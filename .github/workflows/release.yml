@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing v* tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ~\AppData\Local\NuGet\packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore CodeIndex.sln
+
+      - name: Build
+        run: dotnet build CodeIndex.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test CodeIndex.sln --configuration Release --no-build --nologo
+
+      - name: Publish (self-contained)
+        run: >
+          dotnet publish src/CodeIndex/CodeIndex.csproj
+          --configuration Release
+          --runtime ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:PublishTrimmed=true
+          --output publish
+
+      - name: Remove debugging symbols (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: find publish -name '*.pdb' -delete
+
+      - name: Remove debugging symbols (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-ChildItem publish -Filter *.pdb -Recurse | Remove-Item
+
+      - name: Archive release artifacts (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p artifacts
+          cd publish
+          tar czf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" .
+
+      - name: Archive release artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts
+          Compress-Archive -Path publish\* -DestinationPath "artifacts\CodeIndex-${{ matrix.rid }}.zip"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeIndex-${{ matrix.rid }}
+          path: artifacts/**
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-files
+          find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release-files/ \;
+          cd release-files
+          sha256sum * > sha256sums.txt
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          gh release create "${TAG_NAME}" \
+            release-files/* \
+            --verify-tag \
+            --generate-notes

@@ -1,0 +1,34 @@
+## Build results
+[Bb]in/
+[Oo]bj/
+publish/
+artifacts/
+
+## .NET
+*.dll
+*.exe
+*.pdb
+*.nupkg
+*.snupkg
+project.assets.json
+*.nuget.*
+
+## User/IDE settings
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln.docstates
+
+## OS files
+.DS_Store
+Thumbs.db
+
+## CodeIndex output
+*.db
+*.db-shm
+*.db-wal
+
+## Test results
+TestResults/
