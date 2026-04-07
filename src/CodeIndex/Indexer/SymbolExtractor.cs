@@ -91,7 +91,7 @@ public static class SymbolExtractor
         ],
         ["php"] =
         [
-            ("function", new Regex(@"^\s*(?:public|private|protected|static\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled)),
+            ("function", new Regex(@"^\s*(?:(?:public|private|protected|static)\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled)),
             ("class",    new Regex(@"^\s*(?:abstract\s+|final\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled)),
             ("class",    new Regex(@"^\s*(?:interface|trait|enum)\s+(?<name>\w+)", RegexOptions.Compiled)),
         ],
