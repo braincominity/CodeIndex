@@ -19,8 +19,8 @@ dotnet run --project src/CodeIndex -- <command> [options]
 cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # shorthand for 'index'
 
-# Query (default output: JSON lines for AI consumption)
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json|--no-json]
+# Query (default output: human-readable; use --json for AI consumption)
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
 cdidx files [query] [--lang <lang>] [--limit <n>]
 cdidx status [--json]
@@ -50,7 +50,7 @@ tests/CodeIndex.Tests/
 - **Batch commits** — 500 records per transaction for write performance.
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
-- **JSON-first for queries** — search/symbols/files default to JSON lines output (AI-friendly). Use `--no-json` for human-readable.
+- **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 
 ## Conventions
@@ -82,8 +82,8 @@ dotnet run --project src/CodeIndex -- <command> [options]
 cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # 'index'の省略形
 
-# クエリ（デフォルト出力: AI向けJSONライン）
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json|--no-json]
+# クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
 cdidx files [query] [--lang <lang>] [--limit <n>]
 cdidx status [--json]
@@ -113,7 +113,7 @@ tests/CodeIndex.Tests/
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
-- **クエリはJSONファースト** — search/symbols/filesはデフォルトでJSONライン出力（AI向け）。`--no-json`で人間向け出力。
+- **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 
 ## コーディング規約

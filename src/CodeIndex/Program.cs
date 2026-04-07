@@ -41,41 +41,12 @@ if (args[0] is "--version" or "-V")
     return ExitSuccess;
 }
 
-// Easter eggs / イースターエッグ
-if (args.Any(a => a == "--sushi"))
+// Easter eggs — standalone only (no command/path given)
+// イースターエッグ — 単体実行時のみ（コマンド/パスなし）
+var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");
+if (easterEgg != null && !args.Any(a => !a.StartsWith('-')))
 {
-    Console.WriteLine("\U0001f363 Indexing is like making sushi \u2014 patience yields perfection.");
-    Console.WriteLine("   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u5bff\u53f8\u4f5c\u308a\u306e\u3088\u3046\u306b \u2014 \u5fcd\u8010\u304c\u5b8c\u74a7\u3092\u751f\u3080\u3002");
-    return ExitSuccess;
-}
-if (args.Any(a => a == "--coffee"))
-{
-    Console.WriteLine("\u2615 Leave the indexing to me and go grab a coffee!");
-    Console.WriteLine("   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u4efb\u305b\u3066\u3001\u30b3\u30fc\u30d2\u30fc\u3067\u3082\u98f2\u3093\u3067\u304d\u3066\uff01");
-    return ExitSuccess;
-}
-if (args.Any(a => a == "--ramen"))
-{
-    Console.WriteLine("\U0001f35c Indexing in progress... perfect time for a bowl of ramen!");
-    Console.WriteLine("   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u4e2d\u2026\u30e9\u30fc\u30e1\u30f3\u4e00\u676f\u3044\u304b\u304c\uff1f");
-    return ExitSuccess;
-}
-if (args.Any(a => a == "--wine"))
-{
-    Console.WriteLine("\U0001f377 Crushing... Aging... Pouring... Sant\u00e9!");
-    Console.WriteLine("   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u30ef\u30a4\u30f3\u306e\u3088\u3046\u306b\u2014\u719f\u6210\u3092\u5f85\u3064\u4fa1\u5024\u304c\u3042\u308b\u3002");
-    return ExitSuccess;
-}
-if (args.Any(a => a == "--beer"))
-{
-    Console.WriteLine("\U0001f37a Tapping... Pouring... Foaming... Cheers!");
-    Console.WriteLine("   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u5b8c\u4e86\u307e\u3067\u3001\u4e7e\u676f\uff01");
-    return ExitSuccess;
-}
-if (args.Any(a => a == "--matcha"))
-{
-    Console.WriteLine("\U0001f375 Sifting... Pouring... Whisking... \u3069\u3046\u305e\uff01");
-    Console.WriteLine("   \u4e00\u670d\u306e\u62b9\u8336\u3067\u3082\u3044\u304b\u304c\u3067\u3059\u304b\uff1f");
+    PrintEasterEggMessage(easterEgg);
     return ExitSuccess;
 }
 
@@ -95,7 +66,7 @@ return args[0] switch
 // --- Search subcommand / 検索サブコマンド ---
 int RunSearch(string[] cmdArgs)
 {
-    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: false);
     if (query == null)
     {
         Console.Error.WriteLine("Error: search requires a query argument");
@@ -139,7 +110,7 @@ int RunSearch(string[] cmdArgs)
 // --- Symbols subcommand / シンボルサブコマンド ---
 int RunSymbols(string[] cmdArgs)
 {
-    var (dbPath, json, limit, lang, kind, query) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+    var (dbPath, json, limit, lang, kind, query) = ParseQueryArgs(cmdArgs, jsonDefault: false);
 
     return WithDb(dbPath, reader =>
     {
@@ -169,7 +140,7 @@ int RunSymbols(string[] cmdArgs)
 // --- Files subcommand / ファイルサブコマンド ---
 int RunFiles(string[] cmdArgs)
 {
-    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: false);
 
     return WithDb(dbPath, reader =>
     {
@@ -228,7 +199,8 @@ int RunStatus(string[] cmdArgs)
 // --- Index subcommand (existing behavior) / インデックスサブコマンド（既存の動作） ---
 int RunIndex(string[] indexArgs)
 {
-    var (projectPath, dbPath, rebuild, verbose, jsonOutput, commits, updateFiles) = ParseIndexArgs(indexArgs);
+    var (projectPath, dbPath, rebuild, verbose, jsonOutput, commits, updateFiles, easterEgg) = ParseIndexArgs(indexArgs);
+    var spinnerFrames = GetSpinnerFrames(easterEgg);
 
     if (projectPath == null)
     {
@@ -284,31 +256,33 @@ int RunIndex(string[] indexArgs)
 
     if (isUpdateMode)
     {
-        return RunUpdateMode(writer, indexer, projectRoot, dbPath, verbose, jsonOutput, commits, updateFiles, stopwatch);
+        return RunUpdateMode(writer, indexer, projectRoot, dbPath, verbose, jsonOutput, commits, updateFiles, stopwatch, spinnerFrames);
     }
     else
     {
-        return RunFullScan(writer, indexer, projectRoot, dbPath, verbose, jsonOutput, stopwatch);
+        return RunFullScan(writer, indexer, projectRoot, dbPath, verbose, jsonOutput, stopwatch, spinnerFrames);
     }
 }
 
 // --- Update mode / 更新モード ---
 int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, string dbPath,
-    bool verbose, bool jsonOutput, List<string> commits, List<string> updateFiles, Stopwatch stopwatch)
+    bool verbose, bool jsonOutput, List<string> commits, List<string> updateFiles, Stopwatch stopwatch, string[] spinnerFrames)
 {
     var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
     // Resolve files from commit IDs / コミットIDから変更ファイルを解決
     if (commits.Count > 0)
     {
+        CancellationTokenSource? spinnerCts = null;
         if (!jsonOutput)
-            Console.WriteLine($"Resolving changed files from {commits.Count} commit(s)...");
+            spinnerCts = StartSpinner("Resolving changed files...", spinnerFrames);
         foreach (var commit in commits)
         {
             var changedFiles = GetChangedFilesFromCommit(projectRoot, commit);
             foreach (var f in changedFiles)
                 targetPaths.Add(f);
         }
+        StopSpinner(spinnerCts);
         if (!jsonOutput)
             Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
     }
@@ -340,7 +314,7 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
                 {
                     removed++;
                     if (verbose && !jsonOutput)
-                        Console.WriteLine($"  [DEL]  {relPath}");
+                        Console.WriteLine($"  [DEL ] {relPath}");
                 }
                 else
                 {
@@ -371,7 +345,7 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
 
             updated++;
             if (verbose && !jsonOutput)
-                Console.WriteLine($"  [OK]   {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
         }
         catch (Exception ex)
         {
@@ -380,9 +354,9 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
             if (!jsonOutput)
             {
                 if (verbose)
-                    Console.Error.WriteLine($"  [ERR]  {relPath}: {ex.Message}\n{ex.StackTrace}");
+                    Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}\n{ex.StackTrace}");
                 else
-                    Console.Error.WriteLine($"  [ERR]  {relPath}: {ex.Message}");
+                    Console.Error.WriteLine($"  [ERR ] {relPath}: {ex.Message}");
             }
         }
     }
@@ -430,26 +404,43 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
 
 // --- Full scan mode / フルスキャンモード ---
 int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string dbPath,
-    bool verbose, bool jsonOutput, Stopwatch stopwatch)
+    bool verbose, bool jsonOutput, Stopwatch stopwatch, string[] spinnerFrames)
 {
-    if (!jsonOutput) Console.WriteLine("Scanning...");
+    CancellationTokenSource? spinnerCts = null;
+    if (!jsonOutput)
+        spinnerCts = StartSpinner("Scanning...", spinnerFrames);
     var files = indexer.ScanFiles();
+    StopSpinner(spinnerCts);
     if (!jsonOutput)
     {
         Console.WriteLine($"  Found {files.Count:N0} files");
         Console.WriteLine();
     }
 
+    CancellationTokenSource? purgeCts = null;
+    if (!jsonOutput)
+        purgeCts = StartSpinner("Cleaning up stale entries...", spinnerFrames);
     var purged = writer.PurgeStaleFiles(projectRoot);
+    StopSpinner(purgeCts);
     if (purged > 0 && !jsonOutput)
         Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
 
-    if (!jsonOutput) Console.WriteLine("Indexing...");
+    CancellationTokenSource? indexCts = null;
+    if (!jsonOutput)
+        indexCts = StartSpinner("Indexing...", spinnerFrames);
     int processed = 0, skipped = 0, errors = 0;
     var errorList = new List<object>();
+    // Stop the indexing spinner before the first progress update / 最初のプログレス更新前にスピナーを停止
+    bool indexSpinnerStopped = false;
 
     foreach (var filePath in files)
     {
+        if (!indexSpinnerStopped)
+        {
+            StopSpinner(indexCts);
+            indexSpinnerStopped = true;
+            if (!jsonOutput) Console.WriteLine("Indexing...");
+        }
         try
         {
             var (record, content) = indexer.BuildRecord(filePath);
@@ -475,7 +466,7 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             writer.InsertSymbols(symbols);
 
             if (verbose && !jsonOutput)
-                Console.WriteLine($"  [OK]   {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
         }
         catch (Exception ex)
         {
@@ -484,14 +475,21 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             if (!jsonOutput)
             {
                 if (verbose)
-                    Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}\n{ex.StackTrace}");
+                    Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}\n{ex.StackTrace}");
                 else
-                    Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}");
+                    Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}");
             }
         }
 
         processed++;
         if (!jsonOutput) PrintProgress(processed, files.Count);
+    }
+
+    // If no files to process, stop the indexing spinner / ファイルがない場合はスピナーを停止
+    if (!indexSpinnerStopped)
+    {
+        StopSpinner(indexCts);
+        if (!jsonOutput) Console.WriteLine("Indexing...");
     }
 
     stopwatch.Stop();
@@ -604,19 +602,22 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
         }
     }
 
-    // Default: JSON for search/symbols/files, human-readable for status
-    // デフォルト: search/symbols/filesはJSON、statusは人間向け
+    // Default: human-readable for all commands; use --json for machine output
+    // デフォルト: 全コマンド人間向け出力、--jsonで機械向け出力
     return (dbPath, json ?? jsonDefault, limit, lang, kind, query);
 }
 
 // Parse index subcommand arguments / インデックスサブコマンドの引数を解析
-static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool json, List<string> commits, List<string> updateFiles) ParseIndexArgs(string[] args)
+static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool json, List<string> commits, List<string> updateFiles, string? easterEgg) ParseIndexArgs(string[] args)
 {
     string? projectPath = null;
     string dbPath = "codeindex.db";
     bool rebuild = false;
     bool verbose = false;
     bool json = false;
+    string? easterEgg = null;
+    int spinnerFlagCount = 0;
+    bool randomSpinner = false;
     var commits = new List<string>();
     var updateFiles = new List<string>();
 
@@ -645,7 +646,14 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
                     updateFiles.Add(args[++i]);
                 break;
             case "--help" or "-h":
-                return (null, dbPath, rebuild, verbose, json, commits, updateFiles);
+                return (null, dbPath, rebuild, verbose, json, commits, updateFiles, null);
+            case "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky":
+                easterEgg = args[i];
+                spinnerFlagCount++;
+                break;
+            case "--random-spinner":
+                randomSpinner = true;
+                break;
             default:
                 if (!args[i].StartsWith('-'))
                     projectPath = args[i];
@@ -653,7 +661,23 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
         }
     }
 
-    return (projectPath, dbPath, rebuild, verbose, json, commits, updateFiles);
+    // Multiple spinner flags detected — fall back to matcha with a warning
+    // 複数のスピナーフラグ検出 — 警告を出して抹茶にフォールバック
+    if (spinnerFlagCount > 1)
+    {
+        Console.Error.WriteLine("\U0001f375 Simultaneous intake of beer and coffee is not recommended. How about some matcha instead?");
+        Console.Error.WriteLine("   \u30d3\u30fc\u30eb\u3068\u30b3\u30fc\u30d2\u30fc\u306e\u540c\u6642\u6442\u53d6\u306f\u304a\u3059\u3059\u3081\u3057\u307e\u305b\u3093\u3002\u62b9\u8336\u306f\u3044\u304b\u304c\uff1f");
+        easterEgg = "--matcha";
+    }
+
+    // --random-spinner picks a random theme / --random-spinnerでランダムテーマ選択
+    if (randomSpinner && easterEgg == null)
+    {
+        var themes = new[] { "--sushi", "--coffee", "--ramen", "--wine", "--beer", "--matcha", "--whisky" };
+        easterEgg = themes[Random.Shared.Next(themes.Length)];
+    }
+
+    return (projectPath, dbPath, rebuild, verbose, json, commits, updateFiles, easterEgg);
 }
 
 // Print inline progress bar / インライン進捗バーを表示
@@ -764,7 +788,7 @@ static void PrintUsage()
     Console.WriteLine("Index options:");
     Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
     Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
-    Console.WriteLine("  --verbose                  Show verbose output");
+    Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
     Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
     Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits");
     Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
@@ -773,8 +797,7 @@ static void PrintUsage()
     Console.WriteLine();
     Console.WriteLine("Query options:");
     Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
-    Console.WriteLine("  --json                     Output as JSON lines (default for search/symbols/files)");
-    Console.WriteLine("  --no-json                  Force human-readable output");
+    Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
     Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
     Console.WriteLine("  --lang <lang>              Filter by language");
     Console.WriteLine("  --kind <kind>              Filter symbols by kind (function/class/import)");
@@ -789,11 +812,143 @@ static void PrintUsage()
     Console.WriteLine("  cdidx ./myproject --commits abc123 def456      Update files from commits");
     Console.WriteLine("  cdidx ./myproject --files src/app.cs           Update specific files");
     Console.WriteLine();
-    Console.WriteLine("Easter eggs:");
-    Console.WriteLine("  --sushi                    \U0001f363");
-    Console.WriteLine("  --coffee                   \u2615");
-    Console.WriteLine("  --ramen                    \U0001f35c");
-    Console.WriteLine("  --wine                     \U0001f377");
-    Console.WriteLine("  --beer                     \U0001f37a");
-    Console.WriteLine("  --matcha                   \U0001f375");
+    Console.WriteLine("Easter eggs (themed spinner when combined with index):");
+    Console.WriteLine("  --sushi                    \U0001f363 Slicing... Shaping... Itadakimasu!");
+    Console.WriteLine("  --coffee                   \u2615 Grinding... Heating... Brewing...");
+    Console.WriteLine("  --ramen                    \U0001f35c Boiling... Steaming... Itadakimasu!");
+    Console.WriteLine("  --wine                     \U0001f377 Crushing... Aging... Sant\u00e9!");
+    Console.WriteLine("  --beer                     \U0001f37a Tapping... Pouring... Cheers!");
+    Console.WriteLine("  --matcha                   \U0001f375 Sifting... Whisking... Douzo!");
+    Console.WriteLine("  --whisky                   \U0001f943 Mashing... Distilling... Slainte!");
+    Console.WriteLine("  --random-spinner           \U0001f3b2 Pick a random theme");
+}
+
+// --- Spinner / スピナー ---
+
+// Start spinner on a background thread, returns CancellationTokenSource to stop it
+// バックグラウンドスレッドでスピナーを開始。停止用のCancellationTokenSourceを返す
+// When themed frames are used (easter egg), the frame itself contains the full display text
+// テーマフレーム使用時（イースターエッグ）はフレーム自体が表示テキストを含む
+static CancellationTokenSource? StartSpinner(string message, string[] frames)
+{
+    // Braille frames are single-char; themed frames are longer strings containing the display text
+    // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
+    bool isThemed = frames.Length > 0 && frames[0].Length > 2;
+
+    if (Console.IsOutputRedirected)
+    {
+        Console.WriteLine(message);
+        return null;
+    }
+
+    var cts = new CancellationTokenSource();
+    var ct = cts.Token;
+    Task.Run(() =>
+    {
+        int i = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            var frame = frames[i % frames.Length];
+            var line = isThemed ? $"\r{frame}" : $"\r{frame} {message}";
+            Console.Write(line);
+            Console.Out.Flush();
+            i++;
+            try { Task.Delay(100, ct).Wait(ct); } catch (OperationCanceledException) { break; }
+        }
+    }, ct);
+    return cts;
+}
+
+// Stop spinner and clear the line / スピナーを停止して行をクリア
+static void StopSpinner(CancellationTokenSource? cts)
+{
+    if (cts == null) return;
+    cts.Cancel();
+    // Small delay to let the spinner task exit / スピナータスク終了のための短い待機
+    Thread.Sleep(20);
+    if (!Console.IsOutputRedirected)
+    {
+        Console.Write($"\r{new string(' ', Console.WindowWidth > 0 ? Console.WindowWidth - 1 : 80)}\r");
+        Console.Out.Flush();
+    }
+}
+
+// Get spinner frames based on easter egg flag / イースターエッグフラグに基づくスピナーフレームを取得
+static string[] GetSpinnerFrames(string? easterEgg) => easterEgg switch
+{
+    "--sushi" =>
+    [
+        "\U0001f363 Slicing       ", "\U0001f363 Slicing.      ", "\U0001f363 Slicing..     ", "\U0001f363 Slicing...    ",
+        "\U0001f363 Shaping       ", "\U0001f363 Shaping.      ", "\U0001f363 Shaping..     ", "\U0001f363 Shaping...    ",
+        "\U0001f363 Pressing      ", "\U0001f363 Pressing.     ", "\U0001f363 Pressing..    ", "\U0001f363 Pressing...   ",
+        "\U0001f363 Itadakimasu!  ",
+    ],
+    "--coffee" =>
+    [
+        "\u2615 Grinding      ", "\u2615 Grinding.     ", "\u2615 Grinding..    ", "\u2615 Grinding...   ",
+        "\u2615 Heating       ", "\u2615 Heating.      ", "\u2615 Heating..     ", "\u2615 Heating...    ",
+        "\u2615 Brewing       ", "\u2615 Brewing.      ", "\u2615 Brewing..     ", "\u2615 Brewing...    ",
+    ],
+    "--ramen" =>
+    [
+        "\U0001f35c Boiling       ", "\U0001f35c Boiling.      ", "\U0001f35c Boiling..     ", "\U0001f35c Boiling...    ",
+        "\U0001f35c Steaming      ", "\U0001f35c Steaming.     ", "\U0001f35c Steaming..    ", "\U0001f35c Steaming...   ",
+        "\U0001f35c Slurping      ", "\U0001f35c Slurping.     ", "\U0001f35c Slurping..    ", "\U0001f35c Slurping...   ",
+        "\U0001f35c Itadakimasu!  ",
+    ],
+    "--wine" =>
+    [
+        "\U0001f377 Crushing      ", "\U0001f377 Crushing.     ", "\U0001f377 Crushing..    ", "\U0001f377 Crushing...   ",
+        "\U0001f377 Aging         ", "\U0001f377 Aging.        ", "\U0001f377 Aging..       ", "\U0001f377 Aging...      ",
+        "\U0001f377 Pouring       ", "\U0001f377 Pouring.      ", "\U0001f377 Pouring..     ", "\U0001f377 Pouring...    ",
+        "\U0001f377 Sant\u00e9!        ",
+    ],
+    "--beer" =>
+    [
+        "\U0001f37a Tapping       ", "\U0001f37a Tapping.      ", "\U0001f37a Tapping..     ", "\U0001f37a Tapping...    ",
+        "\U0001f37a Pouring       ", "\U0001f37a Pouring.      ", "\U0001f37a Pouring..     ", "\U0001f37a Pouring...    ",
+        "\U0001f37a Foaming       ", "\U0001f37a Foaming.      ", "\U0001f37a Foaming..     ", "\U0001f37a Foaming...    ",
+        "\U0001f37a Cheers!       ",
+    ],
+    "--matcha" =>
+    [
+        "\U0001f375 Sifting       ", "\U0001f375 Sifting.      ", "\U0001f375 Sifting..     ", "\U0001f375 Sifting...    ",
+        "\U0001f375 Pouring       ", "\U0001f375 Pouring.      ", "\U0001f375 Pouring..     ", "\U0001f375 Pouring...    ",
+        "\U0001f375 Whisking      ", "\U0001f375 Whisking.     ", "\U0001f375 Whisking..    ", "\U0001f375 Whisking...   ",
+        "\U0001f375 Douzo!        ",
+    ],
+    "--whisky" =>
+    [
+        "\U0001f943 Mashing       ", "\U0001f943 Mashing.      ", "\U0001f943 Mashing..     ", "\U0001f943 Mashing...    ",
+        "\U0001f943 Distilling    ", "\U0001f943 Distilling.   ", "\U0001f943 Distilling..  ", "\U0001f943 Distilling... ",
+        "\U0001f943 Aging         ", "\U0001f943 Aging.        ", "\U0001f943 Aging..       ", "\U0001f943 Aging...      ",
+        "\U0001f943 Slainte!      ",
+    ],
+    // Default: Braille spinner / デフォルト: ブレイルスピナー
+    _ => ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"],
+};
+
+// Print easter egg message (standalone mode) / イースターエッグメッセージを表示（単体実行時）
+static void PrintEasterEggMessage(string flag)
+{
+    var (en, ja) = flag switch
+    {
+        "--sushi"  => ("\U0001f363 Indexing is like making sushi \u2014 patience yields perfection.",
+                       "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u5bff\u53f8\u4f5c\u308a\u306e\u3088\u3046\u306b \u2014 \u5fcd\u8010\u304c\u5b8c\u74a7\u3092\u751f\u3080\u3002"),
+        "--coffee" => ("\u2615 Leave the indexing to me and go grab a coffee!",
+                       "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u4efb\u305b\u3066\u3001\u30b3\u30fc\u30d2\u30fc\u3067\u3082\u98f2\u3093\u3067\u304d\u3066\uff01"),
+        "--ramen"  => ("\U0001f35c Indexing in progress... perfect time for a bowl of ramen!",
+                       "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u4e2d\u2026\u30e9\u30fc\u30e1\u30f3\u4e00\u676f\u3044\u304b\u304c\uff1f"),
+        "--wine"   => ("\U0001f377 Crushing... Aging... Pouring... Sant\u00e9!",
+                       "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u30ef\u30a4\u30f3\u306e\u3088\u3046\u306b\u2014\u719f\u6210\u3092\u5f85\u3064\u4fa1\u5024\u304c\u3042\u308b\u3002"),
+        "--beer"   => ("\U0001f37a Tapping... Pouring... Foaming... Cheers!",
+                       "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u5b8c\u4e86\u307e\u3067\u3001\u4e7e\u676f\uff01"),
+        "--matcha" => ("\U0001f375 Sifting... Pouring... Whisking... \u3069\u3046\u305e\uff01",
+                       "   \u4e00\u670d\u306e\u62b9\u8336\u3067\u3082\u3044\u304b\u304c\u3067\u3059\u304b\uff1f"),
+        "--whisky" => ("\U0001f943 Mashing... Distilling... Aging... Slainte!",
+                       "   \u30a4\u30f3\u30c7\u30c3\u30af\u30b9\u306f\u30a6\u30a4\u30b9\u30ad\u30fc\u306e\u3088\u3046\u306b\u2014\u719f\u6210\u304c\u5927\u4e8b\u3002"),
+        _ => ("", ""),
+    };
+    Console.WriteLine(en);
+    Console.WriteLine(ja);
 }

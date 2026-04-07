@@ -85,11 +85,11 @@ cdidx ./myproject --verbose     # show per-file details
 Default output:
 
 ```
-Scanning...
+⠹ Scanning...
   Found 42 files
 
 Indexing...
-  [=================>        ] 67%
+  ████████████████████░░░░░░░░░░░░  67.0%  [28/42]
 
 Done.
   Files   : 42
@@ -102,11 +102,13 @@ Done.
 With `--verbose`, each file also shows a status tag so you can see exactly what happened:
 
 ```
-  [OK]   src/app.cs (12 chunks, 5 symbols)   — indexed successfully
-  [SKIP] src/utils.cs                         — unchanged, skipped
-  [DEL]  src/old.cs                           — deleted from DB (file removed from disk)
-  [ERR]  src/bad.cs: <message>                — failed (includes stack trace in verbose)
+  [OK  ] src/app.cs (12 chunks, 5 symbols)
+  [SKIP] src/utils.cs
+  [DEL ] src/old.cs
+  [ERR ] src/bad.cs: <message>
 ```
+
+> `[OK  ]` = indexed successfully, `[SKIP]` = unchanged / skipped, `[DEL ]` = deleted from DB (file removed from disk), `[ERR ]` = failed (verbose mode includes stack trace)
 
 This is useful for debugging indexing issues or verifying which files were actually processed.
 
@@ -118,13 +120,7 @@ cdidx search "handleRequest" --lang go   # filter by language
 cdidx search "TODO" --limit 50           # more results
 ```
 
-Output (JSON lines — one result per line, machine-readable):
-
-```json
-{"path":"src/Auth/Login.cs","startLine":15,"endLine":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
-```
-
-Use `--no-json` for human-readable output:
+Output:
 
 ```
 src/Auth/Login.cs:15-30
@@ -133,6 +129,22 @@ src/Auth/Login.cs:15-30
       var hash = ComputeHash(pass);
       return _store.Verify(user, hash);
   ...
+
+src/Auth/TokenService.cs:42-58
+  public string GenerateToken(User user)
+  {
+      var claims = BuildClaims(user);
+      return _jwt.CreateToken(claims);
+  ...
+
+(2 results)
+```
+
+Use `--json` for machine-readable output (AI agents):
+
+```json
+{"path":"src/Auth/Login.cs","start_line":15,"end_line":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
+{"path":"src/Auth/TokenService.cs","start_line":42,"end_line":58,"content":"public string GenerateToken(...)...","lang":"csharp","score":9.8}
 ```
 
 ### Search symbols (functions, classes, etc.)
@@ -143,10 +155,13 @@ cdidx symbols --kind class             # all classes
 cdidx symbols --kind function --lang python
 ```
 
-Output (JSON lines):
+Output:
 
-```json
-{"name":"UserService","kind":"class","path":"src/Services/UserService.cs","line":8,"lang":"csharp"}
+```
+class      UserService                              src/Services/UserService.cs:8
+function   GetUserById                              src/Services/UserService.cs:24
+function   CreateUser                               src/Services/UserService.cs:45
+(3 symbols)
 ```
 
 ### List files
@@ -156,10 +171,13 @@ cdidx files                            # all indexed files
 cdidx files --lang csharp              # only C# files
 ```
 
-Output (JSON lines):
+Output:
 
-```json
-{"path":"src/Services/UserService.cs","lang":"csharp","lines":120}
+```
+csharp          120 lines  src/Services/UserService.cs
+csharp           85 lines  src/Controllers/UserController.cs
+csharp           42 lines  src/Models/User.cs
+(3 files)
 ```
 
 ### Check status
@@ -185,13 +203,12 @@ Languages:
 | Option | Applies to | Description |
 |---|---|---|
 | `--db <path>` | All commands | Database file path (default: `codeindex.db`) |
-| `--json` | All commands | JSON output (default for search/symbols/files) |
-| `--no-json` | Query commands | Force human-readable output |
+| `--json` | All commands | JSON output (for AI/machine use) |
 | `--limit <n>` | Query commands | Max results (default: 20) |
 | `--lang <lang>` | Query commands | Filter by language |
 | `--kind <kind>` | `symbols` | Filter by symbol kind (function/class/import) |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
-| `--verbose` | `index` | Show per-file status (`[OK]`/`[SKIP]`/`[DEL]`/`[ERR]`) |
+| `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits |
 | `--files <path...>` | `index` | Update only the specified files |
 
@@ -206,11 +223,11 @@ Languages:
 
 ## How it works
 
-cdidx scans your project directory, splits each source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) compares each file's last-modified timestamp against the database and skips unchanged files entirely, so re-indexing after a branch switch only processes the files that actually differ.
+cdidx scans your project directory, splits each source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. This means re-indexing after a branch switch only processes the files that actually differ.
 
 ## Git branch switching
 
-The database reflects the working tree at the time of the last index. After switching branches, simply re-run `cdidx .` — only files whose timestamps differ from the database are re-indexed, so the update is proportional to the number of changed files, not the total project size.
+The database reflects the working tree at the time of the last index. After switching branches, simply re-run `cdidx .` — files that no longer exist on disk are purged from the database, newly appeared files are indexed, and existing files are re-indexed only when their timestamp differs. The update is proportional to the number of changed files, not the total project size.
 
 | Situation | What happens |
 |---|---|
@@ -262,7 +279,7 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 ## AI Integration
 
-cdidx is designed as an AI-first code search tool. All query commands output JSON lines by default, making them easy to parse programmatically.
+cdidx is designed as an AI-friendly code search tool. All query commands support `--json` for JSON lines output, making them easy to parse programmatically.
 
 ### Setup: Add to CLAUDE.md
 
@@ -433,11 +450,11 @@ cdidx ./myproject --verbose     # ファイルごとの詳細表示
 デフォルト出力:
 
 ```
-Scanning...
+⠹ Scanning...
   Found 42 files
 
 Indexing...
-  [=================>        ] 67%
+  ████████████████████░░░░░░░░░░░░  67.0%  [28/42]
 
 Done.
   Files   : 42
@@ -450,11 +467,13 @@ Done.
 `--verbose` を付けると、各ファイルにステータスタグも表示され、何が起きたか一目でわかります:
 
 ```
-  [OK]   src/app.cs (12 chunks, 5 symbols)   — インデックス成功
-  [SKIP] src/utils.cs                         — 未変更、スキップ
-  [DEL]  src/old.cs                           — DBから削除（ディスク上のファイルが消えたため）
-  [ERR]  src/bad.cs: <message>                — 失敗（verboseではスタックトレースも表示）
+  [OK  ] src/app.cs (12 chunks, 5 symbols)
+  [SKIP] src/utils.cs
+  [DEL ] src/old.cs
+  [ERR ] src/bad.cs: <message>
 ```
+
+> `[OK  ]` = インデックス成功、`[SKIP]` = 未変更・スキップ、`[DEL ]` = DBから削除（ディスク上のファイルが消えた）、`[ERR ]` = 失敗（verboseではスタックトレースも表示）
 
 インデックスの問題をデバッグしたり、どのファイルが実際に処理されたかを確認するのに便利です。
 
@@ -466,13 +485,7 @@ cdidx search "handleRequest" --lang go   # 言語でフィルタ
 cdidx search "TODO" --limit 50           # 結果数を増やす
 ```
 
-出力（JSONライン — 1行1結果、機械処理可能）:
-
-```json
-{"path":"src/Auth/Login.cs","startLine":15,"endLine":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
-```
-
-`--no-json` で人間向け出力:
+出力:
 
 ```
 src/Auth/Login.cs:15-30
@@ -481,6 +494,22 @@ src/Auth/Login.cs:15-30
       var hash = ComputeHash(pass);
       return _store.Verify(user, hash);
   ...
+
+src/Auth/TokenService.cs:42-58
+  public string GenerateToken(User user)
+  {
+      var claims = BuildClaims(user);
+      return _jwt.CreateToken(claims);
+  ...
+
+(2 results)
+```
+
+`--json` でAI/機械向け出力:
+
+```json
+{"path":"src/Auth/Login.cs","start_line":15,"end_line":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
+{"path":"src/Auth/TokenService.cs","start_line":42,"end_line":58,"content":"public string GenerateToken(...)...","lang":"csharp","score":9.8}
 ```
 
 ### シンボル検索（関数、クラスなど）
@@ -491,10 +520,13 @@ cdidx symbols --kind class             # すべてのクラス
 cdidx symbols --kind function --lang python
 ```
 
-出力（JSONライン）:
+出力:
 
-```json
-{"name":"UserService","kind":"class","path":"src/Services/UserService.cs","line":8,"lang":"csharp"}
+```
+class      UserService                              src/Services/UserService.cs:8
+function   GetUserById                              src/Services/UserService.cs:24
+function   CreateUser                               src/Services/UserService.cs:45
+(3 symbols)
 ```
 
 ### ファイル一覧
@@ -504,10 +536,13 @@ cdidx files                            # 全インデックス済みファイル
 cdidx files --lang csharp              # C#ファイルのみ
 ```
 
-出力（JSONライン）:
+出力:
 
-```json
-{"path":"src/Services/UserService.cs","lang":"csharp","lines":120}
+```
+csharp          120 lines  src/Services/UserService.cs
+csharp           85 lines  src/Controllers/UserController.cs
+csharp           42 lines  src/Models/User.cs
+(3 files)
 ```
 
 ### 状態確認
@@ -533,13 +568,12 @@ Languages:
 | オプション | 対象 | 説明 |
 |---|---|---|
 | `--db <path>` | 全コマンド | DBファイルパス（デフォルト: `codeindex.db`） |
-| `--json` | 全コマンド | JSON出力（search/symbols/filesはデフォルト） |
-| `--no-json` | クエリ系 | 人間向け出力を強制 |
+| `--json` | 全コマンド | JSON出力（AI/機械向け） |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20） |
 | `--lang <lang>` | クエリ系 | 言語でフィルタ |
 | `--kind <kind>` | `symbols` | シンボル種別でフィルタ（function/class/import） |
 | `--rebuild` | `index` | 既存DBを削除して再構築 |
-| `--verbose` | `index` | ファイルごとのステータス表示（`[OK]`/`[SKIP]`/`[DEL]`/`[ERR]`） |
+| `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新 |
 | `--files <path...>` | `index` | 指定ファイルのみ更新 |
 
@@ -554,11 +588,11 @@ Languages:
 
 ## 動作の仕組み
 
-cdidxはプロジェクトディレクトリを走査し、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、変更のないファイルは処理をスキップするため、ブランチ切り替え後の再インデックスでは実際に差分のあるファイルだけが処理されます。
+cdidxはプロジェクトディレクトリを走査し、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。
 
 ## Gitブランチ切り替え
 
-データベースはインデックス実行時のワーキングツリーを反映します。ブランチ切り替え後は `cdidx .` を再実行してください。タイムスタンプが変わったファイルだけを再インデックスするため、更新量はプロジェクト全体のサイズではなく変更ファイル数に比例します。
+データベースはインデックス実行時のワーキングツリーを反映します。ブランチ切り替え後は `cdidx .` を再実行してください。ディスク上から消えたファイルはDBからパージされ、新たに現れたファイルはインデックスに追加され、既存ファイルはタイムスタンプが異なる場合のみ再インデックスされます。更新量はプロジェクト全体のサイズではなく変更ファイル数に比例します。
 
 | 状況 | 動作 |
 |---|---|
@@ -610,7 +644,7 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 
 ## AIとの連携
 
-cdidxはAIファーストのコード検索ツールとして設計されています。すべてのクエリコマンドはデフォルトでJSONライン出力を行い、プログラムからのパースが容易です。
+cdidxはAI対応のコード検索ツールとして設計されています。すべてのクエリコマンドは `--json` でJSONライン出力に対応し、プログラムからのパースが容易です。
 
 ### セットアップ: CLAUDE.mdに追加
 
