@@ -73,6 +73,19 @@ public class ChunkSplitterTests
             Assert.Equal(i, chunks[i].ChunkIndex);
         }
     }
+
+    [Fact]
+    public void Split_CrlfInput_NormalizesToLf()
+    {
+        // CRLF line endings should be normalized to LF before splitting
+        // CRLF改行はLFに正規化されてから分割される
+        var content = "line 1\r\nline 2\r\nline 3\r\n";
+        var chunks = ChunkSplitter.Split(1, content);
+
+        Assert.Single(chunks);
+        Assert.Equal(3, chunks[0].EndLine);
+        Assert.DoesNotContain("\r", chunks[0].Content);
+    }
 }
 
 /// <summary>
@@ -178,6 +191,94 @@ public class SymbolExtractorTests
         Assert.Single(symbols);
         Assert.Equal(2, symbols[0].Line);
     }
+
+    [Fact]
+    public void Extract_Java_DetectsClassesAndMethods()
+    {
+        // Java: class, interface, methods / Java: クラス、インターフェース、メソッド
+        var content = "public class UserService {\n    public User getUser(int id) {\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getUser");
+    }
+
+    [Fact]
+    public void Extract_Kotlin_DetectsFunctionsAndClasses()
+    {
+        // Kotlin: class, fun / Kotlin: クラス、関数
+        var content = "data class Config(val name: String)\nfun process(input: String): String {\n}";
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsDefAndClass()
+    {
+        // Ruby: def, class, module / Ruby: メソッド、クラス、モジュール
+        var content = "class UserService\n  def find_user(id)\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "find_user");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsFunctionsAndClasses()
+    {
+        // PHP: function, class, interface / PHP: 関数、クラス、インターフェース
+        var content = "class AuthService {\n    public function login($user) {\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AuthService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "login");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsFuncAndStruct()
+    {
+        // Swift: func, class, struct / Swift: 関数、クラス、構造体
+        var content = "struct Config {\n    func validate() -> Bool {\n        return true\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
+    }
+
+    [Fact]
+    public void Extract_C_DetectsFunctionsAndStructs()
+    {
+        // C: functions, struct / C: 関数、構造体
+        var content = "typedef struct Config {\n    int value;\n};\nint main(int argc) {\n}";
+        var symbols = SymbolExtractor.Extract(1, "c", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
+    }
+
+    [Fact]
+    public void Extract_Cpp_DetectsClassAndNamespace()
+    {
+        // C++: class, namespace, functions / C++: クラス、名前空間、関数
+        var content = "namespace MyApp {\nclass Handler {\n    void process(int data) {\n    }\n};\n}";
+        var symbols = SymbolExtractor.Extract(1, "cpp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInterfaceAndEnum()
+    {
+        // TypeScript: interface, type, enum / TypeScript: インターフェース、型、列挙型
+        var content = "export interface IUser {\n    name: string;\n}\nexport enum Status {\n    Active,\n}";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+    }
 }
 
 /// <summary>
@@ -282,6 +383,80 @@ public class FileIndexerTests
             Assert.Equal(2, record.Lines); // "def main():\n    print('hello')\n" = 2 lines (trailing newline ignored)
             Assert.NotNull(record.Checksum);
             Assert.Contains("def main()", record.Snippet);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsCaseInsensitiveDirectories()
+    {
+        // SkipDirs should be case-insensitive (e.g. "Build" matches "build")
+        // SkipDirsは大文字小文字を区別しない（例: "Build"は"build"にマッチ）
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+
+            var buildDir = Path.Combine(tempDir, "Build");
+            Directory.CreateDirectory(buildDir);
+            File.WriteAllText(Path.Combine(buildDir, "output.js"), "var x = 1;");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            Assert.Single(files);
+            Assert.Contains("app.py", files[0]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_CrlfNormalizedToLf()
+    {
+        // CRLF line endings in files should be normalized to LF
+        // ファイル内のCRLF改行はLFに正規化される
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "crlf.py");
+            File.WriteAllBytes(filePath, System.Text.Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content) = indexer.BuildRecord(filePath);
+
+            Assert.DoesNotContain("\r", content);
+            Assert.Equal(3, record.Lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_ThrowsForOversizedFile()
+    {
+        // Files exceeding 10 MB should throw InvalidOperationException
+        // 10MBを超えるファイルはInvalidOperationExceptionを投げる
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "large.py");
+            // Create a file just over 10 MB / 10MBを少し超えるファイルを作成
+            var data = new byte[10 * 1024 * 1024 + 1];
+            File.WriteAllBytes(filePath, data);
+
+            var indexer = new FileIndexer(tempDir);
+            Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
         }
         finally
         {
