@@ -79,6 +79,15 @@ public class DbReader
     }
 
     /// <summary>
+    /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
+    /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
+    /// </summary>
+    private static string EscapeLikeQuery(string input)
+    {
+        return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+    }
+
+    /// <summary>
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
@@ -93,7 +102,7 @@ public class DbReader
             WHERE 1=1";
 
         if (query != null)
-            sql += " AND s.name LIKE @query";
+            sql += " AND s.name LIKE @query ESCAPE '\\'";
         if (kind != null)
             sql += " AND s.kind = @kind";
         if (lang != null)
@@ -103,7 +112,7 @@ public class DbReader
 
         cmd.CommandText = sql;
         if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{query}%");
+            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
@@ -141,7 +150,7 @@ public class DbReader
             WHERE 1=1";
 
         if (query != null)
-            sql += " AND f.path LIKE @query";
+            sql += " AND f.path LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
 
@@ -149,7 +158,7 @@ public class DbReader
 
         cmd.CommandText = sql;
         if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{query}%");
+            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         cmd.Parameters.AddWithValue("@limit", limit);
