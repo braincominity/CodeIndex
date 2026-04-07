@@ -33,7 +33,11 @@ public static class SymbolExtractor
         ["csharp"] =
         [
             ("class",    new Regex(@"^\s*(?:public|private|protected|internal)\s+(?:static\s+)?(?:partial\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled)),
+            ("class",    new Regex(@"^\s*(?:public|private|protected|internal)\s+(?:static\s+)?(?:partial\s+)?(?:interface|enum|record|struct)\s+(?<name>\w+)", RegexOptions.Compiled)),
             ("function", new Regex(@"^\s*(?:public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?(?:override\s+)?(?:\w+(?:<[^>]+>)?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled)),
+            // Constructor: access modifier followed by class-like name and open paren (no return type)
+            // コンストラクタ: アクセス修飾子の後にクラス名風の名前と開き括弧（戻り値なし）
+            ("function", new Regex(@"^\s*(?:public|private|protected|internal)\s+(?:static\s+)?(?<name>\w+)\s*\(", RegexOptions.Compiled)),
         ],
         ["go"] =
         [
