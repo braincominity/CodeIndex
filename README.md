@@ -28,7 +28,7 @@ dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -o ./publish
 cp ./publish/cdidx /usr/local/bin/cdidx
 
 # Windows (PowerShell — run as Administrator)
-# Copy-Item .\publish\cdidx.exe C:\Tools\cdidx.exe
+Copy-Item .\publish\cdidx.exe C:\Tools\cdidx.exe
 # Then add C:\Tools to your system PATH if not already there
 ```
 
@@ -162,7 +162,7 @@ dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -o ./publish
 cp ./publish/cdidx /usr/local/bin/cdidx
 
 # Windows（PowerShell — 管理者として実行）
-# Copy-Item .\publish\cdidx.exe C:\Tools\cdidx.exe
+Copy-Item .\publish\cdidx.exe C:\Tools\cdidx.exe
 # C:\Tools がPATHに含まれていない場合は追加してください
 ```
 
