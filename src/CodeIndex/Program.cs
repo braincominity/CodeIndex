@@ -1,71 +1,264 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 
-// Parse command-line arguments / コマンドライン引数を解析
-var (projectPath, dbPath, rebuild, verbose, commits, updateFiles) = ParseArgs(args);
+// Exit codes / 終了コード
+// 0 = success, 1 = usage error, 2 = not found, 3 = database error
+const int ExitSuccess = 0;
+const int ExitUsageError = 1;
+const int ExitNotFound = 2;
+const int ExitDbError = 3;
 
-if (projectPath == null)
+// JSON serializer options for structured output / JSON出力用のシリアライザ設定
+var jsonOptions = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    WriteIndented = false,
+};
+
+// Route to subcommand / サブコマンドにルーティング
+if (args.Length == 0 || args[0] is "--help" or "-h")
 {
     PrintUsage();
-    return 1;
+    return args.Length == 0 ? ExitUsageError : ExitSuccess;
 }
 
-var stopwatch = Stopwatch.StartNew();
-var isUpdateMode = commits.Count > 0 || updateFiles.Count > 0;
-var mode = rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
-
-Console.WriteLine("CodeIndex v1.0.0");
-Console.WriteLine("================");
-Console.WriteLine($"Project : {Path.GetFullPath(projectPath)}");
-Console.WriteLine($"Output  : {dbPath}");
-Console.WriteLine($"Mode    : {mode}");
-Console.WriteLine();
-
-if (!Directory.Exists(projectPath))
+return args[0] switch
 {
-    Console.Error.WriteLine($"Error: directory not found: {projectPath}");
-    return 1;
+    "search" => RunSearch(args[1..]),
+    "symbols" => RunSymbols(args[1..]),
+    "files" => RunFiles(args[1..]),
+    "status" => RunStatus(args[1..]),
+    "index" => RunIndex(args[1..]),
+    // Backwards compatibility: if first arg looks like a path, treat as index
+    // 後方互換性: 最初の引数がパスっぽければindexとして扱う
+    _ when !args[0].StartsWith('-') && (Directory.Exists(args[0]) || args[0].Contains('/') || args[0].Contains('\\') || args[0] == ".") => RunIndex(args),
+    _ => ShowError($"Unknown command: {args[0]}"),
+};
+
+// --- Search subcommand / 検索サブコマンド ---
+int RunSearch(string[] cmdArgs)
+{
+    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+    if (query == null)
+    {
+        Console.Error.WriteLine("Error: search requires a query argument");
+        Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>]");
+        return ExitUsageError;
+    }
+
+    return WithDb(dbPath, reader =>
+    {
+        var results = reader.Search(query, limit, lang);
+        if (results.Count == 0)
+        {
+            if (!json)
+                Console.Error.WriteLine("No results found.");
+            return ExitNotFound;
+        }
+
+        if (json)
+        {
+            foreach (var r in results)
+                Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+        }
+        else
+        {
+            foreach (var r in results)
+            {
+                Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
+                // Indent content lines for readability / 可読性のためコンテンツ行をインデント
+                foreach (var line in r.Content.Split('\n').Take(5))
+                    Console.WriteLine($"  {line}");
+                if (r.Content.Split('\n').Length > 5)
+                    Console.WriteLine("  ...");
+                Console.WriteLine();
+            }
+            Console.Error.WriteLine($"({results.Count} results)");
+        }
+        return ExitSuccess;
+    });
 }
 
-if (rebuild && isUpdateMode)
+// --- Symbols subcommand / シンボルサブコマンド ---
+int RunSymbols(string[] cmdArgs)
 {
-    Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files");
-    return 1;
+    var (dbPath, json, limit, lang, kind, query) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+
+    return WithDb(dbPath, reader =>
+    {
+        var results = reader.SearchSymbols(query, limit, kind, lang);
+        if (results.Count == 0)
+        {
+            if (!json)
+                Console.Error.WriteLine("No symbols found.");
+            return ExitNotFound;
+        }
+
+        if (json)
+        {
+            foreach (var r in results)
+                Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+        }
+        else
+        {
+            foreach (var r in results)
+                Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{r.Line}");
+            Console.Error.WriteLine($"({results.Count} symbols)");
+        }
+        return ExitSuccess;
+    });
 }
 
-// Delete DB if rebuild mode / rebuildモードならDB削除
-if (rebuild && File.Exists(dbPath))
-    File.Delete(dbPath);
-
-using var db = new DbContext(dbPath);
-
-if (rebuild)
-    db.DropAll();
-
-db.InitializeSchema();
-
-var writer = new DbWriter(db.Connection);
-var indexer = new FileIndexer(projectPath);
-var projectRoot = Path.GetFullPath(projectPath);
-
-if (isUpdateMode)
+// --- Files subcommand / ファイルサブコマンド ---
+int RunFiles(string[] cmdArgs)
 {
-    // Update mode: process only specified files
-    // 更新モード: 指定ファイルのみ処理
+    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+
+    return WithDb(dbPath, reader =>
+    {
+        var results = reader.ListFiles(query, limit, lang);
+        if (results.Count == 0)
+        {
+            if (!json)
+                Console.Error.WriteLine("No files found.");
+            return ExitNotFound;
+        }
+
+        if (json)
+        {
+            foreach (var r in results)
+                Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+        }
+        else
+        {
+            foreach (var r in results)
+                Console.WriteLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {r.Path}");
+            Console.Error.WriteLine($"({results.Count} files)");
+        }
+        return ExitSuccess;
+    });
+}
+
+// --- Status subcommand / ステータスサブコマンド ---
+int RunStatus(string[] cmdArgs)
+{
+    var (dbPath, json, _, _, _, _) = ParseQueryArgs(cmdArgs, jsonDefault: false);
+
+    return WithDb(dbPath, reader =>
+    {
+        var status = reader.GetStatus();
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(status, jsonOptions));
+        }
+        else
+        {
+            Console.WriteLine($"Files   : {status.Files:N0}");
+            Console.WriteLine($"Chunks  : {status.Chunks:N0}");
+            Console.WriteLine($"Symbols : {status.Symbols:N0}");
+            if (status.Languages.Count > 0)
+            {
+                Console.WriteLine("Languages:");
+                foreach (var (lang, count) in status.Languages)
+                    Console.WriteLine($"  {lang,-12} {count,6}");
+            }
+        }
+        return ExitSuccess;
+    });
+}
+
+// --- Index subcommand (existing behavior) / インデックスサブコマンド（既存の動作） ---
+int RunIndex(string[] indexArgs)
+{
+    var (projectPath, dbPath, rebuild, verbose, jsonOutput, commits, updateFiles) = ParseIndexArgs(indexArgs);
+
+    if (projectPath == null)
+    {
+        PrintUsage();
+        return ExitUsageError;
+    }
+
+    var stopwatch = Stopwatch.StartNew();
+    var isUpdateMode = commits.Count > 0 || updateFiles.Count > 0;
+    var mode = rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
+
+    if (!jsonOutput)
+    {
+        Console.WriteLine("cdidx v1.1.0");
+        Console.WriteLine("============");
+        Console.WriteLine($"Project : {Path.GetFullPath(projectPath)}");
+        Console.WriteLine($"Output  : {dbPath}");
+        Console.WriteLine($"Mode    : {mode}");
+        Console.WriteLine();
+    }
+
+    if (!Directory.Exists(projectPath))
+    {
+        if (jsonOutput)
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message = $"directory not found: {projectPath}" }, jsonOptions));
+        else
+            Console.Error.WriteLine($"Error: directory not found: {projectPath}");
+        return ExitNotFound;
+    }
+
+    if (rebuild && isUpdateMode)
+    {
+        if (jsonOutput)
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message = "--rebuild cannot be used with --commits or --files" }, jsonOptions));
+        else
+            Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files");
+        return ExitUsageError;
+    }
+
+    // Delete DB if rebuild mode / rebuildモードならDB削除
+    if (rebuild && File.Exists(dbPath))
+        File.Delete(dbPath);
+
+    using var db = new DbContext(dbPath);
+
+    if (rebuild)
+        db.DropAll();
+
+    db.InitializeSchema();
+
+    var writer = new DbWriter(db.Connection);
+    var indexer = new FileIndexer(projectPath);
+    var projectRoot = Path.GetFullPath(projectPath);
+
+    if (isUpdateMode)
+    {
+        return RunUpdateMode(writer, indexer, projectRoot, dbPath, verbose, jsonOutput, commits, updateFiles, stopwatch);
+    }
+    else
+    {
+        return RunFullScan(writer, indexer, projectRoot, dbPath, verbose, jsonOutput, stopwatch);
+    }
+}
+
+// --- Update mode / 更新モード ---
+int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, string dbPath,
+    bool verbose, bool jsonOutput, List<string> commits, List<string> updateFiles, Stopwatch stopwatch)
+{
     var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
     // Resolve files from commit IDs / コミットIDから変更ファイルを解決
     if (commits.Count > 0)
     {
-        Console.WriteLine($"Resolving changed files from {commits.Count} commit(s)...");
+        if (!jsonOutput)
+            Console.WriteLine($"Resolving changed files from {commits.Count} commit(s)...");
         foreach (var commit in commits)
         {
             var changedFiles = GetChangedFilesFromCommit(projectRoot, commit);
             foreach (var f in changedFiles)
                 targetPaths.Add(f);
         }
-        Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
+        if (!jsonOutput)
+            Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
     }
 
     // Resolve explicitly specified files / 明示的に指定されたファイルを解決
@@ -79,8 +272,10 @@ if (isUpdateMode)
         }
     }
 
-    Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
+    if (!jsonOutput)
+        Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
     int updated = 0, removed = 0, skipped = 0, errors = 0;
+    var errorList = new List<object>();
 
     foreach (var relPath in targetPaths)
     {
@@ -89,101 +284,117 @@ if (isUpdateMode)
         {
             if (!File.Exists(absPath))
             {
-                // File deleted: remove from DB / ファイル削除済み: DBから除去
                 if (writer.DeleteFileByPath(relPath))
                 {
                     removed++;
-                    if (verbose)
+                    if (verbose && !jsonOutput)
                         Console.WriteLine($"  [DEL]  {relPath}");
                 }
                 else
                 {
                     skipped++;
-                    if (verbose)
+                    if (verbose && !jsonOutput)
                         Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
                 }
                 continue;
             }
 
-            // Check if file type is supported / サポート対象のファイル種別か確認
             if (FileIndexer.DetectLanguage(absPath) == null)
             {
                 skipped++;
-                if (verbose)
+                if (verbose && !jsonOutput)
                     Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
                 continue;
             }
 
             var (record, content) = indexer.BuildRecord(absPath);
             var fileId = writer.UpsertFile(record);
-
-            // Delete old chunks/symbols before re-indexing
-            // 再インデックス前に古いチャンク・シンボルを削除
             writer.DeleteFileData(fileId);
 
-            // Split into chunks / チャンクに分割
             var chunks = ChunkSplitter.Split(fileId, content);
             writer.InsertChunks(chunks);
 
-            // Extract symbols / シンボルを抽出
             var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
             writer.InsertSymbols(symbols);
 
             updated++;
-            if (verbose)
+            if (verbose && !jsonOutput)
                 Console.WriteLine($"  [OK]   {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
         }
         catch (Exception ex)
         {
             errors++;
-            if (verbose)
-                Console.Error.WriteLine($"  [ERR]  {relPath}: {ex.Message}\n{ex.StackTrace}");
-            else
-                Console.Error.WriteLine($"  [ERR]  {relPath}: {ex.Message}");
+            errorList.Add(new { file = relPath, message = ex.Message });
+            if (!jsonOutput)
+            {
+                if (verbose)
+                    Console.Error.WriteLine($"  [ERR]  {relPath}: {ex.Message}\n{ex.StackTrace}");
+                else
+                    Console.Error.WriteLine($"  [ERR]  {relPath}: {ex.Message}");
+            }
         }
     }
 
-    Console.WriteLine();
-
-    // Summary / サマリー
     stopwatch.Stop();
     var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
 
-    Console.WriteLine();
-    Console.WriteLine("Done.");
-    Console.WriteLine($"  Files   : {totalFiles:N0} (total in DB)");
-    Console.WriteLine($"  Chunks  : {totalChunks:N0}");
-    Console.WriteLine($"  Symbols : {totalSymbols:N0}");
-    Console.WriteLine($"  Updated : {updated:N0}");
-    if (removed > 0)
-        Console.WriteLine($"  Removed : {removed:N0}");
-    if (skipped > 0)
-        Console.WriteLine($"  Skipped : {skipped:N0}");
-    if (errors > 0)
-        Console.WriteLine($"  Errors  : {errors:N0}");
-    Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+    if (jsonOutput)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = errors > 0 ? "partial" : "success",
+            mode = "update",
+            summary = new
+            {
+                files_total = totalFiles,
+                chunks_total = totalChunks,
+                symbols_total = totalSymbols,
+                updated,
+                removed,
+                skipped,
+                errors,
+            },
+            errors = errorList.Count > 0 ? errorList : null,
+            elapsed_ms = stopwatch.ElapsedMilliseconds,
+        }, jsonOptions));
+    }
+    else
+    {
+        Console.WriteLine();
+        Console.WriteLine();
+        Console.WriteLine("Done.");
+        Console.WriteLine($"  Files   : {totalFiles:N0} (total in DB)");
+        Console.WriteLine($"  Chunks  : {totalChunks:N0}");
+        Console.WriteLine($"  Symbols : {totalSymbols:N0}");
+        Console.WriteLine($"  Updated : {updated:N0}");
+        if (removed > 0) Console.WriteLine($"  Removed : {removed:N0}");
+        if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0}");
+        if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
+        Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+    }
+
+    return ExitSuccess;
 }
-else
+
+// --- Full scan mode / フルスキャンモード ---
+int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string dbPath,
+    bool verbose, bool jsonOutput, Stopwatch stopwatch)
 {
-    // Full scan mode (existing behavior) / フルスキャンモード（既存の動作）
-
-    // Phase 1: Scan files / フェーズ1: ファイル走査
-    Console.WriteLine("Scanning...");
+    if (!jsonOutput) Console.WriteLine("Scanning...");
     var files = indexer.ScanFiles();
-    Console.WriteLine($"  Found {files.Count:N0} files");
-    Console.WriteLine();
+    if (!jsonOutput)
+    {
+        Console.WriteLine($"  Found {files.Count:N0} files");
+        Console.WriteLine();
+    }
 
-    // Phase 1.5: Purge stale files (handles branch switches)
-    // フェーズ1.5: 古いファイルを削除（ブランチ切り替え対応）
     var purged = writer.PurgeStaleFiles(projectRoot);
-    if (purged > 0)
+    if (purged > 0 && !jsonOutput)
         Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
 
-    // Phase 2: Index files / フェーズ2: ファイルインデックス
-    Console.WriteLine("Indexing...");
-    int processed = 0;
-    int skipped = 0;
-    int errors = 0;
+    if (!jsonOutput) Console.WriteLine("Indexing...");
+    int processed = 0, skipped = 0, errors = 0;
+    var errorList = new List<object>();
 
     foreach (var filePath in files)
     {
@@ -191,72 +402,207 @@ else
         {
             var (record, content) = indexer.BuildRecord(filePath);
 
-            // Incremental: skip unchanged files / インクリメンタル: 未変更ファイルをスキップ
             var existingId = writer.GetUnchangedFileId(record.Path, record.Modified);
             if (existingId != null)
             {
                 skipped++;
                 processed++;
-                if (verbose)
+                if (verbose && !jsonOutput)
                     Console.WriteLine($"  [SKIP] {record.Path}");
-                PrintProgress(processed, files.Count);
+                if (!jsonOutput) PrintProgress(processed, files.Count);
                 continue;
             }
 
-            // Upsert file record / ファイルレコードをUPSERT
             var fileId = writer.UpsertFile(record);
-
-            // Delete old chunks/symbols before re-indexing
-            // 再インデックス前に古いチャンク・シンボルを削除
             writer.DeleteFileData(fileId);
 
-            // Split into chunks / チャンクに分割
             var chunks = ChunkSplitter.Split(fileId, content);
             writer.InsertChunks(chunks);
 
-            // Extract symbols / シンボルを抽出
             var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
             writer.InsertSymbols(symbols);
 
-            if (verbose)
+            if (verbose && !jsonOutput)
                 Console.WriteLine($"  [OK]   {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
         }
         catch (Exception ex)
         {
-            // Always count errors; show details in verbose mode
-            // エラーは常にカウント、詳細はverboseモードで表示
             errors++;
-            if (verbose)
-                Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}\n{ex.StackTrace}");
-            else
-                Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}");
+            errorList.Add(new { file = filePath, message = ex.Message });
+            if (!jsonOutput)
+            {
+                if (verbose)
+                    Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}\n{ex.StackTrace}");
+                else
+                    Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}");
+            }
         }
 
         processed++;
-        PrintProgress(processed, files.Count);
+        if (!jsonOutput) PrintProgress(processed, files.Count);
     }
 
-    Console.WriteLine();
-
-    // Summary / サマリー
     stopwatch.Stop();
     var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
 
-    Console.WriteLine();
-    Console.WriteLine("Done.");
-    Console.WriteLine($"  Files   : {totalFiles:N0}");
-    Console.WriteLine($"  Chunks  : {totalChunks:N0}");
-    Console.WriteLine($"  Symbols : {totalSymbols:N0}");
-    if (skipped > 0)
-        Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
-    if (errors > 0)
-        Console.WriteLine($"  Errors  : {errors:N0}");
-    Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+    if (jsonOutput)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = errors > 0 ? "partial" : "success",
+            mode = "incremental",
+            summary = new
+            {
+                files_total = totalFiles,
+                chunks_total = totalChunks,
+                symbols_total = totalSymbols,
+                files_scanned = files.Count,
+                files_skipped = skipped,
+                files_purged = purged,
+                errors,
+            },
+            errors = errorList.Count > 0 ? errorList : null,
+            elapsed_ms = stopwatch.ElapsedMilliseconds,
+        }, jsonOptions));
+    }
+    else
+    {
+        Console.WriteLine();
+        Console.WriteLine();
+        Console.WriteLine("Done.");
+        Console.WriteLine($"  Files   : {totalFiles:N0}");
+        Console.WriteLine($"  Chunks  : {totalChunks:N0}");
+        Console.WriteLine($"  Symbols : {totalSymbols:N0}");
+        if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
+        if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
+        Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+    }
+
+    return ExitSuccess;
 }
 
-return 0;
+// --- Helper: open DB and run query / ヘルパー: DBを開いてクエリ実行 ---
+int WithDb(string dbPath, Func<DbReader, int> action)
+{
+    if (!File.Exists(dbPath))
+    {
+        Console.Error.WriteLine($"Error: database not found: {dbPath}");
+        Console.Error.WriteLine("Run 'cdidx index <projectPath>' first to create the index.");
+        return ExitDbError;
+    }
 
-// --- Helper methods / ヘルパーメソッド ---
+    try
+    {
+        using var db = new DbContext(dbPath);
+        var reader = new DbReader(db.Connection);
+        return action(reader);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: database error: {ex.Message}");
+        return ExitDbError;
+    }
+}
+
+int ShowError(string message)
+{
+    Console.Error.WriteLine($"Error: {message}");
+    Console.Error.WriteLine("Run 'cdidx --help' for usage information.");
+    return ExitUsageError;
+}
+
+// --- Argument parsers / 引数パーサー ---
+
+// Parse query subcommand arguments / クエリサブコマンドの引数を解析
+static (string dbPath, bool json, int limit, string? lang, string? kind, string? query) ParseQueryArgs(string[] args, bool jsonDefault)
+{
+    string dbPath = "codeindex.db";
+    bool? json = null;
+    int limit = 20;
+    string? lang = null;
+    string? kind = null;
+    string? query = null;
+
+    for (int i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--db" when i + 1 < args.Length:
+                dbPath = args[++i];
+                break;
+            case "--json":
+                json = true;
+                break;
+            case "--no-json":
+                json = false;
+                break;
+            case "--limit" when i + 1 < args.Length:
+                limit = int.Parse(args[++i]);
+                break;
+            case "--lang" when i + 1 < args.Length:
+                lang = args[++i];
+                break;
+            case "--kind" when i + 1 < args.Length:
+                kind = args[++i];
+                break;
+            default:
+                if (!args[i].StartsWith('-') && query == null)
+                    query = args[i];
+                break;
+        }
+    }
+
+    // Default: JSON for search/symbols/files, human-readable for status
+    // デフォルト: search/symbols/filesはJSON、statusは人間向け
+    return (dbPath, json ?? jsonDefault, limit, lang, kind, query);
+}
+
+// Parse index subcommand arguments / インデックスサブコマンドの引数を解析
+static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool json, List<string> commits, List<string> updateFiles) ParseIndexArgs(string[] args)
+{
+    string? projectPath = null;
+    string dbPath = "codeindex.db";
+    bool rebuild = false;
+    bool verbose = false;
+    bool json = false;
+    var commits = new List<string>();
+    var updateFiles = new List<string>();
+
+    for (int i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--db" when i + 1 < args.Length:
+                dbPath = args[++i];
+                break;
+            case "--rebuild":
+                rebuild = true;
+                break;
+            case "--verbose":
+                verbose = true;
+                break;
+            case "--json":
+                json = true;
+                break;
+            case "--commits":
+                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                    commits.Add(args[++i]);
+                break;
+            case "--files":
+                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                    updateFiles.Add(args[++i]);
+                break;
+            case "--help" or "-h":
+                return (null, dbPath, rebuild, verbose, json, commits, updateFiles);
+            default:
+                if (!args[i].StartsWith('-'))
+                    projectPath = args[i];
+                break;
+        }
+    }
+
+    return (projectPath, dbPath, rebuild, verbose, json, commits, updateFiles);
+}
 
 // Print progress at every 500 files / 500ファイルごとに進捗を表示
 static void PrintProgress(int current, int total)
@@ -296,73 +642,44 @@ static List<string> GetChangedFilesFromCommit(string projectRoot, string commitI
         .ToList();
 }
 
-// Parse CLI arguments / CLI引数を解析
-static (string? projectPath, string dbPath, bool rebuild, bool verbose, List<string> commits, List<string> updateFiles) ParseArgs(string[] args)
-{
-    string? projectPath = null;
-    string dbPath = "codeindex.db";
-    bool rebuild = false;
-    bool verbose = false;
-    var commits = new List<string>();
-    var updateFiles = new List<string>();
-
-    for (int i = 0; i < args.Length; i++)
-    {
-        switch (args[i])
-        {
-            case "--db" when i + 1 < args.Length:
-                dbPath = args[++i];
-                break;
-            case "--rebuild":
-                rebuild = true;
-                break;
-            case "--verbose":
-                verbose = true;
-                break;
-            case "--commits":
-                // Consume subsequent non-flag arguments as commit IDs
-                // 後続のフラグ以外の引数をコミットIDとして取得
-                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
-                    commits.Add(args[++i]);
-                break;
-            case "--files":
-                // Consume subsequent non-flag arguments as file paths
-                // 後続のフラグ以外の引数をファイルパスとして取得
-                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
-                    updateFiles.Add(args[++i]);
-                break;
-            case "--help" or "-h":
-                return (null, dbPath, rebuild, verbose, commits, updateFiles);
-            default:
-                if (!args[i].StartsWith('-'))
-                    projectPath = args[i];
-                break;
-        }
-    }
-
-    return (projectPath, dbPath, rebuild, verbose, commits, updateFiles);
-}
-
 // Print usage information / 使い方を表示
 static void PrintUsage()
 {
-    Console.WriteLine("CodeIndex v1.0.0");
-    Console.WriteLine("================");
-    Console.WriteLine("Usage: codeindex <projectPath> [options]");
+    Console.WriteLine("cdidx v1.1.0");
+    Console.WriteLine("============");
+    Console.WriteLine("Usage: cdidx <command> [options]");
     Console.WriteLine();
-    Console.WriteLine("Arguments:");
-    Console.WriteLine("  projectPath                Path to the project to index");
+    Console.WriteLine("Commands:");
+    Console.WriteLine("  index <projectPath>        Index a project (default if path given)");
+    Console.WriteLine("  search <query>             Full-text search across indexed chunks");
+    Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
+    Console.WriteLine("  files [query]              List indexed files");
+    Console.WriteLine("  status                     Show database statistics");
     Console.WriteLine();
-    Console.WriteLine("Options:");
-    Console.WriteLine("  --db <path>                Output database file path (default: codeindex.db)");
+    Console.WriteLine("Index options:");
+    Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
     Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
     Console.WriteLine("  --verbose                  Show verbose output");
+    Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
     Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits");
     Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
     Console.WriteLine("  --help, -h                 Show this help message");
     Console.WriteLine();
+    Console.WriteLine("Query options:");
+    Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
+    Console.WriteLine("  --json                     Output as JSON lines (default for search/symbols/files)");
+    Console.WriteLine("  --no-json                  Force human-readable output");
+    Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
+    Console.WriteLine("  --lang <lang>              Filter by language");
+    Console.WriteLine("  --kind <kind>              Filter symbols by kind (function/class/import)");
+    Console.WriteLine();
     Console.WriteLine("Examples:");
-    Console.WriteLine("  codeindex ./myproject                           Full incremental index");
-    Console.WriteLine("  codeindex ./myproject --commits abc123 def456   Update files from commits");
-    Console.WriteLine("  codeindex ./myproject --files src/app.cs        Update specific files");
+    Console.WriteLine("  cdidx ./myproject                             Index a project");
+    Console.WriteLine("  cdidx search \"authenticate\" --db codeindex.db  Full-text search");
+    Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
+    Console.WriteLine("  cdidx files --lang python                      List Python files");
+    Console.WriteLine("  cdidx status --json                            DB stats as JSON");
+    Console.WriteLine();
+    Console.WriteLine("  cdidx ./myproject --commits abc123 def456      Update files from commits");
+    Console.WriteLine("  cdidx ./myproject --files src/app.cs           Update specific files");
 }
