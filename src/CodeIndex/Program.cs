@@ -825,16 +825,15 @@ static void PrintUsage()
 
 // --- Spinner / スピナー ---
 
-// Default Braille spinner frames / デフォルトのブレイルスピナーフレーム
-static readonly string[] BrailleFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
-
 // Start spinner on a background thread, returns CancellationTokenSource to stop it
 // バックグラウンドスレッドでスピナーを開始。停止用のCancellationTokenSourceを返す
 // When themed frames are used (easter egg), the frame itself contains the full display text
 // テーマフレーム使用時（イースターエッグ）はフレーム自体が表示テキストを含む
 static CancellationTokenSource? StartSpinner(string message, string[] frames)
 {
-    bool isThemed = frames != BrailleFrames;
+    // Braille frames are single-char; themed frames are longer strings containing the display text
+    // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
+    bool isThemed = frames.Length > 0 && frames[0].Length > 2;
 
     if (Console.IsOutputRedirected)
     {
@@ -925,7 +924,8 @@ static string[] GetSpinnerFrames(string? easterEgg) => easterEgg switch
         "\U0001f943 Aging         ", "\U0001f943 Aging.        ", "\U0001f943 Aging..       ", "\U0001f943 Aging...      ",
         "\U0001f943 Slainte!      ",
     ],
-    _ => BrailleFrames,
+    // Default: Braille spinner / デフォルト: ブレイルスピナー
+    _ => ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"],
 };
 
 // Print easter egg message (standalone mode) / イースターエッグメッセージを表示（単体実行時）
