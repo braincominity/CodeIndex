@@ -16,20 +16,60 @@ A CLI tool that indexes large codebases into a SQLite database for fast search. 
 
 ## Installation
 
+### 1. Build
+
 ```bash
-# Build
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
-
-# Publish as a single binary
 dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -o ./publish
+```
 
-# Optional: add to PATH
-# Linux / macOS
-cp ./publish/cdidx /usr/local/bin/cdidx
+### 2. Add to PATH
 
-# Windows (PowerShell — run as Administrator)
+<details>
+<summary><strong>Linux</strong></summary>
+
+```bash
+sudo cp ./publish/cdidx /usr/local/bin/cdidx
+```
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+```bash
+sudo cp ./publish/cdidx /usr/local/bin/cdidx
+```
+
+If `/usr/local/bin` is not in your PATH (Apple Silicon default shell):
+
+```bash
+echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zprofile
+source ~/.zprofile
+```
+</details>
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+```powershell
+# PowerShell (run as Administrator)
+New-Item -ItemType Directory -Force -Path C:\Tools
 Copy-Item .\publish\cdidx.exe C:\Tools\cdidx.exe
-# Then add C:\Tools to your system PATH if not already there
+
+# Add to PATH permanently (current user)
+$path = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($path -notlike '*C:\Tools*') {
+    [Environment]::SetEnvironmentVariable('Path', "$path;C:\Tools", 'User')
+}
+```
+
+Restart your terminal after adding to PATH.
+</details>
+
+### 3. Verify
+
+```bash
+cdidx --version
 ```
 
 ## Quick Start
@@ -237,20 +277,60 @@ These options make it practical to keep the index up-to-date in real time, even 
 
 ## インストール
 
+### 1. ビルド
+
 ```bash
-# ビルド
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
-
-# 単一バイナリとしてパブリッシュ
 dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -o ./publish
+```
 
-# 任意: PATHに追加
-# Linux / macOS
-cp ./publish/cdidx /usr/local/bin/cdidx
+### 2. PATHに追加
 
-# Windows（PowerShell — 管理者として実行）
+<details>
+<summary><strong>Linux</strong></summary>
+
+```bash
+sudo cp ./publish/cdidx /usr/local/bin/cdidx
+```
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+```bash
+sudo cp ./publish/cdidx /usr/local/bin/cdidx
+```
+
+`/usr/local/bin` がPATHに含まれていない場合（Apple Siliconのデフォルトシェル）:
+
+```bash
+echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zprofile
+source ~/.zprofile
+```
+</details>
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+```powershell
+# PowerShell（管理者として実行）
+New-Item -ItemType Directory -Force -Path C:\Tools
 Copy-Item .\publish\cdidx.exe C:\Tools\cdidx.exe
-# C:\Tools がPATHに含まれていない場合は追加してください
+
+# PATHに永続的に追加（現在のユーザー）
+$path = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($path -notlike '*C:\Tools*') {
+    [Environment]::SetEnvironmentVariable('Path', "$path;C:\Tools", 'User')
+}
+```
+
+PATH追加後はターミナルを再起動してください。
+</details>
+
+### 3. 確認
+
+```bash
+cdidx --version
 ```
 
 ## クイックスタート
