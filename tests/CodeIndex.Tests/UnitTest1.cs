@@ -627,6 +627,43 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void CleanExistingFileData_PreventsFtsOrphans()
+    {
+        // Insert a file with chunks (populates FTS) / ファイルとチャンク（FTS含む）を挿入
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/orphan.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = DateTime.UtcNow,
+        });
+        _writer.InsertChunks([new() { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "def hello_orphan_test(): pass" }]);
+
+        // Verify FTS has the entry / FTSにエントリがあることを確認
+        using var cmd1 = _db.Connection.CreateCommand();
+        cmd1.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'hello_orphan_test'";
+        Assert.Equal(1L, (long)cmd1.ExecuteScalar()!);
+
+        // Clean existing data then re-upsert (simulates re-indexing)
+        // 既存データを掃除してから再upsert（再インデックスをシミュレート）
+        _writer.CleanExistingFileData("src/orphan.py");
+        var newId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/orphan.py", Lang = "python", Size = 60, Lines = 6,
+            Modified = DateTime.UtcNow.AddMinutes(1),
+        });
+        _writer.InsertChunks([new() { FileId = newId, ChunkIndex = 0, StartLine = 1, EndLine = 6, Content = "def world_replacement(): pass" }]);
+
+        // Old FTS entry should be gone, new one should exist
+        // 旧FTSエントリは消え、新エントリが存在するはず
+        using var cmd2 = _db.Connection.CreateCommand();
+        cmd2.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'hello_orphan_test'";
+        Assert.Equal(0L, (long)cmd2.ExecuteScalar()!);
+
+        using var cmd3 = _db.Connection.CreateCommand();
+        cmd3.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'world_replacement'";
+        Assert.Equal(1L, (long)cmd3.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void PurgeStaleFiles_RemovesDeletedFiles()
     {
         // Simulate branch switch: insert a file, then purge when file doesn't exist

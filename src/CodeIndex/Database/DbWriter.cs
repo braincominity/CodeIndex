@@ -40,8 +40,27 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Clean up existing file data (FTS, chunks, symbols) before re-indexing.
+    /// 再インデックス前に既存ファイルデータ（FTS、チャンク、シンボル）を削除する。
+    /// Must be called BEFORE UpsertFile to prevent FTS orphan entries caused by
+    /// INSERT OR REPLACE triggering CASCADE deletes that bypass FTS cleanup.
+    /// INSERT OR REPLACE の CASCADE 削除が FTS をバイパスするため、UpsertFile の前に呼ぶこと。
+    /// </summary>
+    public void CleanExistingFileData(string relativePath)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        var result = cmd.ExecuteScalar();
+        if (result != null)
+            DeleteFileData((long)result);
+    }
+
+    /// <summary>
     /// Upsert a file record and return its ID.
     /// ファイルレコードをUPSERTしてIDを返す。
+    /// NOTE: Call CleanExistingFileData() before this method to avoid FTS orphans.
+    /// 注意: FTS孤立エントリを防ぐため、このメソッドの前にCleanExistingFileData()を呼ぶこと。
     /// </summary>
     public long UpsertFile(FileRecord file)
     {
