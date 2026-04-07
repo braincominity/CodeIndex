@@ -10,6 +10,9 @@ using CodeIndex.Indexer;
 // Windows のコンソールは既定で OEM コードページを使用するため、Unicode 文字が文字化けします。
 Console.OutputEncoding = Encoding.UTF8;
 
+// Load version from version.json / version.jsonからバージョンを読み込み
+var appVersion = LoadVersion();
+
 // Exit codes / 終了コード
 // 0 = success, 1 = usage error, 2 = not found, 3 = database error
 const int ExitSuccess = 0;
@@ -34,7 +37,7 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
 
 if (args[0] is "--version" or "-V")
 {
-    Console.WriteLine("cdidx v1.1.0");
+    Console.WriteLine($"cdidx v{appVersion}");
     return ExitSuccess;
 }
 
@@ -680,6 +683,26 @@ static void PrintProgress(int current, int total)
         // Fallback for redirected output / リダイレクト時はフォールバック
         Console.WriteLine(line.TrimStart());
     }
+}
+
+// Load version from version.json / version.jsonからバージョンを読み込み
+static string LoadVersion()
+{
+    var exeDir = AppContext.BaseDirectory;
+    var path = Path.Combine(exeDir, "version.json");
+    if (!File.Exists(path))
+    {
+        // Fallback: look relative to current directory / カレントディレクトリからの相対パスでフォールバック
+        path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "version.json");
+    }
+    if (File.Exists(path))
+    {
+        var json = File.ReadAllText(path);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("version", out var ver))
+            return ver.GetString() ?? "0.0.0";
+    }
+    return "0.0.0";
 }
 
 // Print ASCII-art banner / ASCIIアートバナーを表示
