@@ -7,6 +7,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## English
 
+### [1.0.1] - 2026-04-07
+
+#### Fixed
+
+- **FTS5 orphan entries on re-indexing** — `INSERT OR REPLACE` on the `files` table triggered `ON DELETE CASCADE` on `chunks`, but the FTS5 virtual table (`fts_chunks`) was not covered by CASCADE. Added `CleanExistingFileData()` to explicitly remove FTS entries before re-upserting. Affected: `Database/DbWriter.cs`, `Program.cs`. Tests: `CleanExistingFileData_PreventsFtsOrphans`.
+
+- **FTS5 MATCH query injection** — User input containing FTS5 operators (`*`, `"`, `AND`, `OR`, `NOT`, `NEAR`) was passed directly to `MATCH`, causing syntax errors or unexpected results. Each token is now quoted as a literal phrase. Affected: `Database/DbReader.cs`.
+
+- **LIKE wildcard injection** — `%` and `_` in user queries for `SearchSymbols` and `ListFiles` were interpreted as SQL LIKE wildcards. Added `ESCAPE` clause and input escaping. Affected: `Database/DbReader.cs`.
+
+- **Connection string injection** — Database path containing `;` could inject additional SQLite connection parameters. Now uses `SqliteConnectionStringBuilder`. Affected: `Database/DbContext.cs`.
+
+- **Git argument injection** — Commit IDs passed to `git diff-tree` were not validated. Added regex whitelist and `--` option terminator. Affected: `Cli/GitHelper.cs`.
+
+- **CancellationTokenSource leak** — Spinner CTS was `Cancel()`'d but never `Dispose()`'d. Affected: `Cli/ConsoleUi.cs`.
+
+#### Changed
+
+- **Checksum-based incremental detection** — `GetUnchangedFileId()` now falls back to SHA256 checksum comparison when timestamps differ (e.g. after `git checkout`), avoiding unnecessary re-indexing. Affected: `Database/DbWriter.cs`. Tests: `GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers`.
+
+- **Added `idx_symbols_file` index** — New index on `symbols(file_id)` for faster deletes and `ListFiles` subquery. Affected: `Database/DbContext.cs`.
+
+- **Optimized CRLF normalization** — `ChunkSplitter.Split()` now skips `Replace()` when no `\r` is present, avoiding unnecessary allocation. Affected: `Indexer/ChunkSplitter.cs`.
+
+- **Extracted CLI helpers** — Moved spinner, progress bar, banner, easter egg, version loading, and usage text to `Cli/ConsoleUi.cs`. Moved git operations to `Cli/GitHelper.cs`. `Program.cs` reduced from 959 to 686 lines. Affected: `Program.cs`, `Cli/ConsoleUi.cs` (new), `Cli/GitHelper.cs` (new).
+
+---
+
 ### [1.0.0] - 2026-04-06
 
 #### Added
@@ -34,6 +62,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ---
 
 ## 日本語
+
+### [1.0.1] - 2026-04-07
+
+#### 修正
+
+- **再インデックス時のFTS5孤立エントリ** — `files`テーブルへの`INSERT OR REPLACE`が`chunks`の`ON DELETE CASCADE`を発火するが、FTS5仮想テーブル（`fts_chunks`）はCASCADE対象外だった。`CleanExistingFileData()`を追加し、再UPSERT前にFTSエントリを明示的に削除。対象: `Database/DbWriter.cs`, `Program.cs`。テスト: `CleanExistingFileData_PreventsFtsOrphans`。
+
+- **FTS5 MATCHクエリインジェクション** — FTS5演算子（`*`, `"`, `AND`, `OR`, `NOT`, `NEAR`）を含むユーザー入力が直接`MATCH`に渡され、構文エラーや予期しない結果が発生していた。各トークンをリテラルフレーズとして引用するよう修正。対象: `Database/DbReader.cs`。
+
+- **LIKEワイルドカードインジェクション** — `SearchSymbols`と`ListFiles`のクエリで`%`と`_`がSQL LIKEワイルドカードとして解釈されていた。`ESCAPE`句と入力エスケープを追加。対象: `Database/DbReader.cs`。
+
+- **接続文字列インジェクション** — `;`を含むデータベースパスで追加のSQLite接続パラメータが注入可能だった。`SqliteConnectionStringBuilder`を使用するよう修正。対象: `Database/DbContext.cs`。
+
+- **Git引数インジェクション** — `git diff-tree`に渡されるコミットIDが未検証だった。正規表現ホワイトリストと`--`オプション終端を追加。対象: `Cli/GitHelper.cs`。
+
+- **CancellationTokenSourceリーク** — スピナーのCTSが`Cancel()`されるだけで`Dispose()`されていなかった。対象: `Cli/ConsoleUi.cs`。
+
+#### 変更
+
+- **チェックサムによるインクリメンタル検出** — `GetUnchangedFileId()`がタイムスタンプ不一致時にSHA256チェックサム比較にフォールバックし（例: `git checkout`後）、不要な再インデックスを回避。対象: `Database/DbWriter.cs`。テスト: `GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers`。
+
+- **`idx_symbols_file`インデックス追加** — `symbols(file_id)`への新インデックスで削除と`ListFiles`サブクエリを高速化。対象: `Database/DbContext.cs`。
+
+- **CRLF正規化の最適化** — `ChunkSplitter.Split()`で`\r`が含まれない場合は`Replace()`をスキップし、不要なアロケーションを回避。対象: `Indexer/ChunkSplitter.cs`。
+
+- **CLIヘルパーの分離** — スピナー、プログレスバー、バナー、イースターエッグ、バージョン読み込み、使い方テキストを`Cli/ConsoleUi.cs`に、Git操作を`Cli/GitHelper.cs`に分離。`Program.cs`は959行から686行に削減。対象: `Program.cs`, `Cli/ConsoleUi.cs`（新規）, `Cli/GitHelper.cs`（新規）。
+
+---
 
 ### [1.0.0] - 2026-04-06
 
