@@ -153,7 +153,12 @@ public class FileIndexer
         // Read content with UTF-8, replacing invalid bytes
         // UTF-8で読み込み、不正バイトは置換文字で処理
         var content = File.ReadAllText(absolutePath, new UTF8Encoding(false, false));
-        var lines = content.Split('\n');
+        // Normalize line endings to LF / 改行をLFに正規化
+        content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Accurate line count: ignore trailing newline / 正確な行数: 末尾改行を無視
+        var lines = content.EndsWith('\n')
+            ? content[..^1].Split('\n')
+            : content.Split('\n');
         var snippet = content.Length > 2000 ? content[..2000] : content;
         var checksum = ComputeChecksum(content);
 
