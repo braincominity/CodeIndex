@@ -13,4 +13,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\version.json" CopyToOutputDirectory="PreserveNewest" Link="version.json" />
+  </ItemGroup>
+
 </Project>
