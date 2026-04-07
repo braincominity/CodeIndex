@@ -138,10 +138,40 @@ When you search for `handleRequest`, FTS5 reads the entry for that token and imm
 
 ### B-tree indexes vs FTS5
 
-CodeIndex uses two different kinds of indexes for different purposes:
+CodeIndex uses two different kinds of indexes for different purposes.
 
-- **B-tree indexes** (standard SQLite indexes) are created on columns like `files.path`, `files.lang`, `files.modified`, `chunks.file_id`, and `symbols.name`. These are good for exact matches and range queries (e.g., "find all Python files" or "find files modified after date X"). They work like a sorted lookup table.
-- **FTS5 inverted index** is used for full-text search inside code content. It answers the question "which chunks contain this word?" without scanning every chunk. This is what makes keyword search fast.
+#### What is a B-tree index?
+
+A B-tree (balanced tree) is the default index structure in SQLite. It organizes values in a sorted, tree-shaped hierarchy — similar to how a phone book is sorted alphabetically.
+
+For example, the index on `files.lang` might look conceptually like this:
+
+```
+            [go | python]
+           /      |       \
+    [csharp]  [java, kotlin]  [rust, typescript]
+```
+
+To find all C# files, SQLite walks down the tree: start at the root, go left (because `"csharp"` < `"go"`), and arrive at the leaf node — a few steps instead of scanning every row. This lookup takes O(log n) time.
+
+B-tree indexes are created on columns like `files.path`, `files.lang`, `files.modified`, `chunks.file_id`, and `symbols.name`. They are good for:
+
+- **Exact matches** — `WHERE lang = 'csharp'`
+- **Range queries** — `WHERE modified > '2025-01-01'`
+- **Sorting** — `ORDER BY path`
+
+However, B-tree indexes cannot efficiently answer "which rows contain the word `handleRequest` somewhere in a text column?" — that would still require scanning every value. This is where FTS5 comes in.
+
+#### How FTS5 differs
+
+The FTS5 inverted index solves a different problem: full-text search inside code content. Instead of sorting values, it maps each token (word) to the rows that contain it (see [What is an inverted index?](#what-is-an-inverted-index) above). A `MATCH` query looks up the token directly — no tree traversal, no text scanning.
+
+| | B-tree index | FTS5 inverted index |
+|---|---|---|
+| **Best for** | Exact match, range, sort | Full-text keyword search |
+| **Lookup method** | Walk a sorted tree (O(log n)) | Look up token → row ID list |
+| **Used on** | `path`, `lang`, `modified`, `file_id`, `name` | `chunks.content` (code text) |
+| **Example query** | `WHERE lang = 'python'` | `WHERE fts_chunks MATCH 'handleRequest'` |
 
 These two index types complement each other. A typical query might use FTS5 to find matching chunks and then use B-tree indexes to filter by language or file path.
 
@@ -441,10 +471,40 @@ FTS5が構築する転置インデックスは以下のようになります：
 
 ### B-treeインデックスとFTS5の違い
 
-CodeIndexは目的に応じて2種類のインデックスを使い分けています：
+CodeIndexは目的に応じて2種類のインデックスを使い分けています。
 
-- **B-treeインデックス**（SQLiteの標準インデックス）は、`files.path`、`files.lang`、`files.modified`、`chunks.file_id`、`symbols.name`などの列に作成されます。完全一致や範囲検索に適しています（例：「Pythonファイルをすべて取得」「特定日時以降に更新されたファイルを検索」）。ソート済みの参照テーブルのように動作します。
-- **FTS5転置インデックス**は、コード内容の全文検索に使われます。「このキーワードを含むチャンクはどれか？」という問いに、全チャンクをスキャンせずに回答します。キーワード検索が高速な理由はここにあります。
+#### B-treeインデックスとは？
+
+B-tree（平衡木）はSQLiteのデフォルトのインデックス構造です。値をソートされたツリー状の階層に整理します。電話帳がアルファベット順にソートされているのと同じ考え方です。
+
+例えば、`files.lang`に対するインデックスは概念的に以下のような形になります：
+
+```
+            [go | python]
+           /      |       \
+    [csharp]  [java, kotlin]  [rust, typescript]
+```
+
+C#のファイルを探す場合、SQLiteはツリーを辿ります。ルートから開始し、左に進み（`"csharp"` < `"go"` のため）、リーフノードに到達します。全行をスキャンする代わりに数ステップで完了します。この参照はO(log n)の計算量です。
+
+B-treeインデックスは`files.path`、`files.lang`、`files.modified`、`chunks.file_id`、`symbols.name`などの列に作成されており、以下の操作に適しています：
+
+- **完全一致** — `WHERE lang = 'csharp'`
+- **範囲検索** — `WHERE modified > '2025-01-01'`
+- **ソート** — `ORDER BY path`
+
+ただし、B-treeインデックスは「テキスト列のどこかに `handleRequest` という単語を含む行はどれか？」という問いには効率的に答えられません。その場合は全行のスキャンが必要になります。ここでFTS5が登場します。
+
+#### FTS5との違い
+
+FTS5の転置インデックスは、コード内容の全文検索という別の問題を解決します。値をソートするのではなく、各トークン（単語）からそれを含む行へのマッピングを持ちます（前述の[転置インデックスとは？](#転置インデックスとは)を参照）。`MATCH`クエリはトークンを直接参照するため、ツリーの走査もテキストのスキャンも不要です。
+
+| | B-treeインデックス | FTS5転置インデックス |
+|---|---|---|
+| **得意な操作** | 完全一致、範囲検索、ソート | 全文キーワード検索 |
+| **参照方法** | ソート済みツリーを辿る（O(log n)） | トークン → 行IDリストを参照 |
+| **適用対象** | `path`, `lang`, `modified`, `file_id`, `name` | `chunks.content`（コード本文） |
+| **クエリ例** | `WHERE lang = 'python'` | `WHERE fts_chunks MATCH 'handleRequest'` |
 
 この2種類のインデックスは補完的に機能します。典型的なクエリでは、FTS5でマッチするチャンクを見つけた後、B-treeインデックスで言語やファイルパスによる絞り込みを行います。
 
