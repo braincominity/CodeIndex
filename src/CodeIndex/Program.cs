@@ -587,7 +587,11 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
                 json = false;
                 break;
             case "--limit" when i + 1 < args.Length:
-                limit = int.Parse(args[++i]);
+                if (!int.TryParse(args[++i], out limit) || limit <= 0)
+                {
+                    Console.Error.WriteLine($"Error: --limit requires a positive integer, got '{args[i]}'");
+                    limit = 20; // Reset to default / デフォルトにリセット
+                }
                 break;
             case "--lang" when i + 1 < args.Length:
                 lang = args[++i];
