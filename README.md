@@ -14,6 +14,25 @@
 
 A CLI tool that indexes large codebases into a SQLite database for fast search. Works for both humans and AI agents.
 
+## Prerequisites
+
+.NET 8.0 SDK is required to build cdidx.
+
+| OS | Install command |
+|---|---|
+| **Linux (Ubuntu/Debian)** | `sudo apt-get update && sudo apt-get install -y dotnet-sdk-8.0` |
+| **Linux (Fedora)** | `sudo dnf install dotnet-sdk-8.0` |
+| **macOS** | `brew install dotnet@8` |
+| **Windows** | `winget install Microsoft.DotNet.SDK.8` |
+
+Alternatively, download the installer from [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/8.0).
+
+Verify:
+
+```bash
+dotnet --version   # should print 8.x.x
+```
+
 ## Installation
 
 ### 1. Build
@@ -378,6 +397,25 @@ These options make it practical to keep the index up-to-date in real time, even 
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
 大規模コードベースをSQLiteデータベースにインデックスし、高速検索を実現するCLIツールです。人間にもAIエージェントにも対応しています。
+
+## 前提条件
+
+cdidxのビルドには .NET 8.0 SDK が必要です。
+
+| OS | インストールコマンド |
+|---|---|
+| **Linux (Ubuntu/Debian)** | `sudo apt-get update && sudo apt-get install -y dotnet-sdk-8.0` |
+| **Linux (Fedora)** | `sudo dnf install dotnet-sdk-8.0` |
+| **macOS** | `brew install dotnet@8` |
+| **Windows** | `winget install Microsoft.DotNet.SDK.8` |
+
+または [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/8.0) からインストーラーをダウンロードしてください。
+
+確認:
+
+```bash
+dotnet --version   # 8.x.x と表示されること
+```
 
 ## インストール
 
