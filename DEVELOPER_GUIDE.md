@@ -365,7 +365,7 @@ cdidx symbols "ClassName"        # structured symbol search
 
 ### Output format
 
-Query commands (`search`, `symbols`, `files`) default to **JSON lines** (one JSON object per line), designed for easy parsing by AI agents. Use `--no-json` for human-readable output.
+Query commands (`search`, `symbols`, `files`) default to **human-readable output**. Use `--json` for JSON lines output (one JSON object per line), designed for easy parsing by AI agents.
 
 ```json
 {"path":"src/auth.py","lang":"python","start_line":1,"end_line":80,"content":"def authenticate(user):\n ...","score":-1.5}
@@ -387,7 +387,7 @@ Query commands (`search`, `symbols`, `files`) default to **JSON lines** (one JSO
 - **WAL mode** — Write-Ahead Logging for concurrent read/write access and crash safety.
 - **Content-external FTS5** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy.
 - **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability.
-- **JSON-first output** — Query commands default to JSON lines for AI consumption. `--no-json` for humans.
+- **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
 - **Manual arg parsing** — `System.CommandLine` was removed to reduce dependencies. Simple switch-based parsing.
 - **SHA256 checksums** — Stored per file for integrity verification (not currently used for change detection, but available).
 - **UTF-8 with fallback** — Invalid UTF-8 bytes are replaced with U+FFFD rather than failing the entire file.
@@ -766,7 +766,7 @@ cdidx symbols "ClassName"        # 構造化シンボル検索
 
 ### 出力形式
 
-クエリコマンド（`search`、`symbols`、`files`）はデフォルトで**JSONライン**（1行1 JSONオブジェクト）を出力し、AIエージェントが容易にパースできるよう設計されています。`--no-json`で人間向け出力に切り替えられます。
+クエリコマンド（`search`、`symbols`、`files`）はデフォルトで**人間向け出力**です。`--json`でJSONライン出力（1行1 JSONオブジェクト）に切り替えでき、AIエージェントが容易にパースできるよう設計されています。
 
 ```json
 {"path":"src/auth.py","lang":"python","start_line":1,"end_line":80,"content":"def authenticate(user):\n ...","score":-1.5}
@@ -788,7 +788,7 @@ cdidx symbols "ClassName"        # 構造化シンボル検索
 - **WALモード** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。
 - **コンテンツ外部参照FTS5** — `chunks`テーブルを参照しコピーを保存しないことでストレージ倍増を回避。
 - **正規表現シンボル抽出** — ASTパーサーも言語固有の依存関係も不要。精度より速度とポータビリティを優先。
-- **JSONファースト出力** — クエリコマンドはAI向けにデフォルトJSONライン。`--no-json`で人間向け。
+- **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI/機械向け出力。
 - **手動引数解析** — `System.CommandLine`は依存削減のため削除。シンプルなswitch文での解析。
 - **SHA256チェックサム** — 完全性検証用にファイルごとに保存（現在は変更検出には未使用だが利用可能）。
 - **UTF-8フォールバック** — 不正なUTF-8バイトはファイル全体を失敗させずU+FFFDに置換。
