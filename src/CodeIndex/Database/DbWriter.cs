@@ -92,11 +92,12 @@ public class DbWriter
     {
         for (int i = 0; i < chunks.Count; i += BatchSize)
         {
-            var batch = chunks.Skip(i).Take(BatchSize);
+            int end = Math.Min(i + BatchSize, chunks.Count);
             using var transaction = _conn.BeginTransaction();
 
-            foreach (var chunk in batch)
+            for (int j = i; j < end; j++)
             {
+                var chunk = chunks[j];
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
@@ -129,11 +130,12 @@ public class DbWriter
     {
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
-            var batch = symbols.Skip(i).Take(BatchSize);
+            int end = Math.Min(i + BatchSize, symbols.Count);
             using var transaction = _conn.BeginTransaction();
 
-            foreach (var symbol in batch)
+            for (int j = i; j < end; j++)
             {
+                var symbol = symbols[j];
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO symbols (file_id, kind, name, line)
