@@ -76,6 +76,7 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_files_path     ON files(path)");
         Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
 
         // Full-text search / 全文検索
         Execute(@"
