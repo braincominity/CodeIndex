@@ -60,36 +60,92 @@ Incremental mode (default) skips files that haven't changed since the last index
 
 ## Why CodeIndex instead of grep?
 
-On small projects, `grep` works fine. But as a codebase grows to tens of thousands of files, `grep` becomes a bottleneck — especially when an AI agent calls it repeatedly. CodeIndex solves this by **indexing once and querying instantly**.
+On small projects, `grep` works fine. But as a codebase grows to tens of thousands of files, `grep` becomes a bottleneck — especially when an AI agent calls it repeatedly. CodeIndex solves this by **reading every file once at index time** and building a search structure so that queries never need to touch the original files again.
 
 ### The problem with grep
 
-`grep -r "keyword" .` performs a brute-force linear scan: it opens every file, reads every line, and checks for a match. Each search pays the full cost again.
+`grep -r "keyword" .` performs a brute-force linear scan: it opens every file, reads every line, and checks for a match. The tenth search costs the same as the first — every search repeats the full scan from scratch. The slowness is not about how fast individual files are read; it is about the fact that *every file must be read every time*, regardless of whether it contains the keyword.
+
+### How CodeIndex avoids repeated scans
+
+CodeIndex shifts the expensive work to a one-time indexing step. After that, searches are cheap lookups into a pre-built database.
+
+**At index time** (runs once, then incrementally):
+
+1. **Read** — Walk the project directory and read each source file.
+2. **Chunk** — Split each file into 80-line blocks with 10-line overlap. The actual source text of each chunk is stored in the `chunks` table in SQLite. This means the database contains the code itself, not just file paths.
+3. **Tokenize & build inverted index** — SQLite FTS5 processes the chunk text, breaks it into tokens (words), and builds an *inverted index*: a data structure that maps each token to the list of chunks that contain it (see [What is an inverted index?](#what-is-an-inverted-index) below).
+4. **Extract symbols** — Identify function, class, and import names via regex and store them in the `symbols` table.
+
+**At query time** (runs every search):
+
+1. Look up the search term in the FTS5 inverted index → get matching chunk row IDs directly, without scanning any text.
+2. Join to the `chunks` table to retrieve the 80-line code block and line numbers.
+3. Join to the `files` table to get the file path and language.
+
+No source files are opened. No directories are scanned. The entire search runs inside SQLite.
 
 | Factor | `grep -r` | CodeIndex (SQLite FTS5) |
 |---|---|---|
-| **Search algorithm** | Linear scan of every file, every time | B-tree index lookup + inverted index |
+| **Search algorithm** | Linear scan of every file, every time | Token lookup in inverted index |
 | **Repeated searches** | Same full cost each time | Near-instant after initial index |
 | **Startup cost** | None | One-time indexing (incremental updates after) |
+| **What is stored** | Nothing — reads files on the fly | Source text in chunks + inverted index of tokens |
 | **Structured queries** | Text matching only | Filter by language, path, symbol kind, line range |
 | **Symbol awareness** | None — just raw text | Knows function/class/import names and locations |
 | **AI token cost** | Returns raw lines — noisy, high token usage | Returns precise chunks with file path and line numbers |
+
+### What is SQLite FTS5?
+
+[FTS5](https://www.sqlite.org/fts5.html) (Full-Text Search 5) is a SQLite extension that adds full-text search capabilities. It lets you write queries like `WHERE fts_chunks MATCH 'handleRequest'` and get results in milliseconds, even over millions of rows.
+
+FTS5 works through a **virtual table** — a table that looks and behaves like a normal SQLite table (you can `SELECT` from it, join it, etc.) but stores its data in a specialized format optimized for text search. Under the hood, the virtual table maintains an inverted index rather than storing rows in the conventional B-tree format.
+
+In CodeIndex, the FTS5 virtual table `fts_chunks` is defined as an **external-content table**: it does not duplicate the chunk text, but references the text already stored in the `chunks` table. It only stores the inverted index itself.
+
+### <a id="what-is-an-inverted-index"></a>What is an inverted index?
+
+An inverted index is a data structure that maps each word (token) to the list of documents (or rows) that contain it — like the index at the back of a textbook.
+
+For example, suppose three chunks contain the following code:
+
+| Chunk ID | Content (simplified) |
+|---|---|
+| 1 | `handleRequest(ctx)` |
+| 2 | `sendResponse(ctx)` |
+| 3 | `handleRequest(req); sendResponse(res)` |
+
+The inverted index built by FTS5 would look like:
+
+| Token | Chunk IDs |
+|---|---|
+| `handleRequest` | 1, 3 |
+| `sendResponse` | 2, 3 |
+| `ctx` | 1, 2 |
+| `req` | 3 |
+| `res` | 3 |
+
+When you search for `handleRequest`, FTS5 reads the entry for that token and immediately returns chunk IDs `{1, 3}` — no scanning required. This is how the database knows the likely matching locations in advance.
+
+### B-tree indexes vs FTS5
+
+CodeIndex uses two different kinds of indexes for different purposes:
+
+- **B-tree indexes** (standard SQLite indexes) are created on columns like `files.path`, `files.lang`, `files.modified`, `chunks.file_id`, and `symbols.name`. These are good for exact matches and range queries (e.g., "find all Python files" or "find files modified after date X"). They work like a sorted lookup table.
+- **FTS5 inverted index** is used for full-text search inside code content. It answers the question "which chunks contain this word?" without scanning every chunk. This is what makes keyword search fast.
+
+These two index types complement each other. A typical query might use FTS5 to find matching chunks and then use B-tree indexes to filter by language or file path.
 
 ### Database structure
 
 CodeIndex builds a SQLite database with four main structures:
 
-| Table | Columns |
+| Table | Purpose |
 |---|---|
-| **files** | `id`, `path`, `lang`, `size`, `lines`, `checksum`, `modified` |
-| **chunks** | `file_id`, `start_line`, `end_line`, `chunk_index`, `content` |
-| **symbols** | `file_id`, `kind`, `name`, `line` |
-| **fts_chunks** (FTS5 virtual table) | Inverted index over `chunks.content` — enables full-text search with `MATCH` syntax |
-
-- **`files`** — One row per source file. Stores path, language, size, line count, SHA256 checksum, and modification time. Indexed on `path`, `lang`, and `modified`.
-- **`chunks`** — Each file is split into 80-line segments with 10-line overlap. This gives search results with surrounding context, not isolated lines.
-- **`symbols`** — Functions, classes, and imports extracted by regex. Queryable by `kind` and `name`.
-- **`fts_chunks`** — An [FTS5](https://www.sqlite.org/fts5.html) virtual table that mirrors `chunks.content`. FTS5 builds an **inverted index** (a mapping from every token to the rows that contain it), so a `MATCH` query is an index lookup — not a scan.
+| **files** | One row per source file — path, language, size, line count, SHA256 checksum, modification time |
+| **chunks** | Source text split into 80-line blocks (10-line overlap). Contains the actual code. |
+| **symbols** | Functions, classes, and imports extracted by regex. Queryable by `kind` and `name`. |
+| **fts_chunks** | FTS5 virtual table — inverted index over `chunks.content` for full-text `MATCH` queries |
 
 ### How the search works
 
@@ -103,7 +159,7 @@ WHERE fts_chunks MATCH 'handleRequest'
 LIMIT 20;
 ```
 
-1. FTS5 looks up `handleRequest` in its inverted index → gets a list of matching chunk `rowid`s in O(1)
+1. FTS5 looks up `handleRequest` in its inverted index → gets a list of matching chunk `rowid`s directly
 2. Joins back to `chunks` to get the 80-line code block with start/end line numbers
 3. Joins to `files` to get the file path and language
 
@@ -298,36 +354,92 @@ codeindex /path/to/project --verbose
 
 ## なぜgrepではなくCodeIndexなのか？
 
-小規模プロジェクトなら `grep` で十分です。しかしファイルが数万規模になると `grep` はボトルネックになります。特にAIエージェントが繰り返し検索を実行するケースで顕著です。CodeIndexは**一度インデックスを作れば即座に検索できる**ことでこの問題を解決します。
+小規模プロジェクトなら `grep` で十分です。しかしファイルが数万規模になると `grep` はボトルネックになります。特にAIエージェントが繰り返し検索を実行するケースで顕著です。CodeIndexは**すべてのファイルを一度だけ読み込んで検索用の構造を構築する**ことで、以降の検索で元のファイルを一切開かずに済むようにします。
 
 ### grepの問題点
 
-`grep -r "keyword" .` は力任せの線形スキャンです。毎回すべてのファイルを開き、すべての行を読み、マッチを確認します。検索のたびに同じフルコストがかかります。
+`grep -r "keyword" .` は力任せの線形スキャンです。毎回すべてのファイルを開き、すべての行を読み、マッチを確認します。10回目の検索でも1回目と同じコストがかかります。遅さの原因は個々のファイルの読み込み速度ではなく、*キーワードを含むかどうかに関係なく、毎回すべてのファイルを読まなければならない*という点にあります。
+
+### CodeIndexが繰り返しスキャンを回避する仕組み
+
+CodeIndexは重い処理を一度きりのインデックス作成ステップに集約します。それ以降の検索は、事前に構築されたデータベースへの軽い参照で済みます。
+
+**インデックス作成時**（初回のみ実行、以降はインクリメンタル更新）：
+
+1. **読み込み** — プロジェクトディレクトリを走査し、各ソースファイルを読む。
+2. **チャンク分割** — 各ファイルを80行ブロック（10行重複）に分割。各チャンクのソースコード本文はSQLiteの`chunks`テーブルに格納される。つまり、データベースにはファイルパスだけでなくコード本文そのものが保存される。
+3. **トークン化と転置インデックスの構築** — SQLite FTS5がチャンクのテキストを処理し、トークン（単語）に分割し、*転置インデックス*を構築する。転置インデックスとは、各トークンからそれを含むチャンクのリストへのマッピングのこと（後述の[転置インデックスとは？](#転置インデックスとは)を参照）。
+4. **シンボル抽出** — 正規表現で関数・クラス・インポートの名前を識別し、`symbols`テーブルに格納。
+
+**検索時**（毎回の検索で実行）：
+
+1. 検索キーワードをFTS5の転置インデックスで参照 → テキストをスキャンせずにマッチするチャンクの行IDを直接取得。
+2. `chunks`テーブルにJOINして80行のコードブロックと行番号を取得。
+3. `files`テーブルにJOINしてファイルパスと言語を取得。
+
+ソースファイルは一切開かれず、ディレクトリのスキャンも不要です。検索全体がSQLite内で完結します。
 
 | 観点 | `grep -r` | CodeIndex (SQLite FTS5) |
 |---|---|---|
-| **検索アルゴリズム** | 毎回すべてのファイルを線形スキャン | B-treeインデックス参照 + 転置インデックス |
+| **検索アルゴリズム** | 毎回すべてのファイルを線形スキャン | 転置インデックスによるトークン参照 |
 | **繰り返し検索** | 毎回同じフルコスト | 初回インデックス後はほぼ即時 |
 | **初期コスト** | なし | 一度だけのインデックス作成（以降はインクリメンタル更新） |
+| **保存される情報** | なし — 毎回ファイルを直接読む | チャンク化されたソースコード + トークンの転置インデックス |
 | **構造化クエリ** | テキストマッチのみ | 言語・パス・シンボル種別・行範囲でフィルタ可能 |
 | **シンボル認識** | なし — 生テキストのみ | 関数・クラス・インポートの名前と位置を認識 |
 | **AIトークンコスト** | 生の行を返す — ノイズが多くトークン消費大 | ファイルパスと行番号付きの的確なチャンクを返す |
+
+### SQLite FTS5とは？
+
+[FTS5](https://www.sqlite.org/fts5.html)（Full-Text Search 5）は、SQLiteに全文検索機能を追加する拡張です。`WHERE fts_chunks MATCH 'handleRequest'` のようなクエリを書くだけで、数百万行のデータからでもミリ秒単位で結果を得ることができます。
+
+FTS5は**仮想テーブル**を通じて動作します。仮想テーブルとは、通常のSQLiteテーブルと同じように見え、同じように操作できる（`SELECT`やJOINが可能）テーブルですが、内部ではテキスト検索に最適化された特殊な形式でデータを保持します。通常のB-tree形式で行を格納するのではなく、転置インデックスを管理します。
+
+CodeIndexでは、FTS5仮想テーブル `fts_chunks` は**外部コンテンツテーブル**として定義されており、チャンクのテキストを複製するのではなく、すでに`chunks`テーブルに格納されているテキストを参照します。`fts_chunks`自体が保持するのは転置インデックスのみです。
+
+### <a id="転置インデックスとは"></a>転置インデックスとは？
+
+転置インデックスとは、各単語（トークン）からそれを含む文書（行）のリストへのマッピングです。教科書の巻末にある索引と同じ仕組みです。
+
+例えば、3つのチャンクに以下のコードが含まれているとします：
+
+| チャンクID | 内容（簡略化） |
+|---|---|
+| 1 | `handleRequest(ctx)` |
+| 2 | `sendResponse(ctx)` |
+| 3 | `handleRequest(req); sendResponse(res)` |
+
+FTS5が構築する転置インデックスは以下のようになります：
+
+| トークン | チャンクID |
+|---|---|
+| `handleRequest` | 1, 3 |
+| `sendResponse` | 2, 3 |
+| `ctx` | 1, 2 |
+| `req` | 3 |
+| `res` | 3 |
+
+`handleRequest`を検索すると、FTS5はそのトークンのエントリを読んでチャンクID `{1, 3}` を即座に返します。テキストのスキャンは不要です。これが、データベースがマッチしそうな場所を事前に把握できる仕組みです。
+
+### B-treeインデックスとFTS5の違い
+
+CodeIndexは目的に応じて2種類のインデックスを使い分けています：
+
+- **B-treeインデックス**（SQLiteの標準インデックス）は、`files.path`、`files.lang`、`files.modified`、`chunks.file_id`、`symbols.name`などの列に作成されます。完全一致や範囲検索に適しています（例：「Pythonファイルをすべて取得」「特定日時以降に更新されたファイルを検索」）。ソート済みの参照テーブルのように動作します。
+- **FTS5転置インデックス**は、コード内容の全文検索に使われます。「このキーワードを含むチャンクはどれか？」という問いに、全チャンクをスキャンせずに回答します。キーワード検索が高速な理由はここにあります。
+
+この2種類のインデックスは補完的に機能します。典型的なクエリでは、FTS5でマッチするチャンクを見つけた後、B-treeインデックスで言語やファイルパスによる絞り込みを行います。
 
 ### データベース構造
 
 CodeIndexは4つの主要構造を持つSQLiteデータベースを構築します：
 
-| テーブル | カラム |
+| テーブル | 用途 |
 |---|---|
-| **files** | `id`, `path`, `lang`, `size`, `lines`, `checksum`, `modified` |
-| **chunks** | `file_id`, `start_line`, `end_line`, `chunk_index`, `content` |
-| **symbols** | `file_id`, `kind`, `name`, `line` |
-| **fts_chunks** (FTS5仮想テーブル) | `chunks.content`に対する転置インデックス — `MATCH`構文による全文検索を実現 |
-
-- **`files`** — ソースファイル1つにつき1行。パス、言語、サイズ、行数、SHA256チェックサム、更新日時を格納。`path`・`lang`・`modified`にインデックスあり。
-- **`chunks`** — 各ファイルを80行単位・10行重複で分割。孤立した行ではなく、前後の文脈を含む検索結果を返せる。
-- **`symbols`** — 正規表現で抽出した関数・クラス・インポート。`kind`と`name`で検索可能。
-- **`fts_chunks`** — `chunks.content`をミラーする[FTS5](https://www.sqlite.org/fts5.html)仮想テーブル。FTS5は**転置インデックス**（各トークンからそれを含む行へのマッピング）を構築するため、`MATCH`クエリはスキャンではなくインデックス参照で完了する。
+| **files** | ソースファイル1件につき1行 — パス、言語、サイズ、行数、SHA256チェックサム、更新日時 |
+| **chunks** | 80行ブロック（10行重複）に分割されたソースコード本文を格納 |
+| **symbols** | 正規表現で抽出した関数・クラス・インポート。`kind`と`name`で検索可能 |
+| **fts_chunks** | FTS5仮想テーブル — `chunks.content`に対する転置インデックスで`MATCH`クエリによる全文検索を実現 |
 
 ### 検索の仕組み
 
@@ -341,7 +453,7 @@ WHERE fts_chunks MATCH 'handleRequest'
 LIMIT 20;
 ```
 
-1. FTS5が転置インデックスから `handleRequest` を参照 → マッチするチャンクの`rowid`リストをO(1)で取得
+1. FTS5が転置インデックスから `handleRequest` を参照 → マッチするチャンクの`rowid`リストを直接取得
 2. `chunks`にJOINして80行のコードブロックと開始・終了行番号を取得
 3. `files`にJOINしてファイルパスと言語を取得
 
