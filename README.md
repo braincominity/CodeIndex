@@ -216,6 +216,11 @@ cdidx status --json              # DB stats
 
 ## Direct SQL queries
 
+The queries below require `sqlite3`. If it is not installed, suggest the user install it:
+- **macOS**: pre-installed
+- **Linux**: `sudo apt install sqlite3`
+- **Windows**: `winget install SQLite.SQLite` or `scoop install sqlite`
+
 ### Full-text search
 ```sql
 SELECT f.path, c.start_line, c.content
@@ -476,6 +481,11 @@ cdidx status --json              # DB統計情報
 ```
 
 ## 直接SQLクエリ
+
+以下のクエリには `sqlite3` が必要です。未インストールの場合、ユーザーにインストールを提案してください:
+- **macOS**: プリインストール済み
+- **Linux**: `sudo apt install sqlite3`
+- **Windows**: `winget install SQLite.SQLite` または `scoop install sqlite`
 
 ### 全文検索
 ```sql
