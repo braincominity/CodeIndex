@@ -25,11 +25,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Batch commit optimization** — Database writes are committed in batches of 500 records per transaction, balancing memory usage and write performance. Affected: `Database/DbWriter.cs`.
 
-- **CLI interface** — Accepts project path as positional argument with `--db` (output path), `--rebuild` (full re-index), `--verbose` (detailed per-file logging), and `--help` options. Displays progress every 500 files and a summary with file/chunk/symbol counts and elapsed time. Affected: `Program.cs`.
+- **CLI interface** — Accepts project path as positional argument with `--db` (output path), `--rebuild` (full re-index), `--verbose` (detailed per-file logging), and `--help` options. Displays progress every 50 files and a summary with file/chunk/symbol counts and elapsed time. Affected: `Program.cs`.
 
 - **CLAUDE.md AI search prompt template** — Bilingual (English/Japanese) reference document with ready-to-use SQL queries for path search, full-text search, symbol lookup, language filtering, and file overview. Includes notes on branch switching and database staleness detection. Affected: `CLAUDE.md`.
 
-- **Test suite** — 41 xUnit tests covering ChunkSplitter (5 tests: small files, exact chunk size, large files with overlap, empty files, sequential indices), SymbolExtractor (9 tests: Python, JavaScript, C#, Go, Rust, null/unknown languages, line numbering), FileIndexer (5 tests: language detection for known/unknown extensions, directory/file skipping, record building), and Database integration (8 tests: schema creation, upsert, conflict handling, incremental skip, FTS population, symbol insertion, stale file purging, drop-all). Affected: `tests/CodeIndex.Tests/UnitTest1.cs`.
+- **Test suite** — 45 xUnit tests covering ChunkSplitter (5 tests: small files, exact chunk size, large files with overlap, empty files, sequential indices), SymbolExtractor (9 tests: Python, JavaScript, C#, Go, Rust, null/unknown languages, line numbering), FileIndexer (5 tests: language detection for known/unknown extensions, directory/file skipping, record building), Database integration (12 tests: schema creation, upsert, conflict handling, incremental skip, FTS population, symbol insertion, stale file purging, drop-all, file deletion by path, deletion of non-existent path, deletion isolation), and DbReader queries (14 tests: full-text search, empty results, language filtering, result limit, symbol search by name, symbol filtering by kind/language, combined filters, file listing, file filtering by language/name, symbol count in file results, status counts, language breakdown). Affected: `tests/CodeIndex.Tests/UnitTest1.cs`.
 
 ---
 
@@ -53,8 +53,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **バッチコミット最適化** — データベースへの書き込みを1トランザクションあたり500レコードのバッチでコミットし、メモリ使用量と書き込み性能のバランスを最適化。対象: `Database/DbWriter.cs`。
 
-- **CLIインターフェース** — プロジェクトパスを位置引数として受け取り、`--db`（出力パス）、`--rebuild`（完全再インデックス）、`--verbose`（ファイルごとの詳細ログ）、`--help`オプションに対応。500ファイルごとに進捗を表示し、ファイル数・チャンク数・シンボル数と経過時間のサマリーを出力。対象: `Program.cs`。
+- **CLIインターフェース** — プロジェクトパスを位置引数として受け取り、`--db`（出力パス）、`--rebuild`（完全再インデックス）、`--verbose`（ファイルごとの詳細ログ）、`--help`オプションに対応。50ファイルごとに進捗を表示し、ファイル数・チャンク数・シンボル数と経過時間のサマリーを出力。対象: `Program.cs`。
 
 - **CLAUDE.md AI検索プロンプトテンプレート** — 英語・日本語併記のリファレンスドキュメント。パス検索、全文検索、シンボル検索、言語フィルタリング、ファイル概要の即使用可能なSQLクエリを収録。ブランチ切り替えとデータベースの鮮度検出に関する注記を含む。対象: `CLAUDE.md`。
 
-- **テストスイート** — 41件のxUnitテスト。ChunkSplitter（5件: 小ファイル、ちょうどチャンクサイズ、重複ありの大ファイル、空ファイル、連番インデックス）、SymbolExtractor（9件: Python, JavaScript, C#, Go, Rust, null/未知言語, 行番号）、FileIndexer（5件: 既知/未知拡張子の言語検出、ディレクトリ/ファイルスキップ、レコード構築）、Database統合（8件: スキーマ作成、upsert、競合処理、インクリメンタルスキップ、FTS反映、シンボル挿入、古いファイルパージ、全削除）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
+- **テストスイート** — 45件のxUnitテスト。ChunkSplitter（5件: 小ファイル、ちょうどチャンクサイズ、重複ありの大ファイル、空ファイル、連番インデックス）、SymbolExtractor（9件: Python, JavaScript, C#, Go, Rust, null/未知言語, 行番号）、FileIndexer（5件: 既知/未知拡張子の言語検出、ディレクトリ/ファイルスキップ、レコード構築）、Database統合（12件: スキーマ作成、upsert、競合処理、インクリメンタルスキップ、FTS反映、シンボル挿入、古いファイルパージ、全削除、パスによるファイル削除、存在しないパスの削除、削除の分離性）、DbReaderクエリ（14件: 全文検索、空結果、言語フィルタ、結果数制限、名前によるシンボル検索、種別・言語によるシンボルフィルタ、複合フィルタ、ファイル一覧、言語・名前によるファイルフィルタ、ファイル結果のシンボル数、ステータスカウント、言語内訳）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
