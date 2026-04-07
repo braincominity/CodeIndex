@@ -46,9 +46,12 @@ public class DbWriter
     public long UpsertFile(FileRecord file)
     {
         using var cmd = _conn.CreateCommand();
+        // Use RETURNING to atomically insert and retrieve the ID
+        // RETURNINGを使って挿入とID取得をアトミックに行う
         cmd.CommandText = @"
             INSERT OR REPLACE INTO files (path, lang, size, lines, snippet, checksum, modified, indexed_at)
-            VALUES (@path, @lang, @size, @lines, @snippet, @checksum, @modified, CURRENT_TIMESTAMP)";
+            VALUES (@path, @lang, @size, @lines, @snippet, @checksum, @modified, CURRENT_TIMESTAMP)
+            RETURNING id";
         cmd.Parameters.AddWithValue("@path", file.Path);
         cmd.Parameters.AddWithValue("@lang", (object?)file.Lang ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@size", file.Size);
@@ -56,14 +59,7 @@ public class DbWriter
         cmd.Parameters.AddWithValue("@snippet", (object?)file.Snippet ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@checksum", (object?)file.Checksum ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@modified", file.Modified);
-        cmd.ExecuteNonQuery();
-
-        // Retrieve the inserted/replaced file ID
-        // 挿入・置換されたファイルIDを取得
-        using var idCmd = _conn.CreateCommand();
-        idCmd.CommandText = "SELECT id FROM files WHERE path = @path";
-        idCmd.Parameters.AddWithValue("@path", file.Path);
-        return (long)idCmd.ExecuteScalar()!;
+        return (long)cmd.ExecuteScalar()!;
     }
 
     /// <summary>
@@ -96,11 +92,12 @@ public class DbWriter
     {
         for (int i = 0; i < chunks.Count; i += BatchSize)
         {
-            var batch = chunks.Skip(i).Take(BatchSize);
+            int end = Math.Min(i + BatchSize, chunks.Count);
             using var transaction = _conn.BeginTransaction();
 
-            foreach (var chunk in batch)
+            for (int j = i; j < end; j++)
             {
+                var chunk = chunks[j];
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
@@ -133,11 +130,12 @@ public class DbWriter
     {
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
-            var batch = symbols.Skip(i).Take(BatchSize);
+            int end = Math.Min(i + BatchSize, symbols.Count);
             using var transaction = _conn.BeginTransaction();
 
-            foreach (var symbol in batch)
+            for (int j = i; j < end; j++)
             {
+                var symbol = symbols[j];
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO symbols (file_id, kind, name, line)

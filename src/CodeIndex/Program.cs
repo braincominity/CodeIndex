@@ -57,12 +57,13 @@ if (purged > 0)
 Console.WriteLine("Indexing...");
 int processed = 0;
 int skipped = 0;
+int errors = 0;
 
 foreach (var filePath in files)
 {
     try
     {
-        var record = indexer.BuildRecord(filePath);
+        var (record, content) = indexer.BuildRecord(filePath);
 
         // Incremental: skip unchanged files / インクリメンタル: 未変更ファイルをスキップ
         var existingId = writer.GetUnchangedFileId(record.Path, record.Modified);
@@ -83,10 +84,6 @@ foreach (var filePath in files)
         // 再インデックス前に古いチャンク・シンボルを削除
         writer.DeleteFileData(fileId);
 
-        // Read content for chunking and symbol extraction
-        // チャンク分割・シンボル抽出用にコンテンツを読み込み
-        var content = File.ReadAllText(filePath, new System.Text.UTF8Encoding(false, false));
-
         // Split into chunks / チャンクに分割
         var chunks = ChunkSplitter.Split(fileId, content);
         writer.InsertChunks(chunks);
@@ -100,9 +97,13 @@ foreach (var filePath in files)
     }
     catch (Exception ex)
     {
-        // Log error but continue / エラーをログ出力して続行
+        // Always count errors; show details in verbose mode
+        // エラーは常にカウント、詳細はverboseモードで表示
+        errors++;
         if (verbose)
-            Console.WriteLine($"  [ERR]  {filePath}: {ex.Message}");
+            Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}\n{ex.StackTrace}");
+        else
+            Console.Error.WriteLine($"  [ERR]  {filePath}: {ex.Message}");
     }
 
     processed++;
@@ -122,6 +123,8 @@ Console.WriteLine($"  Chunks  : {totalChunks:N0}");
 Console.WriteLine($"  Symbols : {totalSymbols:N0}");
 if (skipped > 0)
     Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
+if (errors > 0)
+    Console.WriteLine($"  Errors  : {errors:N0}");
 Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
 
 return 0;

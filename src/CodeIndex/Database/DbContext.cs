@@ -17,10 +17,15 @@ public class DbContext : IDisposable
         _connection = new SqliteConnection($"Data Source={dbPath}");
         _connection.Open();
 
-        // Enable WAL mode for better concurrent performance
-        // WALモードを有効にして並行性能を向上
-        Execute("PRAGMA journal_mode=WAL");
+        // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
+        var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
+        if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
+            Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
+
         Execute("PRAGMA foreign_keys=ON");
+        var fkResult = ExecuteScalar("PRAGMA foreign_keys");
+        if (fkResult != "1")
+            Console.Error.WriteLine("Warning: foreign_keys pragma not enabled");
     }
 
     /// <summary>
@@ -98,6 +103,13 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private string ExecuteScalar(string sql)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sql;
+        return cmd.ExecuteScalar()?.ToString() ?? "";
     }
 
     public void Dispose()

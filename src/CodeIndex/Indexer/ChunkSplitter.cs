@@ -23,7 +23,16 @@ public static class ChunkSplitter
     /// <returns>List of chunk records / チャンクレコードのリスト</returns>
     public static List<ChunkRecord> Split(long fileId, string content)
     {
-        var lines = content.Split('\n');
+        // Empty file produces no chunks / 空ファイルはチャンクなし
+        if (string.IsNullOrEmpty(content))
+            return [];
+
+        // Normalize line endings to LF before splitting / 分割前に改行をLFに正規化
+        content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Remove trailing newline to avoid phantom empty line / 末尾改行による空行を除去
+        var lines = content.EndsWith('\n')
+            ? content[..^1].Split('\n')
+            : content.Split('\n');
         var chunks = new List<ChunkRecord>();
         int step = ChunkSize - Overlap;
         int chunkIndex = 0;

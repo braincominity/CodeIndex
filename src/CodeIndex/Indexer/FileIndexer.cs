@@ -63,6 +63,9 @@ public class FileIndexer
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     };
 
+    // Maximum file size to index (10 MB) / インデックス対象の最大ファイルサイズ (10 MB)
+    private const long MaxFileSize = 10 * 1024 * 1024;
+
     private readonly string _projectRoot;
 
     public FileIndexer(string projectRoot)
@@ -133,19 +136,44 @@ public class FileIndexer
     /// Build a FileRecord from the given file path.
     /// 指定パスからFileRecordを構築する。
     /// </summary>
-    public FileRecord BuildRecord(string absolutePath)
+    /// <summary>
+    /// Build a FileRecord and return file content (avoids reading the file twice).
+    /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
+    /// </summary>
+    public (FileRecord record, string content) BuildRecord(string absolutePath)
     {
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var info = new FileInfo(absolutePath);
 
-        // Read content with UTF-8, replacing invalid bytes
-        // UTF-8で読み込み、不正バイトは置換文字で処理
-        var content = File.ReadAllText(absolutePath, new UTF8Encoding(false, false));
-        var lines = content.Split('\n');
+        // Skip files exceeding size limit to avoid OutOfMemoryException
+        // OOM防止のためサイズ上限を超えるファイルをスキップ
+        if (info.Length > MaxFileSize)
+            throw new InvalidOperationException($"File too large ({info.Length / 1024 / 1024} MB > {MaxFileSize / 1024 / 1024} MB limit)");
+
+        // Read raw bytes and decode UTF-8; detect invalid sequences
+        // 生バイト読み込み後UTF-8デコード、不正シーケンスを検出
+        var bytes = File.ReadAllBytes(absolutePath);
+        string content;
+        try
+        {
+            content = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
+            Console.Error.WriteLine($"  [WARN] {relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)");
+            content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
+        }
+        // Normalize line endings to LF / 改行をLFに正規化
+        content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Accurate line count: ignore trailing newline / 正確な行数: 末尾改行を無視
+        var lines = content.EndsWith('\n')
+            ? content[..^1].Split('\n')
+            : content.Split('\n');
         var snippet = content.Length > 2000 ? content[..2000] : content;
         var checksum = ComputeChecksum(content);
 
-        return new FileRecord
+        var record = new FileRecord
         {
             Path = relativePath.Replace('\\', '/'),
             Lang = DetectLanguage(absolutePath),
@@ -155,6 +183,8 @@ public class FileIndexer
             Checksum = checksum,
             Modified = info.LastWriteTimeUtc,
         };
+
+        return (record, content);
     }
 
     /// <summary>
