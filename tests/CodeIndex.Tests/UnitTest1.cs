@@ -275,7 +275,7 @@ public class FileIndexerTests
             File.WriteAllText(filePath, "def main():\n    print('hello')\n");
 
             var indexer = new FileIndexer(tempDir);
-            var record = indexer.BuildRecord(filePath);
+            var (record, content) = indexer.BuildRecord(filePath);
 
             Assert.Equal("main.py", record.Path);
             Assert.Equal("python", record.Lang);
