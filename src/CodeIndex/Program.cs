@@ -595,6 +595,8 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
     bool verbose = false;
     bool json = false;
     string? easterEgg = null;
+    int spinnerFlagCount = 0;
+    bool randomSpinner = false;
     var commits = new List<string>();
     var updateFiles = new List<string>();
 
@@ -626,12 +628,32 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
                 return (null, dbPath, rebuild, verbose, json, commits, updateFiles, null);
             case "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky":
                 easterEgg = args[i];
+                spinnerFlagCount++;
+                break;
+            case "--random-spinner":
+                randomSpinner = true;
                 break;
             default:
                 if (!args[i].StartsWith('-'))
                     projectPath = args[i];
                 break;
         }
+    }
+
+    // Multiple spinner flags detected — fall back to matcha with a warning
+    // 複数のスピナーフラグ検出 — 警告を出して抹茶にフォールバック
+    if (spinnerFlagCount > 1)
+    {
+        Console.Error.WriteLine("\U0001f375 Simultaneous intake of beer and coffee is not recommended. How about some matcha instead?");
+        Console.Error.WriteLine("   \u30d3\u30fc\u30eb\u3068\u30b3\u30fc\u30d2\u30fc\u306e\u540c\u6642\u6442\u53d6\u306f\u304a\u3059\u3059\u3081\u3057\u307e\u305b\u3093\u3002\u62b9\u8336\u306f\u3044\u304b\u304c\uff1f");
+        easterEgg = "--matcha";
+    }
+
+    // --random-spinner picks a random theme / --random-spinnerでランダムテーマ選択
+    if (randomSpinner && easterEgg == null)
+    {
+        var themes = new[] { "--sushi", "--coffee", "--ramen", "--wine", "--beer", "--matcha", "--whisky" };
+        easterEgg = themes[Random.Shared.Next(themes.Length)];
     }
 
     return (projectPath, dbPath, rebuild, verbose, json, commits, updateFiles, easterEgg);
@@ -777,6 +799,7 @@ static void PrintUsage()
     Console.WriteLine("  --beer                     \U0001f37a Tapping... Pouring... Cheers!");
     Console.WriteLine("  --matcha                   \U0001f375 Sifting... Whisking... Douzo!");
     Console.WriteLine("  --whisky                   \U0001f943 Mashing... Distilling... Slainte!");
+    Console.WriteLine("  --random-spinner           \U0001f3b2 Pick a random theme");
 }
 
 // --- Spinner / スピナー ---
