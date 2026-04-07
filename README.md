@@ -206,11 +206,11 @@ Languages:
 
 ## How it works
 
-cdidx scans your project directory, splits each source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) skips files that haven't changed, so re-indexing after a branch switch is fast.
+cdidx scans your project directory, splits each source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) compares each file's last-modified timestamp against the database and skips unchanged files entirely, so re-indexing after a branch switch only processes the files that actually differ.
 
 ## Git branch switching
 
-The database reflects the working tree at the time of the last index. After switching branches, simply re-run `cdidx .` — incremental mode makes this fast.
+The database reflects the working tree at the time of the last index. After switching branches, simply re-run `cdidx .` — only files whose timestamps differ from the database are re-indexed, so the update is proportional to the number of changed files, not the total project size.
 
 | Situation | What happens |
 |---|---|
@@ -554,11 +554,11 @@ Languages:
 
 ## 動作の仕組み
 
-cdidxはプロジェクトディレクトリを走査し、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では変更のないファイルをスキップするため、ブランチ切り替え後の再インデックスも高速です。
+cdidxはプロジェクトディレクトリを走査し、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、変更のないファイルは処理をスキップするため、ブランチ切り替え後の再インデックスでは実際に差分のあるファイルだけが処理されます。
 
 ## Gitブランチ切り替え
 
-データベースはインデックス実行時のワーキングツリーを反映します。ブランチ切り替え後は `cdidx .` を再実行してください。インクリメンタルモードなので高速です。
+データベースはインデックス実行時のワーキングツリーを反映します。ブランチ切り替え後は `cdidx .` を再実行してください。タイムスタンプが変わったファイルだけを再インデックスするため、更新量はプロジェクト全体のサイズではなく変更ファイル数に比例します。
 
 | 状況 | 動作 |
 |---|---|
