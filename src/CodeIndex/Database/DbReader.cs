@@ -16,11 +16,29 @@ public class DbReader
     }
 
     /// <summary>
+    /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
+    /// FTS5 MATCH用にユーザー入力をサニタイズ（各トークンをフレーズとして引用）。
+    /// Prevents FTS5 syntax errors from special characters (*, ", AND, OR, NOT, NEAR, etc.).
+    /// 特殊文字（*, ", AND, OR, NOT, NEAR等）によるFTS5構文エラーを防止する。
+    /// </summary>
+    private static string SanitizeFtsQuery(string query)
+    {
+        // Escape double quotes inside the query, then wrap each whitespace-separated
+        // token in double quotes so FTS5 treats them as literal phrases.
+        // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
+        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0)
+            return "\"\"";
+        return string.Join(" ", tokens.Select(t => "\"" + t.Replace("\"", "\"\"") + "\""));
+    }
+
+    /// <summary>
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
     public List<SearchResult> Search(string query, int limit = 20, string? lang = null)
     {
+        var sanitizedQuery = SanitizeFtsQuery(query);
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -38,7 +56,7 @@ public class DbReader
         sql += " ORDER BY rank LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", query);
+        cmd.Parameters.AddWithValue("@query", sanitizedQuery);
         cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
