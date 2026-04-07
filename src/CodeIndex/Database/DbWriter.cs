@@ -18,30 +18,73 @@ public class DbWriter
     }
 
     /// <summary>
-    /// Check if a file needs re-indexing by comparing modified time.
-    /// 更新日時を比較してファイルの再インデックスが必要か判定する。
+    /// Check if a file needs re-indexing by comparing modified time and checksum.
+    /// 更新日時とチェックサムを比較してファイルの再インデックスが必要か判定する。
     /// Returns the existing file ID if unchanged, or null if indexing is needed.
+    /// If the timestamp differs but the checksum matches, updates the timestamp
+    /// in the DB and returns the ID (content unchanged, e.g. after git checkout).
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
+    /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null)
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT id, modified FROM files WHERE path = @path";
+        cmd.CommandText = "SELECT id, modified, checksum FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", relativePath);
 
         using var reader = cmd.ExecuteReader();
         if (reader.Read())
         {
+            var id = reader.GetInt64(0);
             var existingModified = reader.GetDateTime(1);
+
+            // Fast path: timestamp unchanged / 高速パス: タイムスタンプ一致
             if (existingModified == modified)
-                return reader.GetInt64(0);
+                return id;
+
+            // Slow path: timestamp changed but content may be the same (e.g. git checkout)
+            // 低速パス: タイムスタンプは変わったが内容は同じ可能性（例: git checkout）
+            if (checksum != null && !reader.IsDBNull(2))
+            {
+                var existingChecksum = reader.GetString(2);
+                if (existingChecksum == checksum)
+                {
+                    // Update timestamp so next run takes the fast path
+                    // 次回実行で高速パスを通るようタイムスタンプを更新
+                    using var updateCmd = _conn.CreateCommand();
+                    updateCmd.CommandText = "UPDATE files SET modified = @modified WHERE id = @id";
+                    updateCmd.Parameters.AddWithValue("@modified", modified);
+                    updateCmd.Parameters.AddWithValue("@id", id);
+                    updateCmd.ExecuteNonQuery();
+                    return id;
+                }
+            }
         }
         return null;
     }
 
     /// <summary>
+    /// Clean up existing file data (FTS, chunks, symbols) before re-indexing.
+    /// 再インデックス前に既存ファイルデータ（FTS、チャンク、シンボル）を削除する。
+    /// Must be called BEFORE UpsertFile to prevent FTS orphan entries caused by
+    /// INSERT OR REPLACE triggering CASCADE deletes that bypass FTS cleanup.
+    /// INSERT OR REPLACE の CASCADE 削除が FTS をバイパスするため、UpsertFile の前に呼ぶこと。
+    /// </summary>
+    public void CleanExistingFileData(string relativePath)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        var result = cmd.ExecuteScalar();
+        if (result != null)
+            DeleteFileData((long)result);
+    }
+
+    /// <summary>
     /// Upsert a file record and return its ID.
     /// ファイルレコードをUPSERTしてIDを返す。
+    /// NOTE: Call CleanExistingFileData() before this method to avoid FTS orphans.
+    /// 注意: FTS孤立エントリを防ぐため、このメソッドの前にCleanExistingFileData()を呼ぶこと。
     /// </summary>
     public long UpsertFile(FileRecord file)
     {

@@ -15,9 +15,12 @@ dotnet run --project src/CodeIndex -- <command> [options]
 ```
 src/CodeIndex/
   Program.cs                  — CLI entry point, subcommand routing
+  Cli/
+    ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
+    GitHelper.cs              — Git diff-tree helper for --commits option
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
-    DbWriter.cs               — UPSERT, batch insert, stale file purge
+    DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup
     DbReader.cs               — FTS search, symbol lookup, file listing, status
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
@@ -92,6 +95,7 @@ idx_files_modified  ON files(modified)
 idx_files_path      ON files(path)
 idx_chunks_file     ON chunks(file_id)
 idx_symbols_name    ON symbols(name)
+idx_symbols_file    ON symbols(file_id)
 ```
 
 ### Entity-Relationship
@@ -389,7 +393,7 @@ Query commands (`search`, `symbols`, `files`) default to **human-readable output
 - **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability.
 - **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
 - **Manual arg parsing** — `System.CommandLine` was removed to reduce dependencies. Simple switch-based parsing.
-- **SHA256 checksums** — Stored per file for integrity verification (not currently used for change detection, but available).
+- **SHA256 checksums** — Stored per file and used as a fallback for change detection when timestamps differ (e.g. after `git checkout`).
 - **UTF-8 with fallback** — Invalid UTF-8 bytes are replaced with U+FFFD rather than failing the entire file.
 
 ## Coding conventions
@@ -416,9 +420,12 @@ dotnet run --project src/CodeIndex -- <command> [options]
 ```
 src/CodeIndex/
   Program.cs                  — CLIエントリポイント、サブコマンドルーティング
+  Cli/
+    ConsoleUi.cs              — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
+    GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
-    DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ
+    DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ
     DbReader.cs               — FTS検索、シンボル検索、ファイル一覧、ステータス
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
@@ -493,6 +500,7 @@ idx_files_modified  ON files(modified)
 idx_files_path      ON files(path)
 idx_chunks_file     ON chunks(file_id)
 idx_symbols_name    ON symbols(name)
+idx_symbols_file    ON symbols(file_id)
 ```
 
 ### エンティティ関連図

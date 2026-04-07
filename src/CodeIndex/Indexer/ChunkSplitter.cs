@@ -27,8 +27,11 @@ public static class ChunkSplitter
         if (string.IsNullOrEmpty(content))
             return [];
 
-        // Normalize line endings to LF before splitting / 分割前に改行をLFに正規化
-        content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Defensive CRLF normalization — FileIndexer.BuildRecord already normalizes,
+        // but this method is public and may be called directly with raw content.
+        // 防御的CRLF正規化 — BuildRecordで正規化済みだが、直接呼び出し時の安全策。
+        if (content.Contains('\r'))
+            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         // Remove trailing newline to avoid phantom empty line / 末尾改行による空行を除去
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')

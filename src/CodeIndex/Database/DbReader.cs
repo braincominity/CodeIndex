@@ -16,11 +16,29 @@ public class DbReader
     }
 
     /// <summary>
+    /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
+    /// FTS5 MATCH用にユーザー入力をサニタイズ（各トークンをフレーズとして引用）。
+    /// Prevents FTS5 syntax errors from special characters (*, ", AND, OR, NOT, NEAR, etc.).
+    /// 特殊文字（*, ", AND, OR, NOT, NEAR等）によるFTS5構文エラーを防止する。
+    /// </summary>
+    private static string SanitizeFtsQuery(string query)
+    {
+        // Escape double quotes inside the query, then wrap each whitespace-separated
+        // token in double quotes so FTS5 treats them as literal phrases.
+        // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
+        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0)
+            return "\"\"";
+        return string.Join(" ", tokens.Select(t => "\"" + t.Replace("\"", "\"\"") + "\""));
+    }
+
+    /// <summary>
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
     public List<SearchResult> Search(string query, int limit = 20, string? lang = null)
     {
+        var sanitizedQuery = SanitizeFtsQuery(query);
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -38,7 +56,7 @@ public class DbReader
         sql += " ORDER BY rank LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", query);
+        cmd.Parameters.AddWithValue("@query", sanitizedQuery);
         cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
@@ -61,6 +79,15 @@ public class DbReader
     }
 
     /// <summary>
+    /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
+    /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
+    /// </summary>
+    private static string EscapeLikeQuery(string input)
+    {
+        return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+    }
+
+    /// <summary>
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
@@ -75,7 +102,7 @@ public class DbReader
             WHERE 1=1";
 
         if (query != null)
-            sql += " AND s.name LIKE @query";
+            sql += " AND s.name LIKE @query ESCAPE '\\'";
         if (kind != null)
             sql += " AND s.kind = @kind";
         if (lang != null)
@@ -85,7 +112,7 @@ public class DbReader
 
         cmd.CommandText = sql;
         if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{query}%");
+            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
@@ -123,7 +150,7 @@ public class DbReader
             WHERE 1=1";
 
         if (query != null)
-            sql += " AND f.path LIKE @query";
+            sql += " AND f.path LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
 
@@ -131,7 +158,7 @@ public class DbReader
 
         cmd.CommandText = sql;
         if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{query}%");
+            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         cmd.Parameters.AddWithValue("@limit", limit);
