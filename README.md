@@ -79,20 +79,12 @@ On small projects, `grep` works fine. But as a codebase grows to tens of thousan
 
 CodeIndex builds a SQLite database with four main structures:
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ files                                                   │
-│  id | path | lang | size | lines | checksum | modified  │
-├─────────────────────────────────────────────────────────┤
-│ chunks                          │ symbols               │
-│  file_id | start_line | end_line│  file_id | kind | name│
-│  chunk_index | content          │  line                 │
-├─────────────────────────────────┴─────────────────────────┤
-│ fts_chunks (FTS5 virtual table)                         │
-│  Inverted index over chunks.content                     │
-│  Enables full-text search with MATCH syntax             │
-└─────────────────────────────────────────────────────────┘
-```
+| Table | Columns |
+|---|---|
+| **files** | `id`, `path`, `lang`, `size`, `lines`, `checksum`, `modified` |
+| **chunks** | `file_id`, `start_line`, `end_line`, `chunk_index`, `content` |
+| **symbols** | `file_id`, `kind`, `name`, `line` |
+| **fts_chunks** (FTS5 virtual table) | Inverted index over `chunks.content` — enables full-text search with `MATCH` syntax |
 
 - **`files`** — One row per source file. Stores path, language, size, line count, SHA256 checksum, and modification time. Indexed on `path`, `lang`, and `modified`.
 - **`chunks`** — Each file is split into 80-line segments with 10-line overlap. This gives search results with surrounding context, not isolated lines.
@@ -325,20 +317,12 @@ codeindex /path/to/project --verbose
 
 CodeIndexは4つの主要構造を持つSQLiteデータベースを構築します：
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ files                                                   │
-│  id | path | lang | size | lines | checksum | modified  │
-├─────────────────────────────────────────────────────────┤
-│ chunks                          │ symbols               │
-│  file_id | start_line | end_line│  file_id | kind | name│
-│  chunk_index | content          │  line                 │
-├─────────────────────────────────┴─────────────────────────┤
-│ fts_chunks (FTS5仮想テーブル)                            │
-│  chunks.contentに対する転置インデックス                    │
-│  MATCH構文による全文検索を実現                            │
-└─────────────────────────────────────────────────────────┘
-```
+| テーブル | カラム |
+|---|---|
+| **files** | `id`, `path`, `lang`, `size`, `lines`, `checksum`, `modified` |
+| **chunks** | `file_id`, `start_line`, `end_line`, `chunk_index`, `content` |
+| **symbols** | `file_id`, `kind`, `name`, `line` |
+| **fts_chunks** (FTS5仮想テーブル) | `chunks.content`に対する転置インデックス — `MATCH`構文による全文検索を実現 |
 
 - **`files`** — ソースファイル1つにつき1行。パス、言語、サイズ、行数、SHA256チェックサム、更新日時を格納。`path`・`lang`・`modified`にインデックスあり。
 - **`chunks`** — 各ファイルを80行単位・10行重複で分割。孤立した行ではなく、前後の文脈を含む検索結果を返せる。
