@@ -150,9 +150,20 @@ public class FileIndexer
         if (info.Length > MaxFileSize)
             throw new InvalidOperationException($"File too large ({info.Length / 1024 / 1024} MB > {MaxFileSize / 1024 / 1024} MB limit)");
 
-        // Read content with UTF-8, replacing invalid bytes
-        // UTF-8で読み込み、不正バイトは置換文字で処理
-        var content = File.ReadAllText(absolutePath, new UTF8Encoding(false, false));
+        // Read raw bytes and decode UTF-8; detect invalid sequences
+        // 生バイト読み込み後UTF-8デコード、不正シーケンスを検出
+        var bytes = File.ReadAllBytes(absolutePath);
+        string content;
+        try
+        {
+            content = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
+            Console.Error.WriteLine($"  [WARN] {relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)");
+            content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
+        }
         // Normalize line endings to LF / 改行をLFに正規化
         content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         // Accurate line count: ignore trailing newline / 正確な行数: 末尾改行を無視
