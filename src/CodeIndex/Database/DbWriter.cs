@@ -101,19 +101,21 @@ public class DbWriter
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
-                    VALUES (@fid, @idx, @start, @end, @content)";
+                    VALUES (@fid, @idx, @start, @end, @content)
+                    RETURNING id";
                 cmd.Parameters.AddWithValue("@fid", chunk.FileId);
                 cmd.Parameters.AddWithValue("@idx", chunk.ChunkIndex);
                 cmd.Parameters.AddWithValue("@start", chunk.StartLine);
                 cmd.Parameters.AddWithValue("@end", chunk.EndLine);
                 cmd.Parameters.AddWithValue("@content", chunk.Content);
-                cmd.ExecuteNonQuery();
+                var chunkId = (long)cmd.ExecuteScalar()!;
 
-                // Populate FTS index / FTSインデックスに追加
+                // Populate FTS index with explicit chunk ID / 明示的なチャンクIDでFTSインデックスに追加
                 using var ftsCmd = _conn.CreateCommand();
                 ftsCmd.CommandText = @"
                     INSERT INTO fts_chunks (rowid, content)
-                    VALUES (last_insert_rowid(), @content)";
+                    VALUES (@rowid, @content)";
+                ftsCmd.Parameters.AddWithValue("@rowid", chunkId);
                 ftsCmd.Parameters.AddWithValue("@content", chunk.Content);
                 ftsCmd.ExecuteNonQuery();
             }
