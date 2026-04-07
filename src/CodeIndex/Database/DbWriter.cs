@@ -152,6 +152,28 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Delete a file and its associated data by relative path. Returns true if found.
+    /// 相対パスでファイルと関連データを削除する。見つかればtrueを返す。
+    /// </summary>
+    public bool DeleteFileByPath(string relativePath)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        var result = cmd.ExecuteScalar();
+        if (result == null) return false;
+
+        var fileId = (long)result;
+        DeleteFileData(fileId);
+
+        using var cmd2 = _conn.CreateCommand();
+        cmd2.CommandText = "DELETE FROM files WHERE id = @id";
+        cmd2.Parameters.AddWithValue("@id", fileId);
+        cmd2.ExecuteNonQuery();
+        return true;
+    }
+
+    /// <summary>
     /// Remove files from DB that no longer exist on disk (e.g. after branch switch).
     /// ディスク上に存在しなくなったファイルをDBから削除する（ブランチ切り替え対応）。
     /// </summary>

@@ -512,6 +512,60 @@ public class DatabaseTests : IDisposable
         Assert.Equal(0, symbols);
     }
 
+    [Fact]
+    public void DeleteFileByPath_RemovesFileAndData()
+    {
+        // Insert a file with chunks and symbols, then delete by path
+        // ファイルとチャンク・シンボルを挿入し、パスで削除
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/remove_me.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = DateTime.UtcNow,
+        });
+
+        _writer.InsertChunks([new() { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "def foo(): pass" }]);
+        _writer.InsertSymbols([new() { FileId = fileId, Kind = "function", Name = "foo", Line = 1 }]);
+
+        var result = _writer.DeleteFileByPath("src/remove_me.py");
+        Assert.True(result);
+
+        var (files, chunks, symbols) = _writer.GetCounts();
+        Assert.Equal(0, files);
+        Assert.Equal(0, chunks);
+        Assert.Equal(0, symbols);
+    }
+
+    [Fact]
+    public void DeleteFileByPath_ReturnsFalseIfNotFound()
+    {
+        // Deleting a non-existent path returns false
+        // 存在しないパスの削除はfalseを返す
+        var result = _writer.DeleteFileByPath("nonexistent/file.py");
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void DeleteFileByPath_DoesNotAffectOtherFiles()
+    {
+        // Deleting one file should not affect another
+        // 1ファイルの削除は他のファイルに影響しない
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/keep.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = DateTime.UtcNow,
+        });
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/delete.py", Lang = "python", Size = 30, Lines = 3,
+            Modified = DateTime.UtcNow,
+        });
+
+        _writer.DeleteFileByPath("src/delete.py");
+
+        var (files, _, _) = _writer.GetCounts();
+        Assert.Equal(1, files);
+    }
+
     public void Dispose()
     {
         _db.Dispose();
