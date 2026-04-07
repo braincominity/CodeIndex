@@ -1,30 +1,45 @@
-# CodeIndex — Development Guide for AI
+# cdidx (CodeIndex) — Development Guide for AI
 
 ## Project overview
 
-CodeIndex is a .NET 8 CLI tool that indexes source code into a SQLite database (FTS5) for AI-powered search. It is a small, focused project — no unnecessary abstractions.
+cdidx is a .NET 8 CLI tool that indexes source code into a SQLite database (FTS5) for AI-powered search. It supports both human-readable and machine-readable (JSON) output, making it usable by both humans and AI agents. Assembly name is `cdidx` (like `rg` for ripgrep).
 
 ## Build & test
 
 ```bash
 dotnet build
 dotnet test
-dotnet run --project src/CodeIndex -- <projectPath> [--db <path>] [--rebuild] [--verbose]
+dotnet run --project src/CodeIndex -- <command> [options]
+```
+
+## CLI commands
+
+```bash
+# Indexing
+cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
+cdidx <projectPath>                          # shorthand for 'index'
+
+# Query (default output: JSON lines for AI consumption)
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json|--no-json]
+cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
+cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx status [--json]
 ```
 
 ## Architecture
 
 ```
 src/CodeIndex/
-  Program.cs              — CLI entry point, argument parsing, orchestration
-  Database/DbContext.cs    — SQLite connection, schema init (WAL, FTS5)
-  Database/DbWriter.cs    — UPSERT, batch insert, stale file purge
-  Indexer/FileIndexer.cs   — Directory scan, language detection, FileRecord building
-  Indexer/ChunkSplitter.cs — 80-line chunks with 10-line overlap
+  Program.cs               — CLI entry point, subcommand routing, --json support
+  Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5)
+  Database/DbWriter.cs      — UPSERT, batch insert, stale file purge
+  Database/DbReader.cs      — Query operations (FTS search, symbol lookup, file listing, status)
+  Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building
+  Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
-  Models/                  — FileRecord, ChunkRecord, SymbolRecord (plain DTOs)
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord (plain DTOs)
 tests/CodeIndex.Tests/
-  UnitTest1.cs             — 41 xUnit tests (chunker, symbols, indexer, DB integration)
+  UnitTest1.cs              — xUnit tests (chunker, symbols, indexer, DB integration, DbReader queries)
 ```
 
 ## Key design decisions
@@ -35,6 +50,8 @@ tests/CodeIndex.Tests/
 - **Batch commits** — 500 records per transaction for write performance.
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
+- **JSON-first for queries** — search/symbols/files default to JSON lines output (AI-friendly). Use `--no-json` for human-readable.
+- **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 
 ## Conventions
 
@@ -44,33 +61,48 @@ tests/CodeIndex.Tests/
 
 ---
 
-# CodeIndex — AI向け開発ガイド
+# cdidx (CodeIndex) — AI向け開発ガイド
 
 ## プロジェクト概要
 
-CodeIndexは、ソースコードをSQLiteデータベース（FTS5）にインデックスする.NET 8 CLIツール。AI検索用途に特化した小規模で焦点の絞られたプロジェクト。
+cdidxは、ソースコードをSQLiteデータベース（FTS5）にインデックスする.NET 8 CLIツール。人間向けとAIエージェント向け（JSON）の両方の出力に対応。アセンブリ名は`cdidx`（ripgrepの`rg`のように短縮）。
 
 ## ビルド・テスト
 
 ```bash
 dotnet build
 dotnet test
-dotnet run --project src/CodeIndex -- <projectPath> [--db <path>] [--rebuild] [--verbose]
+dotnet run --project src/CodeIndex -- <command> [options]
+```
+
+## CLIコマンド
+
+```bash
+# インデックス作成
+cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
+cdidx <projectPath>                          # 'index'の省略形
+
+# クエリ（デフォルト出力: AI向けJSONライン）
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json|--no-json]
+cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
+cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx status [--json]
 ```
 
 ## アーキテクチャ
 
 ```
 src/CodeIndex/
-  Program.cs              — CLIエントリポイント、引数解析、オーケストレーション
-  Database/DbContext.cs    — SQLite接続、スキーマ初期化（WAL, FTS5）
-  Database/DbWriter.cs    — UPSERT、バッチ挿入、古いファイルのパージ
-  Indexer/FileIndexer.cs   — ディレクトリ走査、言語検出、FileRecord構築
-  Indexer/ChunkSplitter.cs — 80行チャンク（10行重複）
+  Program.cs               — CLIエントリポイント、サブコマンドルーティング、--jsonサポート
+  Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5）
+  Database/DbWriter.cs      — UPSERT、バッチ挿入、古いファイルのパージ
+  Database/DbReader.cs      — クエリ操作（FTS検索、シンボル検索、ファイル一覧、ステータス）
+  Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築
+  Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
-  Models/                  — FileRecord, ChunkRecord, SymbolRecord（プレーンDTO）
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord（プレーンDTO）
 tests/CodeIndex.Tests/
-  UnitTest1.cs             — 41件のxUnitテスト（チャンク、シンボル、インデクサー、DB統合）
+  UnitTest1.cs              — xUnitテスト（チャンク、シンボル、インデクサー、DB統合、DbReaderクエリ）
 ```
 
 ## 主要な設計判断
@@ -81,6 +113,8 @@ tests/CodeIndex.Tests/
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
+- **クエリはJSONファースト** — search/symbols/filesはデフォルトでJSONライン出力（AI向け）。`--no-json`で人間向け出力。
+- **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 
 ## コーディング規約
 
