@@ -417,16 +417,30 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
         Console.WriteLine();
     }
 
+    CancellationTokenSource? purgeCts = null;
+    if (!jsonOutput)
+        purgeCts = StartSpinner("Cleaning up stale entries...", spinnerFrames);
     var purged = writer.PurgeStaleFiles(projectRoot);
+    StopSpinner(purgeCts);
     if (purged > 0 && !jsonOutput)
         Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
 
-    if (!jsonOutput) Console.WriteLine("Indexing...");
+    CancellationTokenSource? indexCts = null;
+    if (!jsonOutput)
+        indexCts = StartSpinner("Indexing...", spinnerFrames);
     int processed = 0, skipped = 0, errors = 0;
     var errorList = new List<object>();
+    // Stop the indexing spinner before the first progress update / 最初のプログレス更新前にスピナーを停止
+    bool indexSpinnerStopped = false;
 
     foreach (var filePath in files)
     {
+        if (!indexSpinnerStopped)
+        {
+            StopSpinner(indexCts);
+            indexSpinnerStopped = true;
+            if (!jsonOutput) Console.WriteLine("Indexing...");
+        }
         try
         {
             var (record, content) = indexer.BuildRecord(filePath);
@@ -469,6 +483,13 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
 
         processed++;
         if (!jsonOutput) PrintProgress(processed, files.Count);
+    }
+
+    // If no files to process, stop the indexing spinner / ファイルがない場合はスピナーを停止
+    if (!indexSpinnerStopped)
+    {
+        StopSpinner(indexCts);
+        if (!jsonOutput) Console.WriteLine("Indexing...");
     }
 
     stopwatch.Stop();
