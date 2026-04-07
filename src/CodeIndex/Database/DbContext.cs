@@ -14,7 +14,11 @@ public class DbContext : IDisposable
 
     public DbContext(string dbPath)
     {
-        _connection = new SqliteConnection($"Data Source={dbPath}");
+        // Use SqliteConnectionStringBuilder to prevent connection string injection
+        // via paths containing ';' or other special characters.
+        // SqliteConnectionStringBuilderで接続文字列インジェクションを防止する。
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        _connection = new SqliteConnection(builder.ConnectionString);
         _connection.Open();
 
         // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
