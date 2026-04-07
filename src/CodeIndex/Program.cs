@@ -751,10 +751,17 @@ static void PrintBanner()
 // Get changed files from a git commit / gitコミットから変更ファイルを取得
 static List<string> GetChangedFilesFromCommit(string projectRoot, string commitId)
 {
+    // Validate commit ID to prevent argument injection (only hex + common ref chars allowed)
+    // コミットIDをバリデーションし引数インジェクションを防止（16進数+一般的な参照文字のみ許可）
+    if (!System.Text.RegularExpressions.Regex.IsMatch(commitId, @"^[a-zA-Z0-9_./^~\-]+$"))
+        throw new ArgumentException($"Invalid commit ID: {commitId}");
+
     var psi = new ProcessStartInfo
     {
         FileName = "git",
-        Arguments = $"diff-tree --no-commit-id -r --name-only {commitId}",
+        // Use "--" to terminate options, preventing commitId from being parsed as a flag
+        // "--"でオプション終了を明示し、commitIdがフラグとして解釈されるのを防止
+        Arguments = $"diff-tree --no-commit-id -r --name-only -- {commitId}",
         WorkingDirectory = projectRoot,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
