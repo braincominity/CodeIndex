@@ -32,6 +32,12 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     return args.Length == 0 ? ExitUsageError : ExitSuccess;
 }
 
+if (args[0] is "--version" or "-V")
+{
+    Console.WriteLine("cdidx v1.1.0");
+    return ExitSuccess;
+}
+
 // Easter eggs / イースターエッグ
 if (args.Any(a => a == "--sushi"))
 {
@@ -687,7 +693,6 @@ static void PrintBanner()
         ██║     ██║   ██║██║  ██║██╔══╝  ██║██║╚██╗██║██║  ██║██╔══╝   ██╔██╗
         ╚██████╗╚██████╔╝██████╔╝███████╗██║██║ ╚████║██████╔╝███████╗██╔╝ ██╗
          ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝
-                                                                        v1.1.0
         """;
     Console.WriteLine(banner);
 }
@@ -741,6 +746,7 @@ static void PrintUsage()
     Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits");
     Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
     Console.WriteLine("  --help, -h                 Show this help message");
+    Console.WriteLine("  --version, -V              Show version information");
     Console.WriteLine();
     Console.WriteLine("Query options:");
     Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
