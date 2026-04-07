@@ -882,6 +882,7 @@ static void StopSpinner(CancellationTokenSource? cts)
         Console.Write($"\r{new string(' ', Console.WindowWidth > 0 ? Console.WindowWidth - 1 : 80)}\r");
         Console.Out.Flush();
     }
+    cts.Dispose();
 }
 
 // Get spinner frames based on easter egg flag / イースターエッグフラグに基づくスピナーフレームを取得
