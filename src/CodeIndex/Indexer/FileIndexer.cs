@@ -44,8 +44,8 @@ public class FileIndexer
         [".tf"]     = "terraform",
     };
 
-    // Directories to skip (exact match) / スキップするディレクトリ（完全一致）
-    private static readonly HashSet<string> SkipDirs = new(StringComparer.Ordinal)
+    // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
+    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git", ".svn", ".hg",
         "node_modules", "__pycache__", ".pytest_cache",
