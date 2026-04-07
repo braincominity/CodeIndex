@@ -82,7 +82,24 @@ cdidx ./myproject --rebuild     # full rebuild from scratch
 cdidx ./myproject --verbose     # show per-file details
 ```
 
-With `--verbose`, each file shows a status tag so you can see exactly what happened:
+Default output:
+
+```
+Scanning...
+  Found 42 files
+
+Indexing...
+  [=================>        ] 67%
+
+Done.
+  Files   : 42
+  Chunks  : 318
+  Symbols : 156
+  Skipped : 28 (unchanged)
+  Elapsed : 00:00:02
+```
+
+With `--verbose`, each file also shows a status tag so you can see exactly what happened:
 
 ```
   [OK]   src/app.cs (12 chunks, 5 symbols)   — indexed successfully
@@ -101,12 +118,35 @@ cdidx search "handleRequest" --lang go   # filter by language
 cdidx search "TODO" --limit 50           # more results
 ```
 
+Output (JSON lines — one result per line, machine-readable):
+
+```json
+{"path":"src/Auth/Login.cs","startLine":15,"endLine":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
+```
+
+Use `--no-json` for human-readable output:
+
+```
+src/Auth/Login.cs:15-30
+  public bool Authenticate(string user, string pass)
+  {
+      var hash = ComputeHash(pass);
+      return _store.Verify(user, hash);
+  ...
+```
+
 ### Search symbols (functions, classes, etc.)
 
 ```bash
 cdidx symbols UserService              # find by name
 cdidx symbols --kind class             # all classes
 cdidx symbols --kind function --lang python
+```
+
+Output (JSON lines):
+
+```json
+{"name":"UserService","kind":"class","path":"src/Services/UserService.cs","line":8,"lang":"csharp"}
 ```
 
 ### List files
@@ -116,10 +156,28 @@ cdidx files                            # all indexed files
 cdidx files --lang csharp              # only C# files
 ```
 
+Output (JSON lines):
+
+```json
+{"path":"src/Services/UserService.cs","lang":"csharp","lines":120}
+```
+
 ### Check status
 
 ```bash
 cdidx status
+```
+
+Output:
+
+```
+Files   : 42
+Chunks  : 318
+Symbols : 156
+Languages:
+  csharp         28
+  python         10
+  javascript      4
 ```
 
 ## Options
@@ -372,7 +430,24 @@ cdidx ./myproject --rebuild     # 完全再構築
 cdidx ./myproject --verbose     # ファイルごとの詳細表示
 ```
 
-`--verbose` を付けると、各ファイルにステータスタグが表示され、何が起きたか一目でわかります:
+デフォルト出力:
+
+```
+Scanning...
+  Found 42 files
+
+Indexing...
+  [=================>        ] 67%
+
+Done.
+  Files   : 42
+  Chunks  : 318
+  Symbols : 156
+  Skipped : 28 (unchanged)
+  Elapsed : 00:00:02
+```
+
+`--verbose` を付けると、各ファイルにステータスタグも表示され、何が起きたか一目でわかります:
 
 ```
   [OK]   src/app.cs (12 chunks, 5 symbols)   — インデックス成功
@@ -391,12 +466,35 @@ cdidx search "handleRequest" --lang go   # 言語でフィルタ
 cdidx search "TODO" --limit 50           # 結果数を増やす
 ```
 
+出力（JSONライン — 1行1結果、機械処理可能）:
+
+```json
+{"path":"src/Auth/Login.cs","startLine":15,"endLine":30,"content":"public bool Authenticate(...)...","lang":"csharp","score":12.5}
+```
+
+`--no-json` で人間向け出力:
+
+```
+src/Auth/Login.cs:15-30
+  public bool Authenticate(string user, string pass)
+  {
+      var hash = ComputeHash(pass);
+      return _store.Verify(user, hash);
+  ...
+```
+
 ### シンボル検索（関数、クラスなど）
 
 ```bash
 cdidx symbols UserService              # 名前で検索
 cdidx symbols --kind class             # すべてのクラス
 cdidx symbols --kind function --lang python
+```
+
+出力（JSONライン）:
+
+```json
+{"name":"UserService","kind":"class","path":"src/Services/UserService.cs","line":8,"lang":"csharp"}
 ```
 
 ### ファイル一覧
@@ -406,10 +504,28 @@ cdidx files                            # 全インデックス済みファイル
 cdidx files --lang csharp              # C#ファイルのみ
 ```
 
+出力（JSONライン）:
+
+```json
+{"path":"src/Services/UserService.cs","lang":"csharp","lines":120}
+```
+
 ### 状態確認
 
 ```bash
 cdidx status
+```
+
+出力:
+
+```
+Files   : 42
+Chunks  : 318
+Symbols : 156
+Languages:
+  csharp         28
+  python         10
+  javascript      4
 ```
 
 ## オプション一覧
