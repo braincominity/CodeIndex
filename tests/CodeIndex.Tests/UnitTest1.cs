@@ -52,12 +52,12 @@ public class ChunkSplitterTests
     }
 
     [Fact]
-    public void Split_EmptyFile_ReturnsSingleEmptyChunk()
+    public void Split_EmptyFile_ReturnsNoChunks()
     {
-        // Empty content should still produce one chunk
-        // 空のコンテンツでも1チャンクが生成される
+        // Empty content produces no chunks
+        // 空のコンテンツではチャンクは生成されない
         var chunks = ChunkSplitter.Split(1, "");
-        Assert.Single(chunks);
+        Assert.Empty(chunks);
     }
 
     [Fact]
@@ -279,7 +279,7 @@ public class FileIndexerTests
 
             Assert.Equal("main.py", record.Path);
             Assert.Equal("python", record.Lang);
-            Assert.Equal(3, record.Lines);
+            Assert.Equal(2, record.Lines); // "def main():\n    print('hello')\n" = 2 lines (trailing newline ignored)
             Assert.NotNull(record.Checksum);
             Assert.Contains("def main()", record.Snippet);
         }
