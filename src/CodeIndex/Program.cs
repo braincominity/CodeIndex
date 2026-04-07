@@ -1,8 +1,14 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+
+// On Windows the console defaults to the OEM code page, causing Unicode
+// characters (box-drawing, block elements, etc.) to appear as '?'.
+// Windows のコンソールは既定で OEM コードページを使用するため、Unicode 文字が文字化けします。
+Console.OutputEncoding = Encoding.UTF8;
 
 // Exit codes / 終了コード
 // 0 = success, 1 = usage error, 2 = not found, 3 = database error
@@ -24,6 +30,26 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
 {
     PrintUsage();
     return args.Length == 0 ? ExitUsageError : ExitSuccess;
+}
+
+// Easter eggs / イースターエッグ
+if (args.Any(a => a == "--sushi"))
+{
+    Console.WriteLine("🍣 Indexing is like making sushi — patience yields perfection.");
+    Console.WriteLine("   インデックスは寿司作りのように — 忍耐が完璧を生む。");
+    return ExitSuccess;
+}
+if (args.Any(a => a == "--coffee"))
+{
+    Console.WriteLine("☕ Leave the indexing to me and go grab a coffee!");
+    Console.WriteLine("   インデックスは任せて、コーヒーでも飲んできて！");
+    return ExitSuccess;
+}
+if (args.Any(a => a == "--ramen"))
+{
+    Console.WriteLine("🍜 Indexing in progress... perfect time for a bowl of ramen!");
+    Console.WriteLine("   インデックス中…ラーメン一杯いかが？");
+    return ExitSuccess;
 }
 
 return args[0] switch
@@ -189,11 +215,10 @@ int RunIndex(string[] indexArgs)
 
     if (!jsonOutput)
     {
-        Console.WriteLine("cdidx v1.1.0");
-        Console.WriteLine("============");
-        Console.WriteLine($"Project : {Path.GetFullPath(projectPath)}");
-        Console.WriteLine($"Output  : {dbPath}");
-        Console.WriteLine($"Mode    : {mode}");
+        PrintBanner();
+        Console.WriteLine($"  Project : {Path.GetFullPath(projectPath)}");
+        Console.WriteLine($"  Output  : {dbPath}");
+        Console.WriteLine($"  Mode    : {mode}");
         Console.WriteLine();
     }
 
@@ -604,14 +629,49 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
     return (projectPath, dbPath, rebuild, verbose, json, commits, updateFiles);
 }
 
-// Print progress at every 500 files / 500ファイルごとに進捗を表示
+// Print inline progress bar / インライン進捗バーを表示
 static void PrintProgress(int current, int total)
 {
-    if (current % 500 == 0 || current == total)
+    // Update every 50 files or at completion / 50ファイルごと、または完了時に更新
+    if (current % 50 != 0 && current != total)
+        return;
+
+    const int barWidth = 32;
+    var pct = (double)current / total;
+    int filled = (int)Math.Round(pct * barWidth);
+    if (filled > barWidth) filled = barWidth;
+
+    var bar = new string('\u2588', filled) + new string('\u2591', barWidth - filled);
+    var line = $"  {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
+
+    if (!Console.IsOutputRedirected)
     {
-        var pct = (double)current / total * 100;
-        Console.WriteLine($"  [{current,5}/{total}] {pct,5:F1}%");
+        Console.Write($"\r{line}");
+        Console.Out.Flush();
+        if (current == total)
+            Console.WriteLine();
     }
+    else
+    {
+        // Fallback for redirected output / リダイレクト時はフォールバック
+        Console.WriteLine(line.TrimStart());
+    }
+}
+
+// Print ASCII-art banner / ASCIIアートバナーを表示
+static void PrintBanner()
+{
+    const string banner = """
+
+          ██████╗██████╗ ██╗██████╗ ██╗  ██╗
+         ██╔════╝██╔══██╗██║██╔══██╗╚██╗██╔╝
+         ██║     ██║  ██║██║██║  ██║ ╚███╔╝
+         ██║     ██║  ██║██║██║  ██║ ██╔██╗
+         ╚██████╗██████╔╝██║██████╔╝██╔╝ ██╗
+          ╚═════╝╚═════╝ ╚═╝╚═════╝ ╚═╝  ╚═╝
+                                     v1.1.0
+        """;
+    Console.WriteLine(banner);
 }
 
 // Get changed files from a git commit / gitコミットから変更ファイルを取得
@@ -645,8 +705,7 @@ static List<string> GetChangedFilesFromCommit(string projectRoot, string commitI
 // Print usage information / 使い方を表示
 static void PrintUsage()
 {
-    Console.WriteLine("cdidx v1.1.0");
-    Console.WriteLine("============");
+    PrintBanner();
     Console.WriteLine("Usage: cdidx <command> [options]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
@@ -682,4 +741,9 @@ static void PrintUsage()
     Console.WriteLine();
     Console.WriteLine("  cdidx ./myproject --commits abc123 def456      Update files from commits");
     Console.WriteLine("  cdidx ./myproject --files src/app.cs           Update specific files");
+    Console.WriteLine();
+    Console.WriteLine("Easter eggs:");
+    Console.WriteLine("  --sushi                    \U0001f363");
+    Console.WriteLine("  --coffee                   \u2615");
+    Console.WriteLine("  --ramen                    \U0001f35c");
 }
