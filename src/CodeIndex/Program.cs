@@ -445,7 +445,7 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
         {
             var (record, content) = indexer.BuildRecord(filePath);
 
-            var existingId = writer.GetUnchangedFileId(record.Path, record.Modified);
+            var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
             if (existingId != null)
             {
                 skipped++;

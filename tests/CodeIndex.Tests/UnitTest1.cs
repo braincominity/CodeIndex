@@ -565,6 +565,30 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_MatchesByChecksumWhenTimestampDiffers()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var checksum = "abc123def456";
+        var file = new FileRecord
+        {
+            Path = "src/checksum.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = modified, Checksum = checksum,
+        };
+        _writer.UpsertFile(file);
+
+        // Different timestamp but same checksum should return the ID (e.g. git checkout)
+        // タイムスタンプ異なるがチェックサム一致ならIDを返す（例: git checkout）
+        var newModified = modified.AddHours(1);
+        var id = _writer.GetUnchangedFileId("src/checksum.py", newModified, checksum);
+        Assert.NotNull(id);
+
+        // Different timestamp AND different checksum should return null
+        // タイムスタンプもチェックサムも異なるならnullを返す
+        var id2 = _writer.GetUnchangedFileId("src/checksum.py", newModified.AddHours(1), "different_checksum");
+        Assert.Null(id2);
+    }
+
+    [Fact]
     public void InsertChunks_InsertsAndPopulatesFts()
     {
         var fileId = _writer.UpsertFile(new FileRecord
