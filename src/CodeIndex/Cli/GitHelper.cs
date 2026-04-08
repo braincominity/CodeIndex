@@ -35,8 +35,12 @@ public static class GitHelper
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+        // Read stderr asynchronously to avoid deadlock when stderr buffer fills
+        // before stdout is fully consumed. See: MS docs on Process.StandardOutput.
+        // stderrバッファが満杯になった時のデッドロックを防ぐため非同期で読む。
+        var errorTask = process.StandardError.ReadToEndAsync();
         var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
+        var error = errorTask.GetAwaiter().GetResult();
         process.WaitForExit();
 
         if (process.ExitCode != 0)
