@@ -778,13 +778,14 @@ AIエージェントにインデックスを活用させるには、プロジェ
 cdidx --version
 ```
 
-コマンドが見つからない場合はインストールしてください:
+コマンドが見つからない場合はインストールしてください。.NET 8+ SDKが必要です:
 
 ```bash
-dotnet tool install -g cdidx   # .NET 8+ SDKとネットワーク接続が必要
+dotnet --version   # 8.x以上であること。そうでなければユーザーに.NET 8+ SDKのインストールを依頼
+dotnet tool install -g cdidx
 ```
 
-インストールに失敗した場合（NuGetへのネットワークアクセスがない等）は、下記のSQLクエリで `.cdidx/codeindex.db` を直接検索できます。
+インストールに失敗した場合（NuGetへのネットワークアクセスがない、.NET SDKが利用不可等）は、下記のSQLクエリで `.cdidx/codeindex.db` を直接検索できます。
 
 ## クエリ
 

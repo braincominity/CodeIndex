@@ -333,13 +333,14 @@ First check if `cdidx` is available:
 cdidx --version
 ```
 
-If the command is not found, install it:
+If the command is not found, install it. .NET 8+ SDK is required:
 
 ```bash
-dotnet tool install -g cdidx   # requires .NET 8+ SDK and network access
+dotnet --version   # must be 8.x or higher; if not, ask the user to install .NET 8+ SDK
+dotnet tool install -g cdidx
 ```
 
-If installation fails (e.g. no network access to NuGet), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`.
+If installation fails (e.g. no network access to NuGet, or .NET SDK unavailable), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`.
 
 ## Keeping the index up to date (requires cdidx)
 
@@ -840,13 +841,14 @@ AIエージェントにインデックスを活用させるには、プロジェ
 cdidx --version
 ```
 
-コマンドが見つからない場合はインストールしてください:
+コマンドが見つからない場合はインストールしてください。.NET 8+ SDKが必要です:
 
 ```bash
-dotnet tool install -g cdidx   # .NET 8+ SDKとネットワーク接続が必要
+dotnet --version   # 8.x以上であること。そうでなければユーザーに.NET 8+ SDKのインストールを依頼
+dotnet tool install -g cdidx
 ```
 
-インストールに失敗した場合（NuGetへのネットワークアクセスがない等）は、下記の **「直接SQLクエリ」** セクションを参照してください。`sqlite3` で `.cdidx/codeindex.db` を直接クエリできます。
+インストールに失敗した場合（NuGetへのネットワークアクセスがない、.NET SDKが利用不可等）は、下記の **「直接SQLクエリ」** セクションを参照してください。`sqlite3` で `.cdidx/codeindex.db` を直接クエリできます。
 
 ## インデックスの最新化（cdidxが必要）
 
