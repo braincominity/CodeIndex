@@ -256,6 +256,11 @@ int RunIndex(string[] indexArgs)
         return ExitUsageError;
     }
 
+    // Ensure the DB directory exists / DBディレクトリの存在を保証
+    var dbDir = Path.GetDirectoryName(dbPath);
+    if (!string.IsNullOrEmpty(dbDir))
+        Directory.CreateDirectory(dbDir);
+
     using var db = new DbContext(dbPath);
 
     // Drop and recreate schema if rebuild mode / rebuildモードならスキーマを削除して再作成
@@ -638,11 +643,13 @@ static void AddToGitExclude(string projectPath, string dbPath)
         if (!Directory.Exists(gitDir)) return;
 
         var excludeFile = Path.Combine(gitDir, "info", "exclude");
-        var dbFileName = Path.GetFileName(dbPath);
 
-        // Patterns to exclude: DB file and its WAL/SHM/journal companions
-        // 除外パターン: DBファイルとWAL/SHM/journal等の副生成物
-        var patterns = new[] { dbFileName, $"{dbFileName}-*" };
+        // Determine the exclude pattern: directory (e.g. ".cdidx/") or file + companions
+        // 除外パターンの決定: ディレクトリ（例: ".cdidx/"）またはファイル＋副生成物
+        var dbDirRelative = Path.GetDirectoryName(dbPath);
+        var patterns = !string.IsNullOrEmpty(dbDirRelative)
+            ? new[] { $"{dbDirRelative}/" }
+            : new[] { Path.GetFileName(dbPath), $"{Path.GetFileName(dbPath)}-*" };
 
         // Read existing content if the file exists / ファイルが存在すれば既存内容を読み込む
         var existingContent = File.Exists(excludeFile) ? File.ReadAllText(excludeFile) : "";
@@ -675,7 +682,7 @@ static void AddToGitExclude(string projectPath, string dbPath)
 // Parse query subcommand arguments / クエリサブコマンドの引数を解析
 static (string dbPath, bool json, int limit, string? lang, string? kind, string? query) ParseQueryArgs(string[] args, bool jsonDefault)
 {
-    string dbPath = "codeindex.db";
+    string dbPath = Path.Combine(".cdidx", "codeindex.db");
     bool? json = null;
     int limit = 20;
     string? lang = null;
@@ -731,7 +738,7 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
 static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool json, List<string> commits, List<string> updateFiles, string? easterEgg) ParseIndexArgs(string[] args)
 {
     string? projectPath = null;
-    string dbPath = "codeindex.db";
+    string dbPath = Path.Combine(".cdidx", "codeindex.db");
     bool rebuild = false;
     bool verbose = false;
     bool json = false;

@@ -292,7 +292,7 @@ public static class ConsoleUi
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
         Console.WriteLine("Index options:");
-        Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
+        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db)");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
@@ -302,7 +302,7 @@ public static class ConsoleUi
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine();
         Console.WriteLine("Query options:");
-        Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
+        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db)");
         Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
         Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
@@ -310,7 +310,7 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
-        Console.WriteLine("  cdidx search \"authenticate\" --db codeindex.db  Full-text search");
+        Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
         Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");

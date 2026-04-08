@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
-- **Auto-exclude DB files from git tracking** — `cdidx index` now automatically adds `codeindex.db` and its companion files (`-wal`, `-shm`, `-journal`) to `.git/info/exclude`, so users don't need to edit `.gitignore`. Silently skipped if no `.git` directory exists. Affected: `Program.cs`.
+- **Store index in `.cdidx/` directory** — Default DB path changed from `codeindex.db` to `.cdidx/codeindex.db`. The directory is created automatically on first `cdidx index`. The `.cdidx/` directory is auto-added to `.git/info/exclude`, so users don't need to edit `.gitignore`. Affected: `Program.cs`, `Cli/ConsoleUi.cs`.
 
 #### Fixed
 
@@ -93,7 +93,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 追加
 
-- **DBファイルのgit追跡を自動除外** — `cdidx index` 実行時に `codeindex.db` とその副生成物（`-wal`, `-shm`, `-journal`）を `.git/info/exclude` に自動追加。`.gitignore` の編集が不要に。`.git` ディレクトリが存在しない場合は静かにスキップ。対象: `Program.cs`。
+- **インデックスを `.cdidx/` ディレクトリに格納** — デフォルトDBパスを `codeindex.db` から `.cdidx/codeindex.db` に変更。ディレクトリは初回の `cdidx index` で自動作成。`.cdidx/` は `.git/info/exclude` に自動追加されるため `.gitignore` の編集が不要。対象: `Program.cs`, `Cli/ConsoleUi.cs`。
 
 #### 修正
 
