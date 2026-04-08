@@ -190,24 +190,33 @@ public class DbWriter
 
     /// <summary>
     /// Upsert a file record and return its ID.
-    /// Automatically cleans up existing FTS/chunk/symbol data first to prevent
-    /// FTS orphan entries caused by INSERT OR REPLACE CASCADE deletes.
+    /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids
+    /// unnecessary AUTOINCREMENT growth from INSERT OR REPLACE's delete+insert).
+    /// Cleans up old chunks/symbols before re-indexing.
     /// ファイルレコードをUPSERTしてIDを返す。
-    /// INSERT OR REPLACE の CASCADE 削除による FTS 孤立を防ぐため、
-    /// 既存の FTS/チャンク/シンボルデータを先に自動クリーンアップする。
+    /// ON CONFLICT DO UPDATEで既存IDを保持する（INSERT OR REPLACEの
+    /// delete+insertによる不要なAUTOINCREMENT増加を回避）。
+    /// 再インデックス前に古いチャンク/シンボルをクリーンアップする。
     /// </summary>
     public long UpsertFile(FileRecord file)
     {
-        // Auto-cleanup existing data to prevent FTS orphans from INSERT OR REPLACE
-        // INSERT OR REPLACE による FTS 孤立防止のため既存データを自動クリーンアップ
+        // Clean up old chunks/symbols so new ones can be inserted
+        // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
         CleanExistingFileData(file.Path);
 
         using var cmd = _conn.CreateCommand();
-        // Use RETURNING to atomically insert and retrieve the ID
-        // RETURNINGを使って挿入とID取得をアトミックに行う
+        // ON CONFLICT DO UPDATE preserves the existing row ID
+        // ON CONFLICT DO UPDATEで既存の行IDを保持する
         cmd.CommandText = @"
-            INSERT OR REPLACE INTO files (path, lang, size, lines, checksum, modified, indexed_at)
+            INSERT INTO files (path, lang, size, lines, checksum, modified, indexed_at)
             VALUES (@path, @lang, @size, @lines, @checksum, @modified, CURRENT_TIMESTAMP)
+            ON CONFLICT(path) DO UPDATE SET
+                lang = excluded.lang,
+                size = excluded.size,
+                lines = excluded.lines,
+                checksum = excluded.checksum,
+                modified = excluded.modified,
+                indexed_at = CURRENT_TIMESTAMP
             RETURNING id";
         cmd.Parameters.AddWithValue("@path", file.Path);
         cmd.Parameters.AddWithValue("@lang", (object?)file.Lang ?? DBNull.Value);
@@ -238,8 +247,8 @@ public class DbWriter
     }
 
     /// <summary>
-    /// Insert chunks in batches and populate FTS index.
-    /// チャンクをバッチ挿入し、FTSインデックスに反映する。
+    /// Insert chunks in batches (FTS index is populated automatically by triggers).
+    /// チャンクをバッチ挿入する（FTSインデックスはトリガーにより自動で反映される）。
     /// </summary>
     public void InsertChunks(IReadOnlyList<ChunkRecord> chunks)
     {
@@ -248,8 +257,7 @@ public class DbWriter
             int end = Math.Min(i + BatchSize, chunks.Count);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
-            var ownTxn = !IsInTransaction();
-            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -257,8 +265,7 @@ public class DbWriter
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
-                    VALUES (@fid, @idx, @start, @end, @content)
-                    RETURNING id";
+                    VALUES (@fid, @idx, @start, @end, @content)";
                 cmd.Parameters.AddWithValue("@fid", chunk.FileId);
                 cmd.Parameters.AddWithValue("@idx", chunk.ChunkIndex);
                 cmd.Parameters.AddWithValue("@start", chunk.StartLine);
@@ -284,8 +291,7 @@ public class DbWriter
             int end = Math.Min(i + BatchSize, symbols.Count);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
-            var ownTxn = !IsInTransaction();
-            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
