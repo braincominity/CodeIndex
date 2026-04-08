@@ -115,14 +115,13 @@ public class DbWriter
         // Use RETURNING to atomically insert and retrieve the ID
         // RETURNINGを使って挿入とID取得をアトミックに行う
         cmd.CommandText = @"
-            INSERT OR REPLACE INTO files (path, lang, size, lines, snippet, checksum, modified, indexed_at)
-            VALUES (@path, @lang, @size, @lines, @snippet, @checksum, @modified, CURRENT_TIMESTAMP)
+            INSERT OR REPLACE INTO files (path, lang, size, lines, checksum, modified, indexed_at)
+            VALUES (@path, @lang, @size, @lines, @checksum, @modified, CURRENT_TIMESTAMP)
             RETURNING id";
         cmd.Parameters.AddWithValue("@path", file.Path);
         cmd.Parameters.AddWithValue("@lang", (object?)file.Lang ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@size", file.Size);
         cmd.Parameters.AddWithValue("@lines", file.Lines);
-        cmd.Parameters.AddWithValue("@snippet", (object?)file.Snippet ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@checksum", (object?)file.Checksum ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@modified", file.Modified);
         return (long)cmd.ExecuteScalar()!;

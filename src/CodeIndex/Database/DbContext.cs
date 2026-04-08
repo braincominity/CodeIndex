@@ -46,7 +46,6 @@ public class DbContext : IDisposable
                 lang        TEXT,
                 size        INTEGER,
                 lines       INTEGER,
-                snippet     TEXT,
                 checksum    TEXT,
                 modified    DATETIME,
                 indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP

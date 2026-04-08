@@ -175,7 +175,6 @@ public class FileIndexer
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')
             : content.Split('\n');
-        var snippet = content.Length > 2000 ? content[..2000] : content;
         var checksum = ComputeChecksum(content);
 
         var record = new FileRecord
@@ -184,7 +183,6 @@ public class FileIndexer
             Lang = DetectLanguage(absolutePath),
             Size = info.Length,
             Lines = lines.Length,
-            Snippet = snippet,
             Checksum = checksum,
             Modified = info.LastWriteTimeUtc,
         };
