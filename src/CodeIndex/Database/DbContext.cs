@@ -26,6 +26,10 @@ public class DbContext : IDisposable
         if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
             Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
 
+        // Set busy timeout to avoid immediate SQLITE_BUSY errors on concurrent access
+        // 同時アクセス時の即座のSQLITE_BUSYエラーを回避するためビジータイムアウトを設定
+        Execute("PRAGMA busy_timeout=5000");
+
         Execute("PRAGMA foreign_keys=ON");
         var fkResult = ExecuteScalar("PRAGMA foreign_keys");
         if (fkResult != "1")
