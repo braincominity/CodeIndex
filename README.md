@@ -50,7 +50,7 @@ dotnet build src/CodeIndex/CodeIndex.csproj -c Release
 dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -o ./publish
 ```
 
-### 2. Add to PATH
+Then add the binary to your PATH:
 
 <details>
 <summary><strong>Linux</strong></summary>
@@ -93,7 +93,7 @@ if ($path -notlike '*C:\Tools*') {
 Restart your terminal after adding to PATH.
 </details>
 
-### 3. Verify
+### Verify
 
 ```bash
 cdidx --version
@@ -534,7 +534,7 @@ dotnet build src/CodeIndex/CodeIndex.csproj -c Release
 dotnet publish src/CodeIndex/CodeIndex.csproj -c Release -o ./publish
 ```
 
-### 2. PATHに追加
+ビルド後、バイナリをPATHに追加します:
 
 <details>
 <summary><strong>Linux</strong></summary>
@@ -577,7 +577,7 @@ if ($path -notlike '*C:\Tools*') {
 PATH追加後はターミナルを再起動してください。
 </details>
 
-### 3. 確認
+### 確認
 
 ```bash
 cdidx --version
