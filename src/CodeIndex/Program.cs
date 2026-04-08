@@ -671,13 +671,17 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
                 json = true;
                 break;
             case "--commits":
-                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                // Consume subsequent arguments until we hit a flag (starts with '-')
+                // '-'で始まる引数が来るまで後続の引数をコミットIDとして取り込む
+                while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                     commits.Add(args[++i]);
                 if (commits.Count == 0)
                     Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
                 break;
             case "--files":
-                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                // Consume subsequent arguments until we hit a flag (starts with '-')
+                // '-'で始まる引数が来るまで後続の引数をファイルパスとして取り込む
+                while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                     updateFiles.Add(args[++i]);
                 if (updateFiles.Count == 0)
                     Console.Error.WriteLine("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
