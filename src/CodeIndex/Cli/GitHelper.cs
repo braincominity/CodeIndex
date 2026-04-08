@@ -16,8 +16,10 @@ public static class GitHelper
     public static List<string> GetChangedFilesFromCommit(string projectRoot, string commitId)
     {
         // Validate commit ID to prevent argument injection (only hex + common ref chars allowed)
+        // Reject values starting with "-" to prevent git option injection even without "--" separator
         // コミットIDをバリデーションし引数インジェクションを防止（16進数+一般的な参照文字のみ許可）
-        if (!Regex.IsMatch(commitId, @"^[a-zA-Z0-9_./^~\-]+$"))
+        // "-"で始まる値も拒否し、"--"セパレータなしでもgitオプション注入を防止
+        if (commitId.StartsWith('-') || !Regex.IsMatch(commitId, @"^[a-zA-Z0-9_./^~\-]+$"))
             throw new ArgumentException($"Invalid commit ID: {commitId}");
 
         var psi = new ProcessStartInfo
