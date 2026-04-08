@@ -19,44 +19,113 @@ public class DbWriter
     }
 
     /// <summary>
-    /// Begin a transaction for grouping multiple operations atomically.
-    /// Returns a TransactionScope that automatically decrements the depth counter on Dispose.
-    /// 複数操作をアトミックにまとめるためのトランザクションを開始する。
-    /// Dispose時に自動的にdepthカウンタを減算するTransactionScopeを返す。
+    /// Begin a transaction or savepoint for grouping multiple operations atomically.
+    /// SQLite does not support nested BEGIN TRANSACTION, so nested calls use SAVEPOINT.
+    /// 複数操作をアトミックにまとめるためのトランザクションまたはセーブポイントを開始する。
+    /// SQLiteはネストされたBEGIN TRANSACTIONをサポートしないため、ネスト時はSAVEPOINTを使用する。
     /// </summary>
     public TransactionScope BeginTransaction()
     {
-        _transactionDepth++;
-        var txn = _conn.BeginTransaction();
-        return new TransactionScope(txn, this);
+        if (_transactionDepth == 0)
+        {
+            _transactionDepth++;
+            var txn = _conn.BeginTransaction();
+            return new TransactionScope(txn, this);
+        }
+        else
+        {
+            // Nested: use SAVEPOINT instead of BEGIN TRANSACTION
+            // ネスト: BEGIN TRANSACTIONの代わりにSAVEPOINTを使用
+            var name = $"sp_{_transactionDepth}";
+            _transactionDepth++;
+            Execute($"SAVEPOINT {name}");
+            return new TransactionScope(name, _conn, this);
+        }
     }
 
     /// <summary>
-    /// RAII wrapper that ensures _transactionDepth is decremented even if an exception occurs.
-    /// 例外発生時にも_transactionDepthが確実に減算されるRAIIラッパー。
+    /// RAII wrapper for transactions and savepoints.
+    /// Ensures _transactionDepth is decremented and uncommitted changes are rolled back on Dispose.
+    /// トランザクションとセーブポイントのRAIIラッパー。
+    /// Dispose時に_transactionDepthを確実に減算し、未コミットの変更をロールバックする。
     /// </summary>
     public sealed class TransactionScope : IDisposable
     {
-        private readonly SqliteTransaction _transaction;
+        private readonly SqliteTransaction? _transaction;
+        private readonly string? _savepointName;
+        private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
+        private bool _committed;
         private bool _disposed;
 
+        // Real transaction / 実トランザクション
         internal TransactionScope(SqliteTransaction transaction, DbWriter writer)
         {
             _transaction = transaction;
             _writer = writer;
         }
 
-        public void Commit() => _transaction.Commit();
-        public void Rollback() => _transaction.Rollback();
+        // Savepoint / セーブポイント
+        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer)
+        {
+            _savepointName = savepointName;
+            _conn = conn;
+            _writer = writer;
+        }
+
+        public void Commit()
+        {
+            _committed = true;
+            if (_transaction != null)
+                _transaction.Commit();
+            else
+                ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+        }
+
+        public void Rollback()
+        {
+            _committed = true;
+            if (_transaction != null)
+                _transaction.Rollback();
+            else
+                ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+        }
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            _transaction.Dispose();
+
+            // Rollback uncommitted changes / 未コミットの変更をロールバック
+            if (!_committed)
+            {
+                try
+                {
+                    if (_transaction != null)
+                        _transaction.Rollback();
+                    else
+                        ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                }
+                catch { /* Best effort during dispose / Dispose中はベストエフォート */ }
+            }
+
+            _transaction?.Dispose();
             if (_writer._transactionDepth > 0) _writer._transactionDepth--;
         }
+
+        private void ExecuteSql(string sql)
+        {
+            using var cmd = _conn!.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private void Execute(string sql)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -290,7 +359,7 @@ public class DbWriter
 
         // Delete all stale files in a single transaction for atomicity and performance
         // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除
-        using var transaction = _conn.BeginTransaction();
+        using var txn = BeginTransaction();
         foreach (var id in staleIds)
         {
             DeleteFileData(id);
@@ -299,7 +368,7 @@ public class DbWriter
             cmd.Parameters.AddWithValue("@id", id);
             cmd.ExecuteNonQuery();
         }
-        transaction.Commit();
+        txn.Commit();
 
         return staleIds.Count;
     }
