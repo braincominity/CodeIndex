@@ -45,7 +45,12 @@ src/CodeIndex/
   Mcp/McpServer.cs          — MCP server (stdin/stdout JSON-RPC 2.0, tools for AI coding tools)
   Models/                   — FileRecord, ChunkRecord, SymbolRecord (plain DTOs)
 tests/CodeIndex.Tests/
-  UnitTest1.cs              — xUnit tests (chunker, symbols, indexer, DB integration, DbReader, MCP)
+  ChunkSplitterTests.cs     — ChunkSplitter tests
+  SymbolExtractorTests.cs   — SymbolExtractor tests (multi-language)
+  FileIndexerTests.cs       — FileIndexer tests (scan, detect, build)
+  DatabaseTests.cs          — DbContext/DbWriter integration tests
+  DbReaderTests.cs          — DbReader query tests (FTS, symbols, files, status)
+  McpServerTests.cs         — MCP server JSON-RPC protocol and tool tests
 ```
 
 ## Key design decisions
@@ -114,7 +119,12 @@ src/CodeIndex/
   Mcp/McpServer.cs          — MCPサーバー（stdin/stdout JSON-RPC 2.0、AIツール向けツール公開）
   Models/                   — FileRecord, ChunkRecord, SymbolRecord（プレーンDTO）
 tests/CodeIndex.Tests/
-  UnitTest1.cs              — xUnitテスト（チャンク、シンボル、インデクサー、DB統合、DbReader、MCP）
+  ChunkSplitterTests.cs     — ChunkSplitterテスト
+  SymbolExtractorTests.cs   — SymbolExtractorテスト（多言語対応）
+  FileIndexerTests.cs       — FileIndexerテスト（走査、検出、構築）
+  DatabaseTests.cs          — DbContext/DbWriter統合テスト
+  DbReaderTests.cs          — DbReaderクエリテスト（FTS、シンボル、ファイル、ステータス）
+  McpServerTests.cs         — MCPサーバーJSON-RPCプロトコル・ツールテスト
 ```
 
 ## 主要な設計判断

@@ -33,7 +33,12 @@ src/CodeIndex/
     ChunkRecord.cs            — Chunk DTO
     SymbolRecord.cs           — Symbol DTO
 tests/CodeIndex.Tests/
-  UnitTest1.cs                — xUnit tests (chunker, symbols, indexer, DB integration, MCP)
+  ChunkSplitterTests.cs       — ChunkSplitter tests
+    SymbolExtractorTests.cs   — SymbolExtractor tests
+    FileIndexerTests.cs       — FileIndexer tests
+    DatabaseTests.cs          — DbContext/DbWriter integration tests
+    DbReaderTests.cs          — DbReader query tests
+    McpServerTests.cs         — MCP server tests
 ```
 
 ### Indexing pipeline
@@ -447,7 +452,12 @@ src/CodeIndex/
     ChunkRecord.cs            — チャンクDTO
     SymbolRecord.cs           — シンボルDTO
 tests/CodeIndex.Tests/
-  UnitTest1.cs                — xUnitテスト（チャンク、シンボル、インデクサー、DB統合、MCP）
+  ChunkSplitterTests.cs       — ChunkSplitterテスト
+    SymbolExtractorTests.cs   — SymbolExtractorテスト
+    FileIndexerTests.cs       — FileIndexerテスト
+    DatabaseTests.cs          — DbContext/DbWriter統合テスト
+    DbReaderTests.cs          — DbReaderクエリテスト
+    McpServerTests.cs         — MCPサーバーテスト
 ```
 
 ### インデックスパイプライン
