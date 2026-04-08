@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Mcp;
 
 // On Windows the console defaults to the OEM code page, causing Unicode
 // characters (box-drawing, block elements, etc.) to appear as '?'.
@@ -51,6 +52,10 @@ if (easterEgg != null && !args.Any(a => !a.StartsWith('-')))
     return ExitSuccess;
 }
 
+// MCP server subcommand needs async handling / MCPサーバーサブコマンドは非同期処理が必要
+if (args[0] is "mcp" or "mcp-server")
+    return RunMcp(args[1..]);
+
 return args[0] switch
 {
     "search" => RunSearch(args[1..]),
@@ -63,6 +68,15 @@ return args[0] switch
     _ when !args[0].StartsWith('-') && (Directory.Exists(args[0]) || args[0].Contains('/') || args[0].Contains('\\') || args[0] == ".") => RunIndex(args),
     _ => ShowError($"Unknown command: {args[0]}"),
 };
+
+// --- MCP server subcommand / MCPサーバーサブコマンド ---
+int RunMcp(string[] cmdArgs)
+{
+    var (dbPath, _, _, _, _, _) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+    var server = new McpServer(dbPath, appVersion);
+    server.RunAsync().GetAwaiter().GetResult();
+    return ExitSuccess;
+}
 
 // --- Search subcommand / 検索サブコマンド ---
 int RunSearch(string[] cmdArgs)
