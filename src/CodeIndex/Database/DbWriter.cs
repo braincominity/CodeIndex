@@ -250,26 +250,13 @@ public class DbWriter
 
     /// <summary>
     /// Insert chunks in batches (FTS index is populated automatically by triggers).
-    /// Reuses a single prepared statement for all rows to avoid per-row command overhead.
+    /// Reuses a prepared statement per batch to avoid per-row command overhead.
     /// チャンクをバッチ挿入する（FTSインデックスはトリガーにより自動で反映される）。
-    /// 行ごとのコマンド生成コストを回避するため、単一のプリペアドステートメントを再利用する。
+    /// バッチごとにプリペアドステートメントを再利用し、行ごとのコマンド生成コストを回避する。
     /// </summary>
     public void InsertChunks(IReadOnlyList<ChunkRecord> chunks)
     {
         if (chunks.Count == 0) return;
-
-        // Prepare the command once and reuse for all rows
-        // コマンドを1回だけ準備し、全行で再利用する
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
-            VALUES (@fid, @idx, @start, @end, @content)";
-        var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
-        var pIdx = cmd.Parameters.Add("@idx", SqliteType.Integer);
-        var pStart = cmd.Parameters.Add("@start", SqliteType.Integer);
-        var pEnd = cmd.Parameters.Add("@end", SqliteType.Integer);
-        var pContent = cmd.Parameters.Add("@content", SqliteType.Text);
-        cmd.Prepare();
 
         for (int i = 0; i < chunks.Count; i += BatchSize)
         {
@@ -277,6 +264,19 @@ public class DbWriter
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+
+            // Prepare after transaction starts so the command inherits the connection's transaction state
+            // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
+                VALUES (@fid, @idx, @start, @end, @content)";
+            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
+            var pIdx = cmd.Parameters.Add("@idx", SqliteType.Integer);
+            var pStart = cmd.Parameters.Add("@start", SqliteType.Integer);
+            var pEnd = cmd.Parameters.Add("@end", SqliteType.Integer);
+            var pContent = cmd.Parameters.Add("@content", SqliteType.Text);
+            cmd.Prepare();
 
             for (int j = i; j < end; j++)
             {
@@ -297,25 +297,13 @@ public class DbWriter
 
     /// <summary>
     /// Insert symbols in batches.
-    /// Reuses a single prepared statement for all rows to avoid per-row command overhead.
+    /// Reuses a prepared statement per batch to avoid per-row command overhead.
     /// シンボルをバッチ挿入する。
-    /// 行ごとのコマンド生成コストを回避するため、単一のプリペアドステートメントを再利用する。
+    /// バッチごとにプリペアドステートメントを再利用し、行ごとのコマンド生成コストを回避する。
     /// </summary>
     public void InsertSymbols(IReadOnlyList<SymbolRecord> symbols)
     {
         if (symbols.Count == 0) return;
-
-        // Prepare the command once and reuse for all rows
-        // コマンドを1回だけ準備し、全行で再利用する
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO symbols (file_id, kind, name, line)
-            VALUES (@fid, @kind, @name, @line)";
-        var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
-        var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
-        var pName = cmd.Parameters.Add("@name", SqliteType.Text);
-        var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
-        cmd.Prepare();
 
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
@@ -323,6 +311,18 @@ public class DbWriter
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+
+            // Prepare after transaction starts so the command inherits the connection's transaction state
+            // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO symbols (file_id, kind, name, line)
+                VALUES (@fid, @kind, @name, @line)";
+            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
+            var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
+            var pName = cmd.Parameters.Add("@name", SqliteType.Text);
+            var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
+            cmd.Prepare();
 
             for (int j = i; j < end; j++)
             {
