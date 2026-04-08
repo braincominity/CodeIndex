@@ -391,6 +391,15 @@ public class DbWriter
         return (files, chunks, symbols);
     }
 
+    /// <summary>
+    /// Optimize FTS5 index to merge internal b-tree segments for better query performance.
+    /// FTS5インデックスを最適化して内部b-treeセグメントを統合し、クエリ性能を改善する。
+    /// </summary>
+    public void OptimizeFts()
+    {
+        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
+    }
+
     private bool IsInTransaction() => _transactionDepth > 0;
 
     private long ExecuteScalar(string sql)

@@ -374,6 +374,9 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
         }
     }
 
+    // Optimize FTS5 index after bulk writes / バルク書き込み後にFTS5インデックスを最適化
+    writer.OptimizeFts();
+
     stopwatch.Stop();
     var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
 
@@ -507,6 +510,9 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
         ConsoleUi.StopSpinner(indexCts);
         if (!jsonOutput) Console.WriteLine("Indexing...");
     }
+
+    // Optimize FTS5 index after bulk writes / バルク書き込み後にFTS5インデックスを最適化
+    writer.OptimizeFts();
 
     stopwatch.Stop();
     var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
