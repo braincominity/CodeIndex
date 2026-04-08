@@ -296,6 +296,13 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
         {
             var absPath = Path.IsPathRooted(f) ? f : Path.GetFullPath(Path.Combine(projectRoot, f));
             var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
+            // Prevent path traversal outside project root / プロジェクトルート外へのパストラバーサルを防止
+            if (relPath.StartsWith(".."))
+            {
+                if (!jsonOutput)
+                    Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}");
+                continue;
+            }
             targetPaths.Add(relPath);
         }
     }
