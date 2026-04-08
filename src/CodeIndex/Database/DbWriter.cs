@@ -19,44 +19,113 @@ public class DbWriter
     }
 
     /// <summary>
-    /// Begin a transaction for grouping multiple operations atomically.
-    /// Returns a TransactionScope that automatically decrements the depth counter on Dispose.
-    /// 複数操作をアトミックにまとめるためのトランザクションを開始する。
-    /// Dispose時に自動的にdepthカウンタを減算するTransactionScopeを返す。
+    /// Begin a transaction or savepoint for grouping multiple operations atomically.
+    /// SQLite does not support nested BEGIN TRANSACTION, so nested calls use SAVEPOINT.
+    /// 複数操作をアトミックにまとめるためのトランザクションまたはセーブポイントを開始する。
+    /// SQLiteはネストされたBEGIN TRANSACTIONをサポートしないため、ネスト時はSAVEPOINTを使用する。
     /// </summary>
     public TransactionScope BeginTransaction()
     {
-        _transactionDepth++;
-        var txn = _conn.BeginTransaction();
-        return new TransactionScope(txn, this);
+        if (_transactionDepth == 0)
+        {
+            _transactionDepth++;
+            var txn = _conn.BeginTransaction();
+            return new TransactionScope(txn, this);
+        }
+        else
+        {
+            // Nested: use SAVEPOINT instead of BEGIN TRANSACTION
+            // ネスト: BEGIN TRANSACTIONの代わりにSAVEPOINTを使用
+            var name = $"sp_{_transactionDepth}";
+            _transactionDepth++;
+            Execute($"SAVEPOINT {name}");
+            return new TransactionScope(name, _conn, this);
+        }
     }
 
     /// <summary>
-    /// RAII wrapper that ensures _transactionDepth is decremented even if an exception occurs.
-    /// 例外発生時にも_transactionDepthが確実に減算されるRAIIラッパー。
+    /// RAII wrapper for transactions and savepoints.
+    /// Ensures _transactionDepth is decremented and uncommitted changes are rolled back on Dispose.
+    /// トランザクションとセーブポイントのRAIIラッパー。
+    /// Dispose時に_transactionDepthを確実に減算し、未コミットの変更をロールバックする。
     /// </summary>
     public sealed class TransactionScope : IDisposable
     {
-        private readonly SqliteTransaction _transaction;
+        private readonly SqliteTransaction? _transaction;
+        private readonly string? _savepointName;
+        private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
+        private bool _committed;
         private bool _disposed;
 
+        // Real transaction / 実トランザクション
         internal TransactionScope(SqliteTransaction transaction, DbWriter writer)
         {
             _transaction = transaction;
             _writer = writer;
         }
 
-        public void Commit() => _transaction.Commit();
-        public void Rollback() => _transaction.Rollback();
+        // Savepoint / セーブポイント
+        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer)
+        {
+            _savepointName = savepointName;
+            _conn = conn;
+            _writer = writer;
+        }
+
+        public void Commit()
+        {
+            _committed = true;
+            if (_transaction != null)
+                _transaction.Commit();
+            else
+                ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+        }
+
+        public void Rollback()
+        {
+            _committed = true;
+            if (_transaction != null)
+                _transaction.Rollback();
+            else
+                ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+        }
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            _transaction.Dispose();
+
+            // Rollback uncommitted changes / 未コミットの変更をロールバック
+            if (!_committed)
+            {
+                try
+                {
+                    if (_transaction != null)
+                        _transaction.Rollback();
+                    else
+                        ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                }
+                catch { /* Best effort during dispose / Dispose中はベストエフォート */ }
+            }
+
+            _transaction?.Dispose();
             if (_writer._transactionDepth > 0) _writer._transactionDepth--;
         }
+
+        private void ExecuteSql(string sql)
+        {
+            using var cmd = _conn!.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private void Execute(string sql)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -121,24 +190,33 @@ public class DbWriter
 
     /// <summary>
     /// Upsert a file record and return its ID.
-    /// Automatically cleans up existing FTS/chunk/symbol data first to prevent
-    /// FTS orphan entries caused by INSERT OR REPLACE CASCADE deletes.
+    /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids
+    /// unnecessary AUTOINCREMENT growth from INSERT OR REPLACE's delete+insert).
+    /// Cleans up old chunks/symbols before re-indexing.
     /// ファイルレコードをUPSERTしてIDを返す。
-    /// INSERT OR REPLACE の CASCADE 削除による FTS 孤立を防ぐため、
-    /// 既存の FTS/チャンク/シンボルデータを先に自動クリーンアップする。
+    /// ON CONFLICT DO UPDATEで既存IDを保持する（INSERT OR REPLACEの
+    /// delete+insertによる不要なAUTOINCREMENT増加を回避）。
+    /// 再インデックス前に古いチャンク/シンボルをクリーンアップする。
     /// </summary>
     public long UpsertFile(FileRecord file)
     {
-        // Auto-cleanup existing data to prevent FTS orphans from INSERT OR REPLACE
-        // INSERT OR REPLACE による FTS 孤立防止のため既存データを自動クリーンアップ
+        // Clean up old chunks/symbols so new ones can be inserted
+        // 新しいチャンク/シンボル挿入のため古いデータをクリーンアップ
         CleanExistingFileData(file.Path);
 
         using var cmd = _conn.CreateCommand();
-        // Use RETURNING to atomically insert and retrieve the ID
-        // RETURNINGを使って挿入とID取得をアトミックに行う
+        // ON CONFLICT DO UPDATE preserves the existing row ID
+        // ON CONFLICT DO UPDATEで既存の行IDを保持する
         cmd.CommandText = @"
-            INSERT OR REPLACE INTO files (path, lang, size, lines, checksum, modified, indexed_at)
+            INSERT INTO files (path, lang, size, lines, checksum, modified, indexed_at)
             VALUES (@path, @lang, @size, @lines, @checksum, @modified, CURRENT_TIMESTAMP)
+            ON CONFLICT(path) DO UPDATE SET
+                lang = excluded.lang,
+                size = excluded.size,
+                lines = excluded.lines,
+                checksum = excluded.checksum,
+                modified = excluded.modified,
+                indexed_at = CURRENT_TIMESTAMP
             RETURNING id";
         cmd.Parameters.AddWithValue("@path", file.Path);
         cmd.Parameters.AddWithValue("@lang", (object?)file.Lang ?? DBNull.Value);
@@ -155,25 +233,22 @@ public class DbWriter
     /// </summary>
     public void DeleteFileData(long fileId)
     {
+        // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
+        // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
         using var cmd1 = _conn.CreateCommand();
-        cmd1.CommandText = "DELETE FROM fts_chunks WHERE rowid IN (SELECT id FROM chunks WHERE file_id = @fid)";
+        cmd1.CommandText = "DELETE FROM chunks WHERE file_id = @fid";
         cmd1.Parameters.AddWithValue("@fid", fileId);
         cmd1.ExecuteNonQuery();
 
         using var cmd2 = _conn.CreateCommand();
-        cmd2.CommandText = "DELETE FROM chunks WHERE file_id = @fid";
+        cmd2.CommandText = "DELETE FROM symbols WHERE file_id = @fid";
         cmd2.Parameters.AddWithValue("@fid", fileId);
         cmd2.ExecuteNonQuery();
-
-        using var cmd3 = _conn.CreateCommand();
-        cmd3.CommandText = "DELETE FROM symbols WHERE file_id = @fid";
-        cmd3.Parameters.AddWithValue("@fid", fileId);
-        cmd3.ExecuteNonQuery();
     }
 
     /// <summary>
-    /// Insert chunks in batches and populate FTS index.
-    /// チャンクをバッチ挿入し、FTSインデックスに反映する。
+    /// Insert chunks in batches (FTS index is populated automatically by triggers).
+    /// チャンクをバッチ挿入する（FTSインデックスはトリガーにより自動で反映される）。
     /// </summary>
     public void InsertChunks(IReadOnlyList<ChunkRecord> chunks)
     {
@@ -182,8 +257,7 @@ public class DbWriter
             int end = Math.Min(i + BatchSize, chunks.Count);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
-            var ownTxn = !IsInTransaction();
-            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -191,23 +265,15 @@ public class DbWriter
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
-                    VALUES (@fid, @idx, @start, @end, @content)
-                    RETURNING id";
+                    VALUES (@fid, @idx, @start, @end, @content)";
                 cmd.Parameters.AddWithValue("@fid", chunk.FileId);
                 cmd.Parameters.AddWithValue("@idx", chunk.ChunkIndex);
                 cmd.Parameters.AddWithValue("@start", chunk.StartLine);
                 cmd.Parameters.AddWithValue("@end", chunk.EndLine);
                 cmd.Parameters.AddWithValue("@content", chunk.Content);
-                var chunkId = (long)cmd.ExecuteScalar()!;
-
-                // Populate FTS index with explicit chunk ID / 明示的なチャンクIDでFTSインデックスに追加
-                using var ftsCmd = _conn.CreateCommand();
-                ftsCmd.CommandText = @"
-                    INSERT INTO fts_chunks (rowid, content)
-                    VALUES (@rowid, @content)";
-                ftsCmd.Parameters.AddWithValue("@rowid", chunkId);
-                ftsCmd.Parameters.AddWithValue("@content", chunk.Content);
-                ftsCmd.ExecuteNonQuery();
+                // FTS index is populated automatically by fts_chunks_ai trigger
+                // FTSインデックスはfts_chunks_aiトリガーにより自動で反映される
+                cmd.ExecuteNonQuery();
             }
 
             transaction?.Commit();
@@ -225,8 +291,7 @@ public class DbWriter
             int end = Math.Min(i + BatchSize, symbols.Count);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
-            var ownTxn = !IsInTransaction();
-            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -300,7 +365,7 @@ public class DbWriter
 
         // Delete all stale files in a single transaction for atomicity and performance
         // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除
-        using var transaction = _conn.BeginTransaction();
+        using var txn = BeginTransaction();
         foreach (var id in staleIds)
         {
             DeleteFileData(id);
@@ -309,7 +374,7 @@ public class DbWriter
             cmd.Parameters.AddWithValue("@id", id);
             cmd.ExecuteNonQuery();
         }
-        transaction.Commit();
+        txn.Commit();
 
         return staleIds.Count;
     }
@@ -324,6 +389,15 @@ public class DbWriter
         long chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
         return (files, chunks, symbols);
+    }
+
+    /// <summary>
+    /// Optimize FTS5 index to merge internal b-tree segments for better query performance.
+    /// FTS5インデックスを最適化して内部b-treeセグメントを統合し、クエリ性能を改善する。
+    /// </summary>
+    public void OptimizeFts()
+    {
+        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;

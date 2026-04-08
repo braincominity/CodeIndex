@@ -592,7 +592,7 @@ public class DatabaseTests : IDisposable
         var fileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/test.py", Lang = "python", Size = 100, Lines = 10,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
         var chunks = new List<ChunkRecord>
@@ -615,7 +615,7 @@ public class DatabaseTests : IDisposable
         var fileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/svc.py", Lang = "python", Size = 50, Lines = 5,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
         var symbols = new List<SymbolRecord>
@@ -635,7 +635,7 @@ public class DatabaseTests : IDisposable
         var fileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/del.py", Lang = "python", Size = 50, Lines = 5,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
         _writer.InsertChunks([new() { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "test" }]);
@@ -655,7 +655,7 @@ public class DatabaseTests : IDisposable
         var fileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/orphan.py", Lang = "python", Size = 50, Lines = 5,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new() { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "def hello_orphan_test(): pass" }]);
 
@@ -670,7 +670,7 @@ public class DatabaseTests : IDisposable
         var newId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/orphan.py", Lang = "python", Size = 60, Lines = 6,
-            Modified = DateTime.UtcNow.AddMinutes(1),
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(1),
         });
         _writer.InsertChunks([new() { FileId = newId, ChunkIndex = 0, StartLine = 1, EndLine = 6, Content = "def world_replacement(): pass" }]);
 
@@ -703,12 +703,12 @@ public class DatabaseTests : IDisposable
             _writer.UpsertFile(new FileRecord
             {
                 Path = "real.py", Lang = "python", Size = 5, Lines = 1,
-                Modified = DateTime.UtcNow,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             _writer.UpsertFile(new FileRecord
             {
                 Path = "ghost.py", Lang = "python", Size = 10, Lines = 2,
-                Modified = DateTime.UtcNow,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
 
             var (beforeCount, _, _) = _writer.GetCounts();
@@ -734,7 +734,7 @@ public class DatabaseTests : IDisposable
         _writer.UpsertFile(new FileRecord
         {
             Path = "src/x.py", Lang = "python", Size = 10, Lines = 1,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
         _db.DropAll();
@@ -754,7 +754,7 @@ public class DatabaseTests : IDisposable
         var fileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/remove_me.py", Lang = "python", Size = 50, Lines = 5,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
         _writer.InsertChunks([new() { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "def foo(): pass" }]);
@@ -786,12 +786,12 @@ public class DatabaseTests : IDisposable
         _writer.UpsertFile(new FileRecord
         {
             Path = "src/keep.py", Lang = "python", Size = 50, Lines = 5,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.UpsertFile(new FileRecord
         {
             Path = "src/delete.py", Lang = "python", Size = 30, Lines = 3,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
         _writer.DeleteFileByPath("src/delete.py");
@@ -841,7 +841,7 @@ public class DbReaderTests : IDisposable
         var pyId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/auth.py", Lang = "python", Size = 500, Lines = 30,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
         {
@@ -855,7 +855,7 @@ public class DbReaderTests : IDisposable
         var jsId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/api.js", Lang = "javascript", Size = 800, Lines = 50,
-            Modified = DateTime.UtcNow,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
         {

@@ -269,7 +269,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Kotlin | `.kt` | yes |
 | Ruby | `.rb` | yes |
 | C | `.c`, `.h` | yes |
-| C++ | `.cpp` | yes |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
 | Swift | `.swift` | yes |
 | Shell | `.sh` | -- |
@@ -653,7 +653,7 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 | Kotlin | `.kt` | yes |
 | Ruby | `.rb` | yes |
 | C | `.c`, `.h` | yes |
-| C++ | `.cpp` | yes |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
 | Swift | `.swift` | yes |
 | Shell | `.sh` | -- |

@@ -26,6 +26,10 @@ public class DbContext : IDisposable
         if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
             Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
 
+        // Set busy timeout to avoid immediate SQLITE_BUSY errors on concurrent access
+        // 同時アクセス時の即座のSQLITE_BUSYエラーを回避するためビジータイムアウトを設定
+        Execute("PRAGMA busy_timeout=5000");
+
         Execute("PRAGMA foreign_keys=ON");
         var fkResult = ExecuteScalar("PRAGMA foreign_keys");
         if (fkResult != "1")
@@ -89,6 +93,24 @@ public class DbContext : IDisposable
                 content='chunks',
                 content_rowid='id'
             )");
+
+        // FTS5 content-synced triggers — keep fts_chunks in sync with chunks table.
+        // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
+        // FTS5 content-synced トリガー — fts_chunksをchunksテーブルと同期する。
+        // これがないとchunksのCASCADE DELETEでfts_chunksに孤立エントリが残る。
+        Execute(@"
+            CREATE TRIGGER IF NOT EXISTS fts_chunks_ai AFTER INSERT ON chunks BEGIN
+                INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
+            END");
+        Execute(@"
+            CREATE TRIGGER IF NOT EXISTS fts_chunks_ad AFTER DELETE ON chunks BEGIN
+                INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
+            END");
+        Execute(@"
+            CREATE TRIGGER IF NOT EXISTS fts_chunks_au AFTER UPDATE ON chunks BEGIN
+                INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
+                INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
+            END");
     }
 
     /// <summary>
@@ -97,6 +119,9 @@ public class DbContext : IDisposable
     /// </summary>
     public void DropAll()
     {
+        Execute("DROP TRIGGER IF EXISTS fts_chunks_ai");
+        Execute("DROP TRIGGER IF EXISTS fts_chunks_ad");
+        Execute("DROP TRIGGER IF EXISTS fts_chunks_au");
         Execute("DROP TABLE IF EXISTS fts_chunks");
         Execute("DROP TABLE IF EXISTS symbols");
         Execute("DROP TABLE IF EXISTS chunks");

@@ -54,7 +54,7 @@ public static class ConsoleUi
         Thread.Sleep(20);
         if (!Console.IsOutputRedirected)
         {
-            Console.Write($"\r{new string(' ', Console.WindowWidth > 0 ? Console.WindowWidth - 1 : 80)}\r");
+            Console.Write($"\r{new string(' ', GetWindowWidth() - 1)}\r");
             Console.Out.Flush();
         }
         cts.Dispose();
@@ -281,5 +281,24 @@ public static class ConsoleUi
         Console.WriteLine("  --matcha                   \U0001f375 Sifting... Whisking... Douzo!");
         Console.WriteLine("  --whisky                   \U0001f943 Mashing... Distilling... Slainte!");
         Console.WriteLine("  --random-spinner           \U0001f3b2 Pick a random theme");
+    }
+
+    // --- Helpers / ヘルパー ---
+
+    /// <summary>
+    /// Get console window width safely (some environments throw IOException).
+    /// コンソール幅を安全に取得する（一部環境ではIOExceptionが発生する）。
+    /// </summary>
+    private static int GetWindowWidth()
+    {
+        try
+        {
+            var w = Console.WindowWidth;
+            return w > 0 ? w : 80;
+        }
+        catch
+        {
+            return 80;
+        }
     }
 }
