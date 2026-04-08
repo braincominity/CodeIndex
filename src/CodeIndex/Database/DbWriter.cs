@@ -86,9 +86,6 @@ public class DbWriter
     /// <summary>
     /// Clean up existing file data (FTS, chunks, symbols) before re-indexing.
     /// 再インデックス前に既存ファイルデータ（FTS、チャンク、シンボル）を削除する。
-    /// Must be called BEFORE UpsertFile to prevent FTS orphan entries caused by
-    /// INSERT OR REPLACE triggering CASCADE deletes that bypass FTS cleanup.
-    /// INSERT OR REPLACE の CASCADE 削除が FTS をバイパスするため、UpsertFile の前に呼ぶこと。
     /// </summary>
     public void CleanExistingFileData(string relativePath)
     {
@@ -102,12 +99,18 @@ public class DbWriter
 
     /// <summary>
     /// Upsert a file record and return its ID.
+    /// Automatically cleans up existing FTS/chunk/symbol data first to prevent
+    /// FTS orphan entries caused by INSERT OR REPLACE CASCADE deletes.
     /// ファイルレコードをUPSERTしてIDを返す。
-    /// NOTE: Call CleanExistingFileData() before this method to avoid FTS orphans.
-    /// 注意: FTS孤立エントリを防ぐため、このメソッドの前にCleanExistingFileData()を呼ぶこと。
+    /// INSERT OR REPLACE の CASCADE 削除による FTS 孤立を防ぐため、
+    /// 既存の FTS/チャンク/シンボルデータを先に自動クリーンアップする。
     /// </summary>
     public long UpsertFile(FileRecord file)
     {
+        // Auto-cleanup existing data to prevent FTS orphans from INSERT OR REPLACE
+        // INSERT OR REPLACE による FTS 孤立防止のため既存データを自動クリーンアップ
+        CleanExistingFileData(file.Path);
+
         using var cmd = _conn.CreateCommand();
         // Use RETURNING to atomically insert and retrieve the ID
         // RETURNINGを使って挿入とID取得をアトミックに行う

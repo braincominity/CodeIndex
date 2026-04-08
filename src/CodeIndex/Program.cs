@@ -341,7 +341,6 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
             using var txn = writer.BeginTransaction();
             try
             {
-                writer.CleanExistingFileData(record.Path);
                 var fileId = writer.UpsertFile(record);
 
                 var chunks = ChunkSplitter.Split(fileId, content);
@@ -474,7 +473,6 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             using var txn = writer.BeginTransaction();
             try
             {
-                writer.CleanExistingFileData(record.Path);
                 var fileId = writer.UpsertFile(record);
 
                 var chunks = ChunkSplitter.Split(fileId, content);
