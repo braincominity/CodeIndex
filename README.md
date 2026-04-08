@@ -254,11 +254,9 @@ cdidx scans your project directory, splits each source file into overlapping chu
 
 ## Git integration
 
-When `cdidx index` runs, it automatically adds `codeindex.db` and its companion files (`-wal`, `-shm`, `-journal`) to `.git/info/exclude`. This is a **standard Git mechanism** for local ignore rules that works exactly like `.gitignore` but is not tracked or committed — so you don't need to edit `.gitignore` yourself.
+`cdidx index` automatically adds `codeindex.db` and its companion files (`-wal`, `-shm`, `-journal`) to `.git/info/exclude`. You don't need to edit `.gitignore`.
 
-Many popular tools use this same approach (git-lfs, JetBrains IDEs, etc.).
-
-> `.git/info/exclude` is per-machine and not committed. cdidx users get the rule automatically on first `cdidx index`. If your team includes people who don't use cdidx and might accidentally `git add` the DB, adding `codeindex.db*` to `.gitignore` prevents that for everyone who clones the repo.
+`.git/info/exclude` is a standard Git mechanism that works just like `.gitignore`. Many tools use it, including git-lfs and JetBrains IDEs.
 
 ## Git branch switching
 
@@ -762,11 +760,9 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 
 ## Git連携
 
-`cdidx index` を実行すると、`codeindex.db` とその副生成物（`-wal`, `-shm`, `-journal`）を自動で `.git/info/exclude` に追加します。これは `.gitignore` と同じ効果を持つ **Gitの標準機能** ですが、ファイル自体はgit追跡対象外のため、`.gitignore` を編集する必要はありません。
+`cdidx index` を実行すると、`codeindex.db` とその副生成物（`-wal`, `-shm`, `-journal`）が自動で `.git/info/exclude` に追加されます。`.gitignore` を編集する必要はありません。
 
-git-lfs、JetBrains IDE など、多くのツールがこの仕組みを利用しています。
-
-> `.git/info/exclude` はマシンごとのローカル設定でコミットされません。cdidxユーザーは初回の `cdidx index` で自動的に除外ルールが適用されます。cdidxを使わないメンバーが誤って `git add` してしまうのを防ぎたい場合は、`.gitignore` に `codeindex.db*` を追加しておくと、クローンした全員に除外ルールが行き渡ります。
+`.git/info/exclude` は `.gitignore` と同じ効果を持つ Git 標準の仕組みで、git-lfs や JetBrains IDE など多くのツールが利用しています。
 
 ## Gitブランチ切り替え
 
