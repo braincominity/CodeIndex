@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
@@ -55,7 +56,7 @@ public class McpServerTests : IDisposable
             Line = 1,
         }]);
 
-        _server = new McpServer(_dbPath, "0.1.1");
+        _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
     }
 
     // --- Protocol tests / プロトコルテスト ---
@@ -70,7 +71,7 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["id"]!.GetValue<int>());
         Assert.Equal("2024-11-05", response["result"]!["protocolVersion"]!.GetValue<string>());
         Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
-        Assert.Equal("0.1.1", response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
+        Assert.Equal(ConsoleUi.LoadVersion(), response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
     }
 
     [Fact]
