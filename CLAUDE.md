@@ -86,6 +86,15 @@ The progress bar uses `\r` without newline. On Windows, stdout and stderr share 
 ### Easter egg themes
 Features that exist in the spinner (braille frames, themed emoji+text) must carry through to the progress bar. `ConsoleUi.SetProgressTheme()` reuses frames from `GetSpinnerFrames()` — don't duplicate the frame definitions.
 
+### Per-commit checklist
+Before every commit, check whether each of the following needs updating. Don't batch these up — evaluate and act on each commit:
+1. **Tests** — Does this change break existing tests or require new ones? Search for affected method/class names in `tests/`.
+2. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
+3. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
+4. **DEVELOPER_GUIDE.md** — Does this change affect the CLAUDE.md template or AI integration guidance?
+5. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
+6. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
@@ -203,6 +212,15 @@ tests/CodeIndex.Tests/
 
 ### イースターエッグテーマ
 スピナーに存在する機能（ブレイルフレーム、テーマ付き絵文字＋テキスト）はプログレスバーにも反映すること。`ConsoleUi.SetProgressTheme()`は`GetSpinnerFrames()`のフレームを再利用する — フレーム定義を重複させないこと。
+
+### コミットごとのチェックリスト
+コミットのたびに、以下の各項目について更新要否を判断すること。後回しにせず、各コミット単位で確認・対応する:
+1. **テスト** — この変更で既存テストが壊れないか？新規テストが必要か？`tests/` 内で影響を受けるメソッド・クラス名を検索。
+2. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
+3. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
+4. **DEVELOPER_GUIDE.md** — CLAUDE.mdテンプレートやAI連携ガイドに影響するか？
+5. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
+6. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:
