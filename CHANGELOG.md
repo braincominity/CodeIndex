@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+
+- **Upgrade instructions** — Added `dotnet tool update -g cdidx` upgrade command to the Installation section of README. Affected: `README.md`.
+
+#### Changed
+
+- **CLAUDE.md template: update before search** — The code search rules template now instructs AI agents to update cdidx to the latest version (`dotnet tool update -g cdidx`) and refresh the index (`cdidx .`) before starting searches. Affected: `README.md`, `DEVELOPER_GUIDE.md`.
+
 ### [1.0.1] - 2026-04-08
 
 #### Added
@@ -92,6 +100,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+- **アップグレード手順** — READMEのインストールセクションに `dotnet tool update -g cdidx` によるアップグレードコマンドを追加。対象: `README.md`。
+
+#### 変更
+
+- **CLAUDE.mdテンプレート: 検索前にアップデート** — AI向けコード検索ルールのテンプレートで、検索開始前にcdidxを最新版に更新（`dotnet tool update -g cdidx`）し、インデックスを最新化（`cdidx .`）するよう案内を追加。対象: `README.md`, `DEVELOPER_GUIDE.md`。
 
 ### [1.0.1] - 2026-04-08
 

@@ -43,6 +43,14 @@ dotnet tool install -g cdidx
 
 That's it. `cdidx` is now available as a command.
 
+#### Upgrade
+
+If you already have cdidx installed, update to the latest version:
+
+```bash
+dotnet tool update -g cdidx
+```
+
 ### Option B: Build from source
 
 ```bash
@@ -333,14 +341,26 @@ First check if `cdidx` is available:
 cdidx --version
 ```
 
-If the command is not found, install it. .NET 8+ SDK is required:
+**If not found**, install it (.NET 8+ SDK required):
 
 ```bash
 dotnet --version   # must be 8.x or higher; if not, ask the user to install .NET 8+ SDK
 dotnet tool install -g cdidx
 ```
 
-If installation fails (e.g. no network access to NuGet, or .NET SDK unavailable), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`.
+**If already installed**, update to the latest version:
+
+```bash
+dotnet tool update -g cdidx
+```
+
+If install/update fails (e.g. no network access to NuGet, or .NET SDK unavailable), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`.
+
+Before searching, update the index so results are accurate:
+
+```bash
+cdidx .   # incremental update (skips unchanged files)
+```
 
 ## Keeping the index up to date (requires cdidx)
 
@@ -550,6 +570,14 @@ dotnet tool install -g cdidx
 ```
 
 これだけです。`cdidx` コマンドがすぐ使えます。
+
+#### アップグレード
+
+すでにインストール済みの場合、最新版に更新できます:
+
+```bash
+dotnet tool update -g cdidx
+```
 
 ### 方法B: ソースからビルド
 
@@ -841,14 +869,26 @@ AIエージェントにインデックスを活用させるには、プロジェ
 cdidx --version
 ```
 
-コマンドが見つからない場合はインストールしてください。.NET 8+ SDKが必要です:
+**見つからない場合**、インストールしてください（.NET 8+ SDK必須）:
 
 ```bash
 dotnet --version   # 8.x以上であること。そうでなければユーザーに.NET 8+ SDKのインストールを依頼
 dotnet tool install -g cdidx
 ```
 
-インストールに失敗した場合（NuGetへのネットワークアクセスがない、.NET SDKが利用不可等）は、下記の **「直接SQLクエリ」** セクションを参照してください。`sqlite3` で `.cdidx/codeindex.db` を直接クエリできます。
+**すでにインストール済みの場合**、最新版に更新してください:
+
+```bash
+dotnet tool update -g cdidx
+```
+
+インストール/更新に失敗した場合（NuGetへのネットワークアクセスがない、.NET SDKが利用不可等）は、下記の **「直接SQLクエリ」** セクションを参照してください。`sqlite3` で `.cdidx/codeindex.db` を直接クエリできます。
+
+検索を始める前に、インデックスを最新化してください:
+
+```bash
+cdidx .   # インクリメンタル更新（未変更ファイルはスキップ）
+```
 
 ## インデックスの最新化（cdidxが必要）
 
