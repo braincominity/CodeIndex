@@ -616,8 +616,15 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
                 kind = args[++i];
                 break;
             default:
-                if (!args[i].StartsWith('-') && query == null)
+                if (args[i].StartsWith('-'))
+                {
+                    // Warn on unknown flags to help catch typos / タイポ検出のため未知フラグを警告
+                    Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
+                }
+                else if (query == null)
+                {
                     query = args[i];
+                }
                 break;
         }
     }
@@ -679,7 +686,9 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
                 randomSpinner = true;
                 break;
             default:
-                if (!args[i].StartsWith('-'))
+                if (args[i].StartsWith('-'))
+                    Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
+                else
                     projectPath = args[i];
                 break;
         }
