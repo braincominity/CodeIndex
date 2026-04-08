@@ -150,8 +150,9 @@ public class DbReader
 
         var sql = @"
             SELECT f.path, f.lang, f.size, f.lines,
-                   (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) as symbol_count
+                   COUNT(s.id) as symbol_count
             FROM files f
+            LEFT JOIN symbols s ON s.file_id = f.id
             WHERE 1=1";
 
         if (query != null)
@@ -159,7 +160,7 @@ public class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
 
-        sql += " ORDER BY f.path LIMIT @limit";
+        sql += " GROUP BY f.id ORDER BY f.path LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)

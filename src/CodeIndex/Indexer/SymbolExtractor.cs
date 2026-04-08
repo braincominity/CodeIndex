@@ -76,15 +76,18 @@ public static class SymbolExtractor
         ],
         ["c"] =
         [
-            // C function: return_type func_name( / C関数: 戻り値型 関数名(
-            ("function", new Regex(@"^(?!.*\b(?:if|else|for|while|switch|return|sizeof|typedef)\b)(?:\w+[\s*]+)+(?<name>\w+)\s*\(", RegexOptions.Compiled)),
+            // C function: return_type func_name( — exclude lines starting with control keywords
+            // C関数: 戻り値型 関数名( — 行頭が制御キーワードの行を除外
+            ("function", new Regex(@"^(?!\s*(?:if|else|for|while|switch|return|sizeof|typedef)\s*[\(\{;])(?:\w+[\s*]+)+(?<name>\w+)\s*\(", RegexOptions.Compiled)),
             // typedef struct / typedef struct
             ("class",    new Regex(@"^\s*(?:typedef\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled)),
             ("class",    new Regex(@"^\s*(?:typedef\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled)),
         ],
         ["cpp"] =
         [
-            ("function", new Regex(@"^(?!.*\b(?:if|else|for|while|switch|return|sizeof|typedef|using|namespace)\b)(?:\w+[\s*&]+)+(?<name>\w+)\s*\(", RegexOptions.Compiled)),
+            // C++ function — exclude lines starting with control keywords
+            // C++関数 — 行頭が制御キーワードの行を除外
+            ("function", new Regex(@"^(?!\s*(?:if|else|for|while|switch|return|sizeof|typedef|using|namespace)\s*[\(\{;<])(?:\w+[\s*&]+)+(?<name>\w+)\s*\(", RegexOptions.Compiled)),
             ("class",    new Regex(@"^\s*(?:class|struct)\s+(?<name>\w+)", RegexOptions.Compiled)),
             ("class",    new Regex(@"^\s*namespace\s+(?<name>\w+)", RegexOptions.Compiled)),
             ("class",    new Regex(@"^\s*(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled)),

@@ -20,21 +20,43 @@ public class DbWriter
 
     /// <summary>
     /// Begin a transaction for grouping multiple operations atomically.
+    /// Returns a TransactionScope that automatically decrements the depth counter on Dispose.
     /// 複数操作をアトミックにまとめるためのトランザクションを開始する。
+    /// Dispose時に自動的にdepthカウンタを減算するTransactionScopeを返す。
     /// </summary>
-    public SqliteTransaction BeginTransaction()
+    public TransactionScope BeginTransaction()
     {
         _transactionDepth++;
-        return _conn.BeginTransaction();
+        var txn = _conn.BeginTransaction();
+        return new TransactionScope(txn, this);
     }
 
     /// <summary>
-    /// Notify that the outer transaction has ended (committed or rolled back).
-    /// 外部トランザクション終了を通知する。
+    /// RAII wrapper that ensures _transactionDepth is decremented even if an exception occurs.
+    /// 例外発生時にも_transactionDepthが確実に減算されるRAIIラッパー。
     /// </summary>
-    public void EndTransaction()
+    public sealed class TransactionScope : IDisposable
     {
-        if (_transactionDepth > 0) _transactionDepth--;
+        private readonly SqliteTransaction _transaction;
+        private readonly DbWriter _writer;
+        private bool _disposed;
+
+        internal TransactionScope(SqliteTransaction transaction, DbWriter writer)
+        {
+            _transaction = transaction;
+            _writer = writer;
+        }
+
+        public void Commit() => _transaction.Commit();
+        public void Rollback() => _transaction.Rollback();
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _transaction.Dispose();
+            if (_writer._transactionDepth > 0) _writer._transactionDepth--;
+        }
     }
 
     /// <summary>
@@ -161,7 +183,7 @@ public class DbWriter
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             var ownTxn = !IsInTransaction();
-            var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -189,7 +211,6 @@ public class DbWriter
             }
 
             transaction?.Commit();
-            transaction?.Dispose();
         }
     }
 
@@ -205,7 +226,7 @@ public class DbWriter
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             var ownTxn = !IsInTransaction();
-            var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -222,7 +243,6 @@ public class DbWriter
             }
 
             transaction?.Commit();
-            transaction?.Dispose();
         }
     }
 

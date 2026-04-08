@@ -296,6 +296,13 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
         {
             var absPath = Path.IsPathRooted(f) ? f : Path.GetFullPath(Path.Combine(projectRoot, f));
             var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
+            // Prevent path traversal outside project root / プロジェクトルート外へのパストラバーサルを防止
+            if (relPath.StartsWith(".."))
+            {
+                if (!jsonOutput)
+                    Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}");
+                continue;
+            }
             targetPaths.Add(relPath);
         }
     }
@@ -340,25 +347,18 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
             // Wrap clean + upsert + insert in a transaction for atomicity
             // clean + upsert + insert をトランザクションでアトミックに実行
             using var txn = writer.BeginTransaction();
-            try
-            {
-                var fileId = writer.UpsertFile(record);
+            var fileId = writer.UpsertFile(record);
 
-                var chunks = ChunkSplitter.Split(fileId, content);
-                writer.InsertChunks(chunks);
+            var chunks = ChunkSplitter.Split(fileId, content);
+            writer.InsertChunks(chunks);
 
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
-                writer.InsertSymbols(symbols);
-                txn.Commit();
+            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+            writer.InsertSymbols(symbols);
+            txn.Commit();
 
-                updated++;
-                if (verbose && !jsonOutput)
-                    Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
-            }
-            finally
-            {
-                writer.EndTransaction();
-            }
+            updated++;
+            if (verbose && !jsonOutput)
+                Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
         }
         catch (Exception ex)
         {
@@ -472,24 +472,17 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             // Wrap clean + upsert + insert in a transaction for atomicity
             // clean + upsert + insert をトランザクションでアトミックに実行
             using var txn = writer.BeginTransaction();
-            try
-            {
-                var fileId = writer.UpsertFile(record);
+            var fileId = writer.UpsertFile(record);
 
-                var chunks = ChunkSplitter.Split(fileId, content);
-                writer.InsertChunks(chunks);
+            var chunks = ChunkSplitter.Split(fileId, content);
+            writer.InsertChunks(chunks);
 
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
-                writer.InsertSymbols(symbols);
-                txn.Commit();
+            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+            writer.InsertSymbols(symbols);
+            txn.Commit();
 
-                if (verbose && !jsonOutput)
-                    Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
-            }
-            finally
-            {
-                writer.EndTransaction();
-            }
+            if (verbose && !jsonOutput)
+                Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
         }
         catch (Exception ex)
         {
