@@ -26,7 +26,11 @@ public class FileIndexer
         [".swift"]  = "swift",
         [".c"]      = "c",
         [".cpp"]    = "cpp",
-        [".h"]      = "c",
+        [".cc"]     = "cpp",
+        [".cxx"]    = "cpp",
+        [".h"]      = "c",       // Could be C or C++; defaults to C for symbol extraction
+        [".hpp"]    = "cpp",
+        [".hxx"]    = "cpp",
         [".cs"]     = "csharp",
         [".php"]    = "php",
         [".sh"]     = "shell",
