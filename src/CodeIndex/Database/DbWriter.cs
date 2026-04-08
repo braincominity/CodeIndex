@@ -236,22 +236,32 @@ public class DbWriter
                 dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
         }
 
-        int removed = 0;
+        // Identify stale files (no longer on disk) / ディスク上に存在しないファイルを特定
+        var staleIds = new List<long>();
         foreach (var (id, relativePath) in dbPaths)
         {
             var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
             if (!File.Exists(absolutePath))
-            {
-                DeleteFileData(id);
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText = "DELETE FROM files WHERE id = @id";
-                cmd.Parameters.AddWithValue("@id", id);
-                cmd.ExecuteNonQuery();
-                removed++;
-            }
+                staleIds.Add(id);
         }
 
-        return removed;
+        if (staleIds.Count == 0)
+            return 0;
+
+        // Delete all stale files in a single transaction for atomicity and performance
+        // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除
+        using var transaction = _conn.BeginTransaction();
+        foreach (var id in staleIds)
+        {
+            DeleteFileData(id);
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM files WHERE id = @id";
+            cmd.Parameters.AddWithValue("@id", id);
+            cmd.ExecuteNonQuery();
+        }
+        transaction.Commit();
+
+        return staleIds.Count;
     }
 
     /// <summary>
