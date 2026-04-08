@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **README: PATH setup instructions restructured** — Moved the "Add to PATH" section under "Option B: Build from source" since it is unnecessary when installing via NuGet global tool (Option A). Removed incorrect step numbering (was "2." and "3." with no "1."). Affected: `README.md`.
 
+- **CLAUDE.md template: install instructions and offline fallback** — The code search rules template now guides AI agents to check for `cdidx` first, install via `dotnet tool install -g cdidx` if needed, and fall back to direct `sqlite3` queries when NuGet is unreachable. Section headers clarified to distinguish CLI (recommended) from direct SQL (fallback). Affected: `README.md`, `DEVELOPER_GUIDE.md`.
+
 ### [1.0.0] - 2026-04-08
 
 #### Added
@@ -90,6 +92,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 変更
 
 - **README: PATHセットアップ手順の構成変更** — 「PATHに追加」セクションを「方法B: ソースからビルド」の配下に移動。NuGetグローバルツール（方法A）では不要なため。誤った番号付け（「1.」なしの「2.」「3.」）も修正。対象: `README.md`。
+
+- **CLAUDE.mdテンプレート: インストール手順とオフラインフォールバック** — コードベース検索ルールのテンプレートで、AIエージェントにまず `cdidx` の有無を確認させ、なければ `dotnet tool install -g cdidx` でインストールを試行、NuGetにアクセスできない場合は `sqlite3` による直接SQLクエリにフォールバックするよう案内。セクション見出しもCLI（推奨）と直接SQL（フォールバック）を明確に区別。対象: `README.md`, `DEVELOPER_GUIDE.md`。
 
 ### [1.0.0] - 2026-04-08
 
