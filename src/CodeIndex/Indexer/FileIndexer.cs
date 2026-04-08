@@ -60,8 +60,9 @@ public class FileIndexer
         "coverage", "vendor",
     };
 
-    // Files to skip (exact match) / スキップするファイル名（完全一致）
-    private static readonly HashSet<string> SkipFiles = new(StringComparer.Ordinal)
+    // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
+    // スキップするファイル名（SkipDirsと同様にクロスプラットフォーム対応で大文字小文字を区別しない）
+    private static readonly HashSet<string> SkipFiles = new(StringComparer.OrdinalIgnoreCase)
     {
         ".DS_Store", "Thumbs.db",
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
