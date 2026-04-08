@@ -62,6 +62,7 @@ tests/CodeIndex.Tests/
 - **Stale file purge** — Before indexing, removes DB entries for files no longer on disk (branch switch support).
 - **Batch commits** — 500 records per transaction for write performance. Supports nesting via SAVEPOINT.
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
+- **Literal-safe search by default** — Search queries are quoted token-by-token to avoid FTS syntax errors by default. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
@@ -192,6 +193,7 @@ tests/CodeIndex.Tests/
 - **古いファイルのパージ** — インデックス前にディスク上に存在しないファイルをDBから削除（ブランチ切り替え対応）。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。SAVEPOINTによるネスト対応。
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
+- **デフォルトはリテラル安全検索** — 検索クエリは既定ではトークンごとに引用し、FTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。

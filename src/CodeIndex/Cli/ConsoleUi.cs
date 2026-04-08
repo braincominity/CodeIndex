@@ -306,6 +306,7 @@ public static class ConsoleUi
         Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
         Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
+        Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --kind <kind>              Filter symbols by kind (function/class/import)");
         Console.WriteLine();
         Console.WriteLine("Examples:");

@@ -37,4 +37,14 @@ public class SearchSnippetFormatterTests
 
         Assert.Equal(["...", "line 3", "line 4", "line 5", "line 6", "line 7"], snippet);
     }
+
+    [Fact]
+    public void Format_UsesNormalizedTokensForRawFtsQueries()
+    {
+        var content = "alpha\nauthenticate user\nomega";
+
+        var snippet = SearchSnippetFormatter.Format(content, "auth*");
+
+        Assert.Equal(["alpha", "authenticate user", "omega"], snippet);
+    }
 }

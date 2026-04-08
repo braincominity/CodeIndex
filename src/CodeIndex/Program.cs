@@ -72,7 +72,7 @@ return args[0] switch
 // --- MCP server subcommand / MCPサーバーサブコマンド ---
 int RunMcp(string[] cmdArgs)
 {
-    var (dbPath, _, _, _, _, _) = ParseQueryArgs(cmdArgs, jsonDefault: true);
+    var (dbPath, _, _, _, _, _, _) = ParseQueryArgs(cmdArgs, jsonDefault: true);
     var server = new McpServer(dbPath, appVersion);
     server.RunAsync().GetAwaiter().GetResult();
     return ExitSuccess;
@@ -81,17 +81,17 @@ int RunMcp(string[] cmdArgs)
 // --- Search subcommand / 検索サブコマンド ---
 int RunSearch(string[] cmdArgs)
 {
-    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: false);
+    var (dbPath, json, limit, lang, _, query, rawFts) = ParseQueryArgs(cmdArgs, jsonDefault: false);
     if (query == null)
     {
         Console.Error.WriteLine("Error: search requires a query argument");
-        Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>]");
+        Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--fts]");
         return ExitUsageError;
     }
 
     return WithDb(dbPath, reader =>
     {
-        var results = reader.Search(query, limit, lang);
+        var results = reader.Search(query, limit, lang, rawFts);
         if (results.Count == 0)
         {
             if (!json)
@@ -125,7 +125,7 @@ int RunSearch(string[] cmdArgs)
 // --- Symbols subcommand / シンボルサブコマンド ---
 int RunSymbols(string[] cmdArgs)
 {
-    var (dbPath, json, limit, lang, kind, query) = ParseQueryArgs(cmdArgs, jsonDefault: false);
+    var (dbPath, json, limit, lang, kind, query, _) = ParseQueryArgs(cmdArgs, jsonDefault: false);
 
     return WithDb(dbPath, reader =>
     {
@@ -155,7 +155,7 @@ int RunSymbols(string[] cmdArgs)
 // --- Files subcommand / ファイルサブコマンド ---
 int RunFiles(string[] cmdArgs)
 {
-    var (dbPath, json, limit, lang, _, query) = ParseQueryArgs(cmdArgs, jsonDefault: false);
+    var (dbPath, json, limit, lang, _, query, _) = ParseQueryArgs(cmdArgs, jsonDefault: false);
 
     return WithDb(dbPath, reader =>
     {
@@ -185,7 +185,7 @@ int RunFiles(string[] cmdArgs)
 // --- Status subcommand / ステータスサブコマンド ---
 int RunStatus(string[] cmdArgs)
 {
-    var (dbPath, json, _, _, _, _) = ParseQueryArgs(cmdArgs, jsonDefault: false);
+    var (dbPath, json, _, _, _, _, _) = ParseQueryArgs(cmdArgs, jsonDefault: false);
 
     return WithDb(dbPath, reader =>
     {
@@ -685,7 +685,7 @@ static void AddToGitExclude(string projectPath, string dbPath)
 // --- Argument parsers / 引数パーサー ---
 
 // Parse query subcommand arguments / クエリサブコマンドの引数を解析
-static (string dbPath, bool json, int limit, string? lang, string? kind, string? query) ParseQueryArgs(string[] args, bool jsonDefault)
+static (string dbPath, bool json, int limit, string? lang, string? kind, string? query, bool rawFts) ParseQueryArgs(string[] args, bool jsonDefault)
 {
     string dbPath = Path.Combine(".cdidx", "codeindex.db");
     bool? json = null;
@@ -693,6 +693,7 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
     string? lang = null;
     string? kind = null;
     string? query = null;
+    bool rawFts = false;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -720,6 +721,9 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
             case "--kind" when i + 1 < args.Length:
                 kind = args[++i];
                 break;
+            case "--fts":
+                rawFts = true;
+                break;
             default:
                 if (args[i].StartsWith('-'))
                 {
@@ -736,7 +740,7 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
 
     // Default: human-readable for all commands; use --json for machine output
     // デフォルト: 全コマンド人間向け出力、--jsonで機械向け出力
-    return (dbPath, json ?? jsonDefault, limit, lang, kind, query);
+    return (dbPath, json ?? jsonDefault, limit, lang, kind, query, rawFts);
 }
 
 // Parse index subcommand arguments / インデックスサブコマンドの引数を解析

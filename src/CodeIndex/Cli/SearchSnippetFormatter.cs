@@ -18,8 +18,9 @@ public static class SearchSnippetFormatter
         var normalizedQuery = query.Trim();
         var tokens = query
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-            .Select(t => t.Trim('"'))
+            .Select(NormalizeToken)
             .Where(t => t.Length > 0)
+            .Where(t => t is not "AND" and not "OR" and not "NOT" and not "NEAR")
             .ToArray();
 
         var matchIndex = FindFirstMatchingLine(lines, normalizedQuery, tokens);
@@ -64,5 +65,12 @@ public static class SearchSnippetFormatter
         }
 
         return -1;
+    }
+
+    private static string NormalizeToken(string token)
+    {
+        return token
+            .Trim('"', '\'', '(', ')')
+            .TrimEnd('*');
     }
 }

@@ -166,7 +166,8 @@ public class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
-                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" }
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
+                        ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 }),
@@ -273,15 +274,17 @@ public class McpServer
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>();
+        var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.Search(query, limit, lang);
+            var results = reader.Search(query, limit, lang, rawQuery);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
                 {
                     ["query"] = query,
+                    ["rawQuery"] = rawQuery,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
@@ -291,6 +294,7 @@ public class McpServer
             var structured = new JsonObject
             {
                 ["query"] = query,
+                ["rawQuery"] = rawQuery,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };

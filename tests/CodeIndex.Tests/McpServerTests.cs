@@ -210,6 +210,17 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_RawQuerySupportsFtsSyntax()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Ap*","rawQuery":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.True(response["result"]!["structuredContent"]!["rawQuery"]!.GetValue<bool>());
+        Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_MissingQuery_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{}}}""")!;
