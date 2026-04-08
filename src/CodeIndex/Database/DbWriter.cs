@@ -387,14 +387,14 @@ public class DbWriter
         // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically
         // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する
         using var txn = BeginTransaction();
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = cmd.Parameters.Add("@id", SqliteType.Integer);
-        cmd.Prepare();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
         foreach (var id in staleIds)
         {
             pId.Value = id;
-            cmd.ExecuteNonQuery();
+            deleteCmd.ExecuteNonQuery();
         }
         txn.Commit();
 
