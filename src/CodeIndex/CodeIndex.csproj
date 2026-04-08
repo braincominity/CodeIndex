@@ -12,7 +12,9 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>cdidx</ToolCommandName>
     <PackageId>cdidx</PackageId>
-    <Version>0.1.1</Version>
+    <VersionJsonPath>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '..', '..', 'version.json'))</VersionJsonPath>
+    <VersionJsonContent>$([System.IO.File]::ReadAllText('$(VersionJsonPath)'))</VersionJsonContent>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match('$(VersionJsonContent)', '"version"\s*:\s*"([^"]+)"').Groups[1].Value)</Version>
     <Authors>Widthdom</Authors>
     <Description>Fast code indexer with FTS5 search for AI-powered coding. Index source code into SQLite and search by text, symbols, or files. / AIコーディング向け高速コードインデクサー。ソースコードをSQLiteにインデックスし、テキスト・シンボル・ファイルで検索。</Description>
     <PackageTags>code-search;indexer;sqlite;fts5;ai;mcp;developer-tools</PackageTags>
