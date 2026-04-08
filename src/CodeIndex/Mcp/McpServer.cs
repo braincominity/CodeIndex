@@ -87,7 +87,7 @@ public class McpServer
     /// Route a JSON-RPC message to the appropriate handler.
     /// JSON-RPCメッセージを適切なハンドラにルーティング。
     /// </summary>
-    private JsonNode? HandleMessage(JsonNode request)
+    internal JsonNode? HandleMessage(JsonNode request)
     {
         var method = request["method"]?.GetValue<string>();
         var id = request["id"];

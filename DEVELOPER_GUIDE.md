@@ -26,12 +26,14 @@ src/CodeIndex/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
     SymbolExtractor.cs        — Regex-based symbol extraction (13 languages)
+  Mcp/
+    McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools)
   Models/
     FileRecord.cs             — File metadata DTO
     ChunkRecord.cs            — Chunk DTO
     SymbolRecord.cs           — Symbol DTO
 tests/CodeIndex.Tests/
-  UnitTest1.cs                — xUnit tests (chunker, symbols, indexer, DB integration)
+  UnitTest1.cs                — xUnit tests (chunker, symbols, indexer, DB integration, MCP)
 ```
 
 ### Indexing pipeline
@@ -438,12 +440,14 @@ src/CodeIndex/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
     SymbolExtractor.cs        — 正規表現によるシンボル抽出（13言語対応）
+  Mcp/
+    McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
   Models/
     FileRecord.cs             — ファイルメタデータDTO
     ChunkRecord.cs            — チャンクDTO
     SymbolRecord.cs           — シンボルDTO
 tests/CodeIndex.Tests/
-  UnitTest1.cs                — xUnitテスト（チャンク、シンボル、インデクサー、DB統合）
+  UnitTest1.cs                — xUnitテスト（チャンク、シンボル、インデクサー、DB統合、MCP）
 ```
 
 ### インデックスパイプライン

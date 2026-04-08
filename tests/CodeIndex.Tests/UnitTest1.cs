@@ -1,5 +1,7 @@
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Mcp;
 using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
@@ -987,6 +989,322 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, status.Languages.Count);
         Assert.Equal(1, status.Languages["python"]);
         Assert.Equal(1, status.Languages["javascript"]);
+    }
+
+    public void Dispose()
+    {
+        _db.Dispose();
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        if (File.Exists(_dbPath))
+            File.Delete(_dbPath);
+    }
+}
+
+/// <summary>
+/// Tests for McpServer JSON-RPC message handling.
+/// McpServerのJSON-RPCメッセージ処理のテスト。
+/// </summary>
+public class McpServerTests : IDisposable
+{
+    private readonly string _dbPath;
+    private readonly DbContext _db;
+    private readonly McpServer _server;
+
+    public McpServerTests()
+    {
+        _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_{Guid.NewGuid():N}.db");
+        _db = new DbContext(_dbPath);
+        _db.InitializeSchema();
+
+        // Seed test data / テストデータを投入
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 10,
+            Modified = "2024-01-01T00:00:00",
+            Checksum = "abc123",
+        });
+        writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 10,
+            Content = "public class App { public void Run() { } }",
+        }]);
+        writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "class",
+            Name = "App",
+            Line = 1,
+        },
+        new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = "Run",
+            Line = 1,
+        }]);
+
+        _server = new McpServer(_dbPath, "0.1.1");
+    }
+
+    // --- Protocol tests / プロトコルテスト ---
+
+    [Fact]
+    public void Initialize_ReturnsProtocolVersion()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("2.0", response["jsonrpc"]!.GetValue<string>());
+        Assert.Equal(1, response["id"]!.GetValue<int>());
+        Assert.Equal("2024-11-05", response["result"]!["protocolVersion"]!.GetValue<string>());
+        Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
+        Assert.Equal("0.1.1", response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Initialize_ReturnsToolsCapability()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]!["capabilities"]!["tools"]);
+    }
+
+    [Fact]
+    public void Notification_Initialized_ReturnsNull()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")!;
+        var response = _server.HandleMessage(request);
+
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public void Notification_Cancelled_ReturnsNull()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/cancelled"}""")!;
+        var response = _server.HandleMessage(request);
+
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public void Ping_ReturnsEmptyResult()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":99,"method":"ping"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(99, response["id"]!.GetValue<int>());
+        Assert.NotNull(response["result"]);
+    }
+
+    [Fact]
+    public void UnknownMethod_ReturnsMethodNotFound()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"unknown/method"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32601, response["error"]!["code"]!.GetValue<int>());
+        Assert.Contains("Method not found", response["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void MissingMethod_ReturnsInvalidRequest()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void MissingMethodAndId_ReturnsNull()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0"}""")!;
+        var response = _server.HandleMessage(request);
+
+        Assert.Null(response);
+    }
+
+    // --- tools/list tests / ツール一覧テスト ---
+
+    [Fact]
+    public void ToolsList_Returns5Tools()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        Assert.Equal(5, tools.Count);
+
+        var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
+        Assert.Contains("search", names);
+        Assert.Contains("symbols", names);
+        Assert.Contains("files", names);
+        Assert.Contains("status", names);
+        Assert.Contains("index", names);
+    }
+
+    [Fact]
+    public void ToolsList_SearchHasRequiredQueryParam()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var required = searchTool["inputSchema"]!["required"]!.AsArray();
+        Assert.Contains("query", required.Select(r => r!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsList_IndexHasRequiredPathParam()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var indexTool = tools.First(t => t!["name"]!.GetValue<string>() == "index")!;
+        var required = indexTool["inputSchema"]!["required"]!.AsArray();
+        Assert.Contains("path", required.Select(r => r!.GetValue<string>()));
+    }
+
+    // --- tools/call tests / ツール呼び出しテスト ---
+
+    [Fact]
+    public void ToolsCall_Search_ReturnsResults()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var content = response["result"]!["content"]!.AsArray();
+        Assert.NotEmpty(content);
+        var text = content[0]!["text"]!.GetValue<string>();
+        Assert.Contains("src/app.cs", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_NoResults()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("No results found", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_MissingQuery_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("query", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_ReturnsResults()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("App", text);
+        Assert.Contains("class", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_FilterByKind()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"kind":"function"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Run", text);
+        Assert.DoesNotContain("class", text.Split('\n').Where(l => l.Contains("Run")).First());
+    }
+
+    [Fact]
+    public void ToolsCall_Files_ReturnsResults()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("src/app.cs", text);
+        Assert.Contains("csharp", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReturnsCounts()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Files", text);
+        Assert.Contains("Chunks", text);
+        Assert.Contains("Symbols", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Index_MissingPath_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_Index_NonexistentDir_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"/nonexistent/path/xyz"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("not found", text);
+    }
+
+    [Fact]
+    public void ToolsCall_UnknownTool_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_MissingToolName_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+    }
+
+    // --- Database not found tests / DB未検出テスト ---
+
+    [Fact]
+    public void ToolsCall_Search_DbNotFound_ReturnsError()
+    {
+        var server = new McpServer("/nonexistent/path/test.db", "0.1.1");
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"test"}}}""")!;
+        var response = server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("not found", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     public void Dispose()

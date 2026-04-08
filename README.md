@@ -420,6 +420,46 @@ Cursor (`.cursor/mcp.json`):
 }
 ```
 
+Windsurf (`.windsurf/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+GitHub Copilot (VS Code — `.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "cdidx": {
+      "type": "stdio",
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
 Once configured, the AI can directly call these tools:
 
 | Tool | Description |
@@ -852,6 +892,46 @@ Claude Code (`.claude/settings.json` または `.mcp.json`):
 ```
 
 Cursor (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+Windsurf (`.windsurf/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+GitHub Copilot (VS Code — `.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "cdidx": {
+      "type": "stdio",
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 
 ```json
 {
