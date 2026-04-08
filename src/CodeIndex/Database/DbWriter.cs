@@ -11,10 +11,30 @@ public class DbWriter
 {
     private readonly SqliteConnection _conn;
     private const int BatchSize = 500;
+    private int _transactionDepth;
 
     public DbWriter(SqliteConnection connection)
     {
         _conn = connection;
+    }
+
+    /// <summary>
+    /// Begin a transaction for grouping multiple operations atomically.
+    /// 複数操作をアトミックにまとめるためのトランザクションを開始する。
+    /// </summary>
+    public SqliteTransaction BeginTransaction()
+    {
+        _transactionDepth++;
+        return _conn.BeginTransaction();
+    }
+
+    /// <summary>
+    /// Notify that the outer transaction has ended (committed or rolled back).
+    /// 外部トランザクション終了を通知する。
+    /// </summary>
+    public void EndTransaction()
+    {
+        if (_transactionDepth > 0) _transactionDepth--;
     }
 
     /// <summary>
@@ -66,9 +86,6 @@ public class DbWriter
     /// <summary>
     /// Clean up existing file data (FTS, chunks, symbols) before re-indexing.
     /// 再インデックス前に既存ファイルデータ（FTS、チャンク、シンボル）を削除する。
-    /// Must be called BEFORE UpsertFile to prevent FTS orphan entries caused by
-    /// INSERT OR REPLACE triggering CASCADE deletes that bypass FTS cleanup.
-    /// INSERT OR REPLACE の CASCADE 削除が FTS をバイパスするため、UpsertFile の前に呼ぶこと。
     /// </summary>
     public void CleanExistingFileData(string relativePath)
     {
@@ -82,24 +99,29 @@ public class DbWriter
 
     /// <summary>
     /// Upsert a file record and return its ID.
+    /// Automatically cleans up existing FTS/chunk/symbol data first to prevent
+    /// FTS orphan entries caused by INSERT OR REPLACE CASCADE deletes.
     /// ファイルレコードをUPSERTしてIDを返す。
-    /// NOTE: Call CleanExistingFileData() before this method to avoid FTS orphans.
-    /// 注意: FTS孤立エントリを防ぐため、このメソッドの前にCleanExistingFileData()を呼ぶこと。
+    /// INSERT OR REPLACE の CASCADE 削除による FTS 孤立を防ぐため、
+    /// 既存の FTS/チャンク/シンボルデータを先に自動クリーンアップする。
     /// </summary>
     public long UpsertFile(FileRecord file)
     {
+        // Auto-cleanup existing data to prevent FTS orphans from INSERT OR REPLACE
+        // INSERT OR REPLACE による FTS 孤立防止のため既存データを自動クリーンアップ
+        CleanExistingFileData(file.Path);
+
         using var cmd = _conn.CreateCommand();
         // Use RETURNING to atomically insert and retrieve the ID
         // RETURNINGを使って挿入とID取得をアトミックに行う
         cmd.CommandText = @"
-            INSERT OR REPLACE INTO files (path, lang, size, lines, snippet, checksum, modified, indexed_at)
-            VALUES (@path, @lang, @size, @lines, @snippet, @checksum, @modified, CURRENT_TIMESTAMP)
+            INSERT OR REPLACE INTO files (path, lang, size, lines, checksum, modified, indexed_at)
+            VALUES (@path, @lang, @size, @lines, @checksum, @modified, CURRENT_TIMESTAMP)
             RETURNING id";
         cmd.Parameters.AddWithValue("@path", file.Path);
         cmd.Parameters.AddWithValue("@lang", (object?)file.Lang ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@size", file.Size);
         cmd.Parameters.AddWithValue("@lines", file.Lines);
-        cmd.Parameters.AddWithValue("@snippet", (object?)file.Snippet ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@checksum", (object?)file.Checksum ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@modified", file.Modified);
         return (long)cmd.ExecuteScalar()!;
@@ -136,7 +158,10 @@ public class DbWriter
         for (int i = 0; i < chunks.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, chunks.Count);
-            using var transaction = _conn.BeginTransaction();
+            // Only create a batch transaction when not already inside an outer transaction
+            // 外部トランザクション内でない場合のみバッチトランザクションを作成
+            var ownTxn = !IsInTransaction();
+            var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -163,7 +188,8 @@ public class DbWriter
                 ftsCmd.ExecuteNonQuery();
             }
 
-            transaction.Commit();
+            transaction?.Commit();
+            transaction?.Dispose();
         }
     }
 
@@ -176,7 +202,10 @@ public class DbWriter
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, symbols.Count);
-            using var transaction = _conn.BeginTransaction();
+            // Only create a batch transaction when not already inside an outer transaction
+            // 外部トランザクション内でない場合のみバッチトランザクションを作成
+            var ownTxn = !IsInTransaction();
+            var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -192,7 +221,8 @@ public class DbWriter
                 cmd.ExecuteNonQuery();
             }
 
-            transaction.Commit();
+            transaction?.Commit();
+            transaction?.Dispose();
         }
     }
 
@@ -236,22 +266,32 @@ public class DbWriter
                 dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
         }
 
-        int removed = 0;
+        // Identify stale files (no longer on disk) / ディスク上に存在しないファイルを特定
+        var staleIds = new List<long>();
         foreach (var (id, relativePath) in dbPaths)
         {
             var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
             if (!File.Exists(absolutePath))
-            {
-                DeleteFileData(id);
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText = "DELETE FROM files WHERE id = @id";
-                cmd.Parameters.AddWithValue("@id", id);
-                cmd.ExecuteNonQuery();
-                removed++;
-            }
+                staleIds.Add(id);
         }
 
-        return removed;
+        if (staleIds.Count == 0)
+            return 0;
+
+        // Delete all stale files in a single transaction for atomicity and performance
+        // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除
+        using var transaction = _conn.BeginTransaction();
+        foreach (var id in staleIds)
+        {
+            DeleteFileData(id);
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM files WHERE id = @id";
+            cmd.Parameters.AddWithValue("@id", id);
+            cmd.ExecuteNonQuery();
+        }
+        transaction.Commit();
+
+        return staleIds.Count;
     }
 
     /// <summary>
@@ -265,6 +305,8 @@ public class DbWriter
         long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
         return (files, chunks, symbols);
     }
+
+    private bool IsInTransaction() => _transactionDepth > 0;
 
     private long ExecuteScalar(string sql)
     {

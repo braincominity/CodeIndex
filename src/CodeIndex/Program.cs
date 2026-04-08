@@ -96,9 +96,10 @@ int RunSearch(string[] cmdArgs)
             {
                 Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
                 // Indent content lines for readability / 可読性のためコンテンツ行をインデント
-                foreach (var line in r.Content.Split('\n').Take(5))
+                var contentLines = r.Content.Split('\n');
+                foreach (var line in contentLines.Take(5))
                     Console.WriteLine($"  {line}");
-                if (r.Content.Split('\n').Length > 5)
+                if (contentLines.Length > 5)
                     Console.WriteLine("  ...");
                 Console.WriteLine();
             }
@@ -335,18 +336,29 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
             }
 
             var (record, content) = indexer.BuildRecord(absPath);
-            writer.CleanExistingFileData(record.Path);
-            var fileId = writer.UpsertFile(record);
 
-            var chunks = ChunkSplitter.Split(fileId, content);
-            writer.InsertChunks(chunks);
+            // Wrap clean + upsert + insert in a transaction for atomicity
+            // clean + upsert + insert をトランザクションでアトミックに実行
+            using var txn = writer.BeginTransaction();
+            try
+            {
+                var fileId = writer.UpsertFile(record);
 
-            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
-            writer.InsertSymbols(symbols);
+                var chunks = ChunkSplitter.Split(fileId, content);
+                writer.InsertChunks(chunks);
 
-            updated++;
-            if (verbose && !jsonOutput)
-                Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                writer.InsertSymbols(symbols);
+                txn.Commit();
+
+                updated++;
+                if (verbose && !jsonOutput)
+                    Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
+            }
+            finally
+            {
+                writer.EndTransaction();
+            }
         }
         catch (Exception ex)
         {
@@ -457,17 +469,27 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
                 continue;
             }
 
-            writer.CleanExistingFileData(record.Path);
-            var fileId = writer.UpsertFile(record);
+            // Wrap clean + upsert + insert in a transaction for atomicity
+            // clean + upsert + insert をトランザクションでアトミックに実行
+            using var txn = writer.BeginTransaction();
+            try
+            {
+                var fileId = writer.UpsertFile(record);
 
-            var chunks = ChunkSplitter.Split(fileId, content);
-            writer.InsertChunks(chunks);
+                var chunks = ChunkSplitter.Split(fileId, content);
+                writer.InsertChunks(chunks);
 
-            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
-            writer.InsertSymbols(symbols);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                writer.InsertSymbols(symbols);
+                txn.Commit();
 
-            if (verbose && !jsonOutput)
-                Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                if (verbose && !jsonOutput)
+                    Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+            }
+            finally
+            {
+                writer.EndTransaction();
+            }
         }
         catch (Exception ex)
         {
@@ -645,10 +667,14 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
             case "--commits":
                 while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
                     commits.Add(args[++i]);
+                if (commits.Count == 0)
+                    Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
                 break;
             case "--files":
                 while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
                     updateFiles.Add(args[++i]);
+                if (updateFiles.Count == 0)
+                    Console.Error.WriteLine("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
                 break;
             case "--help" or "-h":
                 return (null, dbPath, rebuild, verbose, json, commits, updateFiles, null);

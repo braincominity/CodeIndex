@@ -38,6 +38,11 @@ public class DbReader
     /// </summary>
     public List<SearchResult> Search(string query, int limit = 20, string? lang = null)
     {
+        // Guard against empty/whitespace queries that would match everything
+        // 空白のみのクエリが全件マッチするのを防止
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
         var sanitizedQuery = SanitizeFtsQuery(query);
         using var cmd = _conn.CreateCommand();
 

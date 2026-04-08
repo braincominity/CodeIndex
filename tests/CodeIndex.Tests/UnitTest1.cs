@@ -382,7 +382,6 @@ public class FileIndexerTests
             Assert.Equal("python", record.Lang);
             Assert.Equal(2, record.Lines); // "def main():\n    print('hello')\n" = 2 lines (trailing newline ignored)
             Assert.NotNull(record.Checksum);
-            Assert.Contains("def main()", record.Snippet);
         }
         finally
         {
@@ -510,7 +509,6 @@ public class DatabaseTests : IDisposable
             Lang = "python",
             Size = 100,
             Lines = 10,
-            Snippet = "def main():",
             Checksum = "abc123",
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };

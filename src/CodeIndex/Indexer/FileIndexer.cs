@@ -26,7 +26,11 @@ public class FileIndexer
         [".swift"]  = "swift",
         [".c"]      = "c",
         [".cpp"]    = "cpp",
-        [".h"]      = "c",
+        [".cc"]     = "cpp",
+        [".cxx"]    = "cpp",
+        [".h"]      = "c",       // Could be C or C++; defaults to C for symbol extraction
+        [".hpp"]    = "cpp",
+        [".hxx"]    = "cpp",
         [".cs"]     = "csharp",
         [".php"]    = "php",
         [".sh"]     = "shell",
@@ -51,13 +55,17 @@ public class FileIndexer
         "node_modules", "__pycache__", ".pytest_cache",
         "venv", ".venv", "env",
         "dist", "build", ".build", "out",
+        "bin", "obj",                   // .NET build outputs / .NETビルド出力
+        "target",                       // Rust/Java/Maven build output / Rust/Java/Mavenビルド出力
+        ".gradle",                      // Gradle cache / Gradleキャッシュ
         ".next", ".nuxt",
         ".idea", ".vscode",
         "coverage", "vendor",
     };
 
-    // Files to skip (exact match) / スキップするファイル名（完全一致）
-    private static readonly HashSet<string> SkipFiles = new(StringComparer.Ordinal)
+    // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
+    // スキップするファイル名（SkipDirsと同様にクロスプラットフォーム対応で大文字小文字を区別しない）
+    private static readonly HashSet<string> SkipFiles = new(StringComparer.OrdinalIgnoreCase)
     {
         ".DS_Store", "Thumbs.db",
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
@@ -170,7 +178,6 @@ public class FileIndexer
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')
             : content.Split('\n');
-        var snippet = content.Length > 2000 ? content[..2000] : content;
         var checksum = ComputeChecksum(content);
 
         var record = new FileRecord
@@ -179,7 +186,6 @@ public class FileIndexer
             Lang = DetectLanguage(absolutePath),
             Size = info.Length,
             Lines = lines.Length,
-            Snippet = snippet,
             Checksum = checksum,
             Modified = info.LastWriteTimeUtc,
         };

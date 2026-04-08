@@ -20,9 +20,6 @@ public class FileRecord
     /// <summary>Total line count / 総行数</summary>
     public int Lines { get; set; }
 
-    /// <summary>First 2000 characters of the file / ファイル先頭2000文字</summary>
-    public string? Snippet { get; set; }
-
     /// <summary>SHA256 checksum / SHA256チェックサム</summary>
     public string? Checksum { get; set; }
 
