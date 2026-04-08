@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+
+- **Progress bar spinner not visible** — Added a spinning braille character to the left of the progress bar during indexing. When an easter egg theme is active (e.g. `--beer`), the themed frames with text (e.g. `🍺 Tapping...`, `🍺 Pouring...`, `🍺 Cheers!`) are displayed instead of the braille character. Affected: `Cli/ConsoleUi.cs`, `Program.cs`.
+
+- **WARN/ERR messages overlapping progress bar** — Warning and error messages printed during indexing (e.g. invalid UTF-8 detection) no longer appear on the same line as the progress bar. The progress bar line is now cleared before outputting messages, then redrawn on the next update. `BuildRecord()` returns warnings as a return value instead of writing directly to stderr. Affected: `Cli/ConsoleUi.cs`, `Indexer/FileIndexer.cs`, `Program.cs`, `Mcp/McpServer.cs`.
+
+#### Changed
+
+- **README: PATH setup instructions restructured** — Moved the "Add to PATH" section under "Option B: Build from source" since it is unnecessary when installing via NuGet global tool (Option A). Removed incorrect step numbering (was "2." and "3." with no "1."). Affected: `README.md`.
+
 ### [1.0.0] - 2026-04-08
 
 #### Added
@@ -70,6 +80,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+
+- **プログレスバーのスピナーが表示されない問題** — インデックス中のプログレスバー左側にブレイルスピナー文字を追加。イースターエッグテーマ（`--beer`等）使用時は、テーマ付きフレーム（例: `🍺 Tapping...`、`🍺 Pouring...`、`🍺 Cheers!`）がブレイル文字の代わりに表示される。対象: `Cli/ConsoleUi.cs`, `Program.cs`。
+
+- **WARN/ERRメッセージがプログレスバーと重なる問題** — インデックス中の警告・エラーメッセージ（無効なUTF-8検出等）がプログレスバーと同じ行に出力されなくなった。メッセージ出力前にプログレスバー行をクリアし、次の更新で再描画。`BuildRecord()`は直接stderrに書き込む代わりに警告を戻り値で返すよう変更。対象: `Cli/ConsoleUi.cs`, `Indexer/FileIndexer.cs`, `Program.cs`, `Mcp/McpServer.cs`。
+
+#### 変更
+
+- **README: PATHセットアップ手順の構成変更** — 「PATHに追加」セクションを「方法B: ソースからビルド」の配下に移動。NuGetグローバルツール（方法A）では不要なため。誤った番号付け（「1.」なしの「2.」「3.」）も修正。対象: `README.md`。
 
 ### [1.0.0] - 2026-04-08
 
