@@ -96,7 +96,8 @@ The following files contain overlapping content that must be updated together:
 When modifying the CLAUDE.md template (code search rules for AI agents) in README/DEVELOPER_GUIDE, update all instances (README English, README Japanese, DEVELOPER_GUIDE).
 
 ### CHANGELOG style
-- Group related changes into a single entry. Don't write separate entries for iterative fixes on the same feature.
+- One entry per distinct change. Don't merge unrelated fixes into a single entry just to reduce line count.
+- But don't write separate entries for iterative commits toward the same fix — consolidate them into one entry describing the final result.
 - Use [Keep a Changelog](https://keepachangelog.com/) categories: Added, Changed, Fixed, Removed.
 - Each entry: `**Bold title** — Description. Affected: \`file1\`, \`file2\`.`
 
@@ -213,7 +214,8 @@ tests/CodeIndex.Tests/
 CLAUDE.mdテンプレート（AI向けコード検索ルール）をREADME/DEVELOPER_GUIDEで変更する場合、全インスタンス（README英語、README日本語、DEVELOPER_GUIDE）を更新すること。
 
 ### CHANGELOGのスタイル
-- 関連する変更は1エントリにまとめる。同じ機能への段階的修正を個別エントリにしない。
+- 変更ごとに1エントリ。無関係な修正を行数削減のために1エントリにまとめない。
+- ただし、同じ修正に向けた段階的なコミットは1エントリに統合し、最終結果を記述する。
 - [Keep a Changelog](https://keepachangelog.com/)のカテゴリを使用: Added, Changed, Fixed, Removed（日本語: 追加, 変更, 修正, 削除）。
 - 各エントリ: `**太字タイトル** — 説明。Affected: \`file1\`, \`file2\`.`（日本語: `対象:`）
 
