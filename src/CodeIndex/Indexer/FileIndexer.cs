@@ -157,6 +157,11 @@ public class FileIndexer
         // Read raw bytes and decode UTF-8; detect invalid sequences
         // 生バイト読み込み後UTF-8デコード、不正シーケンスを検出
         var bytes = File.ReadAllBytes(absolutePath);
+
+        // Compute checksum from raw bytes to avoid re-encoding the string (~10MB saved for large files)
+        // 文字列の再エンコードを回避するためraw bytesからチェックサムを算出（大ファイルで約10MB節約）
+        var checksum = ComputeChecksum(bytes);
+
         string content;
         try
         {
@@ -174,7 +179,6 @@ public class FileIndexer
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')
             : content.Split('\n');
-        var checksum = ComputeChecksum(content);
 
         var record = new FileRecord
         {
@@ -190,12 +194,11 @@ public class FileIndexer
     }
 
     /// <summary>
-    /// Compute SHA256 checksum of the content.
-    /// コンテンツのSHA256チェックサムを算出する。
+    /// Compute SHA256 checksum from raw file bytes.
+    /// ファイルのraw bytesからSHA256チェックサムを算出する。
     /// </summary>
-    private static string ComputeChecksum(string content)
+    private static string ComputeChecksum(byte[] bytes)
     {
-        var bytes = Encoding.UTF8.GetBytes(content);
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
