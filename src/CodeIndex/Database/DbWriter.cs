@@ -75,11 +75,13 @@ public class DbWriter
 
         public void Commit()
         {
-            _committed = true;
             if (_transaction != null)
                 _transaction.Commit();
             else
                 ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+            // Set _committed after success so Dispose() will rollback if Commit/Release throws
+            // コミット/リリース成功後にフラグを立て、失敗時はDispose()でロールバックされるようにする
+            _committed = true;
         }
 
         public void Rollback()
