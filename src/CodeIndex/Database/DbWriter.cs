@@ -183,7 +183,7 @@ public class DbWriter
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             var ownTxn = !IsInTransaction();
-            var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -211,7 +211,6 @@ public class DbWriter
             }
 
             transaction?.Commit();
-            transaction?.Dispose();
         }
     }
 
@@ -227,7 +226,7 @@ public class DbWriter
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             var ownTxn = !IsInTransaction();
-            var transaction = ownTxn ? _conn.BeginTransaction() : null;
+            using var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -244,7 +243,6 @@ public class DbWriter
             }
 
             transaction?.Commit();
-            transaction?.Dispose();
         }
     }
 
