@@ -109,12 +109,11 @@ int RunSearch(string[] cmdArgs)
             foreach (var r in results)
             {
                 Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                // Indent content lines for readability / 可読性のためコンテンツ行をインデント
-                var contentLines = r.Content.Split('\n');
-                foreach (var line in contentLines.Take(5))
+                // Center the human-readable snippet around the first matching line
+                // 人間向けスニペットは最初の一致行の前後を表示する
+                var snippetLines = SearchSnippetFormatter.Format(r.Content, query);
+                foreach (var line in snippetLines)
                     Console.WriteLine($"  {line}");
-                if (contentLines.Length > 5)
-                    Console.WriteLine("  ...");
                 Console.WriteLine();
             }
             Console.Error.WriteLine($"({results.Count} results)");

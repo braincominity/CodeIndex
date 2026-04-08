@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+
+- **Human-readable search snippets center on matches** — `cdidx search` now shows a short snippet around the first matching line instead of always printing the first five lines of the stored chunk. This makes tail or middle-of-chunk matches visible in CLI output. Affected: `Program.cs`, `Cli/SearchSnippetFormatter.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`.
+
 #### Fixed
 
 - **Project-local default DB path for indexing** — `cdidx index <projectPath>` now stores the default database in `<projectPath>/.cdidx/codeindex.db` instead of resolving `.cdidx/codeindex.db` from the caller's current directory. This prevents indexing one project from mutating another project's default DB. Affected: `Program.cs`, `Cli/DbPathResolver.cs`, `Cli/ConsoleUi.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/DbPathResolverTests.cs`.
@@ -112,6 +116,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+
+- **人間向け検索スニペットを一致箇所中心に表示** — `cdidx search` が、保存チャンクの先頭5行を固定で出す代わりに、最初の一致行の前後を短いスニペットとして表示するよう変更。チャンク後半や中央の一致箇所もCLI出力から確認しやすくした。対象: `Program.cs`, `Cli/SearchSnippetFormatter.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`。
 
 #### 修正
 

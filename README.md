@@ -178,6 +178,8 @@ src/Auth/TokenService.cs:42-58
 (2 results)
 ```
 
+Human-readable search output is centered around the first matching line when possible, instead of always showing the start of the chunk.
+
 Use `--json` for machine-readable output (AI agents):
 
 ```json
@@ -707,6 +709,8 @@ src/Auth/TokenService.cs:42-58
 
 (2 results)
 ```
+
+人間向けの検索出力は、可能な限り最初の一致行を中心にスニペットを表示し、常にチャンク先頭だけを出すことはありません。
 
 `--json` でAI/機械向け出力:
 

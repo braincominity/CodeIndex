@@ -37,6 +37,7 @@ src/CodeIndex/
   Cli/ConsoleUi.cs         — Spinner, progress bar, banner, easter egg, version, usage text
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git diff-tree helper for --commits option
+  Cli/SearchSnippetFormatter.cs — Center human-readable search output on matching lines
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge
   Database/DbReader.cs      — Query operations (FTS search, symbol lookup, file listing, status)
@@ -165,6 +166,7 @@ src/CodeIndex/
   Cli/ConsoleUi.cs         — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
+  Cli/SearchSnippetFormatter.cs — 人間向け検索出力を一致行中心に整形
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ
   Database/DbReader.cs      — クエリ操作（FTS検索、シンボル検索、ファイル一覧、ステータス）

@@ -19,6 +19,7 @@ src/CodeIndex/
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
     DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git diff-tree helper for --commits option
+    SearchSnippetFormatter.cs — Human-readable search snippet formatting
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup
