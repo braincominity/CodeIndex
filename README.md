@@ -258,7 +258,7 @@ When `cdidx index` runs, it automatically adds `codeindex.db` and its companion 
 
 Many popular tools use this same approach (git-lfs, JetBrains IDEs, etc.).
 
-> `.git/info/exclude` is per-machine and not committed, so each team member gets the rule automatically when they run `cdidx index`. If you want the ignore rule committed to the repo (e.g. for contributors who don't use cdidx), add `codeindex.db*` to `.gitignore` instead.
+> `.git/info/exclude` is per-machine and not committed. cdidx users get the rule automatically on first `cdidx index`. If your team includes people who don't use cdidx and might accidentally `git add` the DB, adding `codeindex.db*` to `.gitignore` prevents that for everyone who clones the repo.
 
 ## Git branch switching
 
@@ -766,7 +766,7 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 
 git-lfs、JetBrains IDE など、多くのツールがこの仕組みを利用しています。
 
-> `.git/info/exclude` はマシンごとのローカル設定でコミットされないため、チームメンバーそれぞれが `cdidx index` を実行すれば自動で除外ルールが適用されます。cdidxを使わないコントリビューター向けにリポジトリ側で除外ルールを管理したい場合は、代わりに `.gitignore` に `codeindex.db*` を追加してください。
+> `.git/info/exclude` はマシンごとのローカル設定でコミットされません。cdidxユーザーは初回の `cdidx index` で自動的に除外ルールが適用されます。cdidxを使わないメンバーが誤って `git add` してしまうのを防ぎたい場合は、`.gitignore` に `codeindex.db*` を追加しておくと、クローンした全員に除外ルールが行き渡ります。
 
 ## Gitブランチ切り替え
 
