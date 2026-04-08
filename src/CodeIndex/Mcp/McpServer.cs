@@ -21,6 +21,7 @@ public class McpServer
     private const string ProtocolVersion = "2024-11-05";
     private const int MaxLimit = 200;
     private const int MaxQueryLength = 1000;
+    private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
 
     public McpServer(string dbPath, string version)
     {
@@ -56,6 +57,16 @@ public class McpServer
 
             if (string.IsNullOrWhiteSpace(line))
                 continue;
+
+            // Reject oversized messages to prevent memory exhaustion
+            // メモリ枯渇を防ぐため巨大メッセージを拒否
+            if (line.Length > MaxLineLength)
+            {
+                Console.Error.WriteLine($"[cdidx-mcp] Message too large ({line.Length} bytes), rejecting");
+                var errorResponse = CreateErrorResponse(null, -32700, "Message too large");
+                await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
+                continue;
+            }
 
             try
             {
