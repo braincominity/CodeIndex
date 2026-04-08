@@ -14,11 +14,14 @@ dotnet run --project src/CodeIndex -- <command> [options]
 
 ```
 src/CodeIndex/
-  Program.cs                  — CLI entry point, subcommand routing
+  Program.cs                  — Thin CLI entry point and command routing
   Cli/
+    CommandExitCodes.cs       — Shared process exit codes
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
     DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git diff-tree helper for --commits option
+    IndexCommandRunner.cs     — Index command execution and update/full-scan flows
+    QueryCommandRunner.cs     — Search/symbols/files/status execution and query arg parsing
     SearchSnippetFormatter.cs — Human-readable search snippet formatting
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
@@ -396,10 +399,15 @@ dotnet run --project src/CodeIndex -- <command> [options]
 
 ```
 src/CodeIndex/
-  Program.cs                  — CLIエントリポイント、サブコマンドルーティング
+  Program.cs                  — 薄いCLIエントリポイントとコマンドルーティング
   Cli/
+    CommandExitCodes.cs       — 共通のプロセス終了コード
     ConsoleUi.cs              — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
+    DbPathResolver.cs         — indexコマンド用の既定DBパス解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
+    IndexCommandRunner.cs     — indexコマンド実行と更新/フルスキャンフロー
+    QueryCommandRunner.cs     — search/symbols/files/status実行とクエリ引数解析
+    SearchSnippetFormatter.cs — 人間向け検索スニペット整形
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ

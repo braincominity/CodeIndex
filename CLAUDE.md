@@ -33,10 +33,13 @@ cdidx mcp [--db <path>]
 
 ```
 src/CodeIndex/
-  Program.cs               — CLI entry point, subcommand routing, --json support, .git/info/exclude auto-add
+  Program.cs               — Thin CLI entry point and command routing
+  Cli/CommandExitCodes.cs  — Shared process exit codes
   Cli/ConsoleUi.cs         — Spinner, progress bar, banner, easter egg, version, usage text
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git diff-tree helper for --commits option
+  Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
+  Cli/QueryCommandRunner.cs — Search/symbols/files/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Center human-readable search output on matching lines
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge
@@ -67,7 +70,7 @@ tests/CodeIndex.Tests/
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
-- **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Program.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
+- **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
 - **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
 
 ## Conventions
@@ -80,7 +83,7 @@ tests/CodeIndex.Tests/
 
 ### Method signature changes
 When changing a method's return type or parameters (e.g. `BuildRecord` from `(FileRecord, string)` to `(FileRecord, string, string?)`), **update ALL callers** in the same commit:
-- `Program.cs` (main indexing loop AND `--commits`/`--files` update mode)
+- `Cli/IndexCommandRunner.cs` (full scan AND `--commits`/`--files` update mode)
 - `Mcp/McpServer.cs`
 - `tests/CodeIndex.Tests/` (use `_` to discard unused elements)
 
@@ -164,10 +167,13 @@ cdidx mcp [--db <path>]
 
 ```
 src/CodeIndex/
-  Program.cs               — CLIエントリポイント、サブコマンドルーティング、--jsonサポート、.git/info/exclude自動追加
+  Program.cs               — 薄いCLIエントリポイントとコマンドルーティング
+  Cli/CommandExitCodes.cs  — 共通のプロセス終了コード
   Cli/ConsoleUi.cs         — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
+  Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
+  Cli/QueryCommandRunner.cs — search/symbols/files/statusコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け検索出力を一致行中心に整形
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ
@@ -198,7 +204,7 @@ tests/CodeIndex.Tests/
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
-- **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Program.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
+- **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Cli/IndexCommandRunner.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
 - **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
 
 ## コーディング規約
@@ -211,7 +217,7 @@ tests/CodeIndex.Tests/
 
 ### メソッドシグネチャの変更
 メソッドの戻り値やパラメータを変更した場合（例: `BuildRecord`を`(FileRecord, string)`から`(FileRecord, string, string?)`に変更）、**同じコミットで全ての呼び出し元を更新すること**:
-- `Program.cs`（メインのインデックスループ AND `--commits`/`--files`更新モード）
+- `Cli/IndexCommandRunner.cs`（フルスキャン AND `--commits`/`--files`更新モード）
 - `Mcp/McpServer.cs`
 - `tests/CodeIndex.Tests/`（不要な要素は`_`で破棄）
 
