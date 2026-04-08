@@ -120,30 +120,19 @@ public static class ConsoleUi
 
     // --- Progress bar / プログレスバー ---
 
-    // Default braille spinner frames / デフォルトのブレイルスピナーフレーム
-    private static readonly string[] BrailleFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
-    // Active spinner frames for progress bar (may be themed emoji) / プログレスバー用アクティブスピナーフレーム（テーマ絵文字の場合あり）
-    private static string[] _progressSpinnerFrames = BrailleFrames;
+    // Active spinner frames for progress bar (themed or default braille)
+    // プログレスバー用アクティブスピナーフレーム（テーマ付きまたはデフォルトブレイル）
+    private static string[] _progressSpinnerFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
     // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
     private static int _lastProgressLineLength;
 
     /// <summary>
-    /// Set progress bar spinner theme based on easter egg flag.
-    /// イースターエッグフラグに基づいてプログレスバーのスピナーテーマを設定。
+    /// Set progress bar spinner theme (reuses GetSpinnerFrames).
+    /// プログレスバーのスピナーテーマを設定（GetSpinnerFramesを再利用）。
     /// </summary>
     public static void SetProgressTheme(string? easterEgg)
     {
-        _progressSpinnerFrames = easterEgg switch
-        {
-            "--sushi"  => ["\U0001f363"],
-            "--coffee" => ["\u2615"],
-            "--ramen"  => ["\U0001f35c"],
-            "--wine"   => ["\U0001f377"],
-            "--beer"   => ["\U0001f37a"],
-            "--matcha" => ["\U0001f375"],
-            "--whisky" => ["\U0001f943"],
-            _ => BrailleFrames,
-        };
+        _progressSpinnerFrames = GetSpinnerFrames(easterEgg);
     }
 
     /// <summary>
