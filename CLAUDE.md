@@ -33,13 +33,13 @@ cdidx mcp [--db <path>]
 
 ```
 src/CodeIndex/
-  Program.cs               — CLI entry point, subcommand routing, --json support
+  Program.cs               — CLI entry point, subcommand routing, --json support, .git/info/exclude auto-add
   Cli/ConsoleUi.cs         — Spinner, progress bar, banner, easter egg, version, usage text
   Cli/GitHelper.cs         — Git diff-tree helper for --commits option
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge
   Database/DbReader.cs      — Query operations (FTS search, symbol lookup, file listing, status)
-  Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building
+  Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
   Mcp/McpServer.cs          — MCP server (stdin/stdout JSON-RPC 2.0, tools for AI coding tools)
@@ -63,12 +63,55 @@ tests/CodeIndex.Tests/
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
+- **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Program.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
+- **Auto `.git/info/exclude`** — `cdidx index` auto-adds DB files to `.git/info/exclude` so users don't touch `.gitignore`. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
 
 ## Conventions
 
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
 - Documentation (README, CHANGELOG) is structured: English first, then Japanese.
 - No unnecessary packages — `System.CommandLine` was removed in favor of manual arg parsing.
+
+## Rules for changes (important)
+
+### Method signature changes
+When changing a method's return type or parameters (e.g. `BuildRecord` from `(FileRecord, string)` to `(FileRecord, string, string?)`), **update ALL callers** in the same commit:
+- `Program.cs` (main indexing loop AND `--commits`/`--files` update mode)
+- `Mcp/McpServer.cs`
+- `tests/CodeIndex.Tests/` (use `_` to discard unused elements)
+
+### Console output and progress bar
+The progress bar uses `\r` without newline. On Windows, stdout and stderr share the cursor position. **Any output (WARN, ERR, verbose [OK]/[SKIP]) while the progress bar is active MUST call `ConsoleUi.ClearProgressLine()` first**, or the message will merge with the bar on the same line.
+
+### Easter egg themes
+Features that exist in the spinner (braille frames, themed emoji+text) must carry through to the progress bar. `ConsoleUi.SetProgressTheme()` reuses frames from `GetSpinnerFrames()` — don't duplicate the frame definitions.
+
+### Documentation — keep in sync
+The following files contain overlapping content that must be updated together:
+- **README.md** — English section AND Japanese section (both must match)
+- **DEVELOPER_GUIDE.md** — Japanese-only, has its own CLAUDE.md template
+- **CHANGELOG.md** — English section AND Japanese section
+- **CLAUDE.md** — This file; update architecture/design sections when code changes
+
+When modifying the CLAUDE.md template (code search rules for AI agents) in README/DEVELOPER_GUIDE, update all instances (README English, README Japanese, DEVELOPER_GUIDE).
+
+### CHANGELOG style
+- Group related changes into a single entry. Don't write separate entries for iterative fixes on the same feature.
+- Use [Keep a Changelog](https://keepachangelog.com/) categories: Added, Changed, Fixed, Removed.
+- Each entry: `**Bold title** — Description. Affected: \`file1\`, \`file2\`.`
+
+### Pull requests
+- Title and description in **English**.
+- Structure: `## Summary` (bullet points grouped by theme) + `## Test plan` (checkbox list).
+- When iterating on a PR, update the title/description to reflect the final state, not the history of changes.
+
+### Tests
+When changing public API signatures or adding new public methods, check if tests need updating. Run `dotnet test` to verify. If the build environment lacks .NET SDK, at minimum verify all callers are updated by searching for the method name.
+
+### README structure
+- Section numbering must be consistent (don't have "2." without "1.").
+- Instructions specific to one install method (e.g. PATH setup for build-from-source) belong under that method's section, not at the top level.
+- Keep explanations simple and factual. Avoid over-explaining edge cases that are unlikely in practice.
 
 ---
 
@@ -107,13 +150,13 @@ cdidx mcp [--db <path>]
 
 ```
 src/CodeIndex/
-  Program.cs               — CLIエントリポイント、サブコマンドルーティング、--jsonサポート
+  Program.cs               — CLIエントリポイント、サブコマンドルーティング、--jsonサポート、.git/info/exclude自動追加
   Cli/ConsoleUi.cs         — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ
   Database/DbReader.cs      — クエリ操作（FTS検索、シンボル検索、ファイル一覧、ステータス）
-  Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築
+  Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
   Mcp/McpServer.cs          — MCPサーバー（stdin/stdout JSON-RPC 2.0、AIツール向けツール公開）
@@ -137,9 +180,52 @@ tests/CodeIndex.Tests/
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
+- **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Program.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
+- **`.git/info/exclude`自動追加** — `cdidx index`がDBファイルを`.git/info/exclude`に自動追加し、ユーザーが`.gitignore`を編集せずに済むようにする。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
 
 ## コーディング規約
 
 - コメントは英日併記（例: `// Enable WAL mode / WALモードを有効化`）
 - ドキュメント（README, CHANGELOG）は前半英語、後半日本語の構成。
 - 不要なパッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。
+
+## 変更時のルール（重要）
+
+### メソッドシグネチャの変更
+メソッドの戻り値やパラメータを変更した場合（例: `BuildRecord`を`(FileRecord, string)`から`(FileRecord, string, string?)`に変更）、**同じコミットで全ての呼び出し元を更新すること**:
+- `Program.cs`（メインのインデックスループ AND `--commits`/`--files`更新モード）
+- `Mcp/McpServer.cs`
+- `tests/CodeIndex.Tests/`（不要な要素は`_`で破棄）
+
+### コンソール出力とプログレスバー
+プログレスバーは`\r`（改行なし）で出力する。Windowsではstdoutとstderrがカーソル位置を共有する。**プログレスバー表示中に何かを出力する場合（WARN、ERR、verbose [OK]/[SKIP]）は必ず先に`ConsoleUi.ClearProgressLine()`を呼ぶこと**。そうしないとメッセージがバーと同じ行に結合される。
+
+### イースターエッグテーマ
+スピナーに存在する機能（ブレイルフレーム、テーマ付き絵文字＋テキスト）はプログレスバーにも反映すること。`ConsoleUi.SetProgressTheme()`は`GetSpinnerFrames()`のフレームを再利用する — フレーム定義を重複させないこと。
+
+### ドキュメント — 同期を保つ
+以下のファイルには重複する内容があり、同時に更新する必要がある:
+- **README.md** — 英語セクション AND 日本語セクション（両方一致させる）
+- **DEVELOPER_GUIDE.md** — 日本語のみ、独自のCLAUDE.mdテンプレートあり
+- **CHANGELOG.md** — 英語セクション AND 日本語セクション
+- **CLAUDE.md** — このファイル。コード変更時にアーキテクチャ・設計セクションも更新
+
+CLAUDE.mdテンプレート（AI向けコード検索ルール）をREADME/DEVELOPER_GUIDEで変更する場合、全インスタンス（README英語、README日本語、DEVELOPER_GUIDE）を更新すること。
+
+### CHANGELOGのスタイル
+- 関連する変更は1エントリにまとめる。同じ機能への段階的修正を個別エントリにしない。
+- [Keep a Changelog](https://keepachangelog.com/)のカテゴリを使用: Added, Changed, Fixed, Removed（日本語: 追加, 変更, 修正, 削除）。
+- 各エントリ: `**太字タイトル** — 説明。Affected: \`file1\`, \`file2\`.`（日本語: `対象:`）
+
+### プルリクエスト
+- タイトルと説明は**英語**で書く。
+- 構成: `## Summary`（テーマ別の箇条書き）+ `## Test plan`（チェックボックスリスト）。
+- PRを修正していく過程で、タイトル・説明は変更履歴ではなく**最終状態**を反映するよう更新する。
+
+### テスト
+公開APIのシグネチャ変更や新しい公開メソッド追加時はテストの更新要否を確認する。`dotnet test`で検証。ビルド環境に.NET SDKがない場合でも、最低限メソッド名を検索して全呼び出し元が更新されていることを確認する。
+
+### READMEの構成
+- セクション番号は一貫させる（「1.」なしに「2.」を書かない）。
+- 特定のインストール方法に固有の手順（ビルド時のPATH設定等）はそのセクション内に置き、トップレベルに出さない。
+- 説明はシンプルかつ事実ベースに。実際に起こりにくいエッジケースを過剰に説明しない。
