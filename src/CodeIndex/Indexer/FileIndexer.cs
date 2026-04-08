@@ -141,10 +141,6 @@ public class FileIndexer
     }
 
     /// <summary>
-    /// Build a FileRecord from the given file path.
-    /// 指定パスからFileRecordを構築する。
-    /// </summary>
-    /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
     /// </summary>
