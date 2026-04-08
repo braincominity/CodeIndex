@@ -117,6 +117,8 @@ cdidx ./myproject --rebuild     # full rebuild from scratch
 cdidx ./myproject --verbose     # show per-file details
 ```
 
+By default, `cdidx index` stores the database in `<projectPath>/.cdidx/codeindex.db`, even if you run the command from another directory.
+
 Default output:
 
 ```
@@ -238,7 +240,7 @@ Languages:
 
 | Option | Applies to | Description |
 |---|---|---|
-| `--db <path>` | All commands | Database file path (default: `.cdidx/codeindex.db`) |
+| `--db <path>` | All commands | Database file path. `index` defaults to `<projectPath>/.cdidx/codeindex.db`; query commands default to `.cdidx/codeindex.db` in the current directory. |
 | `--json` | All commands | JSON output (for AI/machine use) |
 | `--limit <n>` | Query commands | Max results (default: 20) |
 | `--lang <lang>` | Query commands | Filter by language |
@@ -645,6 +647,8 @@ cdidx ./myproject --rebuild     # 完全再構築
 cdidx ./myproject --verbose     # ファイルごとの詳細表示
 ```
 
+`cdidx index` は、別ディレクトリから実行しても、デフォルトでは `<projectPath>/.cdidx/codeindex.db` にDBを保存します。
+
 デフォルト出力:
 
 ```
@@ -766,7 +770,7 @@ Languages:
 
 | オプション | 対象 | 説明 |
 |---|---|---|
-| `--db <path>` | 全コマンド | DBファイルパス（デフォルト: `.cdidx/codeindex.db`） |
+| `--db <path>` | 全コマンド | DBファイルパス。`index` のデフォルトは `<projectPath>/.cdidx/codeindex.db`、クエリ系コマンドのデフォルトはカレントディレクトリの `.cdidx/codeindex.db`。 |
 | `--json` | 全コマンド | JSON出力（AI/機械向け） |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20） |
 | `--lang <lang>` | クエリ系 | 言語でフィルタ |

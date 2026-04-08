@@ -215,7 +215,7 @@ int RunStatus(string[] cmdArgs)
 // --- Index subcommand (existing behavior) / インデックスサブコマンド（既存の動作） ---
 int RunIndex(string[] indexArgs)
 {
-    var (projectPath, dbPath, rebuild, verbose, jsonOutput, commits, updateFiles, easterEgg) = ParseIndexArgs(indexArgs);
+    var (projectPath, explicitDbPath, rebuild, verbose, jsonOutput, commits, updateFiles, easterEgg) = ParseIndexArgs(indexArgs);
     var spinnerFrames = ConsoleUi.GetSpinnerFrames(easterEgg);
     ConsoleUi.SetProgressTheme(easterEgg);
 
@@ -225,6 +225,7 @@ int RunIndex(string[] indexArgs)
         return ExitUsageError;
     }
 
+    var dbPath = DbPathResolver.ResolveForIndex(projectPath, explicitDbPath);
     var stopwatch = Stopwatch.StartNew();
     var isUpdateMode = commits.Count > 0 || updateFiles.Count > 0;
     var mode = rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
@@ -234,7 +235,7 @@ int RunIndex(string[] indexArgs)
         ConsoleUi.PrintBanner();
         Console.WriteLine();
         Console.WriteLine($"  Project : {Path.GetFullPath(projectPath)}");
-        Console.WriteLine($"  Output  : {dbPath}");
+        Console.WriteLine($"  Output  : {Path.GetFullPath(dbPath)}");
         Console.WriteLine($"  Mode    : {mode}");
         Console.WriteLine();
     }
@@ -740,10 +741,10 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
 }
 
 // Parse index subcommand arguments / インデックスサブコマンドの引数を解析
-static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool json, List<string> commits, List<string> updateFiles, string? easterEgg) ParseIndexArgs(string[] args)
+static (string? projectPath, string? dbPath, bool rebuild, bool verbose, bool json, List<string> commits, List<string> updateFiles, string? easterEgg) ParseIndexArgs(string[] args)
 {
     string? projectPath = null;
-    string dbPath = Path.Combine(".cdidx", "codeindex.db");
+    string? dbPath = null;
     bool rebuild = false;
     bool verbose = false;
     bool json = false;

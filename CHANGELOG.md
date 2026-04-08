@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+
+- **Project-local default DB path for indexing** — `cdidx index <projectPath>` now stores the default database in `<projectPath>/.cdidx/codeindex.db` instead of resolving `.cdidx/codeindex.db` from the caller's current directory. This prevents indexing one project from mutating another project's default DB. Affected: `Program.cs`, `Cli/DbPathResolver.cs`, `Cli/ConsoleUi.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/DbPathResolverTests.cs`.
+
 ### [1.0.2] - 2026-04-08
 
 #### Added
@@ -108,6 +112,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+
+- **インデックス時の既定DBパスをプロジェクト基準に変更** — `cdidx index <projectPath>` の既定DB保存先を、呼び出し元のカレントディレクトリ基準の `.cdidx/codeindex.db` ではなく `<projectPath>/.cdidx/codeindex.db` に変更。別プロジェクトをインデックスした際に、他プロジェクトの既定DBを壊す問題を防止。対象: `Program.cs`, `Cli/DbPathResolver.cs`, `Cli/ConsoleUi.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/DbPathResolverTests.cs`。
 
 ### [1.0.2] - 2026-04-08
 

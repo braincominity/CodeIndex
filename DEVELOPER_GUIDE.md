@@ -17,6 +17,7 @@ src/CodeIndex/
   Program.cs                  — CLI entry point, subcommand routing
   Cli/
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
+    DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git diff-tree helper for --commits option
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
