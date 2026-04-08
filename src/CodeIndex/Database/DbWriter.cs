@@ -11,10 +11,30 @@ public class DbWriter
 {
     private readonly SqliteConnection _conn;
     private const int BatchSize = 500;
+    private int _transactionDepth;
 
     public DbWriter(SqliteConnection connection)
     {
         _conn = connection;
+    }
+
+    /// <summary>
+    /// Begin a transaction for grouping multiple operations atomically.
+    /// 複数操作をアトミックにまとめるためのトランザクションを開始する。
+    /// </summary>
+    public SqliteTransaction BeginTransaction()
+    {
+        _transactionDepth++;
+        return _conn.BeginTransaction();
+    }
+
+    /// <summary>
+    /// Notify that the outer transaction has ended (committed or rolled back).
+    /// 外部トランザクション終了を通知する。
+    /// </summary>
+    public void EndTransaction()
+    {
+        if (_transactionDepth > 0) _transactionDepth--;
     }
 
     /// <summary>
@@ -136,7 +156,10 @@ public class DbWriter
         for (int i = 0; i < chunks.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, chunks.Count);
-            using var transaction = _conn.BeginTransaction();
+            // Only create a batch transaction when not already inside an outer transaction
+            // 外部トランザクション内でない場合のみバッチトランザクションを作成
+            var ownTxn = !IsInTransaction();
+            var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -163,7 +186,8 @@ public class DbWriter
                 ftsCmd.ExecuteNonQuery();
             }
 
-            transaction.Commit();
+            transaction?.Commit();
+            transaction?.Dispose();
         }
     }
 
@@ -176,7 +200,10 @@ public class DbWriter
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, symbols.Count);
-            using var transaction = _conn.BeginTransaction();
+            // Only create a batch transaction when not already inside an outer transaction
+            // 外部トランザクション内でない場合のみバッチトランザクションを作成
+            var ownTxn = !IsInTransaction();
+            var transaction = ownTxn ? _conn.BeginTransaction() : null;
 
             for (int j = i; j < end; j++)
             {
@@ -192,7 +219,8 @@ public class DbWriter
                 cmd.ExecuteNonQuery();
             }
 
-            transaction.Commit();
+            transaction?.Commit();
+            transaction?.Dispose();
         }
     }
 
@@ -275,6 +303,8 @@ public class DbWriter
         long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
         return (files, chunks, symbols);
     }
+
+    private bool IsInTransaction() => _transactionDepth > 0;
 
     private long ExecuteScalar(string sql)
     {

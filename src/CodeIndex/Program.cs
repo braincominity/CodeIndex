@@ -335,18 +335,30 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
             }
 
             var (record, content) = indexer.BuildRecord(absPath);
-            writer.CleanExistingFileData(record.Path);
-            var fileId = writer.UpsertFile(record);
 
-            var chunks = ChunkSplitter.Split(fileId, content);
-            writer.InsertChunks(chunks);
+            // Wrap clean + upsert + insert in a transaction for atomicity
+            // clean + upsert + insert をトランザクションでアトミックに実行
+            using var txn = writer.BeginTransaction();
+            try
+            {
+                writer.CleanExistingFileData(record.Path);
+                var fileId = writer.UpsertFile(record);
 
-            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
-            writer.InsertSymbols(symbols);
+                var chunks = ChunkSplitter.Split(fileId, content);
+                writer.InsertChunks(chunks);
 
-            updated++;
-            if (verbose && !jsonOutput)
-                Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                writer.InsertSymbols(symbols);
+                txn.Commit();
+
+                updated++;
+                if (verbose && !jsonOutput)
+                    Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
+            }
+            finally
+            {
+                writer.EndTransaction();
+            }
         }
         catch (Exception ex)
         {
@@ -457,17 +469,28 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
                 continue;
             }
 
-            writer.CleanExistingFileData(record.Path);
-            var fileId = writer.UpsertFile(record);
+            // Wrap clean + upsert + insert in a transaction for atomicity
+            // clean + upsert + insert をトランザクションでアトミックに実行
+            using var txn = writer.BeginTransaction();
+            try
+            {
+                writer.CleanExistingFileData(record.Path);
+                var fileId = writer.UpsertFile(record);
 
-            var chunks = ChunkSplitter.Split(fileId, content);
-            writer.InsertChunks(chunks);
+                var chunks = ChunkSplitter.Split(fileId, content);
+                writer.InsertChunks(chunks);
 
-            var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
-            writer.InsertSymbols(symbols);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                writer.InsertSymbols(symbols);
+                txn.Commit();
 
-            if (verbose && !jsonOutput)
-                Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                if (verbose && !jsonOutput)
+                    Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+            }
+            finally
+            {
+                writer.EndTransaction();
+            }
         }
         catch (Exception ex)
         {
