@@ -155,20 +155,17 @@ public class DbWriter
     /// </summary>
     public void DeleteFileData(long fileId)
     {
+        // FTS cleanup is handled automatically by fts_chunks_ad trigger on chunk deletion
+        // FTSクリーンアップはチャンク削除時にfts_chunks_adトリガーで自動処理される
         using var cmd1 = _conn.CreateCommand();
-        cmd1.CommandText = "DELETE FROM fts_chunks WHERE rowid IN (SELECT id FROM chunks WHERE file_id = @fid)";
+        cmd1.CommandText = "DELETE FROM chunks WHERE file_id = @fid";
         cmd1.Parameters.AddWithValue("@fid", fileId);
         cmd1.ExecuteNonQuery();
 
         using var cmd2 = _conn.CreateCommand();
-        cmd2.CommandText = "DELETE FROM chunks WHERE file_id = @fid";
+        cmd2.CommandText = "DELETE FROM symbols WHERE file_id = @fid";
         cmd2.Parameters.AddWithValue("@fid", fileId);
         cmd2.ExecuteNonQuery();
-
-        using var cmd3 = _conn.CreateCommand();
-        cmd3.CommandText = "DELETE FROM symbols WHERE file_id = @fid";
-        cmd3.Parameters.AddWithValue("@fid", fileId);
-        cmd3.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -198,16 +195,9 @@ public class DbWriter
                 cmd.Parameters.AddWithValue("@start", chunk.StartLine);
                 cmd.Parameters.AddWithValue("@end", chunk.EndLine);
                 cmd.Parameters.AddWithValue("@content", chunk.Content);
-                var chunkId = (long)cmd.ExecuteScalar()!;
-
-                // Populate FTS index with explicit chunk ID / 明示的なチャンクIDでFTSインデックスに追加
-                using var ftsCmd = _conn.CreateCommand();
-                ftsCmd.CommandText = @"
-                    INSERT INTO fts_chunks (rowid, content)
-                    VALUES (@rowid, @content)";
-                ftsCmd.Parameters.AddWithValue("@rowid", chunkId);
-                ftsCmd.Parameters.AddWithValue("@content", chunk.Content);
-                ftsCmd.ExecuteNonQuery();
+                // FTS index is populated automatically by fts_chunks_ai trigger
+                // FTSインデックスはfts_chunks_aiトリガーにより自動で反映される
+                cmd.ExecuteNonQuery();
             }
 
             transaction?.Commit();
