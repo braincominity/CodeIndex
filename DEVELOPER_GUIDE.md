@@ -341,45 +341,7 @@ cdidx ./myproject --files src/app.cs        # specific files only
 
 ## AI integration
 
-### Setting up CLAUDE.md
-
-To let AI agents use the generated index, place a `CLAUDE.md` in your project root:
-
-````markdown
-# Code Search Rules
-
-This project uses **cdidx** for fast code search via a pre-built SQLite index (`.cdidx/codeindex.db`).
-**Query this database** instead of using `find`, `grep`, or `ls -R`.
-
-## Queries
-
-### Full-text search
-```sql
-SELECT f.path, c.start_line, c.content
-FROM fts_chunks fc
-JOIN chunks c ON c.id = fc.rowid
-JOIN files f ON f.id = c.file_id
-WHERE fts_chunks MATCH 'keyword'
-LIMIT 20;
-```
-
-### Search by function/class name
-```sql
-SELECT f.path, s.name, s.line
-FROM symbols s
-JOIN files f ON f.id = s.file_id
-WHERE s.kind = 'function' AND s.name LIKE '%keyword%';
-```
-````
-
-### CLI-based integration
-
-If `cdidx` is on PATH, AI agents can use the CLI directly:
-
-```bash
-cdidx search "keyword"           # JSON lines output, ready for parsing
-cdidx symbols "ClassName"        # structured symbol search
-```
+For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see the [AI Integration](README.md#ai-integration) section in README.
 
 ### Output format
 
@@ -391,12 +353,7 @@ Query commands (`search`, `symbols`, `files`) default to **human-readable output
 
 ## Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Success |
-| `1` | Usage error (invalid arguments) |
-| `2` | Not found (no search results, missing directory) |
-| `3` | Database error |
+See [Exit codes](README.md#exit-codes) in README.
 
 ## Design decisions
 
@@ -760,62 +717,7 @@ cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 
 ## AI連携
 
-### CLAUDE.mdの設定
-
-AIエージェントにインデックスを活用させるには、プロジェクトルートに `CLAUDE.md` を配置してください:
-
-````markdown
-# コードベース検索ルール
-
-このプロジェクトは **cdidx** を使い、事前構築済みSQLiteインデックス（`.cdidx/codeindex.db`）で高速コード検索を行います。
-コードを検索する際は `find`, `grep`, `ls -R` ではなく**このデータベースを検索**してください。
-
-## セットアップ
-
-まず `cdidx` が利用可能か確認してください:
-
-```bash
-cdidx --version
-```
-
-コマンドが見つからない場合はインストールしてください。.NET 8+ SDKが必要です:
-
-```bash
-dotnet --version   # 8.x以上であること。そうでなければユーザーに.NET 8+ SDKのインストールを依頼
-dotnet tool install -g cdidx
-```
-
-インストールに失敗した場合（NuGetへのネットワークアクセスがない、.NET SDKが利用不可等）は、下記のSQLクエリで `.cdidx/codeindex.db` を直接検索できます。
-
-## クエリ
-
-### 全文検索
-```sql
-SELECT f.path, c.start_line, c.content
-FROM fts_chunks fc
-JOIN chunks c ON c.id = fc.rowid
-JOIN files f ON f.id = c.file_id
-WHERE fts_chunks MATCH 'キーワード'
-LIMIT 20;
-```
-
-### 関数・クラス名で検索
-```sql
-SELECT f.path, s.name, s.line
-FROM symbols s
-JOIN files f ON f.id = s.file_id
-WHERE s.kind = 'function' AND s.name LIKE '%キーワード%';
-```
-````
-
-### CLI経由の連携
-
-`cdidx` がPATH上にある場合、AIエージェントはCLIを直接使うこともできます:
-
-```bash
-cdidx search "keyword"           # JSONライン出力、パース可能
-cdidx symbols "ClassName"        # 構造化シンボル検索
-```
+CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）については、READMEの[AIとの連携](README.md#aiとの連携)セクションを参照してください。
 
 ### 出力形式
 
@@ -827,12 +729,7 @@ cdidx symbols "ClassName"        # 構造化シンボル検索
 
 ## 終了コード
 
-| コード | 意味 |
-|---|---|
-| `0` | 成功 |
-| `1` | 引数エラー |
-| `2` | 未検出（検索結果なし、ディレクトリ不在） |
-| `3` | データベースエラー |
+READMEの[終了コード](README.md#終了コード)セクションを参照してください。
 
 ## 設計判断
 
