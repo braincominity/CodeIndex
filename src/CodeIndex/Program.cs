@@ -232,6 +232,7 @@ int RunIndex(string[] indexArgs)
     if (!jsonOutput)
     {
         ConsoleUi.PrintBanner();
+        Console.WriteLine();
         Console.WriteLine($"  Project : {Path.GetFullPath(projectPath)}");
         Console.WriteLine($"  Output  : {dbPath}");
         Console.WriteLine($"  Mode    : {mode}");
@@ -440,6 +441,7 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
         Console.WriteLine();
         Console.WriteLine();
         Console.WriteLine("Done.");
+        Console.WriteLine();
         Console.WriteLine($"  Files   : {totalFiles:N0} (total in DB)");
         Console.WriteLine($"  Chunks  : {totalChunks:N0}");
         Console.WriteLine($"  Symbols : {totalSymbols:N0}");
@@ -448,6 +450,7 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
         if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0}");
         if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
         Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+        Console.WriteLine();
     }
 
     return ExitSuccess;
@@ -587,12 +590,14 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
         Console.WriteLine();
         Console.WriteLine();
         Console.WriteLine("Done.");
+        Console.WriteLine();
         Console.WriteLine($"  Files   : {totalFiles:N0}");
         Console.WriteLine($"  Chunks  : {totalChunks:N0}");
         Console.WriteLine($"  Symbols : {totalSymbols:N0}");
         if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
         if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
         Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+        Console.WriteLine();
     }
 
     return ExitSuccess;
