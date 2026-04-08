@@ -1024,7 +1024,7 @@ public class McpServerTests : IDisposable
             Lang = "csharp",
             Size = 200,
             Lines = 10,
-            Modified = "2024-01-01T00:00:00",
+            Modified = new DateTime(2024, 1, 1),
             Checksum = "abc123",
         });
         writer.InsertChunks([new ChunkRecord
