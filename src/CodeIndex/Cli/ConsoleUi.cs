@@ -120,10 +120,31 @@ public static class ConsoleUi
 
     // --- Progress bar / プログレスバー ---
 
-    // Braille spinner frames for progress bar / プログレスバー用ブレイルスピナーフレーム
-    private static readonly string[] ProgressSpinnerFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
+    // Default braille spinner frames / デフォルトのブレイルスピナーフレーム
+    private static readonly string[] BrailleFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
+    // Active spinner frames for progress bar (may be themed emoji) / プログレスバー用アクティブスピナーフレーム（テーマ絵文字の場合あり）
+    private static string[] _progressSpinnerFrames = BrailleFrames;
     // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
     private static int _lastProgressLineLength;
+
+    /// <summary>
+    /// Set progress bar spinner theme based on easter egg flag.
+    /// イースターエッグフラグに基づいてプログレスバーのスピナーテーマを設定。
+    /// </summary>
+    public static void SetProgressTheme(string? easterEgg)
+    {
+        _progressSpinnerFrames = easterEgg switch
+        {
+            "--sushi"  => ["\U0001f363"],
+            "--coffee" => ["\u2615"],
+            "--ramen"  => ["\U0001f35c"],
+            "--wine"   => ["\U0001f377"],
+            "--beer"   => ["\U0001f37a"],
+            "--matcha" => ["\U0001f375"],
+            "--whisky" => ["\U0001f943"],
+            _ => BrailleFrames,
+        };
+    }
 
     /// <summary>
     /// Print inline progress bar with spinner.
@@ -141,7 +162,7 @@ public static class ConsoleUi
         if (filled > barWidth) filled = barWidth;
 
         // Show spinner while in progress, checkmark on completion / 処理中はスピナー、完了時はチェックマーク
-        var spinner = current == total ? " " : ProgressSpinnerFrames[(current / 50) % ProgressSpinnerFrames.Length];
+        var spinner = current == total ? " " : _progressSpinnerFrames[(current / 50) % _progressSpinnerFrames.Length];
         var bar = new string('\u2588', filled) + new string('\u2591', barWidth - filled);
         var line = $"{spinner} {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
 

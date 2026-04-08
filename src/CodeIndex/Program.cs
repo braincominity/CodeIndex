@@ -217,6 +217,7 @@ int RunIndex(string[] indexArgs)
 {
     var (projectPath, dbPath, rebuild, verbose, jsonOutput, commits, updateFiles, easterEgg) = ParseIndexArgs(indexArgs);
     var spinnerFrames = ConsoleUi.GetSpinnerFrames(easterEgg);
+    ConsoleUi.SetProgressTheme(easterEgg);
 
     if (projectPath == null)
     {
