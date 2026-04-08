@@ -432,6 +432,8 @@ These options make it practical to keep the index up-to-date in real time, even 
 
 cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a standard protocol that lets AI coding tools communicate with external programs. When you run `cdidx mcp`, cdidx starts listening on stdin/stdout — your AI tool sends search requests as JSON, and cdidx returns results instantly from the pre-built index.
 
+Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
+
 ```
 ┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐
 │  Claude Code │ ──────────────────→ │  cdidx   │
@@ -963,6 +965,8 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
 
 cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
+
+ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 
 ```
 ┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐

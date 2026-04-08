@@ -64,6 +64,7 @@ tests/CodeIndex.Tests/
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
+- **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Program.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
 - **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
@@ -193,6 +194,7 @@ tests/CodeIndex.Tests/
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
+- **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Program.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
 - **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。

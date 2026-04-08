@@ -190,10 +190,12 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        var content = response["result"]!["content"]!.AsArray();
-        Assert.NotEmpty(content);
-        var text = content[0]!["text"]!.GetValue<string>();
-        Assert.Contains("src/app.cs", text);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Found 1 search result", text);
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("src/app.cs", structured["results"]![0]!["path"]!.GetValue<string>());
     }
 
     [Fact]
@@ -204,6 +206,7 @@ public class McpServerTests : IDisposable
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("No results found", text);
+        Assert.Equal(0, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
     }
 
     [Fact]
@@ -224,8 +227,9 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("App", text);
-        Assert.Contains("class", text);
+        Assert.Contains("Found 1 symbol", text);
+        Assert.Equal("App", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal("class", response["result"]!["structuredContent"]!["results"]![0]!["kind"]!.GetValue<string>());
     }
 
     [Fact]
@@ -234,9 +238,10 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"kind":"function"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Run", text);
-        Assert.DoesNotContain("class", text.Split('\n').Where(l => l.Contains("Run")).First());
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Single(results);
+        Assert.Equal("Run", results[0]!["name"]!.GetValue<string>());
+        Assert.Equal("function", results[0]!["kind"]!.GetValue<string>());
     }
 
     [Fact]
@@ -246,8 +251,9 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("src/app.cs", text);
-        Assert.Contains("csharp", text);
+        Assert.Contains("Found 1 file", text);
+        Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+        Assert.Equal("csharp", response["result"]!["structuredContent"]!["results"]![0]!["lang"]!.GetValue<string>());
     }
 
     [Fact]
@@ -257,9 +263,10 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Files", text);
-        Assert.Contains("Chunks", text);
-        Assert.Contains("Symbols", text);
+        Assert.Contains("Database stats returned", text);
+        Assert.Equal(1, response["result"]!["structuredContent"]!["files"]!.GetValue<long>());
+        Assert.Equal(1, response["result"]!["structuredContent"]!["chunks"]!.GetValue<long>());
+        Assert.Equal(2, response["result"]!["structuredContent"]!["symbols"]!.GetValue<long>());
     }
 
     [Fact]
