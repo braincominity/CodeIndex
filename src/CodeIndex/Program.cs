@@ -353,7 +353,10 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
                 continue;
             }
 
-            var (record, content) = indexer.BuildRecord(absPath);
+            var (record, content, warning) = indexer.BuildRecord(absPath);
+
+            if (warning != null && !jsonOutput)
+                ConsoleUi.PrintWarning(warning);
 
             // Skip unchanged files (same logic as full scan mode)
             // 未変更ファイルをスキップ（フルスキャンモードと同じロジック）
@@ -481,7 +484,10 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
         }
         try
         {
-            var (record, content) = indexer.BuildRecord(filePath);
+            var (record, content, warning) = indexer.BuildRecord(filePath);
+
+            if (warning != null && !jsonOutput)
+                ConsoleUi.PrintWarning(warning);
 
             var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
             if (existingId != null)
@@ -489,7 +495,10 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
                 skipped++;
                 processed++;
                 if (verbose && !jsonOutput)
+                {
+                    ConsoleUi.ClearProgressLine();
                     Console.WriteLine($"  [SKIP] {record.Path}");
+                }
                 if (!jsonOutput) ConsoleUi.PrintProgress(processed, files.Count);
                 continue;
             }
@@ -507,7 +516,10 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             txn.Commit();
 
             if (verbose && !jsonOutput)
+            {
+                ConsoleUi.ClearProgressLine();
                 Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+            }
         }
         catch (Exception ex)
         {
@@ -515,6 +527,7 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             errorList.Add(new { file = filePath, message = ex.Message });
             if (!jsonOutput)
             {
+                ConsoleUi.ClearProgressLine();
                 if (verbose)
                     Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}\n{ex.StackTrace}");
                 else

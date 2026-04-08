@@ -397,7 +397,7 @@ public class McpServer
         {
             try
             {
-                var (record, content) = indexer.BuildRecord(filePath);
+                var (record, content, _) = indexer.BuildRecord(filePath);
                 var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
                 if (existingId != null)
                 {

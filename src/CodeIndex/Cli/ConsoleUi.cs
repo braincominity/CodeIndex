@@ -120,9 +120,14 @@ public static class ConsoleUi
 
     // --- Progress bar / プログレスバー ---
 
+    // Braille spinner frames for progress bar / プログレスバー用ブレイルスピナーフレーム
+    private static readonly string[] ProgressSpinnerFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
+    // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
+    private static int _lastProgressLineLength;
+
     /// <summary>
-    /// Print inline progress bar.
-    /// インライン進捗バーを表示。
+    /// Print inline progress bar with spinner.
+    /// スピナー付きインライン進捗バーを表示。
     /// </summary>
     public static void PrintProgress(int current, int total)
     {
@@ -135,21 +140,51 @@ public static class ConsoleUi
         int filled = (int)Math.Round(pct * barWidth);
         if (filled > barWidth) filled = barWidth;
 
+        // Show spinner while in progress, checkmark on completion / 処理中はスピナー、完了時はチェックマーク
+        var spinner = current == total ? " " : ProgressSpinnerFrames[(current / 50) % ProgressSpinnerFrames.Length];
         var bar = new string('\u2588', filled) + new string('\u2591', barWidth - filled);
-        var line = $"  {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
+        var line = $"{spinner} {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
 
         if (!Console.IsOutputRedirected)
         {
             Console.Write($"\r{line}");
             Console.Out.Flush();
+            _lastProgressLineLength = line.Length;
             if (current == total)
+            {
                 Console.WriteLine();
+                _lastProgressLineLength = 0;
+            }
         }
         else
         {
             // Fallback for redirected output / リダイレクト時はフォールバック
             Console.WriteLine(line.TrimStart());
         }
+    }
+
+    /// <summary>
+    /// Clear the current progress bar line so other output can be printed cleanly.
+    /// 他の出力を正しく表示するために現在のプログレスバー行をクリア。
+    /// </summary>
+    public static void ClearProgressLine()
+    {
+        if (!Console.IsOutputRedirected && _lastProgressLineLength > 0)
+        {
+            Console.Write($"\r{new string(' ', _lastProgressLineLength)}\r");
+            Console.Out.Flush();
+            _lastProgressLineLength = 0;
+        }
+    }
+
+    /// <summary>
+    /// Print a warning message, clearing the progress bar line first if needed.
+    /// 必要に応じてプログレスバー行をクリアしてから警告メッセージを表示。
+    /// </summary>
+    public static void PrintWarning(string message)
+    {
+        ClearProgressLine();
+        Console.Error.WriteLine($"  [WARN] {message}");
     }
 
     // --- Banner / バナー ---
