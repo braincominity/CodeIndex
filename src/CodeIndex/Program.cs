@@ -341,6 +341,17 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
 
             var (record, content) = indexer.BuildRecord(absPath);
 
+            // Skip unchanged files (same logic as full scan mode)
+            // 未変更ファイルをスキップ（フルスキャンモードと同じロジック）
+            var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
+            if (existingId != null)
+            {
+                skipped++;
+                if (verbose && !jsonOutput)
+                    Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                continue;
+            }
+
             // Wrap clean + upsert + insert in a transaction for atomicity
             // clean + upsert + insert をトランザクションでアトミックに実行
             using var txn = writer.BeginTransaction();
