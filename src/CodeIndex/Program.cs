@@ -96,9 +96,10 @@ int RunSearch(string[] cmdArgs)
             {
                 Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
                 // Indent content lines for readability / 可読性のためコンテンツ行をインデント
-                foreach (var line in r.Content.Split('\n').Take(5))
+                var contentLines = r.Content.Split('\n');
+                foreach (var line in contentLines.Take(5))
                     Console.WriteLine($"  {line}");
-                if (r.Content.Split('\n').Length > 5)
+                if (contentLines.Length > 5)
                     Console.WriteLine("  ...");
                 Console.WriteLine();
             }
