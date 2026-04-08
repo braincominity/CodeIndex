@@ -91,18 +91,18 @@ Before every commit, check whether each of the following needs updating. Don't b
 1. **Tests** — Does this change break existing tests or require new ones? Search for affected method/class names in `tests/`.
 2. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
 3. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
-4. **DEVELOPER_GUIDE.md** — Does this change affect the CLAUDE.md template or AI integration guidance?
+4. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
 5. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
 6. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
-- **DEVELOPER_GUIDE.md** — Japanese-only, has its own CLAUDE.md template
+- **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections.
 - **CHANGELOG.md** — English section AND Japanese section
 - **CLAUDE.md** — This file; update architecture/design sections when code changes
 
-When modifying the CLAUDE.md template (code search rules for AI agents) in README/DEVELOPER_GUIDE, update all instances (README English, README Japanese, DEVELOPER_GUIDE).
+When modifying the CLAUDE.md template (code search rules for AI agents), update both instances in README (English and Japanese). DEVELOPER_GUIDE references README, so no separate update is needed there.
 
 ### CHANGELOG style
 - One entry per distinct change. Don't merge unrelated fixes into a single entry just to reduce line count.
@@ -218,18 +218,18 @@ tests/CodeIndex.Tests/
 1. **テスト** — この変更で既存テストが壊れないか？新規テストが必要か？`tests/` 内で影響を受けるメソッド・クラス名を検索。
 2. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
 3. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
-4. **DEVELOPER_GUIDE.md** — CLAUDE.mdテンプレートやAI連携ガイドに影響するか？
+4. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
 5. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
 6. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:
 - **README.md** — 英語セクション AND 日本語セクション（両方一致させる）
-- **DEVELOPER_GUIDE.md** — 日本語のみ、独自のCLAUDE.mdテンプレートあり
+- **DEVELOPER_GUIDE.md** — CLAUDE.mdテンプレートと終了コードはREADMEを参照。設計判断・アーキテクチャは独自セクション。
 - **CHANGELOG.md** — 英語セクション AND 日本語セクション
 - **CLAUDE.md** — このファイル。コード変更時にアーキテクチャ・設計セクションも更新
 
-CLAUDE.mdテンプレート（AI向けコード検索ルール）をREADME/DEVELOPER_GUIDEで変更する場合、全インスタンス（README英語、README日本語、DEVELOPER_GUIDE）を更新すること。
+CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する場合、READMEの両インスタンス（英語・日本語）を更新すること。DEVELOPER_GUIDEはREADMEを参照しているため個別の更新は不要。
 
 ### CHANGELOGのスタイル
 - 変更ごとに1エントリ。無関係な修正を行数削減のために1エントリにまとめない。

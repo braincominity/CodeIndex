@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **CLAUDE.md template: update before search** — The code search rules template now instructs AI agents to update cdidx to the latest version (`dotnet tool update -g cdidx`) and refresh the index (`cdidx .`) before starting searches. Affected: `README.md`, `DEVELOPER_GUIDE.md`.
 
+- **Deduplicate DEVELOPER_GUIDE.md** — Replaced duplicated CLAUDE.md template and exit codes table in DEVELOPER_GUIDE with references to README. Reduces maintenance burden when updating the template. Affected: `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
 ### [1.0.1] - 2026-04-08
 
 #### Added
@@ -108,6 +110,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 変更
 
 - **CLAUDE.mdテンプレート: 検索前にアップデート** — AI向けコード検索ルールのテンプレートで、検索開始前にcdidxを最新版に更新（`dotnet tool update -g cdidx`）し、インデックスを最新化（`cdidx .`）するよう案内を追加。対象: `README.md`, `DEVELOPER_GUIDE.md`。
+
+- **DEVELOPER_GUIDE.mdの重複排除** — DEVELOPER_GUIDEのCLAUDE.mdテンプレートと終了コード表をREADMEへの参照に置き換え。テンプレート更新時のメンテナンス負荷を軽減。対象: `DEVELOPER_GUIDE.md`, `CLAUDE.md`。
 
 ### [1.0.1] - 2026-04-08
 
