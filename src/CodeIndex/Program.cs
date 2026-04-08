@@ -264,6 +264,10 @@ int RunIndex(string[] indexArgs)
 
     db.InitializeSchema();
 
+    // Auto-add DB files to .git/info/exclude so users don't have to edit .gitignore
+    // DBファイルを.git/info/excludeに自動追加し、ユーザーが.gitignoreを編集せずに済むようにする
+    AddToGitExclude(projectPath, dbPath);
+
     var writer = new DbWriter(db.Connection);
     var indexer = new FileIndexer(projectPath);
     var projectRoot = Path.GetFullPath(projectPath);
@@ -617,6 +621,53 @@ int ShowError(string message)
     Console.Error.WriteLine($"Error: {message}");
     Console.Error.WriteLine("Run 'cdidx --help' for usage information.");
     return ExitUsageError;
+}
+
+// --- Git exclude helper / Git除外ヘルパー ---
+
+/// <summary>
+/// Add DB file patterns to .git/info/exclude so they are ignored without touching .gitignore.
+/// DBファイルのパターンを.git/info/excludeに追加し、.gitignoreを編集せずにgit追跡対象外にする。
+/// </summary>
+static void AddToGitExclude(string projectPath, string dbPath)
+{
+    try
+    {
+        var projectRoot = Path.GetFullPath(projectPath);
+        var gitDir = Path.Combine(projectRoot, ".git");
+        if (!Directory.Exists(gitDir)) return;
+
+        var excludeFile = Path.Combine(gitDir, "info", "exclude");
+        var dbFileName = Path.GetFileName(dbPath);
+
+        // Patterns to exclude: DB file and its WAL/SHM/journal companions
+        // 除外パターン: DBファイルとWAL/SHM/journal等の副生成物
+        var patterns = new[] { dbFileName, $"{dbFileName}-*" };
+
+        // Read existing content if the file exists / ファイルが存在すれば既存内容を読み込む
+        var existingContent = File.Exists(excludeFile) ? File.ReadAllText(excludeFile) : "";
+        var existingLines = existingContent.Split('\n').Select(l => l.TrimEnd('\r')).ToHashSet();
+
+        var missing = patterns.Where(p => !existingLines.Contains(p)).ToList();
+        if (missing.Count == 0) return;
+
+        // Ensure the info directory exists / infoディレクトリの存在を保証
+        Directory.CreateDirectory(Path.GetDirectoryName(excludeFile)!);
+
+        using var sw = File.AppendText(excludeFile);
+        // Add a blank line separator if the file doesn't end with a newline
+        // ファイルが改行で終わっていない場合は空行を追加
+        if (existingContent.Length > 0 && !existingContent.EndsWith('\n'))
+            sw.WriteLine();
+        sw.WriteLine("# cdidx (CodeIndex) — auto-generated / 自動生成");
+        foreach (var pattern in missing)
+            sw.WriteLine(pattern);
+    }
+    catch
+    {
+        // Silently ignore — git exclude is a convenience, not critical
+        // 静かに無視 — git excludeは利便性のためであり致命的ではない
+    }
 }
 
 // --- Argument parsers / 引数パーサー ---

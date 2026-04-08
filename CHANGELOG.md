@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **WARN/ERR messages overlapping progress bar** — Warning and error messages printed during indexing (e.g. invalid UTF-8 detection) no longer appear on the same line as the progress bar. The progress bar line is now cleared before outputting messages, then redrawn on the next update. `BuildRecord()` returns warnings as a return value instead of writing directly to stderr. Affected: `Cli/ConsoleUi.cs`, `Indexer/FileIndexer.cs`, `Program.cs`, `Mcp/McpServer.cs`.
 
+#### Added
+
+- **Auto-exclude DB files from git tracking** — `cdidx index` now automatically adds `codeindex.db` and its companion files (`-wal`, `-shm`, `-journal`) to `.git/info/exclude`. This is a standard Git mechanism for local ignore rules, so users don't need to edit `.gitignore`. Silently skipped if no `.git` directory exists. Affected: `Program.cs`.
+
 #### Changed
 
 - **README: PATH setup instructions restructured** — Moved the "Add to PATH" section under "Option B: Build from source" since it is unnecessary when installing via NuGet global tool (Option A). Removed incorrect step numbering (was "2." and "3." with no "1."). Affected: `README.md`.
@@ -88,6 +92,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **プログレスバーのスピナーが表示されない問題** — インデックス中のプログレスバー左側にブレイルスピナー文字を追加。イースターエッグテーマ（`--beer`等）使用時は、テーマ付きフレーム（例: `🍺 Tapping...`、`🍺 Pouring...`、`🍺 Cheers!`）がブレイル文字の代わりに表示される。対象: `Cli/ConsoleUi.cs`, `Program.cs`。
 
 - **WARN/ERRメッセージがプログレスバーと重なる問題** — インデックス中の警告・エラーメッセージ（無効なUTF-8検出等）がプログレスバーと同じ行に出力されなくなった。メッセージ出力前にプログレスバー行をクリアし、次の更新で再描画。`BuildRecord()`は直接stderrに書き込む代わりに警告を戻り値で返すよう変更。対象: `Cli/ConsoleUi.cs`, `Indexer/FileIndexer.cs`, `Program.cs`, `Mcp/McpServer.cs`。
+
+#### 追加
+
+- **DBファイルのgit追跡を自動除外** — `cdidx index` 実行時に `codeindex.db` とその副生成物（`-wal`, `-shm`, `-journal`）を `.git/info/exclude` に自動追加。Gitの標準機能を利用するため `.gitignore` の編集が不要。`.git` ディレクトリが存在しない場合は静かにスキップ。対象: `Program.cs`。
 
 #### 変更
 

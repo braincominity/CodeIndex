@@ -252,6 +252,14 @@ Languages:
 
 cdidx scans your project directory, splits each source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. This means re-indexing after a branch switch only processes the files that actually differ.
 
+## Git integration
+
+When `cdidx index` runs, it automatically adds `codeindex.db` and its companion files (`-wal`, `-shm`, `-journal`) to `.git/info/exclude`. This is a **standard Git mechanism** for local ignore rules that works exactly like `.gitignore` but is not tracked or committed — so you don't need to edit `.gitignore` yourself.
+
+Many popular tools use this same approach (git-lfs, JetBrains IDEs, etc.).
+
+> `.git/info/exclude` is per-machine and not committed, so each team member gets the rule automatically when they run `cdidx index`. If you want the ignore rule committed to the repo (e.g. for contributors who don't use cdidx), add `codeindex.db*` to `.gitignore` instead.
+
 ## Git branch switching
 
 The database reflects the working tree at the time of the last index. After switching branches, simply re-run `cdidx .` — files that no longer exist on disk are purged from the database, newly appeared files are indexed, and existing files are re-indexed only when their timestamp differs. The update is proportional to the number of changed files, not the total project size.
@@ -751,6 +759,14 @@ Languages:
 ## 動作の仕組み
 
 cdidxはプロジェクトディレクトリを走査し、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。
+
+## Git連携
+
+`cdidx index` を実行すると、`codeindex.db` とその副生成物（`-wal`, `-shm`, `-journal`）を自動で `.git/info/exclude` に追加します。これは `.gitignore` と同じ効果を持つ **Gitの標準機能** ですが、ファイル自体はgit追跡対象外のため、`.gitignore` を編集する必要はありません。
+
+git-lfs、JetBrains IDE など、多くのツールがこの仕組みを利用しています。
+
+> `.git/info/exclude` はマシンごとのローカル設定でコミットされないため、チームメンバーそれぞれが `cdidx index` を実行すれば自動で除外ルールが適用されます。cdidxを使わないコントリビューター向けにリポジトリ側で除外ルールを管理したい場合は、代わりに `.gitignore` に `codeindex.db*` を追加してください。
 
 ## Gitブランチ切り替え
 
