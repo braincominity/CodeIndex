@@ -241,12 +241,9 @@ int RunIndex(string[] indexArgs)
         return ExitUsageError;
     }
 
-    // Delete DB if rebuild mode / rebuildモードならDB削除
-    if (rebuild && File.Exists(dbPath))
-        File.Delete(dbPath);
-
     using var db = new DbContext(dbPath);
 
+    // Drop and recreate schema if rebuild mode / rebuildモードならスキーマを削除して再作成
     if (rebuild)
         db.DropAll();
 
