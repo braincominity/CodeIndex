@@ -667,10 +667,14 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
             case "--commits":
                 while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
                     commits.Add(args[++i]);
+                if (commits.Count == 0)
+                    Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
                 break;
             case "--files":
                 while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
                     updateFiles.Add(args[++i]);
+                if (updateFiles.Count == 0)
+                    Console.Error.WriteLine("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
                 break;
             case "--help" or "-h":
                 return (null, dbPath, rebuild, verbose, json, commits, updateFiles, null);
