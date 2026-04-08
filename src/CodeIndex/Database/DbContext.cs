@@ -76,7 +76,8 @@ public class DbContext : IDisposable
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
         Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_path     ON files(path)");
+        // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
+        // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
         Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
