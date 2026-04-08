@@ -33,8 +33,8 @@ src/CodeIndex/
   Program.cs               — CLI entry point, subcommand routing, --json support
   Cli/ConsoleUi.cs         — Spinner, progress bar, banner, easter egg, version, usage text
   Cli/GitHelper.cs         — Git diff-tree helper for --commits option
-  Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5)
-  Database/DbWriter.cs      — UPSERT, batch insert, stale file purge, FTS cleanup
+  Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
+  Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge
   Database/DbReader.cs      — Query operations (FTS search, symbol lookup, file listing, status)
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
@@ -49,8 +49,8 @@ tests/CodeIndex.Tests/
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keep it simple.
 - **Incremental by default** — Compares `modified` timestamp and SHA256 checksum; skips unchanged files.
 - **Stale file purge** — Before indexing, removes DB entries for files no longer on disk (branch switch support).
-- **Batch commits** — 500 records per transaction for write performance.
-- **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search.
+- **Batch commits** — 500 records per transaction for write performance. Supports nesting via SAVEPOINT.
+- **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
@@ -98,8 +98,8 @@ src/CodeIndex/
   Program.cs               — CLIエントリポイント、サブコマンドルーティング、--jsonサポート
   Cli/ConsoleUi.cs         — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
-  Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5）
-  Database/DbWriter.cs      — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ
+  Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
+  Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ
   Database/DbReader.cs      — クエリ操作（FTS検索、シンボル検索、ファイル一覧、ステータス）
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
@@ -114,8 +114,8 @@ tests/CodeIndex.Tests/
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。シンプルに保つ。
 - **デフォルトでインクリメンタル** — `modified`タイムスタンプとSHA256チェックサムを比較し、未変更ファイルをスキップ。
 - **古いファイルのパージ** — インデックス前にディスク上に存在しないファイルをDBから削除（ブランチ切り替え対応）。
-- **バッチコミット** — 書き込み性能のため1トランザクション500レコード。
-- **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。
+- **バッチコミット** — 書き込み性能のため1トランザクション500レコード。SAVEPOINTによるネスト対応。
+- **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。

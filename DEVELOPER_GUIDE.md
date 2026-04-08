@@ -57,8 +57,7 @@ files (
     lang        TEXT,                        -- detected language (e.g. "python")
     size        INTEGER,                    -- file size in bytes
     lines       INTEGER,                    -- line count
-    snippet     TEXT,                        -- first 2000 characters
-    checksum    TEXT,                        -- SHA256 of content
+    checksum    TEXT,                        -- SHA256 of raw file bytes
     modified    DATETIME,                   -- file modification time (UTC)
     indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 )
@@ -92,10 +91,19 @@ fts_chunks USING fts5(content, content='chunks', content_rowid='id')
 ```sql
 idx_files_lang      ON files(lang)
 idx_files_modified  ON files(modified)
-idx_files_path      ON files(path)
+-- idx_files_path is not needed: the UNIQUE constraint on path creates an implicit index
 idx_chunks_file     ON chunks(file_id)
 idx_symbols_name    ON symbols(name)
 idx_symbols_file    ON symbols(file_id)
+```
+
+### FTS5 sync triggers
+
+```sql
+-- Keep fts_chunks in sync with chunks table automatically
+fts_chunks_ai   AFTER INSERT ON chunks  -- insert into FTS
+fts_chunks_ad   AFTER DELETE ON chunks  -- delete from FTS
+fts_chunks_au   AFTER UPDATE ON chunks  -- delete old + insert new in FTS
 ```
 
 ### Entity-Relationship
@@ -202,7 +210,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
 
 ### Content sync
 
-`fts_chunks` is a **content-external** FTS5 table (`content='chunks'`). It does not store the original text; instead, it points to `chunks.id` via `content_rowid`. This avoids doubling storage. cdidx manually keeps the FTS index in sync during insert and delete operations.
+`fts_chunks` is a **content-external** FTS5 table (`content='chunks'`). It does not store the original text; instead, it points to `chunks.id` via `content_rowid`. This avoids doubling storage. cdidx keeps the FTS index in sync via database triggers (`fts_chunks_ai`, `fts_chunks_ad`, `fts_chunks_au`) that fire on insert, delete, and update of the `chunks` table.
 
 ### Query syntax
 
@@ -287,10 +295,9 @@ Regex-based extraction is intentionally simple. Speed and portability are priori
 By default, cdidx compares each file's `modified` timestamp (UTC) against the stored value in the database. If unchanged, the file is skipped entirely.
 
 When a file is re-indexed:
-1. The file record is upserted (`INSERT OR REPLACE`)
-2. Old chunks and FTS entries for that file are deleted
-3. Old symbols for that file are deleted
-4. New chunks, FTS entries, and symbols are inserted
+1. Old chunks and symbols for that file are deleted (FTS entries are cleaned up automatically by triggers)
+2. The file record is upserted (`INSERT ... ON CONFLICT DO UPDATE`, preserving the row ID)
+3. New chunks and symbols are inserted (FTS entries are populated automatically by triggers)
 
 ### Stale file purge
 
@@ -388,12 +395,12 @@ Query commands (`search`, `symbols`, `files`) default to **human-readable output
 
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
-- **WAL mode** — Write-Ahead Logging for concurrent read/write access and crash safety.
-- **Content-external FTS5** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy.
+- **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
+- **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
 - **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability.
 - **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
 - **Manual arg parsing** — `System.CommandLine` was removed to reduce dependencies. Simple switch-based parsing.
-- **SHA256 checksums** — Stored per file and used as a fallback for change detection when timestamps differ (e.g. after `git checkout`).
+- **SHA256 checksums** — Computed from raw file bytes and stored per file. Used as a fallback for change detection when timestamps differ (e.g. after `git checkout`).
 - **UTF-8 with fallback** — Invalid UTF-8 bytes are replaced with U+FFFD rather than failing the entire file.
 
 ## Coding conventions
@@ -462,8 +469,7 @@ files (
     lang        TEXT,                        -- 検出された言語（例: "python"）
     size        INTEGER,                    -- ファイルサイズ（バイト）
     lines       INTEGER,                    -- 行数
-    snippet     TEXT,                        -- 先頭2000文字
-    checksum    TEXT,                        -- コンテンツのSHA256
+    checksum    TEXT,                        -- ファイルraw bytesのSHA256
     modified    DATETIME,                   -- ファイル更新日時（UTC）
     indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 )
@@ -497,10 +503,19 @@ fts_chunks USING fts5(content, content='chunks', content_rowid='id')
 ```sql
 idx_files_lang      ON files(lang)
 idx_files_modified  ON files(modified)
-idx_files_path      ON files(path)
+-- idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
 idx_chunks_file     ON chunks(file_id)
 idx_symbols_name    ON symbols(name)
 idx_symbols_file    ON symbols(file_id)
+```
+
+### FTS5同期トリガー
+
+```sql
+-- chunksテーブルとfts_chunksを自動的に同期するトリガー
+fts_chunks_ai   AFTER INSERT ON chunks  -- FTSに挿入
+fts_chunks_ad   AFTER DELETE ON chunks  -- FTSから削除
+fts_chunks_au   AFTER UPDATE ON chunks  -- 旧エントリ削除＋新エントリ挿入
 ```
 
 ### エンティティ関連図
@@ -607,7 +622,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
 
 ### コンテンツ同期
 
-`fts_chunks`は**コンテンツ外部参照型**のFTS5テーブル（`content='chunks'`）です。元のテキストを保存せず、`content_rowid`で`chunks.id`を参照します。これによりストレージの倍増を回避しています。cdidxは挿入・削除操作時にFTSインデックスを手動で同期します。
+`fts_chunks`は**コンテンツ外部参照型**のFTS5テーブル（`content='chunks'`）です。元のテキストを保存せず、`content_rowid`で`chunks.id`を参照します。これによりストレージの倍増を回避しています。cdidxはデータベーストリガー（`fts_chunks_ai`、`fts_chunks_ad`、`fts_chunks_au`）でFTSインデックスを自動的に同期します。
 
 ### クエリ構文
 
@@ -692,10 +707,9 @@ LIMIT 20;
 デフォルトでは、cdidxは各ファイルの`modified`タイムスタンプ（UTC）をデータベースの値と比較します。変更がなければファイルは完全にスキップされます。
 
 ファイルが再インデックスされる場合:
-1. ファイルレコードをUPSERT（`INSERT OR REPLACE`）
-2. そのファイルの古いチャンクとFTSエントリを削除
-3. そのファイルの古いシンボルを削除
-4. 新しいチャンク、FTSエントリ、シンボルを挿入
+1. そのファイルの古いチャンクとシンボルを削除（FTSエントリはトリガーで自動クリーンアップ）
+2. ファイルレコードをUPSERT（`INSERT ... ON CONFLICT DO UPDATE`、行IDを保持）
+3. 新しいチャンクとシンボルを挿入（FTSエントリはトリガーで自動反映）
 
 ### 古いファイルのパージ
 
@@ -793,12 +807,12 @@ cdidx symbols "ClassName"        # 構造化シンボル検索
 
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
-- **WALモード** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。
-- **コンテンツ外部参照FTS5** — `chunks`テーブルを参照しコピーを保存しないことでストレージ倍増を回避。
+- **WALモード + busy_timeout** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。5秒のbusy_timeoutで即座のSQLITE_BUSYエラーを回避。
+- **トリガー付きコンテンツ外部参照FTS5** — `chunks`テーブルを参照しコピーを保存しないことでストレージ倍増を回避。データベーストリガーでFTSインデックスを自動同期。
 - **正規表現シンボル抽出** — ASTパーサーも言語固有の依存関係も不要。精度より速度とポータビリティを優先。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI/機械向け出力。
 - **手動引数解析** — `System.CommandLine`は依存削減のため削除。シンプルなswitch文での解析。
-- **SHA256チェックサム** — 完全性検証用にファイルごとに保存（現在は変更検出には未使用だが利用可能）。
+- **SHA256チェックサム** — ファイルのraw bytesから算出しファイルごとに保存。タイムスタンプが異なる場合の変更検出フォールバックとして使用（例: `git checkout`後）。
 - **UTF-8フォールバック** — 不正なUTF-8バイトはファイル全体を失敗させずU+FFFDに置換。
 
 ## コーディング規約
