@@ -19,6 +19,8 @@ public class McpServer
     private bool _running = true;
 
     private const string ProtocolVersion = "2024-11-05";
+    private const int MaxLimit = 200;
+    private const int MaxQueryLength = 1000;
 
     public McpServer(string dbPath, string version)
     {
@@ -244,13 +246,21 @@ public class McpServer
 
     // --- Tool implementations / ツール実装 ---
 
+    /// <summary>
+    /// Clamp limit to a safe range to prevent resource exhaustion.
+    /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
+    /// </summary>
+    private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(query))
             return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var limit = args?["limit"]?.GetValue<int>() ?? 20;
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>();
 
         return WithDbReader(id, reader =>
@@ -274,9 +284,11 @@ public class McpServer
     private JsonNode ExecuteSymbols(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
+        if (query != null && query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
-        var limit = args?["limit"]?.GetValue<int>() ?? 20;
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
 
         return WithDbReader(id, reader =>
         {
@@ -295,8 +307,10 @@ public class McpServer
     private JsonNode ExecuteFiles(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
+        if (query != null && query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         var lang = args?["lang"]?.GetValue<string>();
-        var limit = args?["limit"]?.GetValue<int>() ?? 20;
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
 
         return WithDbReader(id, reader =>
         {
@@ -340,8 +354,14 @@ public class McpServer
         var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
         var projectPath = Path.GetFullPath(path);
 
+        // Prevent path traversal — only allow indexing within current working directory
+        // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
+        var cwd = Path.GetFullPath(".");
+        if (!projectPath.StartsWith(cwd + Path.DirectorySeparatorChar) && projectPath != cwd)
+            return CreateToolErrorResponse(id, "Path must be within the current working directory");
+
         if (!Directory.Exists(projectPath))
-            return CreateToolErrorResponse(id, $"Directory not found: {projectPath}");
+            return CreateToolErrorResponse(id, "Directory not found");
 
         // Determine DB path — use the provided _dbPath or default
         // DBパスを決定 — 指定された_dbPathまたはデフォルトを使用

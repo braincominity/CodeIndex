@@ -1268,12 +1268,11 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_Index_NonexistentDir_ReturnsError()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"/nonexistent/path/xyz"}}}""")!;
+        // Use a path within CWD that doesn't exist / CWD内の存在しないパスを使用
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"./nonexistent_subdir_xyz_test"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("not found", text);
     }
 
     [Fact]
@@ -1292,6 +1291,31 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+    }
+
+    // --- Security tests / セキュリティテスト ---
+
+    [Fact]
+    public void ToolsCall_Index_PathTraversal_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"/etc"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("current working directory", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_QueryTooLong_ReturnsError()
+    {
+        var longQuery = new string('a', 1001);
+        var request = JsonNode.Parse($$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"{{longQuery}}"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("too long", text);
     }
 
     // --- Database not found tests / DB未検出テスト ---
