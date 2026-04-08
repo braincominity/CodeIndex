@@ -354,7 +354,7 @@ dotnet tool install -g cdidx
 dotnet tool update -g cdidx
 ```
 
-If install/update fails (e.g. no network access to NuGet, or .NET SDK unavailable), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`.
+If update fails, the existing version still works — just continue with it. If install fails (no .NET SDK, no network), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`, provided the database was already built.
 
 Before searching, update the index so results are accurate:
 
@@ -882,7 +882,7 @@ dotnet tool install -g cdidx
 dotnet tool update -g cdidx
 ```
 
-インストール/更新に失敗した場合（NuGetへのネットワークアクセスがない、.NET SDKが利用不可等）は、下記の **「直接SQLクエリ」** セクションを参照してください。`sqlite3` で `.cdidx/codeindex.db` を直接クエリできます。
+更新に失敗しても既存バージョンはそのまま使えます。インストール自体に失敗した場合（.NET SDKがない、ネットワーク不通等）は、データベースが構築済みであれば下記の **「直接SQLクエリ」** セクションで `sqlite3` から `.cdidx/codeindex.db` を直接検索できます。
 
 検索を始める前に、インデックスを最新化してください:
 
