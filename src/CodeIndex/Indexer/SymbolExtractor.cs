@@ -137,6 +137,10 @@ public static class SymbolExtractor
                         Name = name,
                         Line = i + 1, // 1-based / 1始まり
                     });
+                    // Stop after first match per line to avoid duplicate symbols
+                    // (e.g. C# method pattern + constructor pattern both matching)
+                    // 1行につき最初のマッチのみ採用し重複を防ぐ
+                    break;
                 }
             }
         }
