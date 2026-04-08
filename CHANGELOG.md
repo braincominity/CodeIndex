@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.0.2] - 2026-04-08
+
 #### Added
 
 - **Upgrade instructions** — Added `dotnet tool update -g cdidx` upgrade command to the Installation section of README. Affected: `README.md`.
@@ -107,6 +109,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.0.2] - 2026-04-08
+
 #### 追加
 
 - **アップグレード手順** — READMEのインストールセクションに `dotnet tool update -g cdidx` によるアップグレードコマンドを追加。対象: `README.md`。
@@ -199,6 +203,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Widthdom/CodeIndex/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Widthdom/CodeIndex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0
