@@ -241,12 +241,9 @@ int RunIndex(string[] indexArgs)
         return ExitUsageError;
     }
 
-    // Delete DB if rebuild mode / rebuildモードならDB削除
-    if (rebuild && File.Exists(dbPath))
-        File.Delete(dbPath);
-
     using var db = new DbContext(dbPath);
 
+    // Drop and recreate schema if rebuild mode / rebuildモードならスキーマを削除して再作成
     if (rebuild)
         db.DropAll();
 
@@ -343,6 +340,17 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
             }
 
             var (record, content) = indexer.BuildRecord(absPath);
+
+            // Skip unchanged files (same logic as full scan mode)
+            // 未変更ファイルをスキップ（フルスキャンモードと同じロジック）
+            var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
+            if (existingId != null)
+            {
+                skipped++;
+                if (verbose && !jsonOutput)
+                    Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                continue;
+            }
 
             // Wrap clean + upsert + insert in a transaction for atomicity
             // clean + upsert + insert をトランザクションでアトミックに実行
@@ -671,13 +679,17 @@ static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool jso
                 json = true;
                 break;
             case "--commits":
-                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                // Consume subsequent arguments until we hit a flag (starts with '-')
+                // '-'で始まる引数が来るまで後続の引数をコミットIDとして取り込む
+                while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                     commits.Add(args[++i]);
                 if (commits.Count == 0)
                     Console.Error.WriteLine("Warning: --commits specified but no commit IDs provided / --commits が指定されましたがコミットIDがありません");
                 break;
             case "--files":
-                while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                // Consume subsequent arguments until we hit a flag (starts with '-')
+                // '-'で始まる引数が来るまで後続の引数をファイルパスとして取り込む
+                while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                     updateFiles.Add(args[++i]);
                 if (updateFiles.Count == 0)
                     Console.Error.WriteLine("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");

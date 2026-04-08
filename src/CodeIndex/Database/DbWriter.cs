@@ -75,11 +75,13 @@ public class DbWriter
 
         public void Commit()
         {
-            _committed = true;
             if (_transaction != null)
                 _transaction.Commit();
             else
                 ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+            // Set _committed after success so Dispose() will rollback if Commit/Release throws
+            // コミット/リリース成功後にフラグを立て、失敗時はDispose()でロールバックされるようにする
+            _committed = true;
         }
 
         public void Rollback()
@@ -248,10 +250,14 @@ public class DbWriter
 
     /// <summary>
     /// Insert chunks in batches (FTS index is populated automatically by triggers).
+    /// Reuses a prepared statement per batch to avoid per-row command overhead.
     /// チャンクをバッチ挿入する（FTSインデックスはトリガーにより自動で反映される）。
+    /// バッチごとにプリペアドステートメントを再利用し、行ごとのコマンド生成コストを回避する。
     /// </summary>
     public void InsertChunks(IReadOnlyList<ChunkRecord> chunks)
     {
+        if (chunks.Count == 0) return;
+
         for (int i = 0; i < chunks.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, chunks.Count);
@@ -259,18 +265,27 @@ public class DbWriter
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
+            // Prepare after transaction starts so the command inherits the connection's transaction state
+            // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
+                VALUES (@fid, @idx, @start, @end, @content)";
+            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
+            var pIdx = cmd.Parameters.Add("@idx", SqliteType.Integer);
+            var pStart = cmd.Parameters.Add("@start", SqliteType.Integer);
+            var pEnd = cmd.Parameters.Add("@end", SqliteType.Integer);
+            var pContent = cmd.Parameters.Add("@content", SqliteType.Text);
+            cmd.Prepare();
+
             for (int j = i; j < end; j++)
             {
                 var chunk = chunks[j];
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
-                    VALUES (@fid, @idx, @start, @end, @content)";
-                cmd.Parameters.AddWithValue("@fid", chunk.FileId);
-                cmd.Parameters.AddWithValue("@idx", chunk.ChunkIndex);
-                cmd.Parameters.AddWithValue("@start", chunk.StartLine);
-                cmd.Parameters.AddWithValue("@end", chunk.EndLine);
-                cmd.Parameters.AddWithValue("@content", chunk.Content);
+                pFid.Value = chunk.FileId;
+                pIdx.Value = chunk.ChunkIndex;
+                pStart.Value = chunk.StartLine;
+                pEnd.Value = chunk.EndLine;
+                pContent.Value = chunk.Content;
                 // FTS index is populated automatically by fts_chunks_ai trigger
                 // FTSインデックスはfts_chunks_aiトリガーにより自動で反映される
                 cmd.ExecuteNonQuery();
@@ -282,10 +297,14 @@ public class DbWriter
 
     /// <summary>
     /// Insert symbols in batches.
+    /// Reuses a prepared statement per batch to avoid per-row command overhead.
     /// シンボルをバッチ挿入する。
+    /// バッチごとにプリペアドステートメントを再利用し、行ごとのコマンド生成コストを回避する。
     /// </summary>
     public void InsertSymbols(IReadOnlyList<SymbolRecord> symbols)
     {
+        if (symbols.Count == 0) return;
+
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, symbols.Count);
@@ -293,17 +312,25 @@ public class DbWriter
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
 
+            // Prepare after transaction starts so the command inherits the connection's transaction state
+            // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO symbols (file_id, kind, name, line)
+                VALUES (@fid, @kind, @name, @line)";
+            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
+            var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
+            var pName = cmd.Parameters.Add("@name", SqliteType.Text);
+            var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
+            cmd.Prepare();
+
             for (int j = i; j < end; j++)
             {
                 var symbol = symbols[j];
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO symbols (file_id, kind, name, line)
-                    VALUES (@fid, @kind, @name, @line)";
-                cmd.Parameters.AddWithValue("@fid", symbol.FileId);
-                cmd.Parameters.AddWithValue("@kind", symbol.Kind);
-                cmd.Parameters.AddWithValue("@name", symbol.Name);
-                cmd.Parameters.AddWithValue("@line", symbol.Line);
+                pFid.Value = symbol.FileId;
+                pKind.Value = symbol.Kind;
+                pName.Value = symbol.Name;
+                pLine.Value = symbol.Line;
                 cmd.ExecuteNonQuery();
             }
 
@@ -313,24 +340,16 @@ public class DbWriter
 
     /// <summary>
     /// Delete a file and its associated data by relative path. Returns true if found.
+    /// CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
     /// 相対パスでファイルと関連データを削除する。見つかればtrueを返す。
+    /// chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
     /// </summary>
     public bool DeleteFileByPath(string relativePath)
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
+        cmd.CommandText = "DELETE FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", relativePath);
-        var result = cmd.ExecuteScalar();
-        if (result == null) return false;
-
-        var fileId = (long)result;
-        DeleteFileData(fileId);
-
-        using var cmd2 = _conn.CreateCommand();
-        cmd2.CommandText = "DELETE FROM files WHERE id = @id";
-        cmd2.Parameters.AddWithValue("@id", fileId);
-        cmd2.ExecuteNonQuery();
-        return true;
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     /// <summary>
@@ -365,14 +384,17 @@ public class DbWriter
 
         // Delete all stale files in a single transaction for atomicity and performance
         // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除
+        // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically
+        // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する
         using var txn = BeginTransaction();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
         foreach (var id in staleIds)
         {
-            DeleteFileData(id);
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "DELETE FROM files WHERE id = @id";
-            cmd.Parameters.AddWithValue("@id", id);
-            cmd.ExecuteNonQuery();
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
         }
         txn.Commit();
 
