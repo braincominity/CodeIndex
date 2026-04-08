@@ -120,9 +120,24 @@ public static class ConsoleUi
 
     // --- Progress bar / プログレスバー ---
 
+    // Active spinner frames for progress bar (themed or default braille)
+    // プログレスバー用アクティブスピナーフレーム（テーマ付きまたはデフォルトブレイル）
+    private static string[] _progressSpinnerFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
+    // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
+    private static int _lastProgressLineLength;
+
     /// <summary>
-    /// Print inline progress bar.
-    /// インライン進捗バーを表示。
+    /// Set progress bar spinner theme (reuses GetSpinnerFrames).
+    /// プログレスバーのスピナーテーマを設定（GetSpinnerFramesを再利用）。
+    /// </summary>
+    public static void SetProgressTheme(string? easterEgg)
+    {
+        _progressSpinnerFrames = GetSpinnerFrames(easterEgg);
+    }
+
+    /// <summary>
+    /// Print inline progress bar with spinner.
+    /// スピナー付きインライン進捗バーを表示。
     /// </summary>
     public static void PrintProgress(int current, int total)
     {
@@ -135,21 +150,51 @@ public static class ConsoleUi
         int filled = (int)Math.Round(pct * barWidth);
         if (filled > barWidth) filled = barWidth;
 
+        // Show spinner while in progress, checkmark on completion / 処理中はスピナー、完了時はチェックマーク
+        var spinner = current == total ? " " : _progressSpinnerFrames[(current / 50) % _progressSpinnerFrames.Length];
         var bar = new string('\u2588', filled) + new string('\u2591', barWidth - filled);
-        var line = $"  {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
+        var line = $"{spinner} {bar} {pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
 
         if (!Console.IsOutputRedirected)
         {
             Console.Write($"\r{line}");
             Console.Out.Flush();
+            _lastProgressLineLength = line.Length;
             if (current == total)
+            {
                 Console.WriteLine();
+                _lastProgressLineLength = 0;
+            }
         }
         else
         {
             // Fallback for redirected output / リダイレクト時はフォールバック
             Console.WriteLine(line.TrimStart());
         }
+    }
+
+    /// <summary>
+    /// Clear the current progress bar line so other output can be printed cleanly.
+    /// 他の出力を正しく表示するために現在のプログレスバー行をクリア。
+    /// </summary>
+    public static void ClearProgressLine()
+    {
+        if (!Console.IsOutputRedirected && _lastProgressLineLength > 0)
+        {
+            Console.Write($"\r{new string(' ', _lastProgressLineLength)}\r");
+            Console.Out.Flush();
+            _lastProgressLineLength = 0;
+        }
+    }
+
+    /// <summary>
+    /// Print a warning message, clearing the progress bar line first if needed.
+    /// 必要に応じてプログレスバー行をクリアしてから警告メッセージを表示。
+    /// </summary>
+    public static void PrintWarning(string message)
+    {
+        ClearProgressLine();
+        Console.Error.WriteLine($"  [WARN] {message}");
     }
 
     // --- Banner / バナー ---
@@ -247,7 +292,7 @@ public static class ConsoleUi
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
         Console.WriteLine("Index options:");
-        Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
+        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db)");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
@@ -257,7 +302,7 @@ public static class ConsoleUi
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine();
         Console.WriteLine("Query options:");
-        Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");
+        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db)");
         Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
         Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
@@ -265,7 +310,7 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
-        Console.WriteLine("  cdidx search \"authenticate\" --db codeindex.db  Full-text search");
+        Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
         Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");

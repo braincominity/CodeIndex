@@ -9,6 +9,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+
+- **Store index in `.cdidx/` directory** — Default DB path changed from `codeindex.db` to `.cdidx/codeindex.db`. The directory is created automatically on first `cdidx index`. The `.cdidx/` directory is auto-added to `.git/info/exclude`, so users don't need to edit `.gitignore`. Affected: `Program.cs`, `Cli/ConsoleUi.cs`.
+
+#### Fixed
+
+- **Progress bar spinner not visible** — Added a spinning braille character to the left of the progress bar. Easter egg themes (e.g. `--beer`) show themed frames (`🍺 Tapping...`, `🍺 Cheers!`, etc.) instead. `SetProgressTheme()` reuses frames from `GetSpinnerFrames()`. Affected: `Cli/ConsoleUi.cs`, `Program.cs`.
+
+- **WARN/ERR messages overlapping progress bar** — Messages printed during indexing (e.g. invalid UTF-8 detection) no longer merge with the progress bar line. The bar is cleared before output and redrawn on the next update. `BuildRecord()` returns warnings as a return value instead of writing directly to stderr. Affected: `Cli/ConsoleUi.cs`, `Indexer/FileIndexer.cs`, `Program.cs`, `Mcp/McpServer.cs`.
+
+#### Changed
+
+- **README: PATH setup instructions restructured** — Moved "Add to PATH" under "Option B: Build from source" since it is unnecessary for NuGet installs. Fixed step numbering. Affected: `README.md`.
+
+- **README: Git integration section** — Added section explaining `.git/info/exclude` auto-exclude behavior with examples of other tools that use this mechanism. Affected: `README.md`.
+
+- **CLAUDE.md template: install instructions and offline fallback** — The code search rules template now guides AI agents to check for `cdidx` first, install via `dotnet tool install -g cdidx` if needed, and fall back to direct `sqlite3` queries when NuGet is unreachable. Affected: `README.md`, `DEVELOPER_GUIDE.md`.
+
+- **CLAUDE.md: development rules** — Added "Rules for changes" section covering method signature updates, console output with progress bar, easter egg theme consistency, documentation sync, CHANGELOG style, PR conventions, and test requirements. Affected: `CLAUDE.md`.
+
 ### [1.0.0] - 2026-04-08
 
 #### Added
@@ -70,6 +90,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+- **インデックスを `.cdidx/` ディレクトリに格納** — デフォルトDBパスを `codeindex.db` から `.cdidx/codeindex.db` に変更。ディレクトリは初回の `cdidx index` で自動作成。`.cdidx/` は `.git/info/exclude` に自動追加されるため `.gitignore` の編集が不要。対象: `Program.cs`, `Cli/ConsoleUi.cs`。
+
+#### 修正
+
+- **プログレスバーのスピナーが表示されない問題** — プログレスバー左側にブレイルスピナー文字を追加。イースターエッグテーマ（`--beer`等）使用時はテーマ付きフレーム（`🍺 Tapping...`、`🍺 Cheers!` 等）を表示。`SetProgressTheme()` は `GetSpinnerFrames()` のフレームを再利用。対象: `Cli/ConsoleUi.cs`, `Program.cs`。
+
+- **WARN/ERRメッセージがプログレスバーと重なる問題** — インデックス中のメッセージ（無効なUTF-8検出等）がプログレスバーと同じ行に出力されなくなった。出力前にバー行をクリアし、次の更新で再描画。`BuildRecord()` は直接stderrに書き込む代わりに警告を戻り値で返すよう変更。対象: `Cli/ConsoleUi.cs`, `Indexer/FileIndexer.cs`, `Program.cs`, `Mcp/McpServer.cs`。
+
+#### 変更
+
+- **README: PATHセットアップ手順の構成変更** — 「PATHに追加」を「方法B: ソースからビルド」の配下に移動（NuGetインストール時は不要）。番号付けも修正。対象: `README.md`。
+
+- **README: Git連携セクション** — `.git/info/exclude` 自動除外の動作と、この仕組みを利用する他ツールの例を追加。対象: `README.md`。
+
+- **CLAUDE.mdテンプレート: インストール手順とオフラインフォールバック** — AI向けコード検索ルールのテンプレートで、`cdidx` の有無確認、`dotnet tool install -g cdidx` でのインストール試行、NuGetにアクセスできない場合の `sqlite3` フォールバックを案内。対象: `README.md`, `DEVELOPER_GUIDE.md`。
+
+- **CLAUDE.md: 開発ルール** — 「変更時のルール」セクションを追加。メソッドシグネチャ変更時の全呼び出し元更新、プログレスバーとコンソール出力、イースターエッグテーマの一貫性、ドキュメント同期、CHANGELOGスタイル、PRの書き方、テスト要件をカバー。対象: `CLAUDE.md`。
 
 ### [1.0.0] - 2026-04-08
 

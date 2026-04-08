@@ -144,7 +144,7 @@ public class FileIndexer
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
     /// </summary>
-    public (FileRecord record, string content) BuildRecord(string absolutePath)
+    public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath)
     {
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var info = new FileInfo(absolutePath);
@@ -163,6 +163,7 @@ public class FileIndexer
         var checksum = ComputeChecksum(bytes);
 
         string content;
+        string? warning = null;
         try
         {
             content = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes);
@@ -170,8 +171,8 @@ public class FileIndexer
         catch (DecoderFallbackException)
         {
             // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
-            Console.Error.WriteLine($"  [WARN] {relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)");
             content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
+            warning = $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)";
         }
         // Normalize line endings to LF / 改行をLFに正規化
         content = content.Replace("\r\n", "\n").Replace("\r", "\n");
@@ -190,7 +191,7 @@ public class FileIndexer
             Modified = info.LastWriteTimeUtc,
         };
 
-        return (record, content);
+        return (record, content, warning);
     }
 
     /// <summary>

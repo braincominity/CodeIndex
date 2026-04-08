@@ -343,13 +343,13 @@ cdidx ./myproject --files src/app.cs        # specific files only
 
 ### Setting up CLAUDE.md
 
-To let AI agents use the generated `codeindex.db`, place a `CLAUDE.md` in your project root:
+To let AI agents use the generated index, place a `CLAUDE.md` in your project root:
 
 ````markdown
 # Code Search Rules
 
-This project has a `codeindex.db` file.
-When searching code, **query this SQLite database** instead of using `find`, `grep`, or `ls -R`.
+This project uses **cdidx** for fast code search via a pre-built SQLite index (`.cdidx/codeindex.db`).
+**Query this database** instead of using `find`, `grep`, or `ls -R`.
 
 ## Queries
 
@@ -762,13 +762,30 @@ cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 
 ### CLAUDE.mdの設定
 
-AIエージェントに `codeindex.db` を活用させるには、プロジェクトルートに `CLAUDE.md` を配置してください:
+AIエージェントにインデックスを活用させるには、プロジェクトルートに `CLAUDE.md` を配置してください:
 
 ````markdown
 # コードベース検索ルール
 
-このプロジェクトには `codeindex.db` があります。
-コードを検索する際は `find`, `grep`, `ls -R` ではなく**このSQLiteデータベースを検索**してください。
+このプロジェクトは **cdidx** を使い、事前構築済みSQLiteインデックス（`.cdidx/codeindex.db`）で高速コード検索を行います。
+コードを検索する際は `find`, `grep`, `ls -R` ではなく**このデータベースを検索**してください。
+
+## セットアップ
+
+まず `cdidx` が利用可能か確認してください:
+
+```bash
+cdidx --version
+```
+
+コマンドが見つからない場合はインストールしてください。.NET 8+ SDKが必要です:
+
+```bash
+dotnet --version   # 8.x以上であること。そうでなければユーザーに.NET 8+ SDKのインストールを依頼
+dotnet tool install -g cdidx
+```
+
+インストールに失敗した場合（NuGetへのネットワークアクセスがない、.NET SDKが利用不可等）は、下記のSQLクエリで `.cdidx/codeindex.db` を直接検索できます。
 
 ## クエリ
 

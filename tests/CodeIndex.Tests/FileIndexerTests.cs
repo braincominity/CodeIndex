@@ -97,7 +97,7 @@ public class FileIndexerTests
             File.WriteAllText(filePath, "def main():\n    print('hello')\n");
 
             var indexer = new FileIndexer(tempDir);
-            var (record, content) = indexer.BuildRecord(filePath);
+            var (record, content, _) = indexer.BuildRecord(filePath);
 
             Assert.Equal("main.py", record.Path);
             Assert.Equal("python", record.Lang);
@@ -150,7 +150,7 @@ public class FileIndexerTests
             File.WriteAllBytes(filePath, System.Text.Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
 
             var indexer = new FileIndexer(tempDir);
-            var (record, content) = indexer.BuildRecord(filePath);
+            var (record, content, _) = indexer.BuildRecord(filePath);
 
             Assert.DoesNotContain("\r", content);
             Assert.Equal(3, record.Lines);

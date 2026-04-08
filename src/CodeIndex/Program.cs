@@ -217,6 +217,7 @@ int RunIndex(string[] indexArgs)
 {
     var (projectPath, dbPath, rebuild, verbose, jsonOutput, commits, updateFiles, easterEgg) = ParseIndexArgs(indexArgs);
     var spinnerFrames = ConsoleUi.GetSpinnerFrames(easterEgg);
+    ConsoleUi.SetProgressTheme(easterEgg);
 
     if (projectPath == null)
     {
@@ -231,6 +232,7 @@ int RunIndex(string[] indexArgs)
     if (!jsonOutput)
     {
         ConsoleUi.PrintBanner();
+        Console.WriteLine();
         Console.WriteLine($"  Project : {Path.GetFullPath(projectPath)}");
         Console.WriteLine($"  Output  : {dbPath}");
         Console.WriteLine($"  Mode    : {mode}");
@@ -255,6 +257,11 @@ int RunIndex(string[] indexArgs)
         return ExitUsageError;
     }
 
+    // Ensure the DB directory exists / DBディレクトリの存在を保証
+    var dbDir = Path.GetDirectoryName(dbPath);
+    if (!string.IsNullOrEmpty(dbDir))
+        Directory.CreateDirectory(dbDir);
+
     using var db = new DbContext(dbPath);
 
     // Drop and recreate schema if rebuild mode / rebuildモードならスキーマを削除して再作成
@@ -262,6 +269,10 @@ int RunIndex(string[] indexArgs)
         db.DropAll();
 
     db.InitializeSchema();
+
+    // Auto-add DB files to .git/info/exclude so users don't have to edit .gitignore
+    // DBファイルを.git/info/excludeに自動追加し、ユーザーが.gitignoreを編集せずに済むようにする
+    AddToGitExclude(projectPath, dbPath);
 
     var writer = new DbWriter(db.Connection);
     var indexer = new FileIndexer(projectPath);
@@ -353,7 +364,10 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
                 continue;
             }
 
-            var (record, content) = indexer.BuildRecord(absPath);
+            var (record, content, warning) = indexer.BuildRecord(absPath);
+
+            if (warning != null && !jsonOutput)
+                ConsoleUi.PrintWarning(warning);
 
             // Skip unchanged files (same logic as full scan mode)
             // 未変更ファイルをスキップ（フルスキャンモードと同じロジック）
@@ -427,6 +441,7 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
         Console.WriteLine();
         Console.WriteLine();
         Console.WriteLine("Done.");
+        Console.WriteLine();
         Console.WriteLine($"  Files   : {totalFiles:N0} (total in DB)");
         Console.WriteLine($"  Chunks  : {totalChunks:N0}");
         Console.WriteLine($"  Symbols : {totalSymbols:N0}");
@@ -435,6 +450,7 @@ int RunUpdateMode(DbWriter writer, FileIndexer indexer, string projectRoot, stri
         if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0}");
         if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
         Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+        Console.WriteLine();
     }
 
     return ExitSuccess;
@@ -481,7 +497,10 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
         }
         try
         {
-            var (record, content) = indexer.BuildRecord(filePath);
+            var (record, content, warning) = indexer.BuildRecord(filePath);
+
+            if (warning != null && !jsonOutput)
+                ConsoleUi.PrintWarning(warning);
 
             var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
             if (existingId != null)
@@ -489,7 +508,10 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
                 skipped++;
                 processed++;
                 if (verbose && !jsonOutput)
+                {
+                    ConsoleUi.ClearProgressLine();
                     Console.WriteLine($"  [SKIP] {record.Path}");
+                }
                 if (!jsonOutput) ConsoleUi.PrintProgress(processed, files.Count);
                 continue;
             }
@@ -507,7 +529,10 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             txn.Commit();
 
             if (verbose && !jsonOutput)
+            {
+                ConsoleUi.ClearProgressLine();
                 Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+            }
         }
         catch (Exception ex)
         {
@@ -515,6 +540,7 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
             errorList.Add(new { file = filePath, message = ex.Message });
             if (!jsonOutput)
             {
+                ConsoleUi.ClearProgressLine();
                 if (verbose)
                     Console.Error.WriteLine($"  [ERR ] {filePath}: {ex.Message}\n{ex.StackTrace}");
                 else
@@ -564,12 +590,14 @@ int RunFullScan(DbWriter writer, FileIndexer indexer, string projectRoot, string
         Console.WriteLine();
         Console.WriteLine();
         Console.WriteLine("Done.");
+        Console.WriteLine();
         Console.WriteLine($"  Files   : {totalFiles:N0}");
         Console.WriteLine($"  Chunks  : {totalChunks:N0}");
         Console.WriteLine($"  Symbols : {totalSymbols:N0}");
         if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
         if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
         Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
+        Console.WriteLine();
     }
 
     return ExitSuccess;
@@ -605,12 +633,61 @@ int ShowError(string message)
     return ExitUsageError;
 }
 
+// --- Git exclude helper / Git除外ヘルパー ---
+
+/// <summary>
+/// Add DB file patterns to .git/info/exclude so they are ignored without touching .gitignore.
+/// DBファイルのパターンを.git/info/excludeに追加し、.gitignoreを編集せずにgit追跡対象外にする。
+/// </summary>
+static void AddToGitExclude(string projectPath, string dbPath)
+{
+    try
+    {
+        var projectRoot = Path.GetFullPath(projectPath);
+        var gitDir = Path.Combine(projectRoot, ".git");
+        if (!Directory.Exists(gitDir)) return;
+
+        var excludeFile = Path.Combine(gitDir, "info", "exclude");
+
+        // Determine the exclude pattern: directory (e.g. ".cdidx/") or file + companions
+        // 除外パターンの決定: ディレクトリ（例: ".cdidx/"）またはファイル＋副生成物
+        var dbDirRelative = Path.GetDirectoryName(dbPath);
+        var patterns = !string.IsNullOrEmpty(dbDirRelative)
+            ? new[] { $"{dbDirRelative}/" }
+            : new[] { Path.GetFileName(dbPath), $"{Path.GetFileName(dbPath)}-*" };
+
+        // Read existing content if the file exists / ファイルが存在すれば既存内容を読み込む
+        var existingContent = File.Exists(excludeFile) ? File.ReadAllText(excludeFile) : "";
+        var existingLines = existingContent.Split('\n').Select(l => l.TrimEnd('\r')).ToHashSet();
+
+        var missing = patterns.Where(p => !existingLines.Contains(p)).ToList();
+        if (missing.Count == 0) return;
+
+        // Ensure the info directory exists / infoディレクトリの存在を保証
+        Directory.CreateDirectory(Path.GetDirectoryName(excludeFile)!);
+
+        using var sw = File.AppendText(excludeFile);
+        // Add a blank line separator if the file doesn't end with a newline
+        // ファイルが改行で終わっていない場合は空行を追加
+        if (existingContent.Length > 0 && !existingContent.EndsWith('\n'))
+            sw.WriteLine();
+        sw.WriteLine("# cdidx (CodeIndex) — auto-generated / 自動生成");
+        foreach (var pattern in missing)
+            sw.WriteLine(pattern);
+    }
+    catch
+    {
+        // Silently ignore — git exclude is a convenience, not critical
+        // 静かに無視 — git excludeは利便性のためであり致命的ではない
+    }
+}
+
 // --- Argument parsers / 引数パーサー ---
 
 // Parse query subcommand arguments / クエリサブコマンドの引数を解析
 static (string dbPath, bool json, int limit, string? lang, string? kind, string? query) ParseQueryArgs(string[] args, bool jsonDefault)
 {
-    string dbPath = "codeindex.db";
+    string dbPath = Path.Combine(".cdidx", "codeindex.db");
     bool? json = null;
     int limit = 20;
     string? lang = null;
@@ -666,7 +743,7 @@ static (string dbPath, bool json, int limit, string? lang, string? kind, string?
 static (string? projectPath, string dbPath, bool rebuild, bool verbose, bool json, List<string> commits, List<string> updateFiles, string? easterEgg) ParseIndexArgs(string[] args)
 {
     string? projectPath = null;
-    string dbPath = "codeindex.db";
+    string dbPath = Path.Combine(".cdidx", "codeindex.db");
     bool rebuild = false;
     bool verbose = false;
     bool json = false;
