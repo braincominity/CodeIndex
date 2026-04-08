@@ -1310,7 +1310,8 @@ public class McpServerTests : IDisposable
     public void ToolsCall_Search_QueryTooLong_ReturnsError()
     {
         var longQuery = new string('a', 1001);
-        var request = JsonNode.Parse($$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"{{longQuery}}"}}}""")!;
+        var json = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"search\",\"arguments\":{\"query\":\"" + longQuery + "\"}}}";
+        var request = JsonNode.Parse(json)!;
         var response = _server.HandleMessage(request)!;
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
