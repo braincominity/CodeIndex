@@ -35,7 +35,15 @@ dotnet --version   # should print 8.x.x
 
 ## Installation
 
-### 1. Build
+### Option A: NuGet Global Tool (recommended)
+
+```bash
+dotnet tool install -g cdidx
+```
+
+That's it. `cdidx` is now available as a command.
+
+### Option B: Build from source
 
 ```bash
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
@@ -372,6 +380,98 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 
 These options make it practical to keep the index up-to-date in real time, even on large codebases.
 
+### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
+
+cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a standard protocol that lets AI coding tools communicate with external programs. When you run `cdidx mcp`, cdidx starts listening on stdin/stdout — your AI tool sends search requests as JSON, and cdidx returns results instantly from the pre-built index.
+
+```
+┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐
+│  Claude Code │ ──────────────────→ │  cdidx   │
+│  / Cursor    │ ←────────────────── │  mcp     │
+│  / Windsurf  │  stdout (JSON-RPC) │  server  │
+└──────────────┘                    └──────────┘
+```
+
+**Setup — add to your AI tool's config:**
+
+Claude Code (`.claude/settings.json` or `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+Cursor (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+Windsurf (`.windsurf/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+GitHub Copilot (VS Code — `.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "cdidx": {
+      "type": "stdio",
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+Once configured, the AI can directly call these tools:
+
+| Tool | Description |
+|---|---|
+| `search` | Full-text search across code chunks |
+| `symbols` | Find functions, classes, interfaces by name |
+| `files` | List indexed files |
+| `status` | Database statistics |
+| `index` | Index or re-index a project directory |
+
+No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
+
 ### Why cdidx over grep/ripgrep for AI?
 
 | | `grep` / `rg` | `cdidx` |
@@ -419,7 +519,15 @@ dotnet --version   # 8.x.x と表示されること
 
 ## インストール
 
-### 1. ビルド
+### 方法A: NuGet グローバルツール（推奨）
+
+```bash
+dotnet tool install -g cdidx
+```
+
+これだけです。`cdidx` コマンドがすぐ使えます。
+
+### 方法B: ソースからビルド
 
 ```bash
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
@@ -755,6 +863,98 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 ```
 
 これらのオプションにより、大規模コードベースでもリアルタイムにインデックスを最新に保つことが実用的になります。
+
+### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
+
+cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
+
+```
+┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐
+│  Claude Code │ ──────────────────→ │  cdidx   │
+│  / Cursor    │ ←────────────────── │  mcp     │
+│  / Windsurf  │  stdout (JSON-RPC) │  server  │
+└──────────────┘                    └──────────┘
+```
+
+**セットアップ — AIツールの設定ファイルに追加するだけ:**
+
+Claude Code (`.claude/settings.json` または `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+Cursor (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+Windsurf (`.windsurf/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+GitHub Copilot (VS Code — `.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "cdidx": {
+      "type": "stdio",
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
+
+```json
+{
+  "mcpServers": {
+    "cdidx": {
+      "command": "cdidx",
+      "args": ["mcp", "--db", "codeindex.db"]
+    }
+  }
+}
+```
+
+設定するだけで、AIが以下のツールを直接呼び出せます:
+
+| ツール | 説明 |
+|---|---|
+| `search` | コードチャンクの全文検索 |
+| `symbols` | 関数・クラス・インターフェースを名前で検索 |
+| `files` | インデックス済みファイル一覧 |
+| `status` | データベース統計情報 |
+| `index` | プロジェクトのインデックス作成・更新 |
+
+CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
 ### AIにとって grep/ripgrep より cdidx が優れる理由
 

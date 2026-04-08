@@ -7,7 +7,24 @@
     <RootNamespace>CodeIndex</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- NuGet Global Tool / NuGet グローバルツール設定 -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>cdidx</ToolCommandName>
+    <PackageId>cdidx</PackageId>
+    <Version>0.1.1</Version>
+    <Authors>Widthdom</Authors>
+    <Description>Fast code indexer with FTS5 search for AI-powered coding. Index source code into SQLite and search by text, symbols, or files. / AIコーディング向け高速コードインデクサー。ソースコードをSQLiteにインデックスし、テキスト・シンボル・ファイルで検索。</Description>
+    <PackageTags>code-search;indexer;sqlite;fts5;ai;mcp;developer-tools</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/widthdom/codeindex</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/widthdom/codeindex</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeIndex.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
@@ -15,6 +32,10 @@
 
   <ItemGroup>
     <Content Include="..\..\version.json" CopyToOutputDirectory="PreserveNewest" Link="version.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

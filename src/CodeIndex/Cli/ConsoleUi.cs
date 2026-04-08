@@ -244,6 +244,7 @@ public static class ConsoleUi
         Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
         Console.WriteLine("  files [query]              List indexed files");
         Console.WriteLine("  status                     Show database statistics");
+        Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
         Console.WriteLine("Index options:");
         Console.WriteLine("  --db <path>                Database file path (default: codeindex.db)");

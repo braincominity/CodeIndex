@@ -24,6 +24,9 @@ cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
 cdidx files [query] [--lang <lang>] [--limit <n>]
 cdidx status [--json]
+
+# MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
+cdidx mcp [--db <path>]
 ```
 
 ## Architecture
@@ -39,9 +42,15 @@ src/CodeIndex/
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
+  Mcp/McpServer.cs          — MCP server (stdin/stdout JSON-RPC 2.0, tools for AI coding tools)
   Models/                   — FileRecord, ChunkRecord, SymbolRecord (plain DTOs)
 tests/CodeIndex.Tests/
-  UnitTest1.cs              — xUnit tests (chunker, symbols, indexer, DB integration, DbReader queries)
+  ChunkSplitterTests.cs     — ChunkSplitter tests
+  SymbolExtractorTests.cs   — SymbolExtractor tests (multi-language)
+  FileIndexerTests.cs       — FileIndexer tests (scan, detect, build)
+  DatabaseTests.cs          — DbContext/DbWriter integration tests
+  DbReaderTests.cs          — DbReader query tests (FTS, symbols, files, status)
+  McpServerTests.cs         — MCP server JSON-RPC protocol and tool tests
 ```
 
 ## Key design decisions
@@ -89,6 +98,9 @@ cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
 cdidx files [query] [--lang <lang>] [--limit <n>]
 cdidx status [--json]
+
+# MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
+cdidx mcp [--db <path>]
 ```
 
 ## アーキテクチャ
@@ -104,9 +116,15 @@ src/CodeIndex/
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
+  Mcp/McpServer.cs          — MCPサーバー（stdin/stdout JSON-RPC 2.0、AIツール向けツール公開）
   Models/                   — FileRecord, ChunkRecord, SymbolRecord（プレーンDTO）
 tests/CodeIndex.Tests/
-  UnitTest1.cs              — xUnitテスト（チャンク、シンボル、インデクサー、DB統合、DbReaderクエリ）
+  ChunkSplitterTests.cs     — ChunkSplitterテスト
+  SymbolExtractorTests.cs   — SymbolExtractorテスト（多言語対応）
+  FileIndexerTests.cs       — FileIndexerテスト（走査、検出、構築）
+  DatabaseTests.cs          — DbContext/DbWriter統合テスト
+  DbReaderTests.cs          — DbReaderクエリテスト（FTS、シンボル、ファイル、ステータス）
+  McpServerTests.cs         — MCPサーバーJSON-RPCプロトコル・ツールテスト
 ```
 
 ## 主要な設計判断
