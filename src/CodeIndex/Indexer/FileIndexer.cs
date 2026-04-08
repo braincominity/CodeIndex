@@ -55,6 +55,9 @@ public class FileIndexer
         "node_modules", "__pycache__", ".pytest_cache",
         "venv", ".venv", "env",
         "dist", "build", ".build", "out",
+        "bin", "obj",                   // .NET build outputs / .NETビルド出力
+        "target",                       // Rust/Java/Maven build output / Rust/Java/Mavenビルド出力
+        ".gradle",                      // Gradle cache / Gradleキャッシュ
         ".next", ".nuxt",
         ".idea", ".vscode",
         "coverage", "vendor",
