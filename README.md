@@ -256,7 +256,7 @@ cdidx scans your project directory, splits each source file into overlapping chu
 
 `cdidx index` automatically adds `codeindex.db` and its companion files (`-wal`, `-shm`, `-journal`) to `.git/info/exclude`. You don't need to edit `.gitignore`.
 
-`.git/info/exclude` is a standard Git mechanism that works just like `.gitignore`. Many tools use it, including git-lfs and JetBrains IDEs.
+`.git/info/exclude` is a standard Git mechanism that works just like `.gitignore`. Many tools use `.git/info/exclude` or store data inside `.git/` to avoid polluting `.gitignore` — git-lfs, git-secret, git-crypt, git-annex, Husky, pre-commit, JetBrains IDEs, VS Code (GitLens), Eclipse, etc.
 
 ## Git branch switching
 
@@ -762,7 +762,7 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 
 `cdidx index` を実行すると、`codeindex.db` とその副生成物（`-wal`, `-shm`, `-journal`）が自動で `.git/info/exclude` に追加されます。`.gitignore` を編集する必要はありません。
 
-`.git/info/exclude` は `.gitignore` と同じ効果を持つ Git 標準の仕組みで、git-lfs や JetBrains IDE など多くのツールが利用しています。
+`.git/info/exclude` は `.gitignore` と同じ効果を持つ Git 標準の仕組みです。`.gitignore` を汚さないよう `.git/info/exclude` や `.git/` 配下を利用するツールは多数あります — git-lfs、git-secret、git-crypt、git-annex、Husky、pre-commit、JetBrains IDE、VS Code (GitLens)、Eclipse など。
 
 ## Gitブランチ切り替え
 
