@@ -292,7 +292,7 @@ public static class ConsoleUi
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
         Console.WriteLine("Index options:");
-        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db)");
+        Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
@@ -302,10 +302,11 @@ public static class ConsoleUi
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine();
         Console.WriteLine("Query options:");
-        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db)");
+        Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
         Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
         Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
+        Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --kind <kind>              Filter symbols by kind (function/class/import)");
         Console.WriteLine();
         Console.WriteLine("Examples:");

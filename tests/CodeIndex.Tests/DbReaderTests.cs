@@ -93,6 +93,15 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_RawQuerySupportsFtsPrefixSyntax()
+    {
+        var results = _reader.Search("auth*", rawQuery: true);
+
+        Assert.Single(results);
+        Assert.Equal("src/auth.py", results[0].Path);
+    }
+
+    [Fact]
     public void SearchSymbols_FindsByName()
     {
         var results = _reader.SearchSymbols("authenticate");

@@ -8,10 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## English
 
 ### [Unreleased]
+#### Changed
+
+- **Structured MCP tool results** — MCP tool calls now return typed JSON in `structuredContent` and keep `content` to a short summary instead of a large plain-text dump. This makes AI integrations more reliable and easier to parse. Affected: `Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **Opt-in raw FTS5 query syntax** — `search` now keeps literal-safe quoting by default but supports raw FTS5 syntax via CLI `--fts` and MCP `rawQuery`. This enables prefix and boolean queries without regressing safe defaults. Affected: `Database/DbReader.cs`, `Cli/QueryCommandRunner.cs`, `Cli/ConsoleUi.cs`, `Mcp/McpServer.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **Split `Program.cs` into command runners** — Moved indexing flows and query command execution into focused `Cli/*Runner.cs` files, leaving `Program.cs` as a thin router. This reduces top-level complexity without changing CLI behavior. Affected: `Program.cs`, `Cli/CommandExitCodes.cs`, `Cli/IndexCommandRunner.cs`, `Cli/QueryCommandRunner.cs`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **Human-readable search snippets center on matches** — `cdidx search` now shows a short snippet around the first matching line instead of always printing the first five lines of the stored chunk. This makes tail or middle-of-chunk matches visible in CLI output. Affected: `Cli/QueryCommandRunner.cs`, `Cli/SearchSnippetFormatter.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`.
 
 #### Fixed
 
-- **Git worktree support for `.cdidx/` exclusion** — In a git worktree, `.git` is a file (not a directory), so the worktree root has no `.git/info/exclude` and `AddToGitExclude` silently skipped writing — causing `.cdidx/` to appear as untracked. Fixed by adding `GitHelper.ResolveGitCommonDir()` which chases references to find the shared `.git/` directory: reads the `.git` file to get the `gitdir:` path (e.g. `.git/worktrees/<name>/`), then reads the `commondir` file at that location (`../..`) to resolve back to the shared `.git/` where `info/exclude` lives. Affected: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`.
+- **Project-local default DB path for indexing** — `cdidx index <projectPath>` now stores the default database in `<projectPath>/.cdidx/codeindex.db` instead of resolving `.cdidx/codeindex.db` from the caller's current directory. This prevents indexing one project from mutating another project's default DB. Affected: `Cli/DbPathResolver.cs`, `Cli/IndexCommandRunner.cs`, `Cli/ConsoleUi.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/DbPathResolverTests.cs`.
+
+- **Git worktree support for `.cdidx/` exclusion** — In a git worktree, `.git` is a file (not a directory), so the worktree root has no `.git/info/exclude` and auto-exclusion would silently skip writing — causing `.cdidx/` to appear as untracked. Fixed by using `GitHelper.ResolveGitCommonDir()` from the indexing runner to chase the worktree references and write to the shared `.git/info/exclude`. Affected: `Cli/GitHelper.cs`, `Cli/IndexCommandRunner.cs`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/GitHelperTests.cs`.
 
 ### [1.0.2] - 2026-04-08
 
@@ -112,10 +123,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+#### 変更
+
+- **MCPツール結果を構造化** — MCPツール呼び出しが、巨大なプレーンテキストダンプではなく `structuredContent` に型付きJSON、`content` に短い要約を返すよう変更。AI連携でのパース信頼性を高めた。対象: `Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`。
+
+- **生のFTS5クエリ構文を opt-in で解放** — `search` は既定のリテラル安全な引用を維持しつつ、CLI の `--fts` と MCP の `rawQuery` で生のFTS5構文を使えるよう変更。前方一致やブール検索を可能にしつつ安全なデフォルトを維持。対象: `Database/DbReader.cs`, `Cli/QueryCommandRunner.cs`, `Cli/ConsoleUi.cs`, `Mcp/McpServer.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`。
+
+- **`Program.cs` をコマンドランナーへ分割** — インデックス処理フローとクエリ系コマンド実行を責務別の `Cli/*Runner.cs` に移し、`Program.cs` は薄いルータに整理。CLIの挙動を変えずにトップレベル複雑度を下げた。対象: `Program.cs`, `Cli/CommandExitCodes.cs`, `Cli/IndexCommandRunner.cs`, `Cli/QueryCommandRunner.cs`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`。
+
+- **人間向け検索スニペットを一致箇所中心に表示** — `cdidx search` が、保存チャンクの先頭5行を固定で出す代わりに、最初の一致行の前後を短いスニペットとして表示するよう変更。チャンク後半や中央の一致箇所もCLI出力から確認しやすくした。対象: `Cli/QueryCommandRunner.cs`, `Cli/SearchSnippetFormatter.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`。
 
 #### 修正
 
-- **git worktreeでの`.cdidx/`除外対応** — git worktreeでは`.git`がディレクトリではなくファイルであるため、worktreeルートには`.git/info/exclude`が存在せず`AddToGitExclude`が書き込みをスキップしていた。結果として`.cdidx/`がuntrackedとして表示されていた。`GitHelper.ResolveGitCommonDir()`を追加し、共通`.git/`ディレクトリを探すよう修正: `.git`ファイルから`gitdir:`パスを読み取り（例: `.git/worktrees/<name>/`）、そのディレクトリ内の`commondir`ファイル（中身は`../..`）を読んで`info/exclude`がある共通`.git/`に到達する。対象: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`。
+- **インデックス時の既定DBパスをプロジェクト基準に変更** — `cdidx index <projectPath>` の既定DB保存先を、呼び出し元のカレントディレクトリ基準の `.cdidx/codeindex.db` ではなく `<projectPath>/.cdidx/codeindex.db` に変更。別プロジェクトをインデックスした際に、他プロジェクトの既定DBを壊す問題を防止。対象: `Cli/DbPathResolver.cs`, `Cli/IndexCommandRunner.cs`, `Cli/ConsoleUi.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/DbPathResolverTests.cs`。
+
+- **git worktreeでの`.cdidx/`除外対応** — git worktreeでは`.git`がディレクトリではなくファイルのため、worktreeルートに`.git/info/exclude`が存在せず、自動除外が黙ってスキップされて `.cdidx/` が未追跡として見えていた。`GitHelper.ResolveGitCommonDir()` を index 実行側から使い、worktreeの参照チェーンを辿って共有 `.git/info/exclude` に書き込むよう修正。対象: `Cli/GitHelper.cs`, `Cli/IndexCommandRunner.cs`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`, `tests/CodeIndex.Tests/GitHelperTests.cs`。
 
 ### [1.0.2] - 2026-04-08
 

@@ -117,6 +117,8 @@ cdidx ./myproject --rebuild     # full rebuild from scratch
 cdidx ./myproject --verbose     # show per-file details
 ```
 
+By default, `cdidx index` stores the database in `<projectPath>/.cdidx/codeindex.db`, even if you run the command from another directory.
+
 Default output:
 
 ```
@@ -154,6 +156,7 @@ This is useful for debugging indexing issues or verifying which files were actua
 cdidx search "authenticate"              # full-text search
 cdidx search "handleRequest" --lang go   # filter by language
 cdidx search "TODO" --limit 50           # more results
+cdidx search "auth*" --fts               # raw FTS5 syntax (prefix search)
 ```
 
 Output:
@@ -175,6 +178,8 @@ src/Auth/TokenService.cs:42-58
 
 (2 results)
 ```
+
+Human-readable search output is centered around the first matching line when possible, instead of always showing the start of the chunk.
 
 Use `--json` for machine-readable output (AI agents):
 
@@ -238,10 +243,11 @@ Languages:
 
 | Option | Applies to | Description |
 |---|---|---|
-| `--db <path>` | All commands | Database file path (default: `.cdidx/codeindex.db`) |
+| `--db <path>` | All commands | Database file path. `index` defaults to `<projectPath>/.cdidx/codeindex.db`; query commands default to `.cdidx/codeindex.db` in the current directory. |
 | `--json` | All commands | JSON output (for AI/machine use) |
 | `--limit <n>` | Query commands | Max results (default: 20) |
 | `--lang <lang>` | Query commands | Filter by language |
+| `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
 | `--kind <kind>` | `symbols` | Filter by symbol kind (function/class/import) |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
@@ -427,6 +433,8 @@ These options make it practical to keep the index up-to-date in real time, even 
 ### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
 
 cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a standard protocol that lets AI coding tools communicate with external programs. When you run `cdidx mcp`, cdidx starts listening on stdin/stdout — your AI tool sends search requests as JSON, and cdidx returns results instantly from the pre-built index.
+
+Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
 ```
 ┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐
@@ -645,6 +653,8 @@ cdidx ./myproject --rebuild     # 完全再構築
 cdidx ./myproject --verbose     # ファイルごとの詳細表示
 ```
 
+`cdidx index` は、別ディレクトリから実行しても、デフォルトでは `<projectPath>/.cdidx/codeindex.db` にDBを保存します。
+
 デフォルト出力:
 
 ```
@@ -682,6 +692,7 @@ Done.
 cdidx search "authenticate"              # 全文検索
 cdidx search "handleRequest" --lang go   # 言語でフィルタ
 cdidx search "TODO" --limit 50           # 結果数を増やす
+cdidx search "auth*" --fts               # 生のFTS5構文（前方一致検索）
 ```
 
 出力:
@@ -703,6 +714,8 @@ src/Auth/TokenService.cs:42-58
 
 (2 results)
 ```
+
+人間向けの検索出力は、可能な限り最初の一致行を中心にスニペットを表示し、常にチャンク先頭だけを出すことはありません。
 
 `--json` でAI/機械向け出力:
 
@@ -766,10 +779,11 @@ Languages:
 
 | オプション | 対象 | 説明 |
 |---|---|---|
-| `--db <path>` | 全コマンド | DBファイルパス（デフォルト: `.cdidx/codeindex.db`） |
+| `--db <path>` | 全コマンド | DBファイルパス。`index` のデフォルトは `<projectPath>/.cdidx/codeindex.db`、クエリ系コマンドのデフォルトはカレントディレクトリの `.cdidx/codeindex.db`。 |
 | `--json` | 全コマンド | JSON出力（AI/機械向け） |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20） |
 | `--lang <lang>` | クエリ系 | 言語でフィルタ |
+| `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
 | `--kind <kind>` | `symbols` | シンボル種別でフィルタ（function/class/import） |
 | `--rebuild` | `index` | 既存DBを削除して再構築 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
@@ -955,6 +969,8 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
 
 cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
+
+ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 
 ```
 ┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐

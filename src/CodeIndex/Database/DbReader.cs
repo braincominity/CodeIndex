@@ -36,14 +36,14 @@ public class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
         if (string.IsNullOrWhiteSpace(query))
             return [];
 
-        var sanitizedQuery = SanitizeFtsQuery(query);
+        var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(query);
         using var cmd = _conn.CreateCommand();
 
         var sql = @"

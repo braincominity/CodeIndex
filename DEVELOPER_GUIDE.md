@@ -14,10 +14,15 @@ dotnet run --project src/CodeIndex -- <command> [options]
 
 ```
 src/CodeIndex/
-  Program.cs                  — CLI entry point, subcommand routing
+  Program.cs                  — Thin CLI entry point and command routing
   Cli/
+    CommandExitCodes.cs       — Shared process exit codes
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
+    DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
+    IndexCommandRunner.cs     — Index command execution and update/full-scan flows
+    QueryCommandRunner.cs     — Search/symbols/files/status execution and query arg parsing
+    SearchSnippetFormatter.cs — Human-readable search snippet formatting
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup
@@ -34,11 +39,12 @@ src/CodeIndex/
     SymbolRecord.cs           — Symbol DTO
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs       — ChunkSplitter tests
-    SymbolExtractorTests.cs   — SymbolExtractor tests
-    FileIndexerTests.cs       — FileIndexer tests
-    DatabaseTests.cs          — DbContext/DbWriter integration tests
-    DbReaderTests.cs          — DbReader query tests
-    McpServerTests.cs         — MCP server tests
+  SymbolExtractorTests.cs     — SymbolExtractor tests
+  FileIndexerTests.cs         — FileIndexer tests
+  DatabaseTests.cs            — DbContext/DbWriter integration tests
+  DbReaderTests.cs            — DbReader query tests
+  McpServerTests.cs           — MCP server tests
+  GitHelperTests.cs           — Git helper tests
 ```
 
 ### Indexing pipeline
@@ -347,6 +353,8 @@ For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see 
 
 Query commands (`search`, `symbols`, `files`) default to **human-readable output**. Use `--json` for JSON lines output (one JSON object per line), designed for easy parsing by AI agents.
 
+MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly.
+
 ```json
 {"path":"src/auth.py","lang":"python","start_line":1,"end_line":80,"content":"def authenticate(user):\n ...","score":-1.5}
 ```
@@ -361,8 +369,10 @@ See [Exit codes](README.md#exit-codes) in README.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
 - **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
 - **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
+- **Literal-safe search by default** — Search uses token-by-token quoting by default to avoid FTS syntax errors. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
 - **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability.
 - **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
+- **Structured MCP responses** — MCP tool calls return typed JSON in `structuredContent` and keep `content` concise for compatibility.
 - **Manual arg parsing** — `System.CommandLine` was removed to reduce dependencies. Simple switch-based parsing.
 - **SHA256 checksums** — Computed from raw file bytes and stored per file. Used as a fallback for change detection when timestamps differ (e.g. after `git checkout`).
 - **UTF-8 with fallback** — Invalid UTF-8 bytes are replaced with U+FFFD rather than failing the entire file.
@@ -417,10 +427,15 @@ dotnet run --project src/CodeIndex -- <command> [options]
 
 ```
 src/CodeIndex/
-  Program.cs                  — CLIエントリポイント、サブコマンドルーティング
+  Program.cs                  — 薄いCLIエントリポイントとコマンドルーティング
   Cli/
+    CommandExitCodes.cs       — 共通のプロセス終了コード
     ConsoleUi.cs              — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
+    DbPathResolver.cs         — indexコマンド用の既定DBパス解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
+    IndexCommandRunner.cs     — indexコマンド実行と更新/フルスキャンフロー
+    QueryCommandRunner.cs     — search/symbols/files/status実行とクエリ引数解析
+    SearchSnippetFormatter.cs — 人間向け検索スニペット整形
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ
@@ -437,11 +452,12 @@ src/CodeIndex/
     SymbolRecord.cs           — シンボルDTO
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs       — ChunkSplitterテスト
-    SymbolExtractorTests.cs   — SymbolExtractorテスト
-    FileIndexerTests.cs       — FileIndexerテスト
-    DatabaseTests.cs          — DbContext/DbWriter統合テスト
-    DbReaderTests.cs          — DbReaderクエリテスト
-    McpServerTests.cs         — MCPサーバーテスト
+  SymbolExtractorTests.cs     — SymbolExtractorテスト
+  FileIndexerTests.cs         — FileIndexerテスト
+  DatabaseTests.cs            — DbContext/DbWriter統合テスト
+  DbReaderTests.cs            — DbReaderクエリテスト
+  McpServerTests.cs           — MCPサーバーテスト
+  GitHelperTests.cs           — Gitヘルパーテスト
 ```
 
 ### インデックスパイプライン
@@ -750,6 +766,8 @@ CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）
 
 クエリコマンド（`search`、`symbols`、`files`）はデフォルトで**人間向け出力**です。`--json`でJSONライン出力（1行1 JSONオブジェクト）に切り替えでき、AIエージェントが容易にパースできるよう設計されています。
 
+MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に短い要約を返すため、クライアントは型付きデータを直接利用できます。
+
 ```json
 {"path":"src/auth.py","lang":"python","start_line":1,"end_line":80,"content":"def authenticate(user):\n ...","score":-1.5}
 ```
@@ -763,6 +781,8 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **ORMなし** — `Microsoft.Data.Sqlite`でパラメータ化クエリを直接使用。依存関係を最小限に、制御を明確に。
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
 - **WALモード + busy_timeout** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。5秒のbusy_timeoutで即座のSQLITE_BUSYエラーを回避。
+- **デフォルトはリテラル安全検索** — 検索は既定でトークンごとに引用してFTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
+- **構造化MCPレスポンス** — MCPツール呼び出しは `structuredContent` に型付きJSONを返し、`content` は互換性のため簡潔に保つ。
 - **トリガー付きコンテンツ外部参照FTS5** — `chunks`テーブルを参照しコピーを保存しないことでストレージ倍増を回避。データベーストリガーでFTSインデックスを自動同期。
 - **正規表現シンボル抽出** — ASTパーサーも言語固有の依存関係も不要。精度より速度とポータビリティを優先。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI/機械向け出力。

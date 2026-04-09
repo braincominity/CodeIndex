@@ -166,7 +166,8 @@ public class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
-                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" }
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
+                        ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 }),
@@ -273,22 +274,31 @@ public class McpServer
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>();
+        var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.Search(query, limit, lang);
+            var results = reader.Search(query, limit, lang, rawQuery);
             if (results.Count == 0)
-                return CreateToolResult(id, "No results found.");
-
-            var sb = new StringBuilder();
-            foreach (var r in results)
             {
-                sb.AppendLine($"--- {r.Path}:{r.StartLine}-{r.EndLine} [{r.Lang}] ---");
-                sb.AppendLine(r.Content);
-                sb.AppendLine();
+                var payload = new JsonObject
+                {
+                    ["query"] = query,
+                    ["rawQuery"] = rawQuery,
+                    ["count"] = 0,
+                    ["results"] = new JsonArray()
+                };
+                return CreateToolResult(id, "No results found.", payload);
             }
-            sb.AppendLine($"({results.Count} results)");
-            return CreateToolResult(id, sb.ToString());
+
+            var structured = new JsonObject
+            {
+                ["query"] = query,
+                ["rawQuery"] = rawQuery,
+                ["count"] = results.Count,
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            return CreateToolResult(id, $"Found {results.Count} search result(s).", structured);
         });
     }
 
@@ -305,13 +315,27 @@ public class McpServer
         {
             var results = reader.SearchSymbols(query, limit, kind, lang);
             if (results.Count == 0)
-                return CreateToolResult(id, "No symbols found.");
+            {
+                var payload = new JsonObject
+                {
+                    ["query"] = query,
+                    ["kind"] = kind,
+                    ["lang"] = lang,
+                    ["count"] = 0,
+                    ["results"] = new JsonArray()
+                };
+                return CreateToolResult(id, "No symbols found.", payload);
+            }
 
-            var sb = new StringBuilder();
-            foreach (var r in results)
-                sb.AppendLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{r.Line}");
-            sb.AppendLine($"({results.Count} symbols)");
-            return CreateToolResult(id, sb.ToString());
+            var structured = new JsonObject
+            {
+                ["query"] = query,
+                ["kind"] = kind,
+                ["lang"] = lang,
+                ["count"] = results.Count,
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            return CreateToolResult(id, $"Found {results.Count} symbol(s).", structured);
         });
     }
 
@@ -327,13 +351,25 @@ public class McpServer
         {
             var results = reader.ListFiles(query, limit, lang);
             if (results.Count == 0)
-                return CreateToolResult(id, "No files found.");
+            {
+                var payload = new JsonObject
+                {
+                    ["query"] = query,
+                    ["lang"] = lang,
+                    ["count"] = 0,
+                    ["results"] = new JsonArray()
+                };
+                return CreateToolResult(id, "No files found.", payload);
+            }
 
-            var sb = new StringBuilder();
-            foreach (var r in results)
-                sb.AppendLine($"{r.Lang ?? "?",-12} {r.Lines,6} lines  {r.Path}");
-            sb.AppendLine($"({results.Count} files)");
-            return CreateToolResult(id, sb.ToString());
+            var structured = new JsonObject
+            {
+                ["query"] = query,
+                ["lang"] = lang,
+                ["count"] = results.Count,
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            return CreateToolResult(id, $"Found {results.Count} file(s).", structured);
         });
     }
 
@@ -342,17 +378,8 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var status = reader.GetStatus();
-            var sb = new StringBuilder();
-            sb.AppendLine($"Files   : {status.Files:N0}");
-            sb.AppendLine($"Chunks  : {status.Chunks:N0}");
-            sb.AppendLine($"Symbols : {status.Symbols:N0}");
-            if (status.Languages.Count > 0)
-            {
-                sb.AppendLine("Languages:");
-                foreach (var (lang, count) in status.Languages)
-                    sb.AppendLine($"  {lang,-12} {count,6}");
-            }
-            return CreateToolResult(id, sb.ToString());
+            var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
+            return CreateToolResult(id, "Database stats returned.", structured);
         });
     }
 
@@ -424,17 +451,22 @@ public class McpServer
         writer.OptimizeFts();
         var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
 
-        var sb = new StringBuilder();
-        sb.AppendLine($"Indexing complete: {projectPath}");
-        sb.AppendLine($"  Files   : {totalFiles:N0}");
-        sb.AppendLine($"  Chunks  : {totalChunks:N0}");
-        sb.AppendLine($"  Symbols : {totalSymbols:N0}");
-        sb.AppendLine($"  Scanned : {files.Count:N0}");
-        if (skipped > 0) sb.AppendLine($"  Skipped : {skipped:N0} (unchanged)");
-        if (purged > 0) sb.AppendLine($"  Purged  : {purged:N0} (stale)");
-        if (errors > 0) sb.AppendLine($"  Errors  : {errors:N0}");
-
-        return CreateToolResult(id, sb.ToString());
+        var structured = new JsonObject
+        {
+            ["path"] = projectPath,
+            ["rebuild"] = rebuild,
+            ["summary"] = new JsonObject
+            {
+                ["files"] = totalFiles,
+                ["chunks"] = totalChunks,
+                ["symbols"] = totalSymbols,
+                ["scanned"] = files.Count,
+                ["skipped"] = skipped,
+                ["purged"] = purged,
+                ["errors"] = errors
+            }
+        };
+        return CreateToolResult(id, "Indexing complete.", structured);
     }
 
     // --- DB helper / DBヘルパー ---
@@ -483,7 +515,7 @@ public class McpServer
     /// Create a tool result response (MCP format).
     /// ツール結果レスポンスを作成（MCP形式）。
     /// </summary>
-    private static JsonObject CreateToolResult(JsonNode? id, string text)
+    private static JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null)
     {
         var result = new JsonObject
         {
@@ -496,6 +528,8 @@ public class McpServer
                 }
             }
         };
+        if (structuredContent != null)
+            result["structuredContent"] = structuredContent;
         return CreateSuccessResponse(id, result);
     }
 
