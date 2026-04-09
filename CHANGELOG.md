@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+
+- **Git worktree support for `.cdidx/` exclusion** — In a git worktree, `.git` is a file (not a directory), so the worktree root has no `.git/info/exclude` and `AddToGitExclude` silently skipped writing — causing `.cdidx/` to appear as untracked. Fixed by adding `GitHelper.ResolveGitCommonDir()` which chases references to find the shared `.git/` directory: reads the `.git` file to get the `gitdir:` path (e.g. `.git/worktrees/<name>/`), then reads the `commondir` file at that location (`../..`) to resolve back to the shared `.git/` where `info/exclude` lives. Affected: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`.
+
 ### [1.0.2] - 2026-04-08
 
 #### Added
@@ -108,6 +112,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+
+- **git worktreeでの`.cdidx/`除外対応** — git worktreeでは`.git`がディレクトリではなくファイルであるため、worktreeルートには`.git/info/exclude`が存在せず`AddToGitExclude`が書き込みをスキップしていた。結果として`.cdidx/`がuntrackedとして表示されていた。`GitHelper.ResolveGitCommonDir()`を追加し、共通`.git/`ディレクトリを探すよう修正: `.git`ファイルから`gitdir:`パスを読み取り（例: `.git/worktrees/<name>/`）、そのディレクトリ内の`commondir`ファイル（中身は`../..`）を読んで`info/exclude`がある共通`.git/`に到達する。対象: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`。
 
 ### [1.0.2] - 2026-04-08
 
