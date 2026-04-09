@@ -10,6 +10,42 @@ namespace CodeIndex.Cli;
 public static class GitHelper
 {
     /// <summary>
+    /// Resolve the common git directory for a project root, handling both normal repos and worktrees.
+    /// プロジェクトルートの共通gitディレクトリを解決する。通常リポジトリとworktreeの両方に対応。
+    /// In a normal repo, .git is a directory and is returned directly.
+    /// In a worktree, .git is a file containing "gitdir: path/to/.git/worktrees/name".
+    /// The common dir is resolved via the "commondir" file inside the worktree git dir.
+    /// </summary>
+    public static string? ResolveGitCommonDir(string projectRoot)
+    {
+        var dotGit = Path.Combine(projectRoot, ".git");
+
+        // Normal repository: .git is a directory / 通常リポジトリ: .gitがディレクトリ
+        if (Directory.Exists(dotGit)) return dotGit;
+
+        // Worktree: .git is a file containing "gitdir: <path>" / worktree: .gitがファイルで "gitdir: <path>" を含む
+        if (!File.Exists(dotGit)) return null;
+
+        var gitFileContent = File.ReadAllText(dotGit).Trim();
+        if (!gitFileContent.StartsWith("gitdir:")) return null;
+
+        var worktreeGitDir = gitFileContent.Substring("gitdir:".Length).Trim();
+        if (!Path.IsPathRooted(worktreeGitDir))
+            worktreeGitDir = Path.GetFullPath(Path.Combine(projectRoot, worktreeGitDir));
+
+        // Read commondir to find the shared .git directory / commondirを読んで共有.gitディレクトリを見つける
+        var commonDirFile = Path.Combine(worktreeGitDir, "commondir");
+        if (File.Exists(commonDirFile))
+        {
+            var commonDirRelative = File.ReadAllText(commonDirFile).Trim();
+            return Path.GetFullPath(Path.Combine(worktreeGitDir, commonDirRelative));
+        }
+
+        // Fallback: use worktreeGitDir itself (e.g. submodules) / フォールバック: worktreeGitDir自体を使用
+        return worktreeGitDir;
+    }
+
+    /// <summary>
     /// Get changed files from a git commit.
     /// gitコミットから変更ファイルを取得する。
     /// </summary>

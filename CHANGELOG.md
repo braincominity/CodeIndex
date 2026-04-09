@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+
+- **Git worktree support for `.cdidx/` exclusion** — `AddToGitExclude` now resolves the common git directory via the `.git` file and `commondir` in worktrees, so `.cdidx/` is correctly added to `.git/info/exclude` even when running inside a git worktree. Previously, the `.git` directory check failed because worktrees use a `.git` file instead. Extracted `ResolveGitCommonDir` to `GitHelper` for testability. Affected: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`.
+
 ### [1.0.2] - 2026-04-08
 
 #### Added
@@ -108,6 +112,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+
+- **git worktreeでの`.cdidx/`除外対応** — `AddToGitExclude`がworktree内の`.git`ファイルと`commondir`を辿って共通gitディレクトリを解決するようになり、worktree内でも`.cdidx/`が正しく`.git/info/exclude`に追加されるようになった。従来はworktreeの`.git`がファイルであるためディレクトリチェックに失敗していた。テスト容易性のため`ResolveGitCommonDir`を`GitHelper`に抽出。対象: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`。
 
 ### [1.0.2] - 2026-04-08
 
