@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.0.4] - 2026-04-09
+
 #### Changed
 
 - **Help banner only on successful help commands** — Explicit help commands such as `cdidx --help` and `cdidx index --help` still show the banner, but usage text shown for invocation errors now omits it. Help output also no longer lists themed spinner easter eggs, and now shows explicit `index --commits` and `index --files` workflows so update commands are easier to discover. Affected: `Program.cs`, `Cli/ConsoleUi.cs`, `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
@@ -139,6 +141,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.0.4] - 2026-04-09
+
 #### 変更
 
 - **成功した help のときだけバナーを表示** — `cdidx --help` や `cdidx index --help` のような明示的な help は従来どおりバナーを表示する一方、呼び出し失敗時に出す usage ではバナーを表示しないようにした。あわせて help 出力からテーマ付きスピナーのイースターエッグ一覧を除外し、`index --commits` / `index --files` の更新フローを明示して使い方を分かりやすくした。対象: `Program.cs`, `Cli/ConsoleUi.cs`, `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
@@ -263,7 +267,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Widthdom/CodeIndex/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Widthdom/CodeIndex/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Widthdom/CodeIndex/compare/v1.0.0...v1.0.1
