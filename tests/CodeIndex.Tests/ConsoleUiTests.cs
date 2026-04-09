@@ -43,19 +43,21 @@ public class ConsoleUiTests
 
     private static string CaptureUsageOutput(bool showBanner = true)
     {
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetOut(writer);
-            ConsoleUi.PrintUsage(showBanner);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
 
-        return writer.ToString();
+            try
+            {
+                Console.SetOut(writer);
+                ConsoleUi.PrintUsage(showBanner);
+                return writer.ToString();
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
     }
 }

@@ -216,7 +216,7 @@ public static class IndexCommandRunner
             {
                 var absPath = Path.IsPathRooted(f) ? f : Path.GetFullPath(Path.Combine(projectRoot, f));
                 var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
-                if (relPath.StartsWith(".."))
+                if (IsOutsideProjectRoot(relPath))
                 {
                     if (!options.Json)
                         Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}");
@@ -344,6 +344,9 @@ public static class IndexCommandRunner
 
         return CommandExitCodes.Success;
     }
+
+    private static bool IsOutsideProjectRoot(string relativePath) =>
+        relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
 
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode)
     {
