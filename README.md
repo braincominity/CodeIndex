@@ -1,6 +1,6 @@
-# CodeIndex
+# cdidx
 
-> **[日本語版はこちら / Japanese version](#codeindex日本語)**
+> **[日本語版はこちら / Japanese version](#cdidx日本語)**
 
 [![Build and Test](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/dotnet.yml)
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
@@ -12,7 +12,49 @@
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
-A CLI tool that indexes large codebases into a SQLite database for fast search. Works for both humans and AI agents.
+**The AI-native local code index for terminal and MCP workflows.**
+
+`cdidx` turns a repository into a reusable local search engine: full-text search over SQLite FTS5, symbol lookup, incremental refresh, human-readable CLI output, JSON for agents, and native MCP integration.
+
+## Why cdidx
+
+Most code search tools optimize for either desktop UI workflows or one-off text scanning in a shell. `cdidx` is built for a different loop: local repositories that need to be searched repeatedly by both humans and AI agents.
+
+- `CLI-first` — designed for terminal workflows, scripts, and automation.
+- `AI-native` — `--json` output and MCP structured results are built in, not bolted on.
+- `Local-first` — SQLite database lives with the project in `.cdidx/`.
+- `Incremental` — refresh only changed files with `--files` or `--commits`.
+
+It is not an IDE replacement or desktop search app. It is a small local search runtime you can script, automate, and hand to AI tools.
+
+Use `rg` when you want a zero-setup one-off scan. Use `cdidx` when the same repository will be searched again and again.
+
+## cdidx vs rg
+
+| | `rg` | `cdidx` |
+|---|---|---|
+| Best at | One-off text scans | Repeated local code search |
+| Setup | None | One-time index build |
+| Search model | Reads files every time | Queries a local SQLite FTS5 index |
+| Output for automation | Plain text | Human-readable, JSON, and MCP |
+| AI integration | Needs parsing | Structured by design |
+| Updates after edits | Re-run search | Refresh only changed files |
+
+## 30-Second Quick Start
+
+`.NET 8 SDK required`
+
+```bash
+dotnet tool install -g cdidx
+cdidx .
+cdidx search "handleRequest"
+```
+
+That is the whole loop:
+
+1. `cdidx .` builds or refreshes `.cdidx/codeindex.db`
+2. `cdidx search ...` returns results from the local index
+3. after edits, refresh with `cdidx . --files path/to/file.cs` or `cdidx . --commits HEAD`
 
 ## Prerequisites
 
@@ -524,7 +566,7 @@ Once configured, the AI can directly call these tools:
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
 
-### Why cdidx over grep/ripgrep for AI?
+### Why cdidx over grep/ripgrep for AI workflows?
 
 | | `grep` / `rg` | `cdidx` |
 |---|---|---|
@@ -539,8 +581,8 @@ No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx nativ
 
 ---
 
-<a id="codeindex日本語"></a>
-# CodeIndex（日本語）
+<a id="cdidx日本語"></a>
+# cdidx（日本語）
 
 ![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
@@ -548,7 +590,49 @@ No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx nativ
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
 
-大規模コードベースをSQLiteデータベースにインデックスし、高速検索を実現するCLIツールです。人間にもAIエージェントにも対応しています。
+**ターミナルとMCPワークフローのための、AIネイティブなローカルコードインデックス。**
+
+`cdidx` は、リポジトリを再利用可能なローカル検索エンジンに変えます。SQLite FTS5 による全文検索、シンボル検索、インクリメンタル更新、人間向けCLI出力、AI向けJSON出力、MCP連携をひとつにまとめています。
+
+## なぜ cdidx なのか
+
+多くのコード検索ツールは、デスクトップUI中心のワークフローか、シェルでの単発テキスト検索のどちらかに最適化されています。`cdidx` が狙っているのは別のループです。ローカルリポジトリを、人間とAIの両方が何度も検索する前提で設計しています。
+
+- `CLI-first` — ターミナル、スクリプト、自動化向けに設計。
+- `AI-native` — `--json` 出力と MCP の構造化結果を標準搭載。
+- `Local-first` — SQLite DB はプロジェクト内の `.cdidx/` に配置。
+- `Incremental` — `--files` と `--commits` で変更分だけ更新。
+
+IDEの置き換えやデスクトップ検索アプリではありません。スクリプト可能で、自動化できて、AIツールにそのまま渡せる小さなローカル検索ランタイムです。
+
+単発で文字列を掘りたいなら `rg`、同じリポジトリを人間とAIの両方が何度も検索するなら `cdidx` が向いています。
+
+## cdidx と rg の違い
+
+| | `rg` | `cdidx` |
+|---|---|---|
+| 得意な用途 | 単発のテキスト走査 | 繰り返し行うローカルコード検索 |
+| 初期セットアップ | 不要 | 最初に一度インデックス作成 |
+| 検索モデル | 毎回ファイルを読む | ローカルの SQLite FTS5 インデックスを検索 |
+| 自動化向け出力 | プレーンテキスト | 人間向け出力、JSON、MCP |
+| AI連携 | パースが必要 | 構造化前提 |
+| 編集後の更新 | 再検索するだけ | 変更ファイルだけ更新できる |
+
+## 30秒で試す
+
+`.NET 8 SDK が必要`
+
+```bash
+dotnet tool install -g cdidx
+cdidx .
+cdidx search "handleRequest"
+```
+
+やることはこれだけです:
+
+1. `cdidx .` で `.cdidx/codeindex.db` を作成または更新
+2. `cdidx search ...` でローカルインデックスを検索
+3. 編集後は `cdidx . --files path/to/file.cs` や `cdidx . --commits HEAD` で差分更新
 
 ## 前提条件
 
@@ -1060,7 +1144,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
-### AIにとって grep/ripgrep より cdidx が優れる理由
+### AIワークフローで grep/ripgrep より cdidx が優れる理由
 
 | | `grep` / `rg` | `cdidx` |
 |---|---|---|
