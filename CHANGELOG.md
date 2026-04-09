@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Sharpened cdidx positioning in docs and package metadata** — Repositioned README and NuGet package description around `cdidx` as an AI-native local code index for CLI and MCP workflows, added an upfront `cdidx` vs `rg` framing, and moved a copy-paste quick start into the README opening so the intended usage is clear within seconds. Affected: `README.md`, `src/CodeIndex/CodeIndex.csproj`.
 
+#### Fixed
+
+- **`.git/info/exclude` now always receives repository-relative patterns for DB paths** — Indexing no longer writes filesystem absolute paths when `--db` is absolute. DB directories outside the project root are skipped for auto-exclude, and worktree scenarios continue to resolve/write via the shared git common directory. Added regression tests for inside-project absolute paths, outside-project absolute paths, and worktree layouts. Affected: `Cli/IndexCommandRunner.cs`, `Cli/GitHelper.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+
 ### [1.0.4] - 2026-04-09
 
 #### Changed
@@ -148,6 +152,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 変更
 
 - **ドキュメントとパッケージ説明で cdidx の立ち位置を明確化** — README と NuGet パッケージ説明を、`cdidx` を CLI / MCP ワークフロー向けの AIネイティブなローカルコードインデックスとして打ち出す内容に整理し、冒頭に `cdidx` と `rg` の使い分けとコピペできるクイックスタートを追加して、用途が数秒で伝わるようにした。対象: `README.md`, `src/CodeIndex/CodeIndex.csproj`.
+
+#### 修正
+
+- **DBパスの `.git/info/exclude` 追記を常にリポジトリ相対パターン化** — `--db` に絶対パスを渡した場合でも、インデックス時にファイルシステム絶対パスを書き込まないよう修正。project 外のDBディレクトリは自動除外対象からスキップし、worktree でも共有 git common directory 側へ正しく追記される挙動を維持。project 内絶対パス / project 外絶対パス / worktree 構成の回帰テストを追加。対象: `Cli/IndexCommandRunner.cs`, `Cli/GitHelper.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
 
 ### [1.0.4] - 2026-04-09
 
