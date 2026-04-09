@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.0.5] - 2026-04-10
+
 #### Changed
 
 - **Sharpened cdidx positioning in docs and package metadata** — Repositioned README and NuGet package description around `cdidx` as an AI-native local code index for CLI and MCP workflows, added an upfront `cdidx` vs `rg` framing, and moved a copy-paste quick start into the README opening so the intended usage is clear within seconds. Affected: `README.md`, `src/CodeIndex/CodeIndex.csproj`.
@@ -149,6 +151,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.0.5] - 2026-04-10
+
 #### 変更
 
 - **ドキュメントとパッケージ説明で cdidx の立ち位置を明確化** — README と NuGet パッケージ説明を、`cdidx` を CLI / MCP ワークフロー向けの AIネイティブなローカルコードインデックスとして打ち出す内容に整理し、冒頭に `cdidx` と `rg` の使い分けとコピペできるクイックスタートを追加して、用途が数秒で伝わるようにした。対象: `README.md`, `src/CodeIndex/CodeIndex.csproj`.
@@ -283,7 +287,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Widthdom/CodeIndex/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Widthdom/CodeIndex/compare/v1.0.1...v1.0.2
