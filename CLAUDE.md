@@ -83,7 +83,7 @@ tests/CodeIndex.Tests/
       │   └── exclude                 ← AddToGitExclude writes here
       └── 📂 worktrees/
           └── 📂 feature-branch/
-              └── commondir           ← contains "../.." (2 levels up = .git/)
+              └── commondir           ← contains "../.."
 
   /projects/my-app-feature/           ← worktree root
   ├── .git                            ← FILE containing "gitdir: /projects/my-app/.git/worktrees/feature-branch"
@@ -94,7 +94,8 @@ tests/CodeIndex.Tests/
   **Resolution chain in worktree:**
   1. Read `.git` file → `gitdir: /projects/my-app/.git/worktrees/feature-branch`
   2. Read `commondir` file at that path → `../..`
-  3. Resolve: `.git/worktrees/feature-branch` + `../..` = `.git/`
+  3. Resolve `../..` relative to `feature-branch/` dir:
+     `feature-branch/` → `..` → `worktrees/` → `..` → `.git/`
   4. Write to `.git/info/exclude`
 
 ## Conventions
@@ -241,7 +242,7 @@ tests/CodeIndex.Tests/
       │   └── exclude                 ← AddToGitExcludeがここに書き込む
       └── 📂 worktrees/
           └── 📂 feature-branch/
-              └── commondir           ← "../.."が入っている（2階層上 = .git/）
+              └── commondir           ← "../.."が入っている
 
   /projects/my-app-feature/           ← worktreeのルート
   ├── .git                            ← ファイル。中身は "gitdir: /projects/my-app/.git/worktrees/feature-branch"
@@ -252,7 +253,8 @@ tests/CodeIndex.Tests/
   **worktreeでの解決チェーン:**
   1. `.git`ファイルを読む → `gitdir: /projects/my-app/.git/worktrees/feature-branch`
   2. そのパスの`commondir`ファイルを読む → `../..`
-  3. 解決: `.git/worktrees/feature-branch` + `../..` = `.git/`
+  3. `../..`を`feature-branch/`ディレクトリ起点で解決:
+     `feature-branch/` → `..` → `worktrees/` → `..` → `.git/`
   4. `.git/info/exclude`に書き込む
 
 ## コーディング規約

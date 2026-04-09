@@ -384,7 +384,7 @@ See [Exit codes](README.md#exit-codes) in README.
       │   └── exclude                 ← write here
       └── 📂 worktrees/
           └── 📂 feature-branch/
-              └── commondir           ← contains "../.." (2 levels up = .git/)
+              └── commondir           ← contains "../.."
 
   /projects/my-app-feature/           ← worktree root
   ├── .git                            ← FILE: "gitdir: /projects/my-app/.git/worktrees/feature-branch"
@@ -392,7 +392,7 @@ See [Exit codes](README.md#exit-codes) in README.
       └── codeindex.db
   ```
 
-  Resolution: read `.git` file → parse `gitdir:` → read `commondir` at that path → resolve to shared `.git/` → write `info/exclude`.
+  Resolution: read `.git` file → parse `gitdir:` → read `commondir` file at that path → resolve `../..` relative to `feature-branch/` dir (`feature-branch/` → `..` → `worktrees/` → `..` → `.git/`) → write `info/exclude`.
 
 ## Coding conventions
 
@@ -795,7 +795,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
       └── codeindex.db
   ```
 
-  解決手順: `.git`ファイルを読む → `gitdir:`を解析 → そのパスの`commondir`を読む → 共通`.git/`に到達 → `info/exclude`に書き込む。
+  解決手順: `.git`ファイルを読む → `gitdir:`を解析 → そのパスの`commondir`ファイルを読む → `../..`を`feature-branch/`ディレクトリ起点で解決（`feature-branch/` → `..` → `worktrees/` → `..` → `.git/`）→ `info/exclude`に書き込む。
 
 ## コーディング規約
 
