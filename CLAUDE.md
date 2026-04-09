@@ -64,7 +64,34 @@ tests/CodeIndex.Tests/
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Program.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
-- **`.cdidx/` directory** — Index files are stored in `.cdidx/codeindex.db` (not project root). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain: `.git` file → `gitdir:` → worktree-specific dir (`.git/worktrees/<name>/`) → `commondir` → shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
+- **`.cdidx/` directory** — Index files are stored in `.cdidx/codeindex.db` (not project root). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain to find the shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
+
+  **Normal repo vs worktree structure:**
+  ```
+  # Normal repo — .git is a directory, info/exclude is right there
+  /projects/my-app/                   ← project root
+    .git/                             ← directory
+      info/exclude                    ← AddToGitExclude writes here
+    .cdidx/codeindex.db
+
+  # Worktree — .git is a file, need to chase references to find info/exclude
+  /projects/my-app/                   ← main repo root
+    .git/                             ← actual git directory (shared)
+      info/exclude                    ← AddToGitExclude writes here
+      worktrees/
+        feature-branch/
+          commondir                   ← contains "../.." (points back to .git/)
+
+  /projects/my-app-feature/           ← worktree root
+    .git                              ← FILE containing "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+    .cdidx/codeindex.db
+  ```
+
+  **Resolution chain in worktree:**
+  1. Read `.git` file → `gitdir: /projects/my-app/.git/worktrees/feature-branch`
+  2. Read `commondir` file at that path → `../..`
+  3. Resolve: `.git/worktrees/feature-branch` + `../..` = `.git/`
+  4. Write to `.git/info/exclude`
 
 ## Conventions
 
@@ -191,7 +218,34 @@ tests/CodeIndex.Tests/
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Program.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
-- **`.cdidx/`ディレクトリ** — インデックスファイルは`.cdidx/codeindex.db`に格納（プロジェクトルート直下ではない）。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。git worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿る: `.git`ファイル → `gitdir:` → worktree固有ディレクトリ（`.git/worktrees/<name>/`）→ `commondir` → `info/exclude`がある共通`.git/`。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
+- **`.cdidx/`ディレクトリ** — インデックスファイルは`.cdidx/codeindex.db`に格納（プロジェクトルート直下ではない）。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。git worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿って`info/exclude`がある共通`.git/`を見つける。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
+
+  **通常リポジトリ vs worktreeの構造:**
+  ```
+  # 通常リポジトリ — .gitがディレクトリ、info/excludeはその直下
+  /projects/my-app/                   ← プロジェクトルート
+    .git/                             ← ディレクトリ
+      info/exclude                    ← AddToGitExcludeがここに書き込む
+    .cdidx/codeindex.db
+
+  # worktree — .gitがファイル、参照を辿ってinfo/excludeを見つける
+  /projects/my-app/                   ← 元リポジトリのルート
+    .git/                             ← 実体のgitディレクトリ（共有）
+      info/exclude                    ← AddToGitExcludeがここに書き込む
+      worktrees/
+        feature-branch/
+          commondir                   ← "../.."が入っている（.git/を指す）
+
+  /projects/my-app-feature/           ← worktreeのルート
+    .git                              ← ファイル。中身は "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+    .cdidx/codeindex.db
+  ```
+
+  **worktreeでの解決チェーン:**
+  1. `.git`ファイルを読む → `gitdir: /projects/my-app/.git/worktrees/feature-branch`
+  2. そのパスの`commondir`ファイルを読む → `../..`
+  3. 解決: `.git/worktrees/feature-branch` + `../..` = `.git/`
+  4. `.git/info/exclude`に書き込む
 
 ## コーディング規約
 
