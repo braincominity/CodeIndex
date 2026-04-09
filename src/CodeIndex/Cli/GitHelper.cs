@@ -61,15 +61,19 @@ public static class GitHelper
         var psi = new ProcessStartInfo
         {
             FileName = "git",
-            // Use "--" to terminate options, preventing commitId from being parsed as a flag
-            // "--"でオプション終了を明示し、commitIdがフラグとして解釈されるのを防止
-            Arguments = $"diff-tree --no-commit-id -r --name-only -- {commitId}",
             WorkingDirectory = projectRoot,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        psi.ArgumentList.Add("diff-tree");
+        psi.ArgumentList.Add("--no-commit-id");
+        psi.ArgumentList.Add("--root");
+        psi.ArgumentList.Add("-m");
+        psi.ArgumentList.Add("-r");
+        psi.ArgumentList.Add("--name-only");
+        psi.ArgumentList.Add(commitId);
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");

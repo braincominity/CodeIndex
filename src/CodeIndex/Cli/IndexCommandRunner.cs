@@ -14,12 +14,19 @@ public static class IndexCommandRunner
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(indexArgs);
+
+        if (options.ShowHelp)
+        {
+            ConsoleUi.PrintUsage();
+            return CommandExitCodes.Success;
+        }
+
         var spinnerFrames = ConsoleUi.GetSpinnerFrames(options.EasterEgg);
         ConsoleUi.SetProgressTheme(options.EasterEgg);
 
         if (options.ProjectPath == null)
         {
-            ConsoleUi.PrintUsage();
+            ConsoleUi.PrintUsage(showBanner: false);
             return CommandExitCodes.UsageError;
         }
 
@@ -119,7 +126,7 @@ public static class IndexCommandRunner
                         Console.Error.WriteLine("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
                     break;
                 case "--help" or "-h":
-                    return new IndexCommandOptions();
+                    return new IndexCommandOptions { ShowHelp = true };
                 case "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky":
                     easterEgg = args[i];
                     spinnerFlagCount++;
@@ -176,15 +183,29 @@ public static class IndexCommandRunner
         if (options.Commits.Count > 0)
         {
             CancellationTokenSource? spinnerCts = null;
-            if (!options.Json)
-                spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
-            foreach (var commit in options.Commits)
+            try
             {
-                var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
-                foreach (var f in changedFiles)
-                    targetPaths.Add(f);
+                if (!options.Json)
+                    spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
+                foreach (var commit in options.Commits)
+                {
+                    var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
+                    foreach (var f in changedFiles)
+                        targetPaths.Add(f);
+                }
             }
-            ConsoleUi.StopSpinner(spinnerCts);
+            catch (Exception ex)
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    $"failed to resolve changed files from git commits: {ex.Message}",
+                    CommandExitCodes.UsageError);
+            }
+            finally
+            {
+                ConsoleUi.StopSpinner(spinnerCts);
+            }
             if (!options.Json)
                 Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
         }
@@ -195,7 +216,7 @@ public static class IndexCommandRunner
             {
                 var absPath = Path.IsPathRooted(f) ? f : Path.GetFullPath(Path.Combine(projectRoot, f));
                 var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
-                if (relPath.StartsWith(".."))
+                if (IsOutsideProjectRoot(relPath))
                 {
                     if (!options.Json)
                         Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}");
@@ -322,6 +343,18 @@ public static class IndexCommandRunner
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static bool IsOutsideProjectRoot(string relativePath) =>
+        relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
+
+    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode)
+    {
+        if (json)
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message }, jsonOptions));
+        else
+            Console.Error.WriteLine($"Error: {message}");
+        return exitCode;
     }
 
     private static int RunFullScan(
@@ -505,6 +538,7 @@ public static class IndexCommandRunner
 
 public sealed class IndexCommandOptions
 {
+    public bool ShowHelp { get; init; }
     public string? ProjectPath { get; init; }
     public string? DbPath { get; init; }
     public bool Rebuild { get; init; }
