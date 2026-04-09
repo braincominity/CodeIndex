@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -120,5 +121,108 @@ public class GitHelperTests : IDisposable
 
         // Assert: falls back to the worktree git dir itself
         Assert.Equal(Path.GetFullPath(worktreeGitDir), Path.GetFullPath(result!));
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_ReturnsFilesForRegularCommit()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v2\n");
+        File.WriteAllText(Path.Combine(repoDir, "added.txt"), "new\n");
+        RunGit(repoDir, "add", "tracked.txt", "added.txt");
+        RunGit(repoDir, "commit", "-m", "update files");
+
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
+
+        Assert.Equal(["added.txt", "tracked.txt"], changedFiles.OrderBy(x => x).ToArray());
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_IncludesFilesForRootCommit()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "first.txt"), "hello\n");
+        RunGit(repoDir, "add", "first.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
+
+        Assert.Equal(["first.txt"], changedFiles);
+    }
+
+    [Fact]
+    public void GetChangedFilesFromCommit_ReturnsFilesForMergeCommit()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "base.txt"), "base\n");
+        RunGit(repoDir, "add", "base.txt");
+        RunGit(repoDir, "commit", "-m", "base");
+
+        RunGit(repoDir, "switch", "-c", "feature");
+        File.WriteAllText(Path.Combine(repoDir, "feature.txt"), "feature\n");
+        RunGit(repoDir, "add", "feature.txt");
+        RunGit(repoDir, "commit", "-m", "feature change");
+
+        RunGit(repoDir, "switch", "master");
+        File.WriteAllText(Path.Combine(repoDir, "main.txt"), "main\n");
+        RunGit(repoDir, "add", "main.txt");
+        RunGit(repoDir, "commit", "-m", "main change");
+
+        RunGit(repoDir, "merge", "--no-ff", "feature", "-m", "merge feature");
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
+
+        Assert.Equal(["feature.txt", "main.txt"], changedFiles.OrderBy(x => x).ToArray());
+    }
+
+    private string CreateGitRepo()
+    {
+        var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoDir);
+
+        RunGit(repoDir, "init");
+        RunGit(repoDir, "config", "user.name", "CodeIndex Tests");
+        RunGit(repoDir, "config", "user.email", "tests@example.com");
+
+        return repoDir;
+    }
+
+    private static string RunGit(string workDir, params string[] args)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
+
+        return stdout;
     }
 }

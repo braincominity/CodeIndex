@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Help banner only on successful help commands** — Explicit help commands such as `cdidx --help` and `cdidx index --help` still show the banner, but usage text shown for invocation errors now omits it. Help output also no longer lists themed spinner easter eggs, and now shows explicit `index --commits` and `index --files` workflows so update commands are easier to discover. Affected: `Program.cs`, `Cli/ConsoleUi.cs`, `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
 
+#### Fixed
+
+- **`--commits` update mode no longer crashes on `git diff-tree` invocation** — Fixed the git argument order used to resolve changed files from commit IDs, added `--root` so initial commits return their changed files, and converted commit-resolution failures into normal CLI errors instead of unhandled exceptions. Affected: `Cli/GitHelper.cs`, `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/GitHelperTests.cs`.
+- **`--commits` handles merge commits** — Commit-based updates now ask `git diff-tree` to expand merge commits so their changed files are included instead of silently producing an empty update set. Affected: `Cli/GitHelper.cs`, `tests/CodeIndex.Tests/GitHelperTests.cs`.
+
 ### [1.0.3] - 2026-04-09
 
 #### Changed
@@ -134,6 +139,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 変更
 
 - **成功した help のときだけバナーを表示** — `cdidx --help` や `cdidx index --help` のような明示的な help は従来どおりバナーを表示する一方、呼び出し失敗時に出す usage ではバナーを表示しないようにした。あわせて help 出力からテーマ付きスピナーのイースターエッグ一覧を除外し、`index --commits` / `index --files` の更新フローを明示して使い方を分かりやすくした。対象: `Program.cs`, `Cli/ConsoleUi.cs`, `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+
+#### 修正
+
+- **`--commits` 更新モードが `git diff-tree` 呼び出しで落ちる問題** — コミットIDから変更ファイルを解決する際の git 引数順を修正し、初回コミットでも変更ファイルを返せるよう `--root` を追加した。さらに commit 解決失敗時は未処理例外ではなく通常のCLIエラーとして返すようにした。対象: `Cli/GitHelper.cs`, `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/GitHelperTests.cs`.
+- **`--commits` で merge commit を扱えない問題** — commit 指定更新で `git diff-tree` に merge commit 展開を指示し、変更ファイルが 0 件になって更新が空振りする問題を修正した。対象: `Cli/GitHelper.cs`, `tests/CodeIndex.Tests/GitHelperTests.cs`.
 
 ### [1.0.3] - 2026-04-09
 

@@ -183,15 +183,29 @@ public static class IndexCommandRunner
         if (options.Commits.Count > 0)
         {
             CancellationTokenSource? spinnerCts = null;
-            if (!options.Json)
-                spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
-            foreach (var commit in options.Commits)
+            try
             {
-                var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
-                foreach (var f in changedFiles)
-                    targetPaths.Add(f);
+                if (!options.Json)
+                    spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
+                foreach (var commit in options.Commits)
+                {
+                    var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
+                    foreach (var f in changedFiles)
+                        targetPaths.Add(f);
+                }
             }
-            ConsoleUi.StopSpinner(spinnerCts);
+            catch (Exception ex)
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    $"failed to resolve changed files from git commits: {ex.Message}",
+                    CommandExitCodes.UsageError);
+            }
+            finally
+            {
+                ConsoleUi.StopSpinner(spinnerCts);
+            }
             if (!options.Json)
                 Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
         }
@@ -329,6 +343,15 @@ public static class IndexCommandRunner
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode)
+    {
+        if (json)
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message }, jsonOptions));
+        else
+            Console.Error.WriteLine($"Error: {message}");
+        return exitCode;
     }
 
     private static int RunFullScan(
