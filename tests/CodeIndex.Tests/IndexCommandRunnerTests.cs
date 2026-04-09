@@ -92,6 +92,89 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_WithAbsoluteDbPathInsideProject_WritesRepoRelativePatternToGitExclude()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
+            var excludeContent = File.ReadAllText(excludePath);
+            Assert.Contains(".cdidx/", excludeContent);
+            Assert.DoesNotContain(dbPath.Replace('\\', '/'), excludeContent);
+        }
+        finally
+        {
+            Directory.Delete(projectRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_WithAbsoluteDbPathOutsideProject_DoesNotWriteAbsolutePathToGitExclude()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideDir = Path.Combine(Path.GetTempPath(), $"cdidx_external_db_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(outsideDir);
+            RunGit(projectRoot, "init");
+            var dbPath = Path.Combine(outsideDir, "external.db");
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
+            var excludeContent = File.ReadAllText(excludePath);
+            Assert.DoesNotContain(dbPath.Replace('\\', '/'), excludeContent);
+            Assert.DoesNotContain("/external.db", excludeContent);
+        }
+        finally
+        {
+            if (Directory.Exists(outsideDir))
+                Directory.Delete(outsideDir, recursive: true);
+            Directory.Delete(projectRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_InWorktreeWithAbsoluteDbPathInsideProject_WritesRelativePatternToSharedExclude()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"cdidx_worktree_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var mainGitDir = Path.Combine(tempRoot, "main", ".git");
+        var worktreeRoot = Path.Combine(tempRoot, "wt");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(mainGitDir, "info"));
+            var worktreeGitDir = Path.Combine(mainGitDir, "worktrees", "wt");
+            Directory.CreateDirectory(worktreeGitDir);
+            File.WriteAllText(Path.Combine(worktreeGitDir, "commondir"), "../..");
+
+            Directory.CreateDirectory(worktreeRoot);
+            File.WriteAllText(Path.Combine(worktreeRoot, ".git"), $"gitdir: {worktreeGitDir}");
+
+            var dbPath = Path.Combine(worktreeRoot, ".cdidx", "codeindex.db");
+            var exitCode = IndexCommandRunner.Run([worktreeRoot, "--db", dbPath, "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var sharedExcludePath = Path.Combine(mainGitDir, "info", "exclude");
+            var excludeContent = File.ReadAllText(sharedExcludePath);
+            Assert.Contains(".cdidx/", excludeContent);
+            Assert.DoesNotContain(dbPath.Replace('\\', '/'), excludeContent);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
     {
         lock (TestConsoleLock.Gate)
@@ -118,5 +201,28 @@ public class IndexCommandRunnerTests
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    private static void RunGit(string workDir, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
     }
 }

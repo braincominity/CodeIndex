@@ -510,10 +510,25 @@ public static class IndexCommandRunner
             if (gitDir == null) return;
 
             var excludeFile = Path.Combine(gitDir, "info", "exclude");
-            var dbDirRelative = Path.GetDirectoryName(dbPath);
-            var patterns = !string.IsNullOrEmpty(dbDirRelative)
-                ? new[] { $"{dbDirRelative}/" }
-                : new[] { Path.GetFileName(dbPath), $"{Path.GetFileName(dbPath)}-*" };
+            var dbAbsolutePath = Path.IsPathRooted(dbPath)
+                ? Path.GetFullPath(dbPath)
+                : Path.GetFullPath(Path.Combine(projectRoot, dbPath));
+            var dbDirAbsolute = Path.GetDirectoryName(dbAbsolutePath);
+            if (string.IsNullOrEmpty(dbDirAbsolute)) return;
+
+            var dbDirRelative = Path.GetRelativePath(projectRoot, dbDirAbsolute).Replace('\\', '/');
+            if (IsOutsideProjectRoot(dbDirRelative)) return;
+
+            string[] patterns;
+            if (dbDirRelative == ".")
+            {
+                var dbFileName = Path.GetFileName(dbAbsolutePath);
+                patterns = [dbFileName, $"{dbFileName}-*"];
+            }
+            else
+            {
+                patterns = [$"{dbDirRelative.TrimEnd('/')}/"];
+            }
 
             var existingContent = File.Exists(excludeFile) ? File.ReadAllText(excludeFile) : "";
             var existingLines = existingContent.Split('\n').Select(l => l.TrimEnd('\r')).ToHashSet();
