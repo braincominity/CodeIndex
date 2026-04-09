@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 
-- **Git worktree support for `.cdidx/` exclusion** — `AddToGitExclude` now resolves the common git directory via the `.git` file and `commondir` in worktrees, so `.cdidx/` is correctly added to `.git/info/exclude` even when running inside a git worktree. Previously, the `.git` directory check failed because worktrees use a `.git` file instead. Extracted `ResolveGitCommonDir` to `GitHelper` for testability. Affected: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`.
+- **Git worktree support for `.cdidx/` exclusion** — In a git worktree, `.git` is a file (not a directory), so `AddToGitExclude` could not find `.git/info/exclude` and silently skipped writing — causing `.cdidx/` to appear as untracked. Fixed by adding `GitHelper.ResolveGitCommonDir()` which follows the worktree resolution chain: `.git` file → parse `gitdir:` to locate the worktree-specific dir (e.g. `.git/worktrees/<name>/`) → read `commondir` (`../..`) to resolve back to the shared `.git/` directory where `info/exclude` lives. Affected: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`.
 
 ### [1.0.2] - 2026-04-08
 
@@ -115,7 +115,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 
-- **git worktreeでの`.cdidx/`除外対応** — `AddToGitExclude`がworktree内の`.git`ファイルと`commondir`を辿って共通gitディレクトリを解決するようになり、worktree内でも`.cdidx/`が正しく`.git/info/exclude`に追加されるようになった。従来はworktreeの`.git`がファイルであるためディレクトリチェックに失敗していた。テスト容易性のため`ResolveGitCommonDir`を`GitHelper`に抽出。対象: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`。
+- **git worktreeでの`.cdidx/`除外対応** — git worktreeでは`.git`がディレクトリではなくファイルであるため、`AddToGitExclude`が`.git/info/exclude`を見つけられず書き込みをスキップしていた。結果として`.cdidx/`がuntrackedとして表示されていた。`GitHelper.ResolveGitCommonDir()`を追加し、worktreeの解決チェーンを辿るよう修正: `.git`ファイル → `gitdir:`を解析してworktree固有ディレクトリ（例: `.git/worktrees/<name>/`）を特定 → `commondir`（`../..`）を読んで`info/exclude`がある共通`.git/`ディレクトリに到達。対象: `Cli/GitHelper.cs`, `Program.cs`, `GitHelperTests.cs`。
 
 ### [1.0.2] - 2026-04-08
 

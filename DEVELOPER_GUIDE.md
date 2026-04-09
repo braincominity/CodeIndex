@@ -17,7 +17,7 @@ src/CodeIndex/
   Program.cs                  — CLI entry point, subcommand routing
   Cli/
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
-    GitHelper.cs              — Git diff-tree helper for --commits option
+    GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup
@@ -366,6 +366,7 @@ See [Exit codes](README.md#exit-codes) in README.
 - **Manual arg parsing** — `System.CommandLine` was removed to reduce dependencies. Simple switch-based parsing.
 - **SHA256 checksums** — Computed from raw file bytes and stored per file. Used as a fallback for change detection when timestamps differ (e.g. after `git checkout`).
 - **UTF-8 with fallback** — Invalid UTF-8 bytes are replaced with U+FFFD rather than failing the entire file.
+- **Worktree-aware git exclude** — `.cdidx/` is auto-added to `.git/info/exclude`. In a worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the resolution chain: `.git` file → `gitdir:` → worktree-specific dir (`.git/worktrees/<name>/`) → `commondir` → shared `.git/` where `info/exclude` lives.
 
 ## Coding conventions
 
@@ -742,6 +743,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **手動引数解析** — `System.CommandLine`は依存削減のため削除。シンプルなswitch文での解析。
 - **SHA256チェックサム** — ファイルのraw bytesから算出しファイルごとに保存。タイムスタンプが異なる場合の変更検出フォールバックとして使用（例: `git checkout`後）。
 - **UTF-8フォールバック** — 不正なUTF-8バイトはファイル全体を失敗させずU+FFFDに置換。
+- **worktree対応のgit exclude** — `.cdidx/`を`.git/info/exclude`に自動追加する。worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿る: `.git`ファイル → `gitdir:` → worktree固有ディレクトリ（`.git/worktrees/<name>/`）→ `commondir` → `info/exclude`がある共通`.git/`。
 
 ## コーディング規約
 
