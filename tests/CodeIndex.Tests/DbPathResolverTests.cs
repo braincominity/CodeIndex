@@ -12,11 +12,12 @@ public class DbPathResolverTests
     public void ResolveForIndex_UsesProjectLocalCdidxByDefault()
     {
         var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var expectedProjectPath = Path.GetFullPath(projectPath);
 
         var dbPath = DbPathResolver.ResolveForIndex(projectPath, null);
 
         Assert.Equal(
-            Path.Combine(projectPath, ".cdidx", "codeindex.db"),
+            Path.Combine(expectedProjectPath, ".cdidx", "codeindex.db"),
             dbPath);
     }
 
