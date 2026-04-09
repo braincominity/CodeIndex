@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 
-- **`.git/info/exclude` now always receives repository-relative patterns for DB paths** — Indexing no longer writes filesystem absolute paths when `--db` is absolute. DB directories outside the project root are skipped for auto-exclude, and worktree scenarios continue to resolve/write via the shared git common directory. Added regression tests for inside-project absolute paths, outside-project absolute paths, and worktree layouts. Affected: `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+- **`.git/info/exclude` now always receives repository-relative patterns for DB paths** — Indexing no longer writes filesystem absolute paths when `--db` is absolute. DB directories outside the project root are skipped for auto-exclude, and worktree scenarios continue to resolve/write via the shared git common directory. The auto-generated marker line is now English-only, and regression tests cover inside-project absolute paths, outside-project absolute paths, and worktree layouts. Affected: `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
 
 ### [1.0.4] - 2026-04-09
 
@@ -155,7 +155,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 
-- **DBパスの `.git/info/exclude` 追記を常にリポジトリ相対パターン化** — `--db` に絶対パスを渡した場合でも、インデックス時にファイルシステム絶対パスを書き込まないよう修正。project 外のDBディレクトリは自動除外対象からスキップし、worktree でも共有 git common directory 側へ正しく追記される挙動を維持。project 内絶対パス / project 外絶対パス / worktree 構成の回帰テストを追加。対象: `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+- **DBパスの `.git/info/exclude` 追記を常にリポジトリ相対パターン化** — `--db` に絶対パスを渡した場合でも、インデックス時にファイルシステム絶対パスを書き込まないよう修正。project 外のDBディレクトリは自動除外対象からスキップし、worktree でも共有 git common directory 側へ正しく追記される挙動を維持。自動生成マーカー行は英語のみとし、project 内絶対パス / project 外絶対パス / worktree 構成の回帰テストを追加。対象: `Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
 
 ### [1.0.4] - 2026-04-09
 
