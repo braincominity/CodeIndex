@@ -20,7 +20,7 @@ public class GitHelperTests : IDisposable
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+            DeleteDirectoryRobust(_tempDir);
     }
 
     [Fact]
@@ -224,5 +224,40 @@ public class GitHelperTests : IDisposable
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
 
         return stdout;
+    }
+
+    private static void DeleteDirectoryRobust(string path)
+    {
+        ClearAttributes(path);
+
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+                ClearAttributes(path);
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+                ClearAttributes(path);
+            }
+        }
+    }
+
+    private static void ClearAttributes(string path)
+    {
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, FileAttributes.Normal);
+
+        foreach (var dir in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
+            File.SetAttributes(dir, FileAttributes.Normal);
+
+        File.SetAttributes(path, FileAttributes.Normal);
     }
 }
