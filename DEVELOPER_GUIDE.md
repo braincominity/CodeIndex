@@ -370,22 +370,26 @@ See [Exit codes](README.md#exit-codes) in README.
 
   ```
   # Normal repo — .git is a directory
-  /projects/my-app/
-    .git/                             ← directory
-      info/exclude                    ← write here
-    .cdidx/codeindex.db
+  /projects/my-app/                   ← project root
+  ├── 📂 .git/                        ← directory
+  │   └── 📂 info/
+  │       └── exclude                 ← write here
+  └── 📂 .cdidx/
+      └── codeindex.db
 
   # Worktree — .git is a file
   /projects/my-app/                   ← main repo
-    .git/                             ← shared git dir
-      info/exclude                    ← write here
-      worktrees/
-        feature-branch/
-          commondir                   ← contains "../.."
+  └── 📂 .git/                        ← shared git dir
+      ├── 📂 info/
+      │   └── exclude                 ← write here
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← contains "../.." (2 levels up = .git/)
 
   /projects/my-app-feature/           ← worktree root
-    .git                              ← FILE: "gitdir: /projects/my-app/.git/worktrees/feature-branch"
-    .cdidx/codeindex.db
+  ├── .git                            ← FILE: "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
   ```
 
   Resolution: read `.git` file → parse `gitdir:` → read `commondir` at that path → resolve to shared `.git/` → write `info/exclude`.
@@ -769,22 +773,26 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 
   ```
   # 通常リポジトリ — .gitがディレクトリ
-  /projects/my-app/
-    .git/                             ← ディレクトリ
-      info/exclude                    ← ここに書き込む
-    .cdidx/codeindex.db
+  /projects/my-app/                   ← プロジェクトルート
+  ├── 📂 .git/                        ← ディレクトリ
+  │   └── 📂 info/
+  │       └── exclude                 ← ここに書き込む
+  └── 📂 .cdidx/
+      └── codeindex.db
 
   # worktree — .gitがファイル
   /projects/my-app/                   ← 元リポジトリ
-    .git/                             ← 共有gitディレクトリ
-      info/exclude                    ← ここに書き込む
-      worktrees/
-        feature-branch/
-          commondir                   ← "../.."が入っている
+  └── 📂 .git/                        ← 共有gitディレクトリ
+      ├── 📂 info/
+      │   └── exclude                 ← ここに書き込む
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← "../.."が入っている（2階層上 = .git/）
 
   /projects/my-app-feature/           ← worktreeルート
-    .git                              ← ファイル: "gitdir: /projects/my-app/.git/worktrees/feature-branch"
-    .cdidx/codeindex.db
+  ├── .git                            ← ファイル: "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
   ```
 
   解決手順: `.git`ファイルを読む → `gitdir:`を解析 → そのパスの`commondir`を読む → 共通`.git/`に到達 → `info/exclude`に書き込む。

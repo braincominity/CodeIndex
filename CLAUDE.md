@@ -70,21 +70,25 @@ tests/CodeIndex.Tests/
   ```
   # Normal repo — .git is a directory, info/exclude is right there
   /projects/my-app/                   ← project root
-    .git/                             ← directory
-      info/exclude                    ← AddToGitExclude writes here
-    .cdidx/codeindex.db
+  ├── 📂 .git/                        ← directory
+  │   └── 📂 info/
+  │       └── exclude                 ← AddToGitExclude writes here
+  └── 📂 .cdidx/
+      └── codeindex.db
 
   # Worktree — .git is a file, need to chase references to find info/exclude
   /projects/my-app/                   ← main repo root
-    .git/                             ← actual git directory (shared)
-      info/exclude                    ← AddToGitExclude writes here
-      worktrees/
-        feature-branch/
-          commondir                   ← contains "../.." (points back to .git/)
+  └── 📂 .git/                        ← actual git directory (shared)
+      ├── 📂 info/
+      │   └── exclude                 ← AddToGitExclude writes here
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← contains "../.." (2 levels up = .git/)
 
   /projects/my-app-feature/           ← worktree root
-    .git                              ← FILE containing "gitdir: /projects/my-app/.git/worktrees/feature-branch"
-    .cdidx/codeindex.db
+  ├── .git                            ← FILE containing "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
   ```
 
   **Resolution chain in worktree:**
@@ -224,21 +228,25 @@ tests/CodeIndex.Tests/
   ```
   # 通常リポジトリ — .gitがディレクトリ、info/excludeはその直下
   /projects/my-app/                   ← プロジェクトルート
-    .git/                             ← ディレクトリ
-      info/exclude                    ← AddToGitExcludeがここに書き込む
-    .cdidx/codeindex.db
+  ├── 📂 .git/                        ← ディレクトリ
+  │   └── 📂 info/
+  │       └── exclude                 ← AddToGitExcludeがここに書き込む
+  └── 📂 .cdidx/
+      └── codeindex.db
 
   # worktree — .gitがファイル、参照を辿ってinfo/excludeを見つける
   /projects/my-app/                   ← 元リポジトリのルート
-    .git/                             ← 実体のgitディレクトリ（共有）
-      info/exclude                    ← AddToGitExcludeがここに書き込む
-      worktrees/
-        feature-branch/
-          commondir                   ← "../.."が入っている（.git/を指す）
+  └── 📂 .git/                        ← 実体のgitディレクトリ（共有）
+      ├── 📂 info/
+      │   └── exclude                 ← AddToGitExcludeがここに書き込む
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← "../.."が入っている（2階層上 = .git/）
 
   /projects/my-app-feature/           ← worktreeのルート
-    .git                              ← ファイル。中身は "gitdir: /projects/my-app/.git/worktrees/feature-branch"
-    .cdidx/codeindex.db
+  ├── .git                            ← ファイル。中身は "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
   ```
 
   **worktreeでの解決チェーン:**
