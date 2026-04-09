@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## English
 
 ### [Unreleased]
+
+### [1.0.3] - 2026-04-09
+
 #### Changed
 
 - **Structured MCP tool results** — MCP tool calls now return typed JSON in `structuredContent` and keep `content` to a short summary instead of a large plain-text dump. This makes AI integrations more reliable and easier to parse. Affected: `Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
@@ -123,6 +126,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+### [1.0.3] - 2026-04-09
+
 #### 変更
 
 - **MCPツール結果を構造化** — MCPツール呼び出しが、巨大なプレーンテキストダンプではなく `structuredContent` に型付きJSON、`content` に短い要約を返すよう変更。AI連携でのパース信頼性を高めた。対象: `Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`。
@@ -233,7 +239,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/Widthdom/CodeIndex/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Widthdom/CodeIndex/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Widthdom/CodeIndex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Widthdom/CodeIndex/releases/tag/v1.0.0
