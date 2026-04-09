@@ -14,12 +14,19 @@ public static class IndexCommandRunner
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(indexArgs);
+
+        if (options.ShowHelp)
+        {
+            ConsoleUi.PrintUsage();
+            return CommandExitCodes.Success;
+        }
+
         var spinnerFrames = ConsoleUi.GetSpinnerFrames(options.EasterEgg);
         ConsoleUi.SetProgressTheme(options.EasterEgg);
 
         if (options.ProjectPath == null)
         {
-            ConsoleUi.PrintUsage();
+            ConsoleUi.PrintUsage(showBanner: false);
             return CommandExitCodes.UsageError;
         }
 
@@ -119,7 +126,7 @@ public static class IndexCommandRunner
                         Console.Error.WriteLine("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
                     break;
                 case "--help" or "-h":
-                    return new IndexCommandOptions();
+                    return new IndexCommandOptions { ShowHelp = true };
                 case "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky":
                     easterEgg = args[i];
                     spinnerFlagCount++;
@@ -505,6 +512,7 @@ public static class IndexCommandRunner
 
 public sealed class IndexCommandOptions
 {
+    public bool ShowHelp { get; init; }
     public string? ProjectPath { get; init; }
     public string? DbPath { get; init; }
     public bool Rebuild { get; init; }

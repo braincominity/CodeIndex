@@ -19,7 +19,7 @@ var jsonOptions = new JsonSerializerOptions
 
 if (args.Length == 0 || args[0] is "--help" or "-h")
 {
-    ConsoleUi.PrintUsage();
+    ConsoleUi.PrintUsage(showBanner: args.Length > 0);
     return args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
 }
 

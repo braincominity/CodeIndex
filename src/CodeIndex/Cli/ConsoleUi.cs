@@ -278,20 +278,33 @@ public static class ConsoleUi
     /// Print usage information.
     /// 使い方を表示する。
     /// </summary>
-    public static void PrintUsage()
+    public static void PrintUsage(bool showBanner = true)
     {
-        PrintBanner();
-        Console.WriteLine("Usage: cdidx <command> [options]");
+        if (showBanner)
+        {
+            PrintBanner();
+        }
+
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  cdidx <projectPath>");
+        Console.WriteLine("  cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]");
+        Console.WriteLine("  cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--json]");
+        Console.WriteLine("  cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]");
+        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--fts]");
+        Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+        Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>]");
+        Console.WriteLine("  cdidx status [--db <path>] [--json]");
+        Console.WriteLine("  cdidx mcp [--db <path>]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
-        Console.WriteLine("  index <projectPath>        Index a project (default if path given)");
+        Console.WriteLine("  index <projectPath>        Build or update the index for a project");
         Console.WriteLine("  search <query>             Full-text search across indexed chunks");
         Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
         Console.WriteLine("  files [query]              List indexed files");
         Console.WriteLine("  status                     Show database statistics");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
-        Console.WriteLine("Index options:");
+        Console.WriteLine("Index and update options:");
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
@@ -300,6 +313,10 @@ public static class ConsoleUi
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
+        Console.WriteLine();
+        Console.WriteLine("Update workflows:");
+        Console.WriteLine("  Use --commits with a project path to update only files changed by specific commits.");
+        Console.WriteLine("  Use --files with a project path to update only specific files.");
         Console.WriteLine();
         Console.WriteLine("Query options:");
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
@@ -311,23 +328,14 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
+        Console.WriteLine("  cdidx index ./myproject --commits abc123      Update DB from one commit");
+        Console.WriteLine("  cdidx index ./myproject --commits abc123 def456");
+        Console.WriteLine("                                              Update DB from multiple commits");
+        Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
         Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
-        Console.WriteLine();
-        Console.WriteLine("  cdidx ./myproject --commits abc123 def456      Update files from commits");
-        Console.WriteLine("  cdidx ./myproject --files src/app.cs           Update specific files");
-        Console.WriteLine();
-        Console.WriteLine("Easter eggs (themed spinner when combined with index):");
-        Console.WriteLine("  --sushi                    \U0001f363 Slicing... Shaping... Itadakimasu!");
-        Console.WriteLine("  --coffee                   \u2615 Grinding... Heating... Brewing...");
-        Console.WriteLine("  --ramen                    \U0001f35c Boiling... Steaming... Itadakimasu!");
-        Console.WriteLine("  --wine                     \U0001f377 Crushing... Aging... Sant\u00e9!");
-        Console.WriteLine("  --beer                     \U0001f37a Tapping... Pouring... Cheers!");
-        Console.WriteLine("  --matcha                   \U0001f375 Sifting... Whisking... Douzo!");
-        Console.WriteLine("  --whisky                   \U0001f943 Mashing... Distilling... Slainte!");
-        Console.WriteLine("  --random-spinner           \U0001f3b2 Pick a random theme");
     }
 
     // --- Helpers / ヘルパー ---
