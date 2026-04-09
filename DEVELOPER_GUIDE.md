@@ -19,7 +19,7 @@ src/CodeIndex/
     CommandExitCodes.cs       — Shared process exit codes
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
     DbPathResolver.cs         — Default DB path resolution for index commands
-    GitHelper.cs              — Git diff-tree helper for --commits option
+    GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
     IndexCommandRunner.cs     — Index command execution and update/full-scan flows
     QueryCommandRunner.cs     — Search/symbols/files/status execution and query arg parsing
     SearchSnippetFormatter.cs — Human-readable search snippet formatting
@@ -39,11 +39,12 @@ src/CodeIndex/
     SymbolRecord.cs           — Symbol DTO
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs       — ChunkSplitter tests
-    SymbolExtractorTests.cs   — SymbolExtractor tests
-    FileIndexerTests.cs       — FileIndexer tests
-    DatabaseTests.cs          — DbContext/DbWriter integration tests
-    DbReaderTests.cs          — DbReader query tests
-    McpServerTests.cs         — MCP server tests
+  SymbolExtractorTests.cs     — SymbolExtractor tests
+  FileIndexerTests.cs         — FileIndexer tests
+  DatabaseTests.cs            — DbContext/DbWriter integration tests
+  DbReaderTests.cs            — DbReader query tests
+  McpServerTests.cs           — MCP server tests
+  GitHelperTests.cs           — Git helper tests
 ```
 
 ### Indexing pipeline
@@ -375,6 +376,33 @@ See [Exit codes](README.md#exit-codes) in README.
 - **Manual arg parsing** — `System.CommandLine` was removed to reduce dependencies. Simple switch-based parsing.
 - **SHA256 checksums** — Computed from raw file bytes and stored per file. Used as a fallback for change detection when timestamps differ (e.g. after `git checkout`).
 - **UTF-8 with fallback** — Invalid UTF-8 bytes are replaced with U+FFFD rather than failing the entire file.
+- **Worktree-aware git exclude** — `.cdidx/` is auto-added to `.git/info/exclude`. In a worktree, `.git` is a file (not a directory), so the worktree root has no `.git/info/exclude`. `GitHelper.ResolveGitCommonDir()` chases references to find the shared `.git/`:
+
+  ```
+  # Normal repo — .git is a directory
+  /projects/my-app/                   ← project root
+  ├── 📂 .git/                        ← directory
+  │   └── 📂 info/
+  │       └── exclude                 ← write here
+  └── 📂 .cdidx/
+      └── codeindex.db
+
+  # Worktree — .git is a file
+  /projects/my-app/                   ← main repo
+  └── 📂 .git/                        ← shared git dir
+      ├── 📂 info/
+      │   └── exclude                 ← write here
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← contains "../.."
+
+  /projects/my-app-feature/           ← worktree root
+  ├── .git                            ← FILE: "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
+  ```
+
+  Resolution: read `.git` file → parse `gitdir:` → read `commondir` file at that path → resolve `../..` relative to `feature-branch/` dir (`feature-branch/` → `..` → `worktrees/` → `..` → `.git/`) → write `info/exclude`.
 
 ## Coding conventions
 
@@ -424,11 +452,12 @@ src/CodeIndex/
     SymbolRecord.cs           — シンボルDTO
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs       — ChunkSplitterテスト
-    SymbolExtractorTests.cs   — SymbolExtractorテスト
-    FileIndexerTests.cs       — FileIndexerテスト
-    DatabaseTests.cs          — DbContext/DbWriter統合テスト
-    DbReaderTests.cs          — DbReaderクエリテスト
-    McpServerTests.cs         — MCPサーバーテスト
+  SymbolExtractorTests.cs     — SymbolExtractorテスト
+  FileIndexerTests.cs         — FileIndexerテスト
+  DatabaseTests.cs            — DbContext/DbWriter統合テスト
+  DbReaderTests.cs            — DbReaderクエリテスト
+  McpServerTests.cs           — MCPサーバーテスト
+  GitHelperTests.cs           — Gitヘルパーテスト
 ```
 
 ### インデックスパイプライン
@@ -760,6 +789,33 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **手動引数解析** — `System.CommandLine`は依存削減のため削除。シンプルなswitch文での解析。
 - **SHA256チェックサム** — ファイルのraw bytesから算出しファイルごとに保存。タイムスタンプが異なる場合の変更検出フォールバックとして使用（例: `git checkout`後）。
 - **UTF-8フォールバック** — 不正なUTF-8バイトはファイル全体を失敗させずU+FFFDに置換。
+- **worktree対応のgit exclude** — `.cdidx/`を`.git/info/exclude`に自動追加する。worktreeでは`.git`がディレクトリではなくファイルのため、worktreeルートには`.git/info/exclude`が存在しない。`GitHelper.ResolveGitCommonDir()`で参照を辿り共通`.git/`を見つける:
+
+  ```
+  # 通常リポジトリ — .gitがディレクトリ
+  /projects/my-app/                   ← プロジェクトルート
+  ├── 📂 .git/                        ← ディレクトリ
+  │   └── 📂 info/
+  │       └── exclude                 ← ここに書き込む
+  └── 📂 .cdidx/
+      └── codeindex.db
+
+  # worktree — .gitがファイル
+  /projects/my-app/                   ← 元リポジトリ
+  └── 📂 .git/                        ← 共有gitディレクトリ
+      ├── 📂 info/
+      │   └── exclude                 ← ここに書き込む
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← "../.."が入っている（2階層上 = .git/）
+
+  /projects/my-app-feature/           ← worktreeルート
+  ├── .git                            ← ファイル: "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
+  ```
+
+  解決手順: `.git`ファイルを読む → `gitdir:`を解析 → そのパスの`commondir`ファイルを読む → `../..`を`feature-branch/`ディレクトリ起点で解決（`feature-branch/` → `..` → `worktrees/` → `..` → `.git/`）→ `info/exclude`に書き込む。
 
 ## コーディング規約
 

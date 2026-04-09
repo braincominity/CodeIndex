@@ -37,7 +37,7 @@ src/CodeIndex/
   Cli/CommandExitCodes.cs  — Shared process exit codes
   Cli/ConsoleUi.cs         — Spinner, progress bar, banner, easter egg, version, usage text
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
-  Cli/GitHelper.cs         — Git diff-tree helper for --commits option
+  Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
   Cli/QueryCommandRunner.cs — Search/symbols/files/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Center human-readable search output on matching lines
@@ -56,6 +56,7 @@ tests/CodeIndex.Tests/
   DatabaseTests.cs          — DbContext/DbWriter integration tests
   DbReaderTests.cs          — DbReader query tests (FTS, symbols, files, status)
   McpServerTests.cs         — MCP server JSON-RPC protocol and tool tests
+  GitHelperTests.cs         — Git helper tests (normal repo, worktree, fallback cases)
 ```
 
 ## Key design decisions
@@ -71,7 +72,39 @@ tests/CodeIndex.Tests/
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
-- **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
+- **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain to find the shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
+
+  **Normal repo vs worktree structure:**
+  ```
+  # Normal repo — .git is a directory, info/exclude is right there
+  /projects/my-app/                   ← project root
+  ├── 📂 .git/                        ← directory
+  │   └── 📂 info/
+  │       └── exclude                 ← AddToGitExclude writes here
+  └── 📂 .cdidx/
+      └── codeindex.db
+
+  # Worktree — .git is a file, need to chase references to find info/exclude
+  /projects/my-app/                   ← main repo root
+  └── 📂 .git/                        ← actual git directory (shared)
+      ├── 📂 info/
+      │   └── exclude                 ← AddToGitExclude writes here
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← contains "../.."
+
+  /projects/my-app-feature/           ← worktree root
+  ├── .git                            ← FILE containing "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
+  ```
+
+  **Resolution chain in worktree:**
+  1. Read `.git` file → `gitdir: /projects/my-app/.git/worktrees/feature-branch`
+  2. Read `commondir` file at that path → `../..`
+  3. Resolve `../..` relative to `feature-branch/` dir:
+     `feature-branch/` → `..` → `worktrees/` → `..` → `.git/`
+  4. Write to `.git/info/exclude`
 
 ## Conventions
 
@@ -190,6 +223,7 @@ tests/CodeIndex.Tests/
   DatabaseTests.cs          — DbContext/DbWriter統合テスト
   DbReaderTests.cs          — DbReaderクエリテスト（FTS、シンボル、ファイル、ステータス）
   McpServerTests.cs         — MCPサーバーJSON-RPCプロトコル・ツールテスト
+  GitHelperTests.cs         — Gitヘルパーテスト（通常repo、worktree、フォールバック）
 ```
 
 ## 主要な設計判断
@@ -205,7 +239,39 @@ tests/CodeIndex.Tests/
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Cli/IndexCommandRunner.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
-- **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
+- **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。git worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿って`info/exclude`がある共通`.git/`を見つける。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
+
+  **通常リポジトリ vs worktreeの構造:**
+  ```
+  # 通常リポジトリ — .gitがディレクトリ、info/excludeはその直下
+  /projects/my-app/                   ← プロジェクトルート
+  ├── 📂 .git/                        ← ディレクトリ
+  │   └── 📂 info/
+  │       └── exclude                 ← AddToGitExcludeがここに書き込む
+  └── 📂 .cdidx/
+      └── codeindex.db
+
+  # worktree — .gitがファイル、参照を辿ってinfo/excludeを見つける
+  /projects/my-app/                   ← 元リポジトリのルート
+  └── 📂 .git/                        ← 実体のgitディレクトリ（共有）
+      ├── 📂 info/
+      │   └── exclude                 ← AddToGitExcludeがここに書き込む
+      └── 📂 worktrees/
+          └── 📂 feature-branch/
+              └── commondir           ← "../.."が入っている
+
+  /projects/my-app-feature/           ← worktreeのルート
+  ├── .git                            ← ファイル。中身は "gitdir: /projects/my-app/.git/worktrees/feature-branch"
+  └── 📂 .cdidx/
+      └── codeindex.db
+  ```
+
+  **worktreeでの解決チェーン:**
+  1. `.git`ファイルを読む → `gitdir: /projects/my-app/.git/worktrees/feature-branch`
+  2. そのパスの`commondir`ファイルを読む → `../..`
+  3. `../..`を`feature-branch/`ディレクトリ起点で解決:
+     `feature-branch/` → `..` → `worktrees/` → `..` → `.git/`
+  4. `.git/info/exclude`に書き込む
 
 ## コーディング規約
 

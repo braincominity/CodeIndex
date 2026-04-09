@@ -473,8 +473,8 @@ public static class IndexCommandRunner
         try
         {
             var projectRoot = Path.GetFullPath(projectPath);
-            var gitDir = Path.Combine(projectRoot, ".git");
-            if (!Directory.Exists(gitDir)) return;
+            var gitDir = GitHelper.ResolveGitCommonDir(projectRoot);
+            if (gitDir == null) return;
 
             var excludeFile = Path.Combine(gitDir, "info", "exclude");
             var dbDirRelative = Path.GetDirectoryName(dbPath);
