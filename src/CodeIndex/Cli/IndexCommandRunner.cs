@@ -541,7 +541,7 @@ public static class IndexCommandRunner
             using var sw = File.AppendText(excludeFile);
             if (existingContent.Length > 0 && !existingContent.EndsWith('\n'))
                 sw.WriteLine();
-            sw.WriteLine("# cdidx (CodeIndex) — auto-generated / 自動生成");
+            sw.WriteLine("# cdidx (CodeIndex) — auto-generated");
             foreach (var pattern in missing)
                 sw.WriteLine(pattern);
         }
