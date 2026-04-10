@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Synchronized README tables with the expanded CLI/MCP surface** — Updated the README English and Japanese tables for MCP tools and query options so they match the current command set, including `definition`, `references`, `callers`, `callees`, `excerpt`, `map`, `inspect`, and MCP `analyze_symbol`. Affected: `README.md`.
+
 - **Added a dedicated self-improvement playbook for AI agents** — Added `SELF_IMPROVEMENT.md`, a bilingual operating contract for iterative cdidx self-improvement loops, including branch/commit discipline, rebuild-and-refresh requirements, approval gates for breaking changes, and language-aware search guidance. Updated README discoverability and CLAUDE.md checklist/sync rules to keep the playbook current. Affected: `SELF_IMPROVEMENT.md`, `README.md`, `CLAUDE.md`.
 
 - **Bundled symbol analysis in one request** — Added `inspect` CLI and MCP `analyze_symbol` workflows that return the primary definition, nearby symbols, references, callers, callees, and file metadata together, so AI clients can answer common symbol questions without chaining several separate queries. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
@@ -172,6 +174,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 変更
+
+- **拡張後のCLI/MCP機能面にREADME表を同期** — README の英語版・日本語版にある MCP ツール表とクエリオプション表を、現在のコマンドセットに合わせて更新した。`definition`、`references`、`callers`、`callees`、`excerpt`、`map`、`inspect`、MCP の `analyze_symbol` を反映している。対象: `README.md`.
 
 - **AIエージェント向けの自己改善プレイブックを追加** — `SELF_IMPROVEMENT.md` を追加し、cdidx 自身を反復改善するための二言語の運用契約をまとめた。ブランチ/コミット規律、毎回の再ビルドとインデックス更新、破壊的変更の承認ゲート、言語差分を踏まえた検索指針を明文化し、README の導線と CLAUDE.md のチェックリスト/同期ルールも更新した。対象: `SELF_IMPROVEMENT.md`, `README.md`, `CLAUDE.md`.
 

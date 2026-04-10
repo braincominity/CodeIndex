@@ -347,12 +347,17 @@ cdidx map --path src/ --exclude-tests --json
 | `--json` | All commands | JSON output (for AI/machine use) |
 | `--limit <n>` | Query commands | Max results (default: 20; `map` uses it per section) |
 | `--lang <lang>` | Query commands | Filter by language |
-| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map` | Restrict results to paths containing this text |
-| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map` | Exclude paths containing this text (repeatable) |
-| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map` | Exclude likely test files and prefer production code |
+| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Restrict results to paths containing this text |
+| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Exclude paths containing this text (repeatable) |
+| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
 | `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
-| `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/import) |
+| `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/import/namespace) |
+| `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
+| `--start <line>` | `excerpt` | Start line for excerpt reconstruction |
+| `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`) |
+| `--before <n>` | `excerpt` | Include extra context lines before the requested excerpt |
+| `--after <n>` | `excerpt` | Include extra context lines after the requested excerpt |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits |
@@ -641,8 +646,15 @@ Once configured, the AI can directly call these tools:
 | Tool | Description |
 |---|---|
 | `search` | Full-text search across code chunks |
-| `symbols` | Find functions, classes, interfaces by name |
+| `definition` | Reconstruct a symbol declaration and optional body |
+| `references` | Find indexed references for supported languages |
+| `callers` | List callers for a named symbol in supported languages |
+| `callees` | List callees for a named symbol in supported languages |
+| `symbols` | Find functions, classes, interfaces, imports, and namespaces by name |
 | `files` | List indexed files |
+| `excerpt` | Reconstruct a specific line range from indexed chunks |
+| `map` | Summarize languages, modules, hotspots, and likely entrypoints |
+| `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, and file metadata |
 | `status` | Database statistics |
 | `index` | Index or re-index a project directory |
 
@@ -1008,12 +1020,17 @@ cdidx map --path src/ --exclude-tests --json
 | `--json` | 全コマンド | JSON出力（AI/機械向け） |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20。`map` では各セクションごとの件数） |
 | `--lang <lang>` | クエリ系 | 言語でフィルタ |
-| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map` | 指定文字列を含むパスに結果を絞る |
-| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map` | 指定文字列を含むパスを除外（繰り返し指定可） |
-| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map` | テストらしいパスを除外し、本番コードを優先 |
+| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | 指定文字列を含むパスに結果を絞る |
+| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | 指定文字列を含むパスを除外（繰り返し指定可） |
+| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
-| `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/import） |
+| `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/import/namespace） |
+| `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
+| `--start <line>` | `excerpt` | 抜粋再構成の開始行 |
+| `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ） |
+| `--before <n>` | `excerpt` | 指定範囲の前に追加する文脈行数 |
+| `--after <n>` | `excerpt` | 指定範囲の後に追加する文脈行数 |
 | `--rebuild` | `index` | 既存DBを削除して再構築 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新 |
@@ -1302,8 +1319,15 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | ツール | 説明 |
 |---|---|
 | `search` | コードチャンクの全文検索 |
-| `symbols` | 関数・クラス・インターフェースを名前で検索 |
+| `definition` | シンボルの宣言と必要なら本体を再構成して取得 |
+| `references` | 対応言語でインデックス済み参照を検索 |
+| `callers` | 対応言語で指定シンボルの caller を列挙 |
+| `callees` | 対応言語で指定シンボルの callee を列挙 |
+| `symbols` | 関数・クラス・インターフェース・import・namespace を名前で検索 |
 | `files` | インデックス済みファイル一覧 |
+| `excerpt` | インデックス済みチャンクから特定行範囲を再構成 |
+| `map` | 言語、モジュール、ホットスポット、推定エントリポイントを要約 |
+| `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報をまとめて返す |
 | `status` | データベース統計情報 |
 | `index` | プロジェクトのインデックス作成・更新 |
 
