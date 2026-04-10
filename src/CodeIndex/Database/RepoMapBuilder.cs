@@ -26,6 +26,8 @@ internal sealed class RepoMapBuilder
         ["ruby"] = ["main", "call", "App"],
         ["php"] = ["main", "handle", "App"],
         ["swift"] = ["main", "App"],
+        ["dart"] = ["main", "runApp"],
+        ["scala"] = ["main", "App"],
     };
     private static readonly Dictionary<string, string[]> EntrypointPathHints = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -40,6 +42,8 @@ internal sealed class RepoMapBuilder
         ["ruby"] = ["app.rb", "main.rb", "cli.rb"],
         ["php"] = ["index.php", "app.php"],
         ["swift"] = ["main.swift", "App.swift"],
+        ["dart"] = ["main.dart", "app.dart"],
+        ["scala"] = ["Main.scala", "App.scala", "Application.scala"],
     };
 
     public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns)
