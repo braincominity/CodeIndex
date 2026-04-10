@@ -176,9 +176,11 @@ When modifying the CLAUDE.md template (code search rules for AI agents), update 
 
 ### Tests
 When changing public API signatures or adding new public methods, check if tests need updating. Run `dotnet test` to verify. If the build environment lacks .NET SDK, at minimum verify all callers are updated by searching for the method name.
+When tests create temporary git repositories and run `git commit`, configure a repo-local `user.name` and `user.email` inside the test setup instead of assuming CI has a global git identity.
 
 ### Cross-platform changes
 cdidx targets Windows, macOS, and Linux. When changing filesystem behavior, path handling, process execution, console output, SQLite lifetime, or test cleanup, explicitly consider cross-platform differences such as path separators, file locking, newline behavior, and shell/tool availability. Add or update tests and docs when behavior depends on the OS.
+For Windows in particular, temp repo and SQLite cleanup may require clearing SQLite pools, normalizing file attributes, and retrying directory deletion for a short period before treating it as a real failure.
 
 ### README structure
 - Section numbering must be consistent (don't have "2." without "1.").
@@ -365,9 +367,11 @@ CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する
 
 ### テスト
 公開APIのシグネチャ変更や新しい公開メソッド追加時はテストの更新要否を確認する。`dotnet test`で検証。ビルド環境に.NET SDKがない場合でも、最低限メソッド名を検索して全呼び出し元が更新されていることを確認する。
+テスト内で一時 git リポジトリを作って `git commit` する場合は、CI に global の git identity が入っている前提にせず、テストセットアップ内で repo-local の `user.name` と `user.email` を設定すること。
 
 ### クロスプラットフォーム変更
 cdidx は Windows、macOS、Linux を対象にする。ファイルシステム挙動、パス処理、プロセス実行、コンソール出力、SQLite のライフタイム、テスト後片付けを変更するときは、パス区切り、ファイルロック、改行、shell/tool の有無など OS 差分を明示的に考慮すること。挙動が OS に依存する場合は、テストとドキュメントも更新する。
+特に Windows では、一時 repo や SQLite の後片付けで SQLite pool の解放、ファイル属性の正規化、短時間の削除リトライが必要になることがある。すぐ失敗扱いにせず、OS 差分として吸収できるかを先に検討する。
 
 ### READMEの構成
 - セクション番号は一貫させる（「1.」なしに「2.」を書かない）。
