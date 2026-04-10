@@ -101,6 +101,9 @@ public class DbContext : IDisposable
             )");
 
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
+        EnsureColumn("files", "checksum", "TEXT");
+        EnsureColumn("files", "modified", "DATETIME");
+        EnsureColumn("files", "indexed_at", "DATETIME");
         EnsureColumn("symbols", "start_line", "INTEGER");
         EnsureColumn("symbols", "end_line", "INTEGER");
         EnsureColumn("symbols", "body_start_line", "INTEGER");

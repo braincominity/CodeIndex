@@ -31,4 +31,15 @@ public class DbPathResolverTests
 
         Assert.Equal(explicitPath, dbPath);
     }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_UsesParentOfCdidxDirectory()
+    {
+        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var dbPath = Path.Combine(projectPath, ".cdidx", "codeindex.db");
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+
+        Assert.Equal(Path.GetFullPath(projectPath), resolved);
+    }
 }

@@ -19,4 +19,21 @@ public static class DbPathResolver
 
         return Path.Combine(Path.GetFullPath(projectPath), ".cdidx", "codeindex.db");
     }
+
+    /// <summary>
+    /// Resolve the most likely project root for query commands from the DB path.
+    /// クエリ系コマンドのDBパスから、もっとも可能性が高いプロジェクトルートを解決する。
+    /// </summary>
+    public static string ResolveProjectRootForQuery(string dbPath)
+    {
+        var fullDbPath = Path.GetFullPath(dbPath);
+        var dbDir = Path.GetDirectoryName(fullDbPath);
+        if (dbDir == null)
+            return Path.GetFullPath(".");
+
+        if (string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase))
+            return Path.GetDirectoryName(dbDir) ?? Path.GetFullPath(".");
+
+        return Path.GetFullPath(".");
+    }
 }

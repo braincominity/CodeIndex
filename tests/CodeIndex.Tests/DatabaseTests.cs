@@ -363,12 +363,29 @@ public class DatabaseTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
+        DeleteDbPath();
+    }
 
-        // Clear SQLite connection pool to release file locks on Windows
-        // Windows環境でファイルロックを解放するためコネクションプールをクリア
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+    private void DeleteDbPath()
+    {
+        if (!File.Exists(_dbPath))
+            return;
 
-        if (File.Exists(_dbPath))
+        try
+        {
             File.Delete(_dbPath);
+        }
+        catch (IOException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
     }
 }

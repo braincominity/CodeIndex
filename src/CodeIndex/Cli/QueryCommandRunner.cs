@@ -321,6 +321,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            WorkspaceMetadataEnricher.Enrich(map, options.DbPath);
 
             if (options.Json)
             {
@@ -332,6 +333,14 @@ public static class QueryCommandRunner
                 Console.WriteLine($"Lines      : {map.TotalLines:N0}");
                 Console.WriteLine($"Symbols    : {map.TotalSymbols:N0}");
                 Console.WriteLine($"References : {map.TotalReferences:N0}");
+                if (map.IndexedAt != null)
+                    Console.WriteLine($"Indexed At : {map.IndexedAt:O}");
+                if (map.LatestModified != null)
+                    Console.WriteLine($"Modified   : {map.LatestModified:O}");
+                if (map.GitHead != null)
+                    Console.WriteLine($"Git HEAD   : {map.GitHead}");
+                if (map.GitIsDirty != null)
+                    Console.WriteLine($"Git Dirty  : {map.GitIsDirty}");
                 WriteRepoMapSection("Languages", map.Languages.Select(item => $"{item.Lang,-12} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Modules", map.Modules.Select(item => $"{item.Module,-24} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
@@ -352,6 +361,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var status = reader.GetStatus();
+            WorkspaceMetadataEnricher.Enrich(status, options.DbPath);
 
             if (options.Json)
             {
@@ -363,6 +373,14 @@ public static class QueryCommandRunner
                 Console.WriteLine($"Chunks  : {status.Chunks:N0}");
                 Console.WriteLine($"Symbols : {status.Symbols:N0}");
                 Console.WriteLine($"Refs    : {status.References:N0}");
+                if (status.IndexedAt != null)
+                    Console.WriteLine($"Indexed : {status.IndexedAt:O}");
+                if (status.LatestModified != null)
+                    Console.WriteLine($"Source  : {status.LatestModified:O}");
+                if (status.GitHead != null)
+                    Console.WriteLine($"Git HEAD: {status.GitHead}");
+                if (status.GitIsDirty != null)
+                    Console.WriteLine($"Git Dirty: {status.GitIsDirty}");
                 if (status.Languages.Count > 0)
                 {
                     Console.WriteLine("Languages:");

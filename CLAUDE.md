@@ -78,6 +78,7 @@ tests/CodeIndex.Tests/
 - **Path-aware narrowing and ranking** — `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` share `--path`, repeatable `--exclude-path`, and `--exclude-tests`. Query ordering prefers source files over tests/docs, and `search` boosts exact symbol-name and path matches.
 - **Compact search snippets for AI** — `search --json` and MCP `search` return match-centered snippets with snippet ranges, match lines, highlights, and context counts instead of whole chunks. `--snippet-lines` lets clients cap payload size up front.
 - **Repo map for first-pass orientation** — `map` summarizes languages, modules, top files, file hot spots, and likely entrypoints so AI clients can form an initial navigation plan before issuing deeper queries.
+- **Freshness metadata for trust decisions** — `status`/`map` expose `indexed_at`, `latest_modified`, `git_head`, and `git_is_dirty`, while `files` exposes per-file checksum and timestamp metadata. Older DBs auto-add missing file columns when possible, and read paths avoid crashing if migration cannot happen in place.
 - **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
@@ -259,6 +260,7 @@ tests/CodeIndex.Tests/
 - **パス考慮の絞り込みとランキング** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` を共有する。クエリ結果は tests や docs より source を優先し、`search` はシンボル名やパスの exact match を追加ブーストする。
 - **AI向けの軽量検索スニペット** — `search --json` と MCP の `search` は、チャンク全文ではなく snippet range、match line、highlight、context count を含む一致中心スニペットを返す。`--snippet-lines` でペイロード量を先に制限できる。
 - **初動向けの repo map** — `map` は、言語、モジュール、主要ファイル、ホットスポット、推定エントリポイントを要約し、AIクライアントが深い検索前に移動計画を立てやすくする。
+- **信用判断のための鮮度メタデータ** — `status`/`map` は `indexed_at`、`latest_modified`、`git_head`、`git_is_dirty` を返し、`files` はファイルごとの checksum と timestamp を返す。古いDBに不足する file 列は可能なら自動追加し、その場移行できない場合も読み取りをクラッシュさせない。
 - **言語差分を考慮した参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対して構築する参照テーブルに支えられる。未対応言語には低信頼な疑似グラフ結果を返さず、`search` を使う前提にする。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。

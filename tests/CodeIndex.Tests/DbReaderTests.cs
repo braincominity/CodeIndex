@@ -390,6 +390,33 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ListFiles_ReturnsFreshnessMetadata()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh.cs",
+            Lang = "csharp",
+            Size = 120,
+            Lines = 6,
+            Checksum = "fresh-checksum",
+            Modified = new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 6,
+            Content = "public class Fresh { public void Run() { } }",
+        }]);
+
+        var file = Assert.Single(_reader.ListFiles(query: "fresh.cs"));
+        Assert.Equal("fresh-checksum", file.Checksum);
+        Assert.Equal(new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc), file.Modified);
+        Assert.NotNull(file.IndexedAt);
+    }
+
+    [Fact]
     public void GetStatus_ReturnsCorrectCounts()
     {
         var status = _reader.GetStatus();
@@ -397,6 +424,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, status.Chunks);
         Assert.Equal(3, status.Symbols);
         Assert.Equal(1, status.References);
+        Assert.NotNull(status.IndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), status.LatestModified);
     }
 
     [Fact]
@@ -428,8 +457,29 @@ public class DbReaderTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (File.Exists(_dbPath))
+        DeleteDbPath();
+    }
+
+    private void DeleteDbPath()
+    {
+        if (!File.Exists(_dbPath))
+            return;
+
+        try
+        {
             File.Delete(_dbPath);
+        }
+        catch (IOException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
     }
 }

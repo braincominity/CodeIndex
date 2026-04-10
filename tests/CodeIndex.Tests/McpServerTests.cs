@@ -318,6 +318,8 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["languages"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["modules"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["topFiles"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
         Assert.Contains("Main", response["result"]!["structuredContent"]!["entrypoints"]!.ToJsonString());
     }
 
@@ -418,6 +420,8 @@ public class McpServerTests : IDisposable
         Assert.Contains("Found 1 file", text);
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
         Assert.Equal("csharp", response["result"]!["structuredContent"]!["results"]![0]!["lang"]!.GetValue<string>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["results"]![0]!["modified"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["results"]![0]!["indexedAt"]);
     }
 
     [Fact]
@@ -444,6 +448,9 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["chunks"]!.GetValue<long>());
         Assert.Equal(2, response["result"]!["structuredContent"]!["symbols"]!.GetValue<long>());
         Assert.Equal(0, response["result"]!["structuredContent"]!["references"]!.GetValue<long>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
     }
 
     [Fact]
@@ -525,8 +532,29 @@ public class McpServerTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (File.Exists(_dbPath))
+        DeleteDbPath();
+    }
+
+    private void DeleteDbPath()
+    {
+        if (!File.Exists(_dbPath))
+            return;
+
+        try
+        {
             File.Delete(_dbPath);
+        }
+        catch (IOException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
     }
 }

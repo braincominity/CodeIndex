@@ -9,6 +9,7 @@ namespace CodeIndex.Database;
 public class DbReader
 {
     private readonly SqliteConnection _conn;
+    private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
     private const string TestPathCondition = @"
         (
@@ -91,6 +92,7 @@ public class DbReader
     public DbReader(SqliteConnection connection)
     {
         _conn = connection;
+        _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
     }
 
@@ -251,7 +253,10 @@ public class DbReader
 
         var sql = @"
             SELECT f.path, f.lang, f.size, f.lines,
-                   COUNT(s.id) as symbol_count
+                   COUNT(s.id) as symbol_count,
+                   " + GetFileColumnSql("checksum") + @" AS checksum,
+                   " + GetFileColumnSql("modified") + @" AS modified,
+                   " + GetFileColumnSql("indexed_at") + @" AS indexed_at
             FROM files f
             LEFT JOIN symbols s ON s.file_id = f.id
             WHERE 1=1";
@@ -282,6 +287,9 @@ public class DbReader
                 Size = reader.GetInt64(2),
                 Lines = reader.GetInt32(3),
                 SymbolCount = reader.GetInt32(4),
+                Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
+                Modified = GetNullableDateTime(reader, 6),
+                IndexedAt = GetNullableDateTime(reader, 7),
             });
         }
         return results;
@@ -610,6 +618,8 @@ public class DbReader
             Chunks = chunks,
             Symbols = symbols,
             References = references,
+            IndexedAt = ExecuteNullableDateTime(_fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null),
+            LatestModified = ExecuteNullableDateTime(_fileColumns.Contains("modified") ? "SELECT MAX(modified) FROM files" : null),
             Languages = langs,
         };
     }
@@ -627,6 +637,8 @@ public class DbReader
             TotalLines = fileStats.Sum(file => (long)file.Lines),
             TotalSymbols = fileStats.Sum(file => (long)file.SymbolCount),
             TotalReferences = fileStats.Sum(file => (long)file.ReferenceCount),
+            IndexedAt = fileStats.Max(file => file.IndexedAt),
+            LatestModified = fileStats.Max(file => file.Modified),
             Languages = fileStats
                 .GroupBy(file => file.Lang ?? "unknown")
                 .Select(group => new RepoLanguageResult
@@ -701,7 +713,10 @@ public class DbReader
         var sql = @"
             SELECT f.path, f.lang, f.size, f.lines,
                    (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) AS symbol_count,
-                   (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id) AS reference_count
+                   (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id) AS reference_count,
+                   " + GetFileColumnSql("checksum") + @" AS checksum,
+                   " + GetFileColumnSql("modified") + @" AS modified,
+                   " + GetFileColumnSql("indexed_at") + @" AS indexed_at
             FROM files f
             WHERE 1=1";
 
@@ -727,6 +742,9 @@ public class DbReader
                 Lines = reader.GetInt32(3),
                 SymbolCount = reader.GetInt32(4),
                 ReferenceCount = reader.GetInt32(5),
+                Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Modified = GetNullableDateTime(reader, 7),
+                IndexedAt = GetNullableDateTime(reader, 8),
             });
         }
 
@@ -852,6 +870,20 @@ public class DbReader
         return (long)cmd.ExecuteScalar()!;
     }
 
+    private DateTime? ExecuteNullableDateTime(string? sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+            return null;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        var value = cmd.ExecuteScalar();
+        if (value == null || value is DBNull)
+            return null;
+
+        return ParseDateTimeValue(value);
+    }
+
     private HashSet<string> LoadColumns(string tableName)
     {
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -869,6 +901,14 @@ public class DbReader
     {
         if (_symbolColumns.Contains(columnName))
             return $"s.{columnName}";
+
+        return fallbackSql ?? "NULL";
+    }
+
+    private string GetFileColumnSql(string columnName, string? fallbackSql = null)
+    {
+        if (_fileColumns.Contains(columnName))
+            return $"f.{columnName}";
 
         return fallbackSql ?? "NULL";
     }
@@ -903,6 +943,24 @@ public class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
                 cmd.Parameters.AddWithValue($"@excludePathPattern{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
         }
+    }
+
+    private static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+            return null;
+
+        return ParseDateTimeValue(reader.GetValue(ordinal));
+    }
+
+    private static DateTime? ParseDateTimeValue(object value)
+    {
+        return value switch
+        {
+            DateTime dateTime => dateTime.Kind == DateTimeKind.Utc ? dateTime : DateTime.SpecifyKind(dateTime, DateTimeKind.Utc),
+            string text when DateTime.TryParse(text, out var parsed) => parsed.Kind == DateTimeKind.Utc ? parsed : DateTime.SpecifyKind(parsed, DateTimeKind.Utc),
+            _ => null,
+        };
     }
 }
 
@@ -943,6 +1001,9 @@ public class FileResult
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }
+    public string? Checksum { get; set; }
+    public DateTime? Modified { get; set; }
+    public DateTime? IndexedAt { get; set; }
 }
 
 public class FileExcerptResult
@@ -1002,6 +1063,11 @@ public class StatusResult
     public long Chunks { get; set; }
     public long Symbols { get; set; }
     public long References { get; set; }
+    public DateTime? IndexedAt { get; set; }
+    public DateTime? LatestModified { get; set; }
+    public string? ProjectRoot { get; set; }
+    public string? GitHead { get; set; }
+    public bool? GitIsDirty { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
 }
 
@@ -1011,6 +1077,11 @@ public class RepoMapResult
     public long TotalLines { get; set; }
     public long TotalSymbols { get; set; }
     public long TotalReferences { get; set; }
+    public DateTime? IndexedAt { get; set; }
+    public DateTime? LatestModified { get; set; }
+    public string? ProjectRoot { get; set; }
+    public string? GitHead { get; set; }
+    public bool? GitIsDirty { get; set; }
     public List<RepoLanguageResult> Languages { get; set; } = [];
     public List<RepoModuleResult> Modules { get; set; } = [];
     public List<RepoFileSummaryResult> TopFiles { get; set; } = [];
@@ -1067,4 +1138,7 @@ internal sealed class RepoFileStat
     public int Lines { get; set; }
     public int SymbolCount { get; set; }
     public int ReferenceCount { get; set; }
+    public string? Checksum { get; set; }
+    public DateTime? Modified { get; set; }
+    public DateTime? IndexedAt { get; set; }
 }

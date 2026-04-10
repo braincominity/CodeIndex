@@ -677,6 +677,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var map = reader.GetRepoMap(limit, lang, pathPattern, excludePaths, excludeTests);
+            WorkspaceMetadataEnricher.Enrich(map, _dbPath);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             structured["limit"] = limit;
             structured["lang"] = lang;
@@ -691,6 +692,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var status = reader.GetStatus();
+            WorkspaceMetadataEnricher.Enrich(status, _dbPath);
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             return CreateToolResult(id, "Database stats returned.", structured);
         });
