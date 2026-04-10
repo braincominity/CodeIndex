@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.2.0] - 2026-04-11
+
 #### Added
 
 - **Freshness hints in zero-result MCP responses** — When MCP query tools (`search`, `definition`, `symbols`, `references`, `callers`, `callees`, `files`) return zero results, the response now includes `indexed_file_count` and `indexed_at` so AI clients can immediately tell whether the index is stale or empty without a separate `status` round-trip. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
@@ -221,6 +223,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.2.0] - 2026-04-11
+
 #### 追加
 
 - **0件 MCP レスポンスに鮮度ヒントを追加** — MCP クエリツール（`search`、`definition`、`symbols`、`references`、`callers`、`callees`、`files`）が 0 件を返すとき、レスポンスに `indexed_file_count` と `indexed_at` を含めるようにした。AI クライアントが別途 `status` を呼ばなくても、インデックスの古さや空を即座に判断できる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
@@ -427,7 +431,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...v1.0.4
