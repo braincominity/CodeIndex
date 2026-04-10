@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Add a dedicated testing guide** — Added bilingual `TESTING_GUIDE.md` covering test suite layout, shared helpers, cross-platform rules, and test-writing conventions. Updated the maintenance checklists so test-code changes now explicitly review the testing guide in the same commit. Affected: `TESTING_GUIDE.md`, `README.md`, `DEVELOPER_GUIDE.md`, `SELF_IMPROVEMENT.md`, `CLAUDE.md`.
+
 - **MCP tool annotations for AI client trust decisions** — All MCP tools now emit `annotations` with `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` per the MCP spec. Query tools are marked read-only and idempotent; the `index` tool is marked destructive and non-idempotent (it can drop the DB via `--rebuild` and replaces chunks/symbols per file). This helps AI clients decide which tools are safe to call without user confirmation. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### Changed
@@ -210,6 +212,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **専用のテストガイドを追加** — テストスイート構成、共有ヘルパー、クロスプラットフォーム上の注意点、テスト作法をまとめた英日併記の `TESTING_GUIDE.md` を追加した。あわせて保守チェックリストを更新し、今後はテストコード変更時に同じコミットでテストガイドも明示的に確認・更新する運用にした。対象: `TESTING_GUIDE.md`, `README.md`, `DEVELOPER_GUIDE.md`, `SELF_IMPROVEMENT.md`, `CLAUDE.md`.
 
 - **MCP ツールアノテーションで AI クライアントの信頼判断を支援** — 全 MCP ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返すようになった。クエリツールは読み取り専用かつ冪等に、`index` ツールは破壊的かつ非冪等にマークされる（`--rebuild` で DB を削除でき、再インデックスでファイルごとにチャンク・シンボルを置き換えるため）。これにより AI クライアントがユーザー確認なしに安全に呼べるツールを判断しやすくなる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 

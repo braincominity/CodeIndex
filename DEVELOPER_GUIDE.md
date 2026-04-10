@@ -10,6 +10,8 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
+
 ## Architecture
 
 ```
@@ -468,6 +470,8 @@ dotnet build
 dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
+
+テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md](TESTING_GUIDE.md) を参照してください。
 
 ## アーキテクチャ
 

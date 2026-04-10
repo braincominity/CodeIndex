@@ -43,6 +43,7 @@ The loop is not just "suggest ideas". It is:
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
 - Favor implementation over brainstorming when the next improvement is clear and non-breaking.
 - Keep docs and tests in sync with behavior.
+- If test code, shared test helpers, test execution flow, or testing conventions change, update `TESTING_GUIDE.md` in the same commit.
 - Do not push tags or branches unless explicitly asked.
 
 ## Breaking-Change Gate
@@ -156,13 +157,14 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 
 Before committing, explicitly review:
 1. Tests
-2. CHANGELOG.md
-3. README.md
-4. README `# Code Search Rules` / `# コードベース検索ルール`
-5. DEVELOPER_GUIDE.md
-6. CLAUDE.md
-7. This file (`SELF_IMPROVEMENT.md`)
-8. PR description, if a PR already exists
+2. TESTING_GUIDE.md
+3. CHANGELOG.md
+4. README.md
+5. README `# Code Search Rules` / `# コードベース検索ルール`
+6. DEVELOPER_GUIDE.md
+7. CLAUDE.md
+8. This file (`SELF_IMPROVEMENT.md`)
+9. PR description, if a PR already exists
 
 Then commit one coherent task.
 
@@ -279,6 +281,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
 - ドキュメントとテストを挙動と同期させる。
+- テストコード、共有テストヘルパー、テスト実行フロー、またはテスト規約を変更した場合は、同じコミットで `TESTING_GUIDE.md` も更新する。
 - `git push` や `git tag` は、明示的に依頼されたときだけ行う。
 
 ## 破壊的変更のゲート
@@ -390,13 +393,14 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 
 コミット前に、明示的に次を確認します:
 1. Tests
-2. CHANGELOG.md
-3. README.md
-4. README `# Code Search Rules` / `# コードベース検索ルール`
-5. DEVELOPER_GUIDE.md
-6. CLAUDE.md
-7. このファイル（`SELF_IMPROVEMENT.md`）
-8. 既存PRがあるなら PR説明
+2. TESTING_GUIDE.md
+3. CHANGELOG.md
+4. README.md
+5. README `# Code Search Rules` / `# コードベース検索ルール`
+6. DEVELOPER_GUIDE.md
+7. CLAUDE.md
+8. このファイル（`SELF_IMPROVEMENT.md`）
+9. 既存PRがあるなら PR説明
 
 そのうえで、1つのまとまりだけをコミットします。
 

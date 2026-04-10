@@ -147,17 +147,19 @@ Features that exist in the spinner (braille frames, themed emoji+text) must carr
 ### Per-commit checklist
 Before every commit, check whether each of the following needs updating. Don't batch these up — evaluate and act on each commit:
 1. **Tests** — Does this change break existing tests or require new ones? Search for affected method/class names in `tests/`.
-2. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
-3. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
-4. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
-5. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
-6. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
-7. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
-8. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+2. **TESTING_GUIDE.md** — If test code, helpers, execution flow, or testing conventions changed, update both English and Japanese sections.
+3. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
+4. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
+5. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
+6. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
+7. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
+8. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
+9. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
+- **TESTING_GUIDE.md** — English section AND Japanese section (both must match); update when test helpers, structure, or conventions change
 - **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections.
 - **CHANGELOG.md** — English section AND Japanese section
 - **SELF_IMPROVEMENT.md** — Dedicated operating contract for iterative AI-driven cdidx self-improvement
@@ -178,6 +180,7 @@ When modifying the CLAUDE.md template (code search rules for AI agents), update 
 
 ### Tests
 When changing public API signatures or adding new public methods, check if tests need updating. Run `dotnet test` to verify. If the build environment lacks .NET SDK, at minimum verify all callers are updated by searching for the method name.
+When changing test code, shared test helpers, test execution flow, or testing conventions, update `TESTING_GUIDE.md` in the same commit.
 When tests create temporary git repositories and run `git commit`, configure a repo-local `user.name` and `user.email` inside the test setup instead of assuming CI has a global git identity.
 
 ### Cross-platform changes
@@ -340,17 +343,19 @@ tests/CodeIndex.Tests/
 ### コミットごとのチェックリスト
 コミットのたびに、以下の各項目について更新要否を判断すること。後回しにせず、各コミット単位で確認・対応する:
 1. **テスト** — この変更で既存テストが壊れないか？新規テストが必要か？`tests/` 内で影響を受けるメソッド・クラス名を検索。
-2. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
-3. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
-4. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
-5. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
-6. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
-7. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
-8. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
+2. **TESTING_GUIDE.md** — テストコード、共有ヘルパー、実行フロー、テスト規約を変えたなら、英語・日本語の両セクションを更新。
+3. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
+4. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
+5. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
+6. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
+7. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
+8. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
+9. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:
 - **README.md** — 英語セクション AND 日本語セクション（両方一致させる）
+- **TESTING_GUIDE.md** — 英語セクション AND 日本語セクション（両方一致させる）。テストヘルパー、構成、規約を変えたら更新する
 - **DEVELOPER_GUIDE.md** — CLAUDE.mdテンプレートと終了コードはREADMEを参照。設計判断・アーキテクチャは独自セクション。
 - **CHANGELOG.md** — 英語セクション AND 日本語セクション
 - **SELF_IMPROVEMENT.md** — AIが cdidx 自身を継続改善するときの専用運用契約
@@ -371,6 +376,7 @@ CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する
 
 ### テスト
 公開APIのシグネチャ変更や新しい公開メソッド追加時はテストの更新要否を確認する。`dotnet test`で検証。ビルド環境に.NET SDKがない場合でも、最低限メソッド名を検索して全呼び出し元が更新されていることを確認する。
+テストコード、共有テストヘルパー、テスト実行フロー、またはテスト規約を変更した場合は、同じコミットで `TESTING_GUIDE.md` も更新する。
 テスト内で一時 git リポジトリを作って `git commit` する場合は、CI に global の git identity が入っている前提にせず、テストセットアップ内で repo-local の `user.name` と `user.email` を設定すること。
 
 ### クロスプラットフォーム変更
