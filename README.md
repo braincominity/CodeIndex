@@ -338,7 +338,7 @@ cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
 ```
 
-`map` gives AI clients a fast repo overview with language breakdowns, module summaries, top files, largest files, symbol-rich files, reference-rich files, and likely entrypoints when heuristics can infer them.
+`map` gives AI clients a fast repo overview with language breakdowns, module summaries, top files, largest files, symbol-rich files, reference-rich files, and likely entrypoints when heuristics can infer them. Entrypoint heuristics now fall back to known top-level entry files such as `Program.cs` and `main.py` even when the language extractor does not emit a dedicated `Main`-style symbol.
 
 `status --json` and `map --json` also expose freshness metadata. In `map --json`, `indexed_at` / `latest_modified` stay scoped to the filtered result set, while `workspace_indexed_at` / `workspace_latest_modified` mirror whole-workspace freshness so AI clients can tell the difference between "this slice is old" and "the repo is old." `inspect --json` and MCP `analyze_symbol` now expose the same whole-workspace freshness plus `project_root`, `git_head`, and `git_is_dirty`, and also include `graph_language`, `graph_supported`, and `graph_support_reason` so language-aware clients can tell whether empty call-graph sections mean "unsupported" or just "no hits." `files --json` includes per-file `checksum`, `modified`, and `indexed_at` so cached assumptions can be checked at file granularity too.
 
@@ -1017,7 +1017,7 @@ cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
 ```
 
-`map` は、言語別内訳、モジュール要約、主要ファイル、巨大ファイル、シンボル密度の高いファイル、参照密度の高いファイル、推定できる場合のエントリポイントをまとめて返し、AIクライアントが最初の30秒で地図を作れるようにします。
+`map` は、言語別内訳、モジュール要約、主要ファイル、巨大ファイル、シンボル密度の高いファイル、参照密度の高いファイル、推定できる場合のエントリポイントをまとめて返し、AIクライアントが最初の30秒で地図を作れるようにします。エントリポイント推定は、言語抽出器が `Main` 系シンボルを出さない場合でも、`Program.cs` や `main.py` のような既知のトップレベル実行ファイルへフォールバックします。
 
 さらに `status --json` と `map --json` は鮮度メタデータを返します。`map --json` では `indexed_at` / `latest_modified` はフィルタ後の結果集合に対する鮮度を維持しつつ、`workspace_indexed_at` / `workspace_latest_modified` でワークスペース全体の鮮度も返すため、AIクライアントは「この絞り込み範囲だけ古い」のか「リポジトリ全体が古い」のかを区別できます。`inspect --json` と MCP の `analyze_symbol` も同じワークスペース鮮度に加えて `project_root`、`git_head`、`git_is_dirty`、さらに `graph_language`、`graph_supported`、`graph_support_reason` を返します。`files --json` にはファイル単位の `checksum`、`modified`、`indexed_at` が含まれるため、AIクライアントは仮説が古くなっていないか判断できます。
 

@@ -455,6 +455,16 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_AddsFileFallbackEntrypointForTopLevelProgram()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp", "var client = new ApiClient();\nConsole.WriteLine(client);\n");
+
+        var map = _reader.GetRepoMap(limit: 5, pathPattern: "src/Program.cs");
+
+        Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
+    }
+
+    [Fact]
     public void GetRepoMap_KeepsScopedFreshnessAndAddsWorkspaceFreshness()
     {
         InsertIndexedFile("src/Program.cs", "csharp", "public class Program\n{\n    public static void Main(string[] args)\n    {\n    }\n}\n",

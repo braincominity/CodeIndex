@@ -813,7 +813,7 @@ public class DbReader
                 .Take(limit)
                 .Select(CreateUnscoredFileSummary)
                 .ToList(),
-            Entrypoints = GetEntrypoints(limit, lang, pathPattern, excludePathPatterns, excludeTests),
+            Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPattern, excludePathPatterns, excludeTests),
         };
 
         return result;
@@ -863,7 +863,7 @@ public class DbReader
         return results;
     }
 
-    private List<RepoEntrypointResult> GetEntrypoints(int limit, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoFileStat> fileStats, int limit, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         using var cmd = _conn.CreateCommand();
         var sql = @"
@@ -902,6 +902,30 @@ public class DbReader
                 Kind = kind,
                 Name = name,
                 Line = line,
+                Score = score,
+            });
+        }
+
+        var filesWithEntrypoints = results
+            .Select(result => result.Path)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in fileStats)
+        {
+            if (filesWithEntrypoints.Contains(file.Path))
+                continue;
+
+            var score = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
+            if (score <= 0)
+                continue;
+
+            results.Add(new RepoEntrypointResult
+            {
+                Path = file.Path,
+                Lang = file.Lang,
+                Kind = "file",
+                Name = Path.GetFileName(file.Path),
+                Line = 1,
                 Score = score,
             });
         }
@@ -970,6 +994,27 @@ public class DbReader
             score += 1;
 
         if (kind == "class" && string.Equals(Path.GetFileNameWithoutExtension(fileName), name, StringComparison.OrdinalIgnoreCase))
+            score += 1;
+
+        return score;
+    }
+
+    private static int ScoreEntrypointFileFallback(string path, string? lang, int symbolCount, int referenceCount)
+    {
+        if (lang == null)
+            return 0;
+
+        var fileName = Path.GetFileName(path);
+        if (!EntrypointPathHints.TryGetValue(lang, out var fileHints) ||
+            !fileHints.Any(candidate => string.Equals(candidate, fileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return 0;
+        }
+
+        var score = 2;
+        if (symbolCount > 0)
+            score += 1;
+        if (referenceCount > 0)
             score += 1;
 
         return score;
