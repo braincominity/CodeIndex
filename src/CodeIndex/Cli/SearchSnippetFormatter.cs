@@ -185,8 +185,16 @@ public static class SearchSnippetFormatter
         return terms;
     }
 
+    /// <summary>
+    /// Strip FTS5 quoting and wildcards so the token matches literal source text.
+    /// FTS5の引用符とワイルドカードを除去し、トークンをソーステキストのリテラルに合わせる。
+    /// </summary>
     private static string NormalizeToken(string token)
     {
+        // Remove surrounding quotes/parens from FTS5 token syntax, then trailing
+        // '*' (FTS5 prefix wildcard) since we match literal token text, not patterns.
+        // FTS5トークン構文の囲み引用符/括弧を除去し、末尾の '*'（FTS5接頭辞
+        // ワイルドカード）を除去。リテラル照合のためパターンではなく文字列で比較する。
         return token
             .Trim('"', '\'', '(', ')')
             .TrimEnd('*');
