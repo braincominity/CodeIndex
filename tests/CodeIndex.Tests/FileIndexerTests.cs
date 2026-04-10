@@ -28,6 +28,8 @@ public class FileIndexerTests
     [InlineData("web.ex", "elixir")]
     [InlineData("test.exs", "elixir")]
     [InlineData("script.lua", "lua")]
+    [InlineData("Program.fs", "fsharp")]
+    [InlineData("Script.fsx", "fsharp")]
     [InlineData("Module1.vb", "vb")]
     [InlineData("script.vbs", "vb")]
     [InlineData("Index.cshtml", "csharp")]

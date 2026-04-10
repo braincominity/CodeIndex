@@ -238,6 +238,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DetectsLetTypeModuleOpen()
+    {
+        // F#: let, type, module, open / F#: let束縛、型、モジュール、open
+        var content = "module MyApp.Domain\n\nopen System\n\ntype User = { Name: string; Age: int }\n\nlet validate user =\n    user.Age > 0\n\nlet rec factorial n =\n    if n <= 1 then 1 else n * factorial (n - 1)";
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factorial");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsSubFunctionClassModule()
     {
         // VB.NET: Sub, Function, Class, Module, Imports / VB.NET: サブ、関数、クラス、モジュール、Imports
