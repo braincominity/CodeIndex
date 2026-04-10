@@ -225,6 +225,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Scala_DetectsObjectTraitAndDef()
+    {
+        // Scala: object, trait, def, case class / Scala: オブジェクト、トレイト、def、ケースクラス
+        var content = "object Main {\n  def run(): Unit = {\n  }\n}\nsealed trait Message\ncase class Ping(id: Int) extends Message";
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Main");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Message");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Ping");
+    }
+
+    [Fact]
     public void Extract_Dart_DetectsClassFunctionAndMixin()
     {
         // Dart: class, mixin, function / Dart: クラス、mixin、関数
