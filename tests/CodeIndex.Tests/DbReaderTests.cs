@@ -576,4 +576,31 @@ public class DbReaderTests : IDisposable
                 File.Delete(_dbPath);
         }
     }
+
+    // --- Outline tests / アウトラインテスト ---
+
+    [Fact]
+    public void GetOutline_ReturnsSymbolsOrderedByLine()
+    {
+        var outline = _reader.GetOutline("src/auth.py");
+
+        Assert.NotNull(outline);
+        Assert.Equal("src/auth.py", outline!.Path);
+        Assert.Equal("python", outline.Lang);
+        Assert.True(outline.SymbolCount > 0);
+        Assert.True(outline.TotalLines > 0);
+
+        // Symbols should be ordered by line / シンボルは行順であるべき
+        for (int i = 1; i < outline.Symbols.Count; i++)
+            Assert.True(outline.Symbols[i].Line >= outline.Symbols[i - 1].Line,
+                $"Symbol at index {i} (line {outline.Symbols[i].Line}) should be >= previous (line {outline.Symbols[i - 1].Line})");
+    }
+
+    [Fact]
+    public void GetOutline_NonexistentFile_ReturnsNull()
+    {
+        var outline = _reader.GetOutline("nonexistent/file.cs");
+
+        Assert.Null(outline);
+    }
 }

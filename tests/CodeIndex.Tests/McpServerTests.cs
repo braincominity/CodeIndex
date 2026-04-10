@@ -600,6 +600,31 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Outline_ReturnsSymbols()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"outline","arguments":{"path":"src/app.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("symbol", text.ToLowerInvariant());
+        Assert.NotNull(result["structuredContent"]);
+        var structured = result["structuredContent"]!;
+        Assert.Equal("src/app.cs", structured["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Outline_NotFound_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"outline","arguments":{"path":"nonexistent.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.NotNull(structured["error"]);
+        Assert.NotNull(structured["indexed_file_count"]);
+    }
+
+    [Fact]
     public void ToolsCall_Index_MissingPath_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{}}}""")!;
