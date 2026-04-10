@@ -493,6 +493,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("fetchData", definition.Name);
         Assert.NotNull(analysis.File);
         Assert.Equal("src/api.js", analysis.File!.Path);
+        Assert.NotNull(analysis.WorkspaceIndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), analysis.WorkspaceLatestModified);
         Assert.Contains(analysis.NearbySymbols, item => item.Name == "ApiClient");
         Assert.Contains(analysis.Callees, item => item.CalleeName == "fetch");
     }

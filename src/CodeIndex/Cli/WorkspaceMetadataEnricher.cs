@@ -23,4 +23,12 @@ public static class WorkspaceMetadataEnricher
         map.GitHead = GitHelper.TryGetHeadCommit(projectRoot);
         map.GitIsDirty = GitHelper.TryIsWorktreeDirty(projectRoot);
     }
+
+    public static void Enrich(SymbolAnalysisResult analysis, string dbPath)
+    {
+        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+        analysis.ProjectRoot = projectRoot;
+        analysis.GitHead = GitHelper.TryGetHeadCommit(projectRoot);
+        analysis.GitIsDirty = GitHelper.TryIsWorktreeDirty(projectRoot);
+    }
 }

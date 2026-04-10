@@ -676,6 +676,7 @@ public class DbReader
         var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPattern, excludePathPatterns, excludeTests);
         var primaryDefinition = definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
+        var freshness = GetWorkspaceFreshness();
         var nearbySymbols = primaryDefinition != null
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
@@ -684,6 +685,8 @@ public class DbReader
         {
             Query = query,
             File = file,
+            WorkspaceIndexedAt = freshness.IndexedAt,
+            WorkspaceLatestModified = freshness.LatestModified,
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
             References = SearchReferences(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
@@ -1247,6 +1250,11 @@ public class SymbolAnalysisResult
 {
     public string Query { get; set; } = string.Empty;
     public FileResult? File { get; set; }
+    public DateTime? WorkspaceIndexedAt { get; set; }
+    public DateTime? WorkspaceLatestModified { get; set; }
+    public string? ProjectRoot { get; set; }
+    public string? GitHead { get; set; }
+    public bool? GitIsDirty { get; set; }
     public List<DefinitionResult> Definitions { get; set; } = [];
     public List<SymbolResult> NearbySymbols { get; set; } = [];
     public List<ReferenceResult> References { get; set; } = [];

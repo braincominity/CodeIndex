@@ -724,6 +724,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPattern, excludePaths, excludeTests);
+            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             structured["lang"] = lang;
             structured["path"] = pathPattern;

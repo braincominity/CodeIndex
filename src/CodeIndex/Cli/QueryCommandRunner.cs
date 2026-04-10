@@ -371,6 +371,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
@@ -380,6 +381,14 @@ public static class QueryCommandRunner
                 Console.WriteLine($"Query: {analysis.Query}");
                 if (analysis.File != null)
                     Console.WriteLine($"File : {analysis.File.Path} ({analysis.File.Lang ?? "?"}, {analysis.File.Lines} lines)");
+                if (analysis.WorkspaceIndexedAt != null)
+                    Console.WriteLine($"Workspace Indexed At : {analysis.WorkspaceIndexedAt:O}");
+                if (analysis.WorkspaceLatestModified != null)
+                    Console.WriteLine($"Workspace Modified   : {analysis.WorkspaceLatestModified:O}");
+                if (analysis.GitHead != null)
+                    Console.WriteLine($"Git HEAD             : {analysis.GitHead}");
+                if (analysis.GitIsDirty != null)
+                    Console.WriteLine($"Git Dirty            : {analysis.GitIsDirty}");
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));

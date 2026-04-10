@@ -338,6 +338,9 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["nearbySymbols"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callers"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callees"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceIndexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceLatestModified"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
     }
 
     [Fact]
