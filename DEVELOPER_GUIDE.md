@@ -33,7 +33,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (19 languages)
+    SymbolExtractor.cs        — Regex-based symbol extraction (21 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools)
@@ -339,8 +339,10 @@ Supported symbol kinds by language:
 | Lua | function, local function | -- | require |
 | R | name <- function() | -- | library, require |
 | Haskell | type signatures (name ::) | data, newtype, type, class, instance | import |
+| F# | let, let rec | type, module | open |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports |
 
-Zig is detected and indexed as raw text but has no symbol extraction patterns yet.
+Razor (`.cshtml`) and Blazor (`.razor`) are detected as csharp. XAML, MSBuild project files (`.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets`), and Zig are detected and indexed as raw text but have no symbol extraction patterns.
 
 Regex-based extraction is intentionally simple. Speed and portability are prioritized over AST-level accuracy.
 
@@ -810,8 +812,10 @@ LIMIT 20;
 | Lua | function, local function | -- | require |
 | R | name <- function() | -- | library, require |
 | Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import |
+| F# | let, let rec | type, module | open |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports |
 
-Zig は言語検出・テキストインデックスのみで、シンボル抽出パターンはまだありません。
+Razor（`.cshtml`）と Blazor（`.razor`）は csharp として検出される。XAML、MSBuild プロジェクトファイル（`.csproj`、`.fsproj`、`.vbproj`、`.props`、`.targets`）、Zig は言語検出・テキストインデックスのみで、シンボル抽出パターンはまだない。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 
