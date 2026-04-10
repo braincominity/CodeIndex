@@ -9,8 +9,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
-### [1.2.0] - 2026-04-11
-
 #### Added
 
 - **Dart, Scala, Elixir, Lua, and R language support** — Added language detection (`.dart`, `.scala`, `.sc`, `.r`, `.R`, `.ex`, `.exs`, `.lua`), symbol extraction for Dart (class/mixin/enum/extension/function/import), Scala (class/object/trait/case class/def/import), Elixir (defmodule/defprotocol/def/defp/import/alias/use), and Lua (function/local function/require). Dart and Scala also gain call-graph reference extraction and entrypoint hints for `map`. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
@@ -233,8 +231,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
-### [1.2.0] - 2026-04-11
-
 #### 追加
 
 - **Dart、Scala、Elixir、Lua、R 言語サポート** — 言語検出（`.dart`、`.scala`、`.sc`、`.r`、`.R`、`.ex`、`.exs`、`.lua`）、Dart（class/mixin/enum/extension/function/import）・Scala（class/object/trait/case class/def/import）・Elixir（defmodule/defprotocol/def/defp/import/alias/use）・Lua（function/local function/require）のシンボル抽出を追加。Dart と Scala は call graph 参照抽出と `map` 向けエントリポイントヒントにも対応。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
@@ -451,8 +447,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...HEAD
-[1.2.0]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...v1.2.0
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...v1.0.4

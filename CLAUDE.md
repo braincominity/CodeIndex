@@ -170,6 +170,7 @@ The following files contain overlapping content that must be updated together:
 When modifying the CLAUDE.md template (code search rules for AI agents), update both instances in README (English and Japanese). DEVELOPER_GUIDE references README, so no separate update is needed there.
 
 ### CHANGELOG style
+- **Always write new entries under `[Unreleased]`**, never under a versioned heading like `[1.2.0]`. Version headings are created only at release time by the maintainer. Writing entries directly into a version heading causes premature version claims and stale compare links.
 - One entry per distinct change. Don't merge unrelated fixes into a single entry just to reduce line count.
 - But don't write separate entries for iterative commits toward the same fix — consolidate them into one entry describing the final result.
 - Use [Keep a Changelog](https://keepachangelog.com/) categories: Added, Changed, Fixed, Removed.
@@ -368,6 +369,7 @@ tests/CodeIndex.Tests/
 CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する場合、READMEの両インスタンス（英語・日本語）を更新すること。DEVELOPER_GUIDEはREADMEを参照しているため個別の更新は不要。
 
 ### CHANGELOGのスタイル
+- **新しいエントリは必ず `[Unreleased]` の下に書く**。`[1.2.0]` のようなバージョン見出しの下には絶対に書かない。バージョン見出しはリリース時にメンテナが作成する。バージョン見出しに直接書くと、早すぎるバージョン宣言と古い compare リンクの原因になる。
 - 変更ごとに1エントリ。無関係な修正を行数削減のために1エントリにまとめない。
 - ただし、同じ修正に向けた段階的なコミットは1エントリに統合し、最終結果を記述する。
 - [Keep a Changelog](https://keepachangelog.com/)のカテゴリを使用: Added, Changed, Fixed, Removed（日本語: 追加, 変更, 修正, 削除）。
