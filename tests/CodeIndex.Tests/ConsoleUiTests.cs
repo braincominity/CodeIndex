@@ -26,6 +26,8 @@ public class ConsoleUiTests
         Assert.DoesNotContain("██████╗", output);
         Assert.Contains("Usage:", output);
         Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]", output);
+        Assert.Contains("cdidx definition <query>", output);
+        Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
         Assert.DoesNotContain("--random-spinner", output);

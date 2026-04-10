@@ -206,6 +206,134 @@ public class DbReader
     }
 
     /// <summary>
+    /// Reconstruct a file excerpt from indexed chunks.
+    /// インデックス済みチャンクからファイル抜粋を再構成する。
+    /// </summary>
+    public FileExcerptResult? GetExcerpt(string path, int startLine, int endLine, int before = 0, int after = 0)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        if (startLine <= 0)
+            startLine = 1;
+        if (endLine < startLine)
+            endLine = startLine;
+        if (before < 0)
+            before = 0;
+        if (after < 0)
+            after = 0;
+
+        using var fileCmd = _conn.CreateCommand();
+        fileCmd.CommandText = "SELECT lang, lines FROM files WHERE path = @path";
+        fileCmd.Parameters.AddWithValue("@path", path);
+
+        using var fileReader = fileCmd.ExecuteReader();
+        if (!fileReader.Read())
+            return null;
+
+        var lang = fileReader.IsDBNull(0) ? null : fileReader.GetString(0);
+        var totalLines = fileReader.GetInt32(1);
+        var requestedStart = Math.Max(1, startLine - before);
+        var requestedEnd = Math.Min(totalLines, endLine + after);
+
+        using var chunkCmd = _conn.CreateCommand();
+        chunkCmd.CommandText = @"
+            SELECT c.start_line, c.end_line, c.content
+            FROM chunks c
+            JOIN files f ON c.file_id = f.id
+            WHERE f.path = @path
+              AND c.end_line >= @startLine
+              AND c.start_line <= @endLine
+            ORDER BY c.start_line, c.chunk_index";
+        chunkCmd.Parameters.AddWithValue("@path", path);
+        chunkCmd.Parameters.AddWithValue("@startLine", requestedStart);
+        chunkCmd.Parameters.AddWithValue("@endLine", requestedEnd);
+
+        var lineMap = new SortedDictionary<int, string>();
+        using var chunkReader = chunkCmd.ExecuteReader();
+        while (chunkReader.Read())
+        {
+            var chunkStartLine = chunkReader.GetInt32(0);
+            var chunkEndLine = chunkReader.GetInt32(1);
+            var chunkLines = chunkReader.GetString(2).Split('\n');
+            var lineCount = chunkEndLine - chunkStartLine + 1;
+
+            for (int i = 0; i < chunkLines.Length && i < lineCount; i++)
+            {
+                var absoluteLine = chunkStartLine + i;
+                if (absoluteLine < requestedStart || absoluteLine > requestedEnd)
+                    continue;
+                if (!lineMap.ContainsKey(absoluteLine))
+                    lineMap[absoluteLine] = chunkLines[i];
+            }
+        }
+
+        if (lineMap.Count == 0)
+            return null;
+
+        var selectedLines = Enumerable.Range(requestedStart, requestedEnd - requestedStart + 1)
+            .Where(lineMap.ContainsKey)
+            .ToList();
+
+        if (selectedLines.Count == 0)
+            return null;
+
+        return new FileExcerptResult
+        {
+            Path = path,
+            Lang = lang,
+            StartLine = selectedLines[0],
+            EndLine = selectedLines[^1],
+            Content = string.Join("\n", selectedLines.Select(line => lineMap[line])),
+        };
+    }
+
+    /// <summary>
+    /// Resolve symbol definitions with reconstructed excerpts.
+    /// シンボル定義を抜粋付きで解決する。
+    /// </summary>
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false)
+    {
+        var symbols = SearchSymbols(query, limit, kind, lang);
+        var results = new List<DefinitionResult>();
+
+        foreach (var symbol in symbols)
+        {
+            var definitionExcerpt = GetExcerpt(symbol.Path, symbol.StartLine, symbol.EndLine);
+            if (definitionExcerpt == null)
+                continue;
+
+            string? bodyContent = null;
+            if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+            {
+                bodyContent = GetExcerpt(symbol.Path, symbol.BodyStartLine.Value, symbol.BodyEndLine.Value)?.Content;
+            }
+
+            results.Add(new DefinitionResult
+            {
+                Path = symbol.Path,
+                Lang = symbol.Lang,
+                Kind = symbol.Kind,
+                Name = symbol.Name,
+                Line = symbol.Line,
+                StartLine = symbol.StartLine,
+                EndLine = symbol.EndLine,
+                BodyStartLine = symbol.BodyStartLine,
+                BodyEndLine = symbol.BodyEndLine,
+                Signature = symbol.Signature,
+                ContainerKind = symbol.ContainerKind,
+                ContainerName = symbol.ContainerName,
+                Visibility = symbol.Visibility,
+                ReturnType = symbol.ReturnType,
+                Content = definitionExcerpt.Content,
+                BodyContent = bodyContent,
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
     /// Get database statistics.
     /// データベースの統計情報を取得する。
     /// </summary>
@@ -298,6 +426,21 @@ public class FileResult
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }
+}
+
+public class FileExcerptResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public string Content { get; set; } = string.Empty;
+}
+
+public class DefinitionResult : SymbolResult
+{
+    public string Content { get; set; } = string.Empty;
+    public string? BodyContent { get; set; }
 }
 
 public class StatusResult

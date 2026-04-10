@@ -21,12 +21,12 @@ src/CodeIndex/
     DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
     IndexCommandRunner.cs     — Index command execution and update/full-scan flows
-    QueryCommandRunner.cs     — Search/symbols/files/status execution and query arg parsing
+    QueryCommandRunner.cs     — Search/definition/symbols/files/excerpt/status execution and query arg parsing
     SearchSnippetFormatter.cs — Human-readable search snippet formatting
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup
-    DbReader.cs               — FTS search, symbol lookup, file listing, status
+    DbReader.cs               — FTS search, definition lookup, symbol lookup, excerpt reconstruction, file listing, status
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
@@ -86,13 +86,22 @@ chunks (
     UNIQUE(file_id, chunk_index)
 )
 
--- Extracted symbols (functions, classes, imports)
+-- Extracted symbols (functions, classes, imports, namespaces)
 symbols (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    kind    TEXT,                            -- "function", "class", or "import"
-    name    TEXT,
-    line    INTEGER                         -- 1-based line number
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    kind            TEXT,                    -- "function", "class", "import", "namespace", ...
+    name            TEXT,
+    line            INTEGER,                 -- 1-based anchor line
+    start_line      INTEGER,                 -- definition start line
+    end_line        INTEGER,                 -- definition end line
+    body_start_line INTEGER,                 -- body start line when known
+    body_end_line   INTEGER,                 -- body end line when known
+    signature       TEXT,                    -- trimmed declaration/signature line
+    container_kind  TEXT,
+    container_name  TEXT,
+    visibility      TEXT,
+    return_type     TEXT
 )
 
 -- FTS5 virtual table mirroring chunks.content
@@ -435,12 +444,12 @@ src/CodeIndex/
     DbPathResolver.cs         — indexコマンド用の既定DBパス解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
     IndexCommandRunner.cs     — indexコマンド実行と更新/フルスキャンフロー
-    QueryCommandRunner.cs     — search/symbols/files/status実行とクエリ引数解析
+    QueryCommandRunner.cs     — search/definition/symbols/files/excerpt/status実行とクエリ引数解析
     SearchSnippetFormatter.cs — 人間向け検索スニペット整形
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ
-    DbReader.cs               — FTS検索、シンボル検索、ファイル一覧、ステータス
+    DbReader.cs               — FTS検索、定義検索、シンボル検索、抜粋再構成、ファイル一覧、ステータス
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
@@ -500,13 +509,22 @@ chunks (
     UNIQUE(file_id, chunk_index)
 )
 
--- 抽出されたシンボル（関数、クラス、インポート）
+-- 抽出されたシンボル（関数、クラス、インポート、名前空間など）
 symbols (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    kind    TEXT,                            -- "function"、"class"、または"import"
-    name    TEXT,
-    line    INTEGER                         -- 1始まりの行番号
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    kind            TEXT,                    -- "function"、"class"、"import"、"namespace" など
+    name            TEXT,
+    line            INTEGER,                 -- 1始まりのアンカー行
+    start_line      INTEGER,                 -- 定義開始行
+    end_line        INTEGER,                 -- 定義終了行
+    body_start_line INTEGER,                 -- 分かる場合の本体開始行
+    body_end_line   INTEGER,                 -- 分かる場合の本体終了行
+    signature       TEXT,                    -- trim済みの宣言/シグネチャ行
+    container_kind  TEXT,
+    container_name  TEXT,
+    visibility      TEXT,
+    return_type     TEXT
 )
 
 -- chunks.contentをミラーするFTS5仮想テーブル

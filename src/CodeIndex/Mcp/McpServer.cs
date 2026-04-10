@@ -172,6 +172,22 @@ public class McpServer
                     ["required"] = new JsonArray { "query" }
                 }),
             CreateToolDefinition(
+                "definition",
+                "Resolve symbol definitions with definition ranges, signatures, and optional body content. / 定義範囲、シグネチャ、必要に応じて本体内容付きでシンボル定義を解決。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name pattern to resolve" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content when body ranges are available", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                }),
+            CreateToolDefinition(
                 "symbols",
                 "Search for code symbols (functions, classes, interfaces, imports) by name pattern. / シンボル（関数、クラス、インターフェース、import）を名前パターンで検索。",
                 new JsonObject
@@ -197,6 +213,22 @@ public class McpServer
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 }
                     }
+                }),
+            CreateToolDefinition(
+                "excerpt",
+                "Reconstruct a file excerpt from indexed chunks for a given line range. / 指定行範囲について、インデックス済みチャンクからファイル抜粋を再構成。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Indexed file path" },
+                        ["startLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Start line (1-based)" },
+                        ["endLine"] = new JsonObject { ["type"] = "integer", ["description"] = "End line (default: startLine)" },
+                        ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines before the range", ["default"] = 0 },
+                        ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines after the range", ["default"] = 0 }
+                    },
+                    ["required"] = new JsonArray { "path", "startLine" }
                 }),
             CreateToolDefinition(
                 "status",
@@ -242,8 +274,10 @@ public class McpServer
             return toolName switch
             {
                 "search" => ExecuteSearch(id, args),
+                "definition" => ExecuteDefinition(id, args),
                 "symbols" => ExecuteSymbols(id, args),
                 "files" => ExecuteFiles(id, args),
+                "excerpt" => ExecuteExcerpt(id, args),
                 "status" => ExecuteStatus(id),
                 "index" => ExecuteIndex(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
@@ -339,6 +373,37 @@ public class McpServer
         });
     }
 
+    private JsonNode ExecuteDefinition(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody);
+            var payload = new JsonObject
+            {
+                ["query"] = query,
+                ["kind"] = kind,
+                ["lang"] = lang,
+                ["includeBody"] = includeBody,
+                ["count"] = results.Count,
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            return CreateToolResult(id,
+                results.Count == 0 ? "No definitions found." : $"Found {results.Count} definition(s).",
+                payload);
+        });
+    }
+
     private JsonNode ExecuteFiles(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -380,6 +445,41 @@ public class McpServer
             var status = reader.GetStatus();
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             return CreateToolResult(id, "Database stats returned.", structured);
+        });
+    }
+
+    private JsonNode ExecuteExcerpt(JsonNode? id, JsonNode? args)
+    {
+        var path = args?["path"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(path))
+            return CreateToolErrorResponse(id, "Missing required parameter: path");
+
+        var startLine = args?["startLine"]?.GetValue<int>();
+        if (startLine == null || startLine <= 0)
+            return CreateToolErrorResponse(id, "Missing or invalid required parameter: startLine");
+
+        var endLine = args?["endLine"]?.GetValue<int>() ?? startLine.Value;
+        if (endLine < startLine.Value)
+            return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
+
+        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
+        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+
+        return WithDbReader(id, reader =>
+        {
+            var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after);
+            if (excerpt == null)
+            {
+                var emptyPayload = new JsonObject
+                {
+                    ["path"] = path,
+                    ["count"] = 0
+                };
+                return CreateToolResult(id, "No excerpt found.", emptyPayload);
+            }
+
+            var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
 

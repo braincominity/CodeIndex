@@ -21,8 +21,10 @@ cdidx <projectPath>                          # shorthand for 'index'
 
 # Query (default output: human-readable; use --json for AI consumption)
 cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
+cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--body] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
 cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx status [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -39,11 +41,11 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/symbols/files/status command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/symbols/files/excerpt/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Center human-readable search output on matching lines
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge
-  Database/DbReader.cs      — Query operations (FTS search, symbol lookup, file listing, status)
+  Database/DbReader.cs      — Query operations (FTS search, definition lookup, excerpt reconstruction, symbol lookup, file listing, status)
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
@@ -189,8 +191,10 @@ cdidx <projectPath>                          # 'index'の省略形
 
 # クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
 cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
+cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--body] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
 cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx status [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
@@ -207,11 +211,11 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/symbols/files/statusコマンド実行とクエリ引数解析
+  Cli/QueryCommandRunner.cs — search/definition/symbols/files/excerpt/statusコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け検索出力を一致行中心に整形
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ
-  Database/DbReader.cs      — クエリ操作（FTS検索、シンボル検索、ファイル一覧、ステータス）
+  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）

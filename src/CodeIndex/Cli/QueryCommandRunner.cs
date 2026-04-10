@@ -50,6 +50,58 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.Query == null)
+        {
+            Console.Error.WriteLine("Error: definition requires a symbol query argument");
+            Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No definitions found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                foreach (var r in results)
+                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+            }
+            else
+            {
+                foreach (var r in results)
+                {
+                    Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{r.StartLine}-{r.EndLine}");
+                    WriteNumberedExcerpt(r.StartLine, r.Content);
+                    if (options.IncludeBody)
+                    {
+                        if (r.BodyContent != null && r.BodyStartLine != null)
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine("  Body:");
+                            WriteNumberedExcerpt(r.BodyStartLine.Value, r.BodyContent);
+                        }
+                        else
+                        {
+                            Console.WriteLine("  Body: unavailable");
+                        }
+                    }
+                    Console.WriteLine();
+                }
+                Console.Error.WriteLine($"({results.Count} definitions)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -113,6 +165,46 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.Query == null)
+        {
+            Console.Error.WriteLine("Error: excerpt requires a path argument");
+            Console.Error.WriteLine("Usage: cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
+            return CommandExitCodes.UsageError;
+        }
+
+        if (options.StartLine == null)
+        {
+            Console.Error.WriteLine("Error: excerpt requires --start <line>");
+            return CommandExitCodes.UsageError;
+        }
+
+        var endLine = options.EndLine ?? options.StartLine.Value;
+        return WithDb(options.DbPath, reader =>
+        {
+            var excerpt = reader.GetExcerpt(options.Query, options.StartLine.Value, endLine, options.ContextBefore, options.ContextAfter);
+            if (excerpt == null)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No excerpt found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(excerpt, jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"{excerpt.Path}:{excerpt.StartLine}-{excerpt.EndLine}");
+                WriteNumberedExcerpt(excerpt.StartLine, excerpt.Content);
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -150,6 +242,11 @@ public static class QueryCommandRunner
         string? kind = null;
         string? query = null;
         bool rawFts = false;
+        bool includeBody = false;
+        int? startLine = null;
+        int? endLine = null;
+        int contextBefore = 0;
+        int contextAfter = 0;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -180,6 +277,21 @@ public static class QueryCommandRunner
                 case "--fts":
                     rawFts = true;
                     break;
+                case "--body":
+                    includeBody = true;
+                    break;
+                case "--start" when i + 1 < args.Length:
+                    startLine = ParsePositiveInt(args[++i], "--start");
+                    break;
+                case "--end" when i + 1 < args.Length:
+                    endLine = ParsePositiveInt(args[++i], "--end");
+                    break;
+                case "--before" when i + 1 < args.Length:
+                    contextBefore = ParseNonNegativeInt(args[++i], "--before");
+                    break;
+                case "--after" when i + 1 < args.Length:
+                    contextAfter = ParseNonNegativeInt(args[++i], "--after");
+                    break;
                 default:
                     if (args[i].StartsWith('-'))
                     {
@@ -202,6 +314,11 @@ public static class QueryCommandRunner
             Kind = kind,
             Query = query,
             RawFts = rawFts,
+            IncludeBody = includeBody,
+            StartLine = startLine,
+            EndLine = endLine,
+            ContextBefore = contextBefore,
+            ContextAfter = contextAfter,
         };
     }
 
@@ -227,6 +344,35 @@ public static class QueryCommandRunner
             return CommandExitCodes.DatabaseError;
         }
     }
+
+    private static void WriteNumberedExcerpt(int startLine, string content)
+    {
+        var lines = content.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+            Console.WriteLine($"  {startLine + i,4}: {lines[i]}");
+    }
+
+    private static int? ParsePositiveInt(string rawValue, string optionName)
+    {
+        if (!int.TryParse(rawValue, out var value) || value <= 0)
+        {
+            Console.Error.WriteLine($"Error: {optionName} requires a positive integer, got '{rawValue}'");
+            return null;
+        }
+
+        return value;
+    }
+
+    private static int ParseNonNegativeInt(string rawValue, string optionName)
+    {
+        if (!int.TryParse(rawValue, out var value) || value < 0)
+        {
+            Console.Error.WriteLine($"Error: {optionName} requires a non-negative integer, got '{rawValue}'");
+            return 0;
+        }
+
+        return value;
+    }
 }
 
 public sealed class QueryCommandOptions
@@ -238,4 +384,9 @@ public sealed class QueryCommandOptions
     public string? Kind { get; init; }
     public string? Query { get; init; }
     public bool RawFts { get; init; }
+    public bool IncludeBody { get; init; }
+    public int? StartLine { get; init; }
+    public int? EndLine { get; init; }
+    public int ContextBefore { get; init; }
+    public int ContextAfter { get; init; }
 }

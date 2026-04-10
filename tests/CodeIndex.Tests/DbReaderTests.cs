@@ -141,6 +141,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetExcerpt_ReconstructsRequestedLineRange()
+    {
+        var excerpt = _reader.GetExcerpt("src/auth.py", 1, 2);
+
+        Assert.NotNull(excerpt);
+        Assert.Equal(1, excerpt!.StartLine);
+        Assert.Equal(2, excerpt.EndLine);
+        Assert.Contains("def authenticate(user, password):", excerpt.Content);
+        Assert.Contains("if user == 'admin':", excerpt.Content);
+    }
+
+    [Fact]
+    public void GetDefinitions_ReturnsDefinitionContentAndOptionalBody()
+    {
+        var results = _reader.GetDefinitions("authenticate", includeBody: true);
+
+        var definition = Assert.Single(results);
+        Assert.Contains("def authenticate(user, password):", definition.Content);
+        Assert.NotNull(definition.BodyContent);
+        Assert.Contains("return True", definition.BodyContent);
+    }
+
+    [Fact]
     public void SearchSymbols_FiltersByKind()
     {
         var classes = _reader.SearchSymbols(kind: "class");
