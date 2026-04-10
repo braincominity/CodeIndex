@@ -51,6 +51,7 @@ return args[0] switch
     "excerpt" => QueryCommandRunner.RunExcerpt(args[1..], jsonOptions),
     "map" => QueryCommandRunner.RunMap(args[1..], jsonOptions),
     "inspect" => QueryCommandRunner.RunInspect(args[1..], jsonOptions),
+    "outline" => QueryCommandRunner.RunOutline(args[1..], jsonOptions),
     "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions),
     "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
     _ when IsProjectPathArg(args[0])
