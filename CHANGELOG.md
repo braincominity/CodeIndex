@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Clarified safe indexing after history rewrites** — README and `SELF_IMPROVEMENT.md` now explicitly recommend `cdidx .` after `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, and `--commits` now prints the same guidance in human-readable mode. Added a regression test for the new CLI note. Affected: `README.md`, `SELF_IMPROVEMENT.md`, `src/CodeIndex/Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+
 - **Hardened test cleanup for Windows SQLite file locks** — `IndexCommandRunnerTests` now clears SQLite pools before retrying temporary directory deletion, avoiding CI failures where Windows still held an external DB file open during cleanup. Also documented cross-platform expectations for filesystem, process, and SQLite-lifetime changes in the AI workflow docs. Affected: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`, `CLAUDE.md`, `SELF_IMPROVEMENT.md`.
 
 - **Synchronized README tables with the expanded CLI/MCP surface** — Updated the README English and Japanese tables for MCP tools and query options so they match the current command set, including `definition`, `references`, `callers`, `callees`, `excerpt`, `map`, `inspect`, and MCP `analyze_symbol`. Affected: `README.md`.
@@ -176,6 +178,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 変更
+
+- **履歴改変後の安全な再インデックス手順を明確化** — README と `SELF_IMPROVEMENT.md` に、`git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は `cdidx .` を優先するルールを明記し、`--commits` の人間向け出力でも同じ案内を出すようにした。新しい CLI 注意文の回帰テストも追加した。対象: `README.md`, `SELF_IMPROVEMENT.md`, `src/CodeIndex/Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
 
 - **Windows の SQLite ファイルロックに耐えるテスト後片付けへ強化** — `IndexCommandRunnerTests` で、一時ディレクトリ削除の再試行前に SQLite の pool をクリアするようにし、Windows で外部 DB ファイルがまだ開かれていて CI が落ちる問題を防いだ。あわせて、ファイルシステム、プロセス、SQLite ライフタイム変更におけるクロスプラットフォーム前提を AI 向け運用ドキュメントへ追記した。対象: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`, `CLAUDE.md`, `SELF_IMPROVEMENT.md`.
 

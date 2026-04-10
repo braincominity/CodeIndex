@@ -36,6 +36,7 @@ The loop is not just "suggest ideas". It is:
 - Before every commit, review README `# Code Search Rules` and `# コードベース検索ルール`; strengthen them if AI behavior should change.
 - After every commit, rebuild `cdidx` from the latest local source and refresh `.cdidx/codeindex.db` using that freshly built binary.
 - Prefer the **locally built latest binary** over an older globally installed `cdidx` whenever the repository code has changed.
+- After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, prefer `cdidx .` over `cdidx . --commits HEAD` so stale files are purged against the current checkout.
 - If a change may be breaking, migration-heavy, destructive, or likely to impose manual work on users, **stop and ask for approval before implementing**.
 - Respect language differences. Do not pretend every query type is meaningful for every language.
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
@@ -262,6 +263,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 毎コミット前に、README の `# Code Search Rules` と `# コードベース検索ルール` を見直し、AIの検索行動を変えるべきなら強化する。
 - 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
 - リポジトリのコードを変更した後は、古いグローバルインストール版より **ローカルでビルドした最新版バイナリ** を優先する。
+- `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、`cdidx . --commits HEAD` より `cdidx .` を優先し、現在の checkout に対する stale file を掃除する。
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。

@@ -207,7 +207,10 @@ public static class IndexCommandRunner
                 ConsoleUi.StopSpinner(spinnerCts);
             }
             if (!options.Json)
+            {
                 Console.WriteLine($"  Found {targetPaths.Count} changed file(s) from git");
+                Console.WriteLine("  Note    : After reset/rebase/amend/switch/merge, prefer `cdidx .` over `--commits` for a full sync / 履歴改変やcheckout変更後は `--commits` より `cdidx .` を推奨");
+            }
         }
 
         if (options.UpdateFiles.Count > 0)

@@ -144,6 +144,28 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_WithCommits_PrintsFullSyncGuidanceForHistoryRewrites()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "tracked.cs"), "class Sample {}\n");
+            RunGit(projectRoot, "add", "tracked.cs");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var (exitCode, output) = RunAndCaptureOutput([projectRoot, "--commits", "HEAD"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("prefer `cdidx .` over `--commits`", output);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_InWorktreeWithAbsoluteDbPathInsideProject_WritesRelativePatternToSharedExclude()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"cdidx_worktree_{Guid.NewGuid():N}");
@@ -189,6 +211,26 @@ public class IndexCommandRunnerTests
                 var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
                 using var document = JsonDocument.Parse(writer.ToString());
                 return (exitCode, document.RootElement.Clone());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    private static (int ExitCode, string Output) RunAndCaptureOutput(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+
+            try
+            {
+                Console.SetOut(writer);
+                var exitCode = IndexCommandRunner.Run(args, new JsonSerializerOptions());
+                return (exitCode, writer.ToString());
             }
             finally
             {
