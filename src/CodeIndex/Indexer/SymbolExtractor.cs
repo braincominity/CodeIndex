@@ -57,6 +57,7 @@ public static class SymbolExtractor
             new("class",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|partial|abstract|sealed|readonly|file)\s+)*(?:class|interface|enum|record\s+struct|record\s+class|record|struct)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|virtual|override|abstract|sealed|new|required)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
         ],
         ["go"] =
         [

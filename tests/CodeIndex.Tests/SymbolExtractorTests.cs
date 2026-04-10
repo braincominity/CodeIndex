@@ -69,6 +69,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsProperties()
+    {
+        // C# property with get/set / C# プロパティ（get/set付き）
+        var content = "public class User\n{\n    public string Name { get; set; }\n    public int Age { get; init; }\n    public virtual string? Email { get; set; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Email");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNullableReturnTypeMethods()
     {
         var content = "public static class GitHelper\n{\n    public static string? ResolveGitCommonDir(string projectRoot)\n    {\n        return null;\n    }\n}";
