@@ -607,7 +607,7 @@ public static class QueryCommandRunner
 
     private static void WriteGraphSupportHint(string? lang)
     {
-        if (!ReferenceExtractor.SupportsLanguage(lang))
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
             Console.Error.WriteLine($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
     }
 

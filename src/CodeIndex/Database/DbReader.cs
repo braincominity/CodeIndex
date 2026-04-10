@@ -747,8 +747,8 @@ public class DbReader
             TotalLines = fileStats.Sum(file => (long)file.Lines),
             TotalSymbols = fileStats.Sum(file => (long)file.SymbolCount),
             TotalReferences = fileStats.Sum(file => (long)file.ReferenceCount),
-            IndexedAt = fileStats.Max(file => file.IndexedAt),
-            LatestModified = fileStats.Max(file => file.Modified),
+            IndexedAt = fileStats.Count > 0 ? fileStats.Max(file => file.IndexedAt) : null,
+            LatestModified = fileStats.Count > 0 ? fileStats.Max(file => file.Modified) : null,
             WorkspaceIndexedAt = freshness.IndexedAt,
             WorkspaceLatestModified = freshness.LatestModified,
             Languages = fileStats
