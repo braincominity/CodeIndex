@@ -179,13 +179,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns10Tools()
+    public void ToolsList_Returns11Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(10, tools.Count);
+        Assert.Equal(11, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -196,6 +196,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("symbols", names);
         Assert.Contains("files", names);
         Assert.Contains("excerpt", names);
+        Assert.Contains("map", names);
         Assert.Contains("status", names);
         Assert.Contains("index", names);
     }
@@ -303,6 +304,21 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.True(response["result"]!["structuredContent"]!["excludeTests"]!.GetValue<bool>());
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Map_ReturnsRepoOverview()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp", "public class Program\n{\n    public static void Main(string[] args)\n    {\n        var app = new App();\n    }\n}\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"map","arguments":{"limit":5,"excludeTests":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(5, response["result"]!["structuredContent"]!["limit"]!.GetValue<int>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["languages"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["modules"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["topFiles"]);
+        Assert.Contains("Main", response["result"]!["structuredContent"]!["entrypoints"]!.ToJsonString());
     }
 
     [Fact]

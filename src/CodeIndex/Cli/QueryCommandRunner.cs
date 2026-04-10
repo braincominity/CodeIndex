@@ -314,6 +314,37 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(map, jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"Files      : {map.FileCount:N0}");
+                Console.WriteLine($"Lines      : {map.TotalLines:N0}");
+                Console.WriteLine($"Symbols    : {map.TotalSymbols:N0}");
+                Console.WriteLine($"References : {map.TotalReferences:N0}");
+                WriteRepoMapSection("Languages", map.Languages.Select(item => $"{item.Lang,-12} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
+                WriteRepoMapSection("Modules", map.Modules.Select(item => $"{item.Module,-24} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
+                WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
+                WriteRepoMapSection("Largest files", map.LargestFiles.Select(item => $"{item.Path}  [{item.Lines} lines, {item.Size} bytes]"));
+                WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
+                WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
+                WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}]"));
+            }
+
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -480,6 +511,18 @@ public static class QueryCommandRunner
         var lines = content.Split('\n');
         for (int i = 0; i < lines.Length; i++)
             Console.WriteLine($"  {startLine + i,4}: {lines[i]}");
+    }
+
+    private static void WriteRepoMapSection(string title, IEnumerable<string> rows)
+    {
+        var materialized = rows.ToList();
+        if (materialized.Count == 0)
+            return;
+
+        Console.WriteLine();
+        Console.WriteLine($"{title}:");
+        foreach (var row in materialized)
+            Console.WriteLine($"  {row}");
     }
 
     private static int? ParsePositiveInt(string rawValue, string optionName)

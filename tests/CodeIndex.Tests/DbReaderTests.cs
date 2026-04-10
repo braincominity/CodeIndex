@@ -408,6 +408,23 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, status.Languages["javascript"]);
     }
 
+    [Fact]
+    public void GetRepoMap_ReturnsOverviewSectionsAndEntrypoints()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp", "public class Program\n{\n    public static void Main(string[] args)\n    {\n        var client = new ApiClient();\n    }\n}\n");
+
+        var map = _reader.GetRepoMap(limit: 5, excludeTests: true);
+
+        Assert.True(map.FileCount >= 3);
+        Assert.Contains(map.Languages, item => item.Lang == "csharp");
+        Assert.Contains(map.Modules, item => item.Module == "src");
+        Assert.NotEmpty(map.TopFiles);
+        Assert.NotEmpty(map.LargestFiles);
+        Assert.NotEmpty(map.SymbolRichFiles);
+        Assert.NotEmpty(map.ReferenceRichFiles);
+        Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+    }
+
     public void Dispose()
     {
         _db.Dispose();

@@ -59,6 +59,34 @@ public class DbReader
             WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
             ELSE 1
         END";
+    private static readonly Dictionary<string, string[]> EntrypointNameHints = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["csharp"] = ["Main", "Program", "App", "Startup", "CreateHostBuilder"],
+        ["python"] = ["main", "app", "cli"],
+        ["javascript"] = ["main", "bootstrap", "start", "createApp", "App"],
+        ["typescript"] = ["main", "bootstrap", "start", "createApp", "App"],
+        ["go"] = ["main"],
+        ["rust"] = ["main"],
+        ["java"] = ["main", "Application", "App"],
+        ["kotlin"] = ["main", "Application", "App"],
+        ["ruby"] = ["main", "call", "App"],
+        ["php"] = ["main", "handle", "App"],
+        ["swift"] = ["main", "App"],
+    };
+    private static readonly Dictionary<string, string[]> EntrypointPathHints = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "App.cs"],
+        ["python"] = ["main.py", "__main__.py", "app.py", "cli.py"],
+        ["javascript"] = ["index.js", "main.js", "app.js", "server.js"],
+        ["typescript"] = ["index.ts", "main.ts", "app.ts", "server.ts"],
+        ["go"] = ["main.go"],
+        ["rust"] = ["main.rs", "lib.rs"],
+        ["java"] = ["Main.java", "App.java", "Application.java"],
+        ["kotlin"] = ["Main.kt", "App.kt", "Application.kt"],
+        ["ruby"] = ["app.rb", "main.rb", "cli.rb"],
+        ["php"] = ["index.php", "app.php"],
+        ["swift"] = ["main.swift", "App.swift"],
+    };
 
     public DbReader(SqliteConnection connection)
     {
@@ -586,6 +614,237 @@ public class DbReader
         };
     }
 
+    /// <summary>
+    /// Build a repo-level overview to help AI clients orient before deep queries.
+    /// 深掘り前の把握に使うリポジトリ俯瞰情報を構築する。
+    /// </summary>
+    public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        var fileStats = GetRepoMapFileStats(lang, pathPattern, excludePathPatterns, excludeTests);
+        var result = new RepoMapResult
+        {
+            FileCount = fileStats.Count,
+            TotalLines = fileStats.Sum(file => (long)file.Lines),
+            TotalSymbols = fileStats.Sum(file => (long)file.SymbolCount),
+            TotalReferences = fileStats.Sum(file => (long)file.ReferenceCount),
+            Languages = fileStats
+                .GroupBy(file => file.Lang ?? "unknown")
+                .Select(group => new RepoLanguageResult
+                {
+                    Lang = group.Key,
+                    Files = group.Count(),
+                    Lines = group.Sum(file => (long)file.Lines),
+                    Symbols = group.Sum(file => (long)file.SymbolCount),
+                    References = group.Sum(file => (long)file.ReferenceCount),
+                })
+                .OrderByDescending(group => group.Files)
+                .ThenBy(group => group.Lang)
+                .Take(limit)
+                .ToList(),
+            Modules = fileStats
+                .GroupBy(file => GetModuleKey(file.Path))
+                .Select(group => new RepoModuleResult
+                {
+                    Module = group.Key,
+                    Files = group.Count(),
+                    Lines = group.Sum(file => (long)file.Lines),
+                    Symbols = group.Sum(file => (long)file.SymbolCount),
+                    References = group.Sum(file => (long)file.ReferenceCount),
+                })
+                .OrderByDescending(group => group.References)
+                .ThenByDescending(group => group.Symbols)
+                .ThenByDescending(group => group.Lines)
+                .ThenBy(group => group.Module)
+                .Take(limit)
+                .ToList(),
+            TopFiles = fileStats
+                .Select(file => CreateScoredFileSummary(file))
+                .OrderByDescending(file => file.Score)
+                .ThenByDescending(file => file.ReferenceCount)
+                .ThenByDescending(file => file.SymbolCount)
+                .ThenByDescending(file => file.Lines)
+                .ThenBy(file => file.Path)
+                .Take(limit)
+                .ToList(),
+            LargestFiles = fileStats
+                .OrderByDescending(file => file.Lines)
+                .ThenByDescending(file => file.Size)
+                .ThenBy(file => file.Path)
+                .Take(limit)
+                .Select(CreateUnscoredFileSummary)
+                .ToList(),
+            SymbolRichFiles = fileStats
+                .OrderByDescending(file => file.SymbolCount)
+                .ThenByDescending(file => file.ReferenceCount)
+                .ThenByDescending(file => file.Lines)
+                .ThenBy(file => file.Path)
+                .Take(limit)
+                .Select(CreateUnscoredFileSummary)
+                .ToList(),
+            ReferenceRichFiles = fileStats
+                .OrderByDescending(file => file.ReferenceCount)
+                .ThenByDescending(file => file.SymbolCount)
+                .ThenByDescending(file => file.Lines)
+                .ThenBy(file => file.Path)
+                .Take(limit)
+                .Select(CreateUnscoredFileSummary)
+                .ToList(),
+            Entrypoints = GetEntrypoints(limit, lang, pathPattern, excludePathPatterns, excludeTests),
+        };
+
+        return result;
+    }
+
+    private List<RepoFileStat> GetRepoMapFileStats(string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT f.path, f.lang, f.size, f.lines,
+                   (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) AS symbol_count,
+                   (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id) AS reference_count
+            FROM files f
+            WHERE 1=1";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += " ORDER BY f.path";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+
+        var results = new List<RepoFileStat>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new RepoFileStat
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Size = reader.GetInt64(2),
+                Lines = reader.GetInt32(3),
+                SymbolCount = reader.GetInt32(4),
+                ReferenceCount = reader.GetInt32(5),
+            });
+        }
+
+        return results;
+    }
+
+    private List<RepoEntrypointResult> GetEntrypoints(int limit, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT f.path, f.lang, s.kind, s.name, s.line
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.kind IN ('function', 'class')";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += " ORDER BY f.path, s.line";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+
+        var results = new List<RepoEntrypointResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var path = reader.GetString(0);
+            var candidateLang = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var kind = reader.GetString(2);
+            var name = reader.GetString(3);
+            var line = reader.GetInt32(4);
+            var score = ScoreEntrypoint(path, candidateLang, kind, name);
+            if (score <= 0)
+                continue;
+
+            results.Add(new RepoEntrypointResult
+            {
+                Path = path,
+                Lang = candidateLang,
+                Kind = kind,
+                Name = name,
+                Line = line,
+                Score = score,
+            });
+        }
+
+        return results
+            .OrderByDescending(result => result.Score)
+            .ThenBy(result => result.Path)
+            .ThenBy(result => result.Line)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static RepoFileSummaryResult CreateScoredFileSummary(RepoFileStat file)
+    {
+        var summary = CreateUnscoredFileSummary(file);
+        summary.Score = (file.Lines * 1L) + (file.SymbolCount * 5L) + (file.ReferenceCount * 2L);
+        return summary;
+    }
+
+    private static RepoFileSummaryResult CreateUnscoredFileSummary(RepoFileStat file)
+    {
+        return new RepoFileSummaryResult
+        {
+            Path = file.Path,
+            Lang = file.Lang,
+            Lines = file.Lines,
+            Size = file.Size,
+            SymbolCount = file.SymbolCount,
+            ReferenceCount = file.ReferenceCount,
+        };
+    }
+
+    private static string GetModuleKey(string path)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+            return ".";
+        if (segments.Length == 1)
+            return segments[0];
+
+        return segments[0] switch
+        {
+            "src" or "app" or "lib" or "tests" or "test" or "docs" or "packages" when segments.Length >= 3 => $"{segments[0]}/{segments[1]}",
+            "src" or "app" or "lib" or "tests" or "test" or "docs" or "packages" => segments[0],
+            _ => segments[0],
+        };
+    }
+
+    private static int ScoreEntrypoint(string path, string? lang, string kind, string name)
+    {
+        if (lang == null)
+            return 0;
+
+        var score = 0;
+        if (EntrypointNameHints.TryGetValue(lang, out var names) && names.Any(candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)))
+            score += 4;
+
+        var fileName = Path.GetFileName(path);
+        if (EntrypointPathHints.TryGetValue(lang, out var fileHints) && fileHints.Any(candidate => string.Equals(candidate, fileName, StringComparison.OrdinalIgnoreCase)))
+            score += 3;
+
+        if (score == 0)
+            return 0;
+
+        if (kind == "function")
+            score += 1;
+
+        if (kind == "class" && string.Equals(Path.GetFileNameWithoutExtension(fileName), name, StringComparison.OrdinalIgnoreCase))
+            score += 1;
+
+        return score;
+    }
+
     private long ExecuteScalar(string sql)
     {
         using var cmd = _conn.CreateCommand();
@@ -744,4 +1003,68 @@ public class StatusResult
     public long Symbols { get; set; }
     public long References { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
+}
+
+public class RepoMapResult
+{
+    public int FileCount { get; set; }
+    public long TotalLines { get; set; }
+    public long TotalSymbols { get; set; }
+    public long TotalReferences { get; set; }
+    public List<RepoLanguageResult> Languages { get; set; } = [];
+    public List<RepoModuleResult> Modules { get; set; } = [];
+    public List<RepoFileSummaryResult> TopFiles { get; set; } = [];
+    public List<RepoFileSummaryResult> LargestFiles { get; set; } = [];
+    public List<RepoFileSummaryResult> SymbolRichFiles { get; set; } = [];
+    public List<RepoFileSummaryResult> ReferenceRichFiles { get; set; } = [];
+    public List<RepoEntrypointResult> Entrypoints { get; set; } = [];
+}
+
+public class RepoLanguageResult
+{
+    public string Lang { get; set; } = string.Empty;
+    public int Files { get; set; }
+    public long Lines { get; set; }
+    public long Symbols { get; set; }
+    public long References { get; set; }
+}
+
+public class RepoModuleResult
+{
+    public string Module { get; set; } = string.Empty;
+    public int Files { get; set; }
+    public long Lines { get; set; }
+    public long Symbols { get; set; }
+    public long References { get; set; }
+}
+
+public class RepoFileSummaryResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int Lines { get; set; }
+    public long Size { get; set; }
+    public int SymbolCount { get; set; }
+    public int ReferenceCount { get; set; }
+    public long? Score { get; set; }
+}
+
+public class RepoEntrypointResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string Kind { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int Score { get; set; }
+}
+
+internal sealed class RepoFileStat
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public long Size { get; set; }
+    public int Lines { get; set; }
+    public int SymbolCount { get; set; }
+    public int ReferenceCount { get; set; }
 }
