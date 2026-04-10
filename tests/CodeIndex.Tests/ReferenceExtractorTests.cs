@@ -52,4 +52,23 @@ public class ReferenceExtractorTests
 
         Assert.Empty(references);
     }
+
+    [Theory]
+    [InlineData("dart")]
+    [InlineData("scala")]
+    public void SupportsLanguage_DartAndScala_ReturnsTrue(string lang)
+    {
+        Assert.True(ReferenceExtractor.SupportsLanguage(lang));
+    }
+
+    [Fact]
+    public void Extract_Dart_DetectsCallSites()
+    {
+        const string content = "void main() {\n  runApp(MyApp());\n}";
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+        var references = ReferenceExtractor.Extract(1, "dart", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runApp");
+        Assert.Contains(references, r => r.SymbolName == "MyApp");
+    }
 }
