@@ -225,6 +225,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Lua_DetectsFunctionsAndRequire()
+    {
+        // Lua: function, local function, require / Lua: 関数、ローカル関数、require
+        var content = "local http = require('socket.http')\n\nfunction greet(name)\n  print(name)\nend\n\nlocal function helper(x)\n  return x\nend";
+        var symbols = SymbolExtractor.Extract(1, "lua", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "socket.http");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+    }
+
+    [Fact]
     public void Extract_Elixir_DetectsModuleAndFunctions()
     {
         // Elixir: defmodule, def, defp / Elixir: モジュール、関数、プライベート関数
