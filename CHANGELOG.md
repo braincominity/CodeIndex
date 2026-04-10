@@ -23,6 +23,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Code quality sweep** — Extract `IsProjectPathArg` helper in `Program.cs` for readability; replace magic numbers with named constants in `ConsoleUi` (`SpinnerFrameDelayMs`, `SpinnerStopDelayMs`, `ConsoleLineMargin`); use C# range syntax in `GitHelper`; deduplicate `WorkspaceMetadataEnricher` with a shared `Apply` helper; document FTS5 token normalization in `SearchSnippetFormatter`. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
+
+- **Clearer CLI error messages and help text** — `--rebuild` conflict error now explains "rebuild requires a full rescan"; database-not-found error shows the full absolute path via `Path.GetFullPath`; `--snippet-lines` help shows "1-20, default: 8" instead of "default: 8, max: 20". Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **Additional test coverage** — Added truncation-marker tests for `SearchSnippetFormatter.Format` (both-sides, before-only, after-only, no-markers), and a `ConsoleUi.LoadVersion` test that verifies the real version is returned instead of the "0.0.0" fallback. Affected: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
 - **Extract `RepoMapBuilder` from `DbReader`** — Moved the repo-map logic (~280 lines: `GetRepoMap`, file stats, entrypoint scoring, module grouping) into a dedicated `RepoMapBuilder` class, reducing `DbReader` from 1174 to 1073 lines. The public API (`DbReader.GetRepoMap`) is unchanged; it delegates to `RepoMapBuilder` internally. Shared query helpers (`AppendPathFilters`, `AddPathFilterParameters`, `EscapeLikeQuery`, `GetNullableDateTime`) became `internal static` for reuse. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
 
 - **Treat the self-improvement loop as regression and monkey testing** — `SELF_IMPROVEMENT.md` now states that the loop is not only for implementing improvements but also for exercising the freshly built local binary as ongoing regression coverage and light monkey testing. Agents are instructed to actively use recent, less-common, and edge-path features instead of only safe happy-path workflows so crashes and integration defects are more likely to surface early. Affected: `SELF_IMPROVEMENT.md`.
@@ -236,6 +242,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP ツールアノテーションで AI クライアントの信頼判断を支援** — 全 MCP ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返すようになった。クエリツールは読み取り専用かつ冪等に、`index` ツールは破壊的かつ非冪等にマークされる（`--rebuild` で DB を削除でき、再インデックスでファイルごとにチャンク・シンボルを置き換えるため）。これにより AI クライアントがユーザー確認なしに安全に呼べるツールを判断しやすくなる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### 変更
+
+- **コード品質の一括改善** — `Program.cs` のパス検出ロジックを `IsProjectPathArg` に抽出して可読性向上、`ConsoleUi` のマジックナンバーに名前付き定数（`SpinnerFrameDelayMs`、`SpinnerStopDelayMs`、`ConsoleLineMargin`）を導入、`GitHelper` で C# range syntax を使用、`WorkspaceMetadataEnricher` の重複ロジックを `Apply` ヘルパーに共通化、`SearchSnippetFormatter` のトークン正規化にコメント追加。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
+
+- **CLI エラーメッセージとヘルプの明確化** — `--rebuild` の競合エラーに理由（full rescan が必要）を追加、DB 未検出エラーに `Path.GetFullPath` でフルパスを表示、`--snippet-lines` のヘルプを "1-20, default: 8" に変更。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **テストカバレッジの追加** — `SearchSnippetFormatter.Format` のトランケーションマーカーテスト（両側・前のみ・後ろのみ・なし）と、`ConsoleUi.LoadVersion` が "0.0.0" フォールバックではなく実バージョンを返すことを検証するテストを追加。対象: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 
 - **`RepoMapBuilder` を `DbReader` から分離** — repo map ロジック（約280行: `GetRepoMap`、ファイル統計、エントリポイント採点、モジュールグループ化）を専用の `RepoMapBuilder` クラスに移動し、`DbReader` を 1174 行から 1073 行に縮小した。公開 API（`DbReader.GetRepoMap`）は変更なし、内部で `RepoMapBuilder` に委譲する。共有クエリヘルパー（`AppendPathFilters`、`AddPathFilterParameters`、`EscapeLikeQuery`、`GetNullableDateTime`）は再利用のため `internal static` に変更。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
 
