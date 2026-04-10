@@ -18,6 +18,8 @@ Keep making `cdidx` more useful to:
 - terminal-first users
 - MCP-based coding workflows
 
+Treat the loop itself as part implementation loop, part regression test, and part monkey test for the freshly built local binary.
+
 The loop is not just "suggest ideas". It is:
 1. inspect the current product with `cdidx`
 2. identify the next high-value gap
@@ -39,6 +41,7 @@ The loop is not just "suggest ideas". It is:
 - After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, re-index with the **locally built binary** using `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .` (full scan, not `--commits HEAD`) so stale files are purged against the current checkout.
 - When searching and navigating code to investigate bugs, plan fixes, or verify changes, always use the **locally built binary** — not the globally installed version. This ensures query results reflect the latest extraction rules and DB schema from this branch.
 - If the **locally built binary** crashes, aborts unexpectedly, or exposes a new defect during this loop, do not silently work around it or fall back to an older/global binary. Notify the user with the concrete failure, explain that the self-improvement loop is now blocked or tainted by that defect, and propose fixing it as a separate task or as the next approved priority.
+- Treat the loop itself as ongoing regression coverage and light monkey testing. Do not limit yourself to only the safest or most standard workflows; actively exercise recent features, edge features, and less-traveled commands/options so the loop can indirectly surface crashes, bad assumptions, stale help text, and integration defects.
 - If a change may be breaking, migration-heavy, destructive, or likely to impose manual work on users, **stop and ask for approval before implementing**.
 - Respect language differences. Do not pretend every query type is meaningful for every language.
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
@@ -100,6 +103,8 @@ dotnet run --project src/CodeIndex -- . --json
 
 Use `cdidx` as your primary navigation tool. Prefer structured and low-token queries first.
 
+Do not only exercise the obvious happy-path commands. Regularly touch newer features and less-common options as well, because this exploration phase also serves as opportunistic regression and monkey testing for the freshly built binary.
+
 Typical sequence:
 
 ```bash
@@ -110,6 +115,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --excl
 ```
 
 Use `inspect` when you already have a likely symbol name. Use `search` for raw text or unsupported languages. Use `map` first when you need orientation.
+Also rotate through features that are easy to neglect, such as JSON output variants, path filters, graph queries on supported languages, unsupported-language behavior, and help/usage flows.
 
 ### 5. Make a plan before editing
 
@@ -258,6 +264,8 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - ターミナル中心のユーザー
 - MCPベースのコーディングワークフロー
 
+このループ自体を、実装サイクルであると同時に、ローカルでビルドした最新版バイナリに対するリグレッションテストと軽いモンキーテストの場として扱います。
+
 このループは「アイデアを出すだけ」ではありません。流れは次のとおりです:
 1. `cdidx` 自身で現状を観察する
 2. 次に改善すべき価値の高いギャップを見つける
@@ -279,6 +287,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .`（フルスキャン。`--commits HEAD` ではない）を実行し、現在の checkout に対する stale file を掃除する。
 - バグ調査、修正計画、変更検証のためにコード検索・ナビゲーションを行うときも、常に **ローカルビルド版** を使う。グローバルインストール版は使わない。これにより、このブランチの最新の抽出ルールと DB スキーマを反映した検索結果が得られる。
 - このループ中に **ローカルビルド版** がクラッシュしたり、異常終了したり、新しい不具合を露呈した場合は、黙って回避したり古い版・グローバル版へ逃げたりしないこと。具体的な失敗内容をユーザーに通知し、その不具合によって自己改善ループがブロックされている、または結果の信頼性が損なわれていることを説明したうえで、別タスクまたは次の承認済み優先事項として修正提案を出すこと。
+- このループ自体を、継続的なリグレッション確認と軽いモンキーテストとして扱うこと。最も安全で標準的なワークフローだけに偏らず、新しい機能、利用頻度の低い機能、枝葉末節のオプションも積極的に触り、間接的にクラッシュ、古いヘルプ文、想定漏れ、統合不具合をあぶり出すこと。
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
@@ -339,6 +348,8 @@ dotnet run --project src/CodeIndex -- . --json
 
 主なナビゲーション手段は `cdidx` にしてください。まずは構造化された、低トークンの問い合わせを優先します。
 
+分かりやすい happy path のコマンドだけをなぞらないこと。ここでの探索は、ビルドしたばかりのバイナリに対する日和見的なリグレッションテスト兼モンキーテストでもあります。
+
 典型例:
 
 ```bash
@@ -349,6 +360,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --excl
 ```
 
 候補シンボル名が分かっているなら `inspect`、生テキストや未対応言語なら `search`、全体像が欲しいなら `map` を優先します。
+加えて、JSON 出力の別経路、path filter、対応言語での graph クエリ、未対応言語の挙動、help / usage など、見落とされやすい経路も意識的に回してください。
 
 ### 5. 編集前に計画を立てる
 
