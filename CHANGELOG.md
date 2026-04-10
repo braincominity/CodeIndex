@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Freshness hints in zero-result MCP responses** — When MCP query tools (`search`, `definition`, `symbols`, `references`, `callers`, `callees`, `files`) return zero results, the response now includes `indexed_file_count` and `indexed_at` so AI clients can immediately tell whether the index is stale or empty without a separate `status` round-trip. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
 - **MCP server instructions and listChanged capability** — The MCP `initialize` response now includes an `instructions` string with tool-selection guidance (start with `map`, use `analyze_symbol` to bundle queries, graph tools only for supported languages, run `index` first if no DB exists, etc.) and sets `capabilities.tools.listChanged` to `false`. The supported-language list in instructions is derived from `ReferenceExtractor.GetSupportedLanguages()` to stay in sync automatically. Protocol version bumped from `2024-11-05` to `2025-03-26` to match the spec revision that introduced `instructions` and tool annotations. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **Add a dedicated testing guide** — Added bilingual `TESTING_GUIDE.md` covering test suite layout, shared helpers, cross-platform rules, and test-writing conventions. Updated the maintenance checklists so test-code changes now explicitly review the testing guide in the same commit. Affected: `TESTING_GUIDE.md`, `README.md`, `DEVELOPER_GUIDE.md`, `SELF_IMPROVEMENT.md`, `CLAUDE.md`.
@@ -216,6 +218,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **0件 MCP レスポンスに鮮度ヒントを追加** — MCP クエリツール（`search`、`definition`、`symbols`、`references`、`callers`、`callees`、`files`）が 0 件を返すとき、レスポンスに `indexed_file_count` と `indexed_at` を含めるようにした。AI クライアントが別途 `status` を呼ばなくても、インデックスの古さや空を即座に判断できる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **MCP サーバー instructions と listChanged ケイパビリティ** — MCP の `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列（`map` から始める、`analyze_symbol` でクエリをまとめる、graph ツールは対応言語のみ、DB 未作成時は `index` を先に実行等）を追加し、`capabilities.tools.listChanged` を `false` に設定した。instructions 内の対応言語リストは `ReferenceExtractor.GetSupportedLanguages()` から動的に生成して自動同期する。プロトコルバージョンを `2024-11-05` から `2025-03-26` に更新し、`instructions` とツールアノテーションを導入した仕様改訂に合わせた。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 

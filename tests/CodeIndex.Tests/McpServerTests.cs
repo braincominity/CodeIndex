@@ -327,7 +327,11 @@ public class McpServerTests : IDisposable
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("No results found", text);
-        Assert.Equal(0, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        // Zero-result responses include freshness hint / 0件時に鮮度ヒントを含む
+        Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.NotNull(structured["indexed_at"]);
     }
 
     [Fact]
@@ -531,6 +535,18 @@ public class McpServerTests : IDisposable
         Assert.Contains("Found 1 definition", text);
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
         Assert.Contains("public void Run()", response["result"]!["structuredContent"]!["results"]![0]!["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_ZeroResults_IncludesFreshnessHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.NotNull(structured["indexed_at"]);
     }
 
     [Fact]

@@ -436,6 +436,20 @@ public class McpServer
     }
 
     /// <summary>
+    /// Add freshness hint fields to a zero-result payload so AI clients
+    /// can self-diagnose stale or empty indexes without a separate status call.
+    /// 0件レスポンスに鮮度ヒントを追加し、AIクライアントが別途statusを
+    /// 呼ばなくてもインデックスの古さや空を自己診断できるようにする。
+    /// </summary>
+    private static void AddFreshnessHint(JsonObject payload, DbReader reader)
+    {
+        var (fileCount, indexedAt) = reader.GetFreshnessHint();
+        payload["indexed_file_count"] = fileCount;
+        if (indexedAt.HasValue)
+            payload["indexed_at"] = indexedAt.Value.ToString("o");
+    }
+
+    /// <summary>
     /// Clamp limit to a safe range to prevent resource exhaustion.
     /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
     /// </summary>
@@ -493,6 +507,7 @@ public class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
 
@@ -537,6 +552,7 @@ public class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No symbols found.", payload);
             }
 
@@ -584,6 +600,8 @@ public class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
                 results.Count == 0 ? "No definitions found." : $"Found {results.Count} definition(s).",
                 payload);
@@ -622,6 +640,8 @@ public class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
                 BuildGraphSummary("references", results.Count, lang, graphSupported),
                 payload);
@@ -660,6 +680,8 @@ public class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
                 BuildGraphSummary("callers", results.Count, lang, graphSupported),
                 payload);
@@ -698,6 +720,8 @@ public class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
                 BuildGraphSummary("callees", results.Count, lang, graphSupported),
                 payload);
@@ -729,6 +753,7 @@ public class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No files found.", payload);
             }
 

@@ -1053,6 +1053,18 @@ public class DbReader
         return (long)cmd.ExecuteScalar()!;
     }
 
+    /// <summary>
+    /// Return a lightweight freshness hint for zero-result MCP responses.
+    /// 0件MCPレスポンス向けの軽量な鮮度ヒントを返す。
+    /// </summary>
+    public (long FileCount, DateTime? IndexedAt) GetFreshnessHint()
+    {
+        var fileCount = ExecuteScalar("SELECT COUNT(*) FROM files");
+        var indexedAt = ExecuteNullableDateTime(
+            _fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null);
+        return (fileCount, indexedAt);
+    }
+
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()
     {
         return (
