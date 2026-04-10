@@ -47,7 +47,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/status command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes

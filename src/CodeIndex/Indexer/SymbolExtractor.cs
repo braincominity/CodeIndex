@@ -125,7 +125,7 @@ public static class SymbolExtractor
         ],
         ["haskell"] =
         [
-            new("function", new Regex(@"^(?<name>[a-z_]\w*)\s+::", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^(?:>\s+|\s*)(?<name>[a-z_]\w*)\s+::", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?:data|newtype|type|class|instance)\s+(?<name>[A-Z]\w*)", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+(?:qualified\s+)?(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],

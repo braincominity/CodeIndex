@@ -310,6 +310,8 @@ public class McpServerTests : IDisposable
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("Found 1 search result", text);
+        // Content summary includes file path for AI orientation / サマリにファイルパスを含む
+        Assert.Contains("src/app.cs", text);
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(1, structured["count"]!.GetValue<int>());

@@ -238,6 +238,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Haskell_DetectsIndentedAndLiterateSignatures()
+    {
+        // Indented where-clause signature and literate Haskell '>' prefix
+        // インデントされたwhere節のシグネチャとliterate Haskellの'>'接頭辞
+        var content = "  helper :: Int -> Int\n  helper x = x + 1\n> main :: IO ()\n> main = putStrLn \"hello\"";
+        var symbols = SymbolExtractor.Extract(1, "haskell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
+    }
+
+    [Fact]
+    public void Extract_R_DoesNotMatchOrdinaryAssignment()
+    {
+        // Ordinary assignment should not be detected as a function
+        // 通常の代入は関数として検出されないこと
+        var content = "x <- 42\ny <- some_func(x)\nz <- list(1, 2, 3)";
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function");
+    }
+
+    [Fact]
     public void Extract_R_DetectsFunctionAssignmentAndLibrary()
     {
         // R: function assignment, library / R: 関数代入、library

@@ -23,7 +23,7 @@ src/CodeIndex/
     DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
     IndexCommandRunner.cs     — Index command execution and update/full-scan flows
-    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/status execution and query arg parsing
+    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
@@ -494,7 +494,7 @@ src/CodeIndex/
     DbPathResolver.cs         — indexコマンド用の既定DBパス解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
     IndexCommandRunner.cs     — indexコマンド実行と更新/フルスキャンフロー
-    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/status実行とクエリ引数解析
+    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status実行とクエリ引数解析
     SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペット整形
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
