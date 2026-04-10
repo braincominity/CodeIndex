@@ -283,4 +283,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("flutter"));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
     }
+
+    [Fact]
+    public void Extract_Dart_DoesNotMatchExpressionLines()
+    {
+        // Expressions that look like "type name(" but are not function definitions
+        // 関数定義に見えるが実際は式の行を誤検出しないことを検証
+        var content = "void main() {\n  return foo(bar);\n  await task(x);\n  const Widget(key: k);\n  throw Error('oops');\n}";
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "task");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Error");
+        // main() should still be detected / main()は検出されるべき
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
+    }
 }

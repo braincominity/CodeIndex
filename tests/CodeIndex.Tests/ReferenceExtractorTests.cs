@@ -71,4 +71,15 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "runApp");
         Assert.Contains(references, r => r.SymbolName == "MyApp");
     }
+
+    [Fact]
+    public void Extract_Scala_DetectsCallSites()
+    {
+        const string content = "object Main {\n  def run(): Unit = {\n    println(compute(42))\n  }\n}";
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "println");
+        Assert.Contains(references, r => r.SymbolName == "compute");
+    }
 }

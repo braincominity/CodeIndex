@@ -73,7 +73,6 @@ public class FileIndexer
         ".cargo",                       // Cargo registry cache / Cargoレジストリキャッシュ
         ".pub-cache",                   // Dart pub cache / Dart pubキャッシュ
         "_build",                       // Elixir/Mix build output / Elixir/Mixビルド出力
-        "deps",                         // Elixir/Mix dependency source / Elixir/Mix依存ソース
     };
 
     // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
