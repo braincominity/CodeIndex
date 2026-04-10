@@ -702,6 +702,7 @@ public class DbReader
         var chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
         var references = ExecuteScalar("SELECT COUNT(*) FROM symbol_references");
+        var freshness = GetWorkspaceFreshness();
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -717,8 +718,8 @@ public class DbReader
             Chunks = chunks,
             Symbols = symbols,
             References = references,
-            IndexedAt = ExecuteNullableDateTime(_fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null),
-            LatestModified = ExecuteNullableDateTime(_fileColumns.Contains("modified") ? "SELECT MAX(modified) FROM files" : null),
+            IndexedAt = freshness.IndexedAt,
+            LatestModified = freshness.LatestModified,
             Languages = langs,
         };
     }
@@ -730,6 +731,7 @@ public class DbReader
     public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         var fileStats = GetRepoMapFileStats(lang, pathPattern, excludePathPatterns, excludeTests);
+        var freshness = GetWorkspaceFreshness();
         var result = new RepoMapResult
         {
             FileCount = fileStats.Count,
@@ -738,6 +740,8 @@ public class DbReader
             TotalReferences = fileStats.Sum(file => (long)file.ReferenceCount),
             IndexedAt = fileStats.Max(file => file.IndexedAt),
             LatestModified = fileStats.Max(file => file.Modified),
+            WorkspaceIndexedAt = freshness.IndexedAt,
+            WorkspaceLatestModified = freshness.LatestModified,
             Languages = fileStats
                 .GroupBy(file => file.Lang ?? "unknown")
                 .Select(group => new RepoLanguageResult
@@ -969,6 +973,14 @@ public class DbReader
         return (long)cmd.ExecuteScalar()!;
     }
 
+    private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()
+    {
+        return (
+            ExecuteNullableDateTime(_fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null),
+            ExecuteNullableDateTime(_fileColumns.Contains("modified") ? "SELECT MAX(modified) FROM files" : null)
+        );
+    }
+
     private DateTime? ExecuteNullableDateTime(string? sql)
     {
         if (string.IsNullOrWhiteSpace(sql))
@@ -1178,6 +1190,8 @@ public class RepoMapResult
     public long TotalReferences { get; set; }
     public DateTime? IndexedAt { get; set; }
     public DateTime? LatestModified { get; set; }
+    public DateTime? WorkspaceIndexedAt { get; set; }
+    public DateTime? WorkspaceLatestModified { get; set; }
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }

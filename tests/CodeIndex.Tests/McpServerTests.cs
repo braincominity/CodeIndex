@@ -321,6 +321,8 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["topFiles"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceIndexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceLatestModified"]);
         Assert.Contains("Main", response["result"]!["structuredContent"]!["entrypoints"]!.ToJsonString());
     }
 

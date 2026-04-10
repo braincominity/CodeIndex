@@ -455,6 +455,36 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_KeepsScopedFreshnessAndAddsWorkspaceFreshness()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp", "public class Program\n{\n    public static void Main(string[] args)\n    {\n    }\n}\n",
+            modified: new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile("docs/guide.md", "markdown", "# Guide\n",
+            modified: new DateTime(2025, 6, 3, 0, 0, 0, DateTimeKind.Utc));
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE files
+            SET indexed_at = CASE path
+                WHEN 'src/auth.py' THEN '2025-06-01 00:00:00'
+                WHEN 'src/api.js' THEN '2025-06-01 00:00:00'
+                WHEN 'src/Program.cs' THEN '2025-06-02 00:00:00'
+                WHEN 'docs/guide.md' THEN '2025-06-04 00:00:00'
+                ELSE indexed_at
+            END
+            WHERE path IN ('src/auth.py', 'src/api.js', 'src/Program.cs', 'docs/guide.md')
+            """;
+        cmd.ExecuteNonQuery();
+
+        var map = _reader.GetRepoMap(limit: 5, pathPattern: "src/Program.cs");
+
+        Assert.Equal(new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc), map.IndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc), map.LatestModified);
+        Assert.Equal(new DateTime(2025, 6, 4, 0, 0, 0, DateTimeKind.Utc), map.WorkspaceIndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 3, 0, 0, 0, DateTimeKind.Utc), map.WorkspaceLatestModified);
+    }
+
+    [Fact]
     public void AnalyzeSymbol_BundlesDefinitionGraphAndNearbyContext()
     {
         var analysis = _reader.AnalyzeSymbol("fetchData", limit: 5, lang: "javascript", includeBody: true);

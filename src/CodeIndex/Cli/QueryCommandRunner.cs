@@ -334,9 +334,13 @@ public static class QueryCommandRunner
                 Console.WriteLine($"Symbols    : {map.TotalSymbols:N0}");
                 Console.WriteLine($"References : {map.TotalReferences:N0}");
                 if (map.IndexedAt != null)
-                    Console.WriteLine($"Indexed At : {map.IndexedAt:O}");
+                    Console.WriteLine($"Scope Indexed At     : {map.IndexedAt:O}");
                 if (map.LatestModified != null)
-                    Console.WriteLine($"Modified   : {map.LatestModified:O}");
+                    Console.WriteLine($"Scope Modified       : {map.LatestModified:O}");
+                if (map.WorkspaceIndexedAt != null)
+                    Console.WriteLine($"Workspace Indexed At : {map.WorkspaceIndexedAt:O}");
+                if (map.WorkspaceLatestModified != null)
+                    Console.WriteLine($"Workspace Modified   : {map.WorkspaceLatestModified:O}");
                 if (map.GitHead != null)
                     Console.WriteLine($"Git HEAD   : {map.GitHead}");
                 if (map.GitIsDirty != null)

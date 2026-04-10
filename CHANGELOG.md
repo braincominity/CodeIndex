@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+
+- **Split scoped and workspace freshness in `map` output** — `map` keeps `indexed_at` and `latest_modified` scoped to the filtered result set for backward compatibility, and now also exposes `workspace_indexed_at` and `workspace_latest_modified` so AI clients can compare slice-level freshness with whole-workspace freshness without falling back to a separate `status` call. Human-readable `map` output now labels the scoped/workspace timestamps explicitly. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
 ### [1.1.0] - 2026-04-10
 
 #### Changed
@@ -178,6 +182,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+
+- **`map` 出力の鮮度を絞り込み範囲とワークスペース全体で分離** — 後方互換のため `map` の `indexed_at` と `latest_modified` は絞り込み結果に対する値のまま維持しつつ、`workspace_indexed_at` と `workspace_latest_modified` を追加し、AIクライアントが別途 `status` を呼ばなくても「この範囲だけ古い」のか「ワークスペース全体が古い」のかを比較できるようにした。人間向け `map` 出力でも scoped/workspace の時刻ラベルを明示した。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 ### [1.1.0] - 2026-04-10
 
