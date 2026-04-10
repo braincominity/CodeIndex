@@ -260,6 +260,176 @@ public class DbReader
     }
 
     /// <summary>
+    /// Search indexed references such as call sites.
+    /// 呼び出し箇所などのインデックス済み参照を検索する。
+    /// </summary>
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT f.path, f.lang, r.symbol_name, r.reference_kind, r.line, r.column_number,
+                   r.context, r.container_kind, r.container_name
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE 1=1";
+
+        if (query != null)
+            sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (referenceKind != null)
+            sql += " AND r.reference_kind = @referenceKind";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
+
+        cmd.CommandText = sql;
+        if (query != null)
+        {
+            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+            cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+            cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
+        }
+        else
+        {
+            cmd.Parameters.AddWithValue("@rankingQuery", "");
+            cmd.Parameters.AddWithValue("@rankingQueryPrefix", "%");
+        }
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<ReferenceResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new ReferenceResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                SymbolName = reader.GetString(2),
+                ReferenceKind = reader.GetString(3),
+                Line = reader.GetInt32(4),
+                Column = reader.GetInt32(5),
+                Context = reader.GetString(6),
+                ContainerKind = reader.IsDBNull(7) ? null : reader.GetString(7),
+                ContainerName = reader.IsDBNull(8) ? null : reader.GetString(8),
+            });
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Find callers for a referenced symbol.
+    /// 指定シンボルを呼び出している呼び出し元を探す。
+    /// </summary>
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                   MIN(r.line) AS first_line, COUNT(*) AS reference_count
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL";
+
+        if (referenceKind != null)
+            sql += " AND r.reference_kind = @referenceKind";
+        else
+            sql += " AND r.reference_kind IN ('call', 'instantiate')";
+        sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<CallerResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new CallerResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                CallerKind = reader.IsDBNull(2) ? null : reader.GetString(2),
+                CallerName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                CalleeName = reader.GetString(4),
+                FirstLine = reader.GetInt32(5),
+                ReferenceCount = reader.GetInt32(6),
+            });
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Find callees used by a caller/container symbol.
+    /// 呼び出し元シンボルが使っている呼び出し先を探す。
+    /// </summary>
+    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL";
+
+        if (referenceKind != null)
+            sql += " AND r.reference_kind = @referenceKind";
+        else
+            sql += " AND r.reference_kind IN ('call', 'instantiate')";
+        sql += " AND r.container_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<CalleeResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new CalleeResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                CallerKind = reader.IsDBNull(2) ? null : reader.GetString(2),
+                CallerName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                CalleeName = reader.GetString(4),
+                ReferenceKind = reader.GetString(5),
+                FirstLine = reader.GetInt32(6),
+                ReferenceCount = reader.GetInt32(7),
+            });
+        }
+        return results;
+    }
+
+    /// <summary>
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>
@@ -396,6 +566,7 @@ public class DbReader
         var files = ExecuteScalar("SELECT COUNT(*) FROM files");
         var chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
+        var references = ExecuteScalar("SELECT COUNT(*) FROM symbol_references");
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -410,6 +581,7 @@ public class DbReader
             Files = files,
             Chunks = chunks,
             Symbols = symbols,
+            References = references,
             Languages = langs,
         };
     }
@@ -529,10 +701,47 @@ public class DefinitionResult : SymbolResult
     public string? BodyContent { get; set; }
 }
 
+public class ReferenceResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string SymbolName { get; set; } = string.Empty;
+    public string ReferenceKind { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public string Context { get; set; } = string.Empty;
+    public string? ContainerKind { get; set; }
+    public string? ContainerName { get; set; }
+}
+
+public class CallerResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string? CallerKind { get; set; }
+    public string? CallerName { get; set; }
+    public string CalleeName { get; set; } = string.Empty;
+    public int FirstLine { get; set; }
+    public int ReferenceCount { get; set; }
+}
+
+public class CalleeResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string? CallerKind { get; set; }
+    public string? CallerName { get; set; }
+    public string CalleeName { get; set; } = string.Empty;
+    public string ReferenceKind { get; set; } = string.Empty;
+    public int FirstLine { get; set; }
+    public int ReferenceCount { get; set; }
+}
+
 public class StatusResult
 {
     public long Files { get; set; }
     public long Chunks { get; set; }
     public long Symbols { get; set; }
+    public long References { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
 }

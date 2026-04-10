@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
 
@@ -65,6 +66,34 @@ public class McpServerTests : IDisposable
         }]);
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+    }
+
+    private void InsertIndexedFile(string path, string lang, string content)
+    {
+        var normalized = content.Replace("\r\n", "\n");
+        var lines = normalized.Split('\n');
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = lang,
+            Size = normalized.Length,
+            Lines = lines.Length,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = lines.Length,
+            Content = normalized,
+        }]);
+
+        var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
+        writer.InsertSymbols(symbols);
+        writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
     // --- Protocol tests / プロトコルテスト ---
@@ -150,17 +179,20 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns7Tools()
+    public void ToolsList_Returns10Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(7, tools.Count);
+        Assert.Equal(10, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
         Assert.Contains("definition", names);
+        Assert.Contains("references", names);
+        Assert.Contains("callers", names);
+        Assert.Contains("callees", names);
         Assert.Contains("symbols", names);
         Assert.Contains("files", names);
         Assert.Contains("excerpt", names);
@@ -248,24 +280,7 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_Search_ExcludeTests_ReturnsOnlySourceMatches()
     {
-        var writer = new DbWriter(_db.Connection);
-        var testFileId = writer.UpsertFile(new FileRecord
-        {
-            Path = "tests/app_test.cs",
-            Lang = "csharp",
-            Size = 120,
-            Lines = 6,
-            Modified = new DateTime(2024, 1, 1),
-            Checksum = "test456",
-        });
-        writer.InsertChunks([new ChunkRecord
-        {
-            FileId = testFileId,
-            ChunkIndex = 0,
-            StartLine = 1,
-            EndLine = 6,
-            Content = "public class AppTests { public void RunScenario() { var app = new App(); } }",
-        }]);
+        InsertIndexedFile("tests/app_test.cs", "csharp", "public class AppTests { public void RunScenario() { var app = new App(); } }");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludeTests":true}}}""")!;
         var response = _server.HandleMessage(request)!;
@@ -273,6 +288,45 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.True(response["result"]!["structuredContent"]!["excludeTests"]!.GetValue<bool>());
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_ReturnsIndexedReference()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["containerName"]!.GetValue<string>());
+        Assert.Equal("call", response["result"]!["structuredContent"]!["results"]![0]!["referenceKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_ReturnsCallerSummary()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_ReturnsCalleeSummary()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"login"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -358,6 +412,7 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["files"]!.GetValue<long>());
         Assert.Equal(1, response["result"]!["structuredContent"]!["chunks"]!.GetValue<long>());
         Assert.Equal(2, response["result"]!["structuredContent"]!["symbols"]!.GetValue<long>());
+        Assert.Equal(0, response["result"]!["structuredContent"]!["references"]!.GetValue<long>());
     }
 
     [Fact]

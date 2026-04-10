@@ -246,6 +246,11 @@ public class DbWriter
         cmd2.CommandText = "DELETE FROM symbols WHERE file_id = @fid";
         cmd2.Parameters.AddWithValue("@fid", fileId);
         cmd2.ExecuteNonQuery();
+
+        using var cmd3 = _conn.CreateCommand();
+        cmd3.CommandText = "DELETE FROM symbol_references WHERE file_id = @fid";
+        cmd3.Parameters.AddWithValue("@fid", fileId);
+        cmd3.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -367,6 +372,57 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Insert indexed references in batches.
+    /// インデックス済み参照をバッチ挿入する。
+    /// </summary>
+    public void InsertReferences(IReadOnlyList<ReferenceRecord> references)
+    {
+        if (references.Count == 0) return;
+
+        for (int i = 0; i < references.Count; i += BatchSize)
+        {
+            int end = Math.Min(i + BatchSize, references.Count);
+            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO symbol_references (
+                    file_id, symbol_name, reference_kind, line, column_number,
+                    context, container_kind, container_name
+                )
+                VALUES (
+                    @fid, @symbolName, @referenceKind, @line, @columnNumber,
+                    @context, @containerKind, @containerName
+                )";
+            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
+            var pSymbolName = cmd.Parameters.Add("@symbolName", SqliteType.Text);
+            var pReferenceKind = cmd.Parameters.Add("@referenceKind", SqliteType.Text);
+            var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
+            var pColumnNumber = cmd.Parameters.Add("@columnNumber", SqliteType.Integer);
+            var pContext = cmd.Parameters.Add("@context", SqliteType.Text);
+            var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
+            var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
+            cmd.Prepare();
+
+            for (int j = i; j < end; j++)
+            {
+                var reference = references[j];
+                pFid.Value = reference.FileId;
+                pSymbolName.Value = reference.SymbolName;
+                pReferenceKind.Value = reference.ReferenceKind;
+                pLine.Value = reference.Line;
+                pColumnNumber.Value = reference.Column;
+                pContext.Value = reference.Context;
+                pContainerKind.Value = (object?)reference.ContainerKind ?? DBNull.Value;
+                pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
+                cmd.ExecuteNonQuery();
+            }
+
+            transaction?.Commit();
+        }
+    }
+
+    /// <summary>
     /// Delete a file and its associated data by relative path. Returns true if found.
     /// CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
     /// 相対パスでファイルと関連データを削除する。見つかればtrueを返す。
@@ -433,12 +489,13 @@ public class DbWriter
     /// Get total counts for the summary output.
     /// サマリー出力用の合計件数を取得する。
     /// </summary>
-    public (long files, long chunks, long symbols) GetCounts()
+    public (long files, long chunks, long symbols, long references) GetCounts()
     {
         long files = ExecuteScalar("SELECT COUNT(*) FROM files");
         long chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
-        return (files, chunks, symbols);
+        long references = ExecuteScalar("SELECT COUNT(*) FROM symbol_references");
+        return (files, chunks, symbols, references);
     }
 
     /// <summary>

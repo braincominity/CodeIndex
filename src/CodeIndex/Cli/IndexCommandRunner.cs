@@ -281,11 +281,13 @@ public static class IndexCommandRunner
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                 writer.InsertSymbols(symbols);
+                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
+                writer.InsertReferences(references);
                 txn.Commit();
 
                 updated++;
                 if (options.Verbose && !options.Json)
-                    Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                    Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
             }
             catch (Exception ex)
             {
@@ -303,7 +305,7 @@ public static class IndexCommandRunner
 
         writer.OptimizeFts();
         stopwatch.Stop();
-        var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
+        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
         if (options.Json)
         {
@@ -316,6 +318,7 @@ public static class IndexCommandRunner
                     files_total = totalFiles,
                     chunks_total = totalChunks,
                     symbols_total = totalSymbols,
+                    references_total = totalReferences,
                     updated,
                     removed,
                     skipped,
@@ -334,6 +337,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Files   : {totalFiles:N0} (total in DB)");
             Console.WriteLine($"  Chunks  : {totalChunks:N0}");
             Console.WriteLine($"  Symbols : {totalSymbols:N0}");
+            Console.WriteLine($"  Refs    : {totalReferences:N0}");
             Console.WriteLine($"  Updated : {updated:N0}");
             if (removed > 0) Console.WriteLine($"  Removed : {removed:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0}");
@@ -427,12 +431,14 @@ public static class IndexCommandRunner
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                 writer.InsertSymbols(symbols);
+                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
+                writer.InsertReferences(references);
                 txn.Commit();
 
                 if (options.Verbose && !options.Json)
                 {
                     ConsoleUi.ClearProgressLine();
-                    Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols)");
+                    Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                 }
             }
             catch (Exception ex)
@@ -461,7 +467,7 @@ public static class IndexCommandRunner
 
         writer.OptimizeFts();
         stopwatch.Stop();
-        var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
+        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
         if (options.Json)
         {
@@ -474,6 +480,7 @@ public static class IndexCommandRunner
                     files_total = totalFiles,
                     chunks_total = totalChunks,
                     symbols_total = totalSymbols,
+                    references_total = totalReferences,
                     files_scanned = files.Count,
                     files_skipped = skipped,
                     files_purged = purged,
@@ -492,6 +499,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Files   : {totalFiles:N0}");
             Console.WriteLine($"  Chunks  : {totalChunks:N0}");
             Console.WriteLine($"  Symbols : {totalSymbols:N0}");
+            Console.WriteLine($"  Refs    : {totalReferences:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");

@@ -36,6 +36,7 @@ public class DatabaseTests : IDisposable
         Assert.Contains("files", tables);
         Assert.Contains("chunks", tables);
         Assert.Contains("symbols", tables);
+        Assert.Contains("symbol_references", tables);
         Assert.Contains("fts_chunks", tables);
     }
 
@@ -75,7 +76,7 @@ public class DatabaseTests : IDisposable
         _writer.UpsertFile(file1);
         _writer.UpsertFile(file2);
 
-        var (count, _, _) = _writer.GetCounts();
+        var (count, _, _, _) = _writer.GetCounts();
         Assert.Equal(1, count);
     }
 
@@ -164,7 +165,7 @@ public class DatabaseTests : IDisposable
         };
         _writer.InsertSymbols(symbols);
 
-        var (_, _, symbolCount) = _writer.GetCounts();
+        var (_, _, symbolCount, _) = _writer.GetCounts();
         Assert.Equal(2, symbolCount);
     }
 
@@ -182,9 +183,27 @@ public class DatabaseTests : IDisposable
 
         _writer.DeleteFileData(fileId);
 
-        var (_, chunkCount, symbolCount) = _writer.GetCounts();
+        var (_, chunkCount, symbolCount, referenceCount) = _writer.GetCounts();
         Assert.Equal(0, chunkCount);
         Assert.Equal(0, symbolCount);
+        Assert.Equal(0, referenceCount);
+    }
+
+    [Fact]
+    public void InsertReferences_InsertsCorrectly()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/ref.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = fileId, SymbolName = "authenticate", ReferenceKind = "call", Line = 2, Column = 12, Context = "return authenticate(user, password)", ContainerKind = "function", ContainerName = "login" },
+        ]);
+
+        var (_, _, _, referenceCount) = _writer.GetCounts();
+        Assert.Equal(1, referenceCount);
     }
 
     [Fact]
@@ -250,13 +269,13 @@ public class DatabaseTests : IDisposable
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
 
-            var (beforeCount, _, _) = _writer.GetCounts();
+            var (beforeCount, _, _, _) = _writer.GetCounts();
             Assert.Equal(2, beforeCount);
 
             var purged = _writer.PurgeStaleFiles(tempDir);
             Assert.Equal(1, purged);
 
-            var (afterCount, _, _) = _writer.GetCounts();
+            var (afterCount, _, _, _) = _writer.GetCounts();
             Assert.Equal(1, afterCount);
         }
         finally
@@ -279,10 +298,11 @@ public class DatabaseTests : IDisposable
         _db.DropAll();
         _db.InitializeSchema();
 
-        var (files, chunks, symbols) = _writer.GetCounts();
+        var (files, chunks, symbols, references) = _writer.GetCounts();
         Assert.Equal(0, files);
         Assert.Equal(0, chunks);
         Assert.Equal(0, symbols);
+        Assert.Equal(0, references);
     }
 
     [Fact]
@@ -302,10 +322,11 @@ public class DatabaseTests : IDisposable
         var result = _writer.DeleteFileByPath("src/remove_me.py");
         Assert.True(result);
 
-        var (files, chunks, symbols) = _writer.GetCounts();
+        var (files, chunks, symbols, references) = _writer.GetCounts();
         Assert.Equal(0, files);
         Assert.Equal(0, chunks);
         Assert.Equal(0, symbols);
+        Assert.Equal(0, references);
     }
 
     [Fact]
@@ -335,7 +356,7 @@ public class DatabaseTests : IDisposable
 
         _writer.DeleteFileByPath("src/delete.py");
 
-        var (files, _, _) = _writer.GetCounts();
+        var (files, _, _, _) = _writer.GetCounts();
         Assert.Equal(1, files);
     }
 

@@ -102,6 +102,115 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.Query == null)
+        {
+            Console.Error.WriteLine("Error: references requires a symbol query argument");
+            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No references found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                foreach (var r in results)
+                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+            }
+            else
+            {
+                foreach (var r in results)
+                {
+                    var owner = r.ContainerName != null ? $"  in {r.ContainerName}" : "";
+                    Console.WriteLine($"{r.ReferenceKind,-12} {r.SymbolName,-32} {r.Path}:{r.Line}:{r.Column}{owner}");
+                    Console.WriteLine($"  {r.Context}");
+                }
+                Console.Error.WriteLine($"({results.Count} references)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
+    public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.Query == null)
+        {
+            Console.Error.WriteLine("Error: callers requires a symbol query argument");
+            Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No callers found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                foreach (var r in results)
+                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+            }
+            else
+            {
+                foreach (var r in results)
+                    Console.WriteLine($"{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                Console.Error.WriteLine($"({results.Count} callers)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
+    public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.Query == null)
+        {
+            Console.Error.WriteLine("Error: callees requires a caller query argument");
+            Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No callees found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                foreach (var r in results)
+                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+            }
+            else
+            {
+                foreach (var r in results)
+                    Console.WriteLine($"{r.ReferenceKind,-12} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
+                Console.Error.WriteLine($"({results.Count} callees)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -222,6 +331,7 @@ public static class QueryCommandRunner
                 Console.WriteLine($"Files   : {status.Files:N0}");
                 Console.WriteLine($"Chunks  : {status.Chunks:N0}");
                 Console.WriteLine($"Symbols : {status.Symbols:N0}");
+                Console.WriteLine($"Refs    : {status.References:N0}");
                 if (status.Languages.Count > 0)
                 {
                     Console.WriteLine("Languages:");

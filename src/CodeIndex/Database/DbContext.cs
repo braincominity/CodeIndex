@@ -86,6 +86,20 @@ public class DbContext : IDisposable
                 return_type     TEXT
             )");
 
+        // Indexed references table / 参照インデックステーブル
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT,
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                container_kind  TEXT,
+                container_name  TEXT
+            )");
+
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
         EnsureColumn("symbols", "start_line", "INTEGER");
         EnsureColumn("symbols", "end_line", "INTEGER");
@@ -106,6 +120,9 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_start  ON symbols(start_line)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
 
         // Full-text search / 全文検索
         Execute(@"
@@ -144,6 +161,7 @@ public class DbContext : IDisposable
         Execute("DROP TRIGGER IF EXISTS fts_chunks_ad");
         Execute("DROP TRIGGER IF EXISTS fts_chunks_au");
         Execute("DROP TABLE IF EXISTS fts_chunks");
+        Execute("DROP TABLE IF EXISTS symbol_references");
         Execute("DROP TABLE IF EXISTS symbols");
         Execute("DROP TABLE IF EXISTS chunks");
         Execute("DROP TABLE IF EXISTS files");

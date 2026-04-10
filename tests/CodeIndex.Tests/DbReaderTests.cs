@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
@@ -28,6 +29,7 @@ public class DbReaderTests : IDisposable
 
     private void SeedData()
     {
+        const string authContent = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False";
         var pyId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/auth.py", Lang = "python", Size = 500, Lines = 30,
@@ -36,17 +38,21 @@ public class DbReaderTests : IDisposable
         _writer.InsertChunks([new ChunkRecord
         {
             FileId = pyId, ChunkIndex = 0, StartLine = 1, EndLine = 30,
-            Content = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False",
+            Content = authContent,
         }]);
-        _writer.InsertSymbols([
+        var authSymbols = new List<SymbolRecord>
+        {
             new SymbolRecord
             {
                 FileId = pyId, Kind = "function", Name = "authenticate", Line = 1,
                 StartLine = 1, EndLine = 4, BodyStartLine = 2, BodyEndLine = 4,
                 Signature = "def authenticate(user, password):"
             },
-        ]);
+        };
+        _writer.InsertSymbols(authSymbols);
+        _writer.InsertReferences(ReferenceExtractor.Extract(pyId, "python", authContent, authSymbols));
 
+        const string apiContent = "export class ApiClient {\n  async fetchData(url) {\n    return fetch(url)\n  }\n}";
         var jsId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/api.js", Lang = "javascript", Size = 800, Lines = 50,
@@ -55,9 +61,10 @@ public class DbReaderTests : IDisposable
         _writer.InsertChunks([new ChunkRecord
         {
             FileId = jsId, ChunkIndex = 0, StartLine = 1, EndLine = 50,
-            Content = "export class ApiClient {\n  async fetchData(url) {\n    return fetch(url)\n  }\n}",
+            Content = apiContent,
         }]);
-        _writer.InsertSymbols([
+        var apiSymbols = new List<SymbolRecord>
+        {
             new SymbolRecord
             {
                 FileId = jsId, Kind = "class", Name = "ApiClient", Line = 1,
@@ -70,7 +77,36 @@ public class DbReaderTests : IDisposable
                 StartLine = 2, EndLine = 3, BodyStartLine = 2, BodyEndLine = 3,
                 Signature = "async fetchData(url) {", ContainerKind = "class", ContainerName = "ApiClient"
             },
-        ]);
+        };
+        _writer.InsertSymbols(apiSymbols);
+        _writer.InsertReferences(ReferenceExtractor.Extract(jsId, "javascript", apiContent, apiSymbols));
+    }
+
+    private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
+    {
+        var normalized = content.Replace("\r\n", "\n");
+        var lines = normalized.Split('\n');
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = lang,
+            Size = normalized.Length,
+            Lines = lines.Length,
+            Modified = modified ?? new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = lines.Length,
+            Content = normalized,
+        }]);
+
+        var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
+        _writer.InsertSymbols(symbols);
+        _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
     [Fact]
@@ -274,6 +310,47 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_FindsIndexedCallSites()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
+
+        var results = _reader.SearchReferences("authenticate");
+
+        var reference = Assert.Single(results);
+        Assert.Equal("src/session.py", reference.Path);
+        Assert.Equal("call", reference.ReferenceKind);
+        Assert.Equal("login", reference.ContainerName);
+    }
+
+    [Fact]
+    public void GetCallers_ReturnsCallingFunctions()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
+
+        var results = _reader.GetCallers("authenticate");
+
+        var caller = Assert.Single(results);
+        Assert.Equal("src/session.py", caller.Path);
+        Assert.Equal("login", caller.CallerName);
+        Assert.Equal("authenticate", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetCallees_ReturnsReferencedSymbolsForCaller()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
+
+        var results = _reader.GetCallees("login");
+
+        var callee = Assert.Single(results);
+        Assert.Equal("src/session.py", callee.Path);
+        Assert.Equal("login", callee.CallerName);
+        Assert.Equal("authenticate", callee.CalleeName);
+        Assert.Equal("call", callee.ReferenceKind);
+    }
+
+    [Fact]
     public void ListFiles_ReturnsAllFiles()
     {
         var results = _reader.ListFiles();
@@ -319,6 +396,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, status.Files);
         Assert.Equal(2, status.Chunks);
         Assert.Equal(3, status.Symbols);
+        Assert.Equal(1, status.References);
     }
 
     [Fact]

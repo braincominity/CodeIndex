@@ -22,6 +22,9 @@ cdidx <projectPath>                          # shorthand for 'index'
 # Query (default output: human-readable; use --json for AI consumption)
 cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
 cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
@@ -41,18 +44,20 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/definition/symbols/files/excerpt/status command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Center human-readable search output on matching lines
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
-  Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge
-  Database/DbReader.cs      — Query operations (FTS search, definition lookup, excerpt reconstruction, symbol lookup, file listing, status)
+  Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
+  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, status)
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
+  Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
   Mcp/McpServer.cs          — MCP server (stdin/stdout JSON-RPC 2.0, tools for AI coding tools)
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord (plain DTOs)
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord (plain DTOs)
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitter tests
+  ReferenceExtractorTests.cs — ReferenceExtractor tests
   SymbolExtractorTests.cs   — SymbolExtractor tests (multi-language)
   FileIndexerTests.cs       — FileIndexer tests (scan, detect, build)
   DatabaseTests.cs          — DbContext/DbWriter integration tests
@@ -70,10 +75,11 @@ tests/CodeIndex.Tests/
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
 - **Literal-safe search by default** — Search queries are quoted token-by-token to avoid FTS syntax errors by default. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
 - **Path-aware narrowing and ranking** — `search`, `definition`, `symbols`, and `files` share `--path`, repeatable `--exclude-path`, and `--exclude-tests`. Query ordering prefers source files over tests/docs, and `search` boosts exact symbol-name and path matches.
+- **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
-- **Backward-compatible symbol schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns when possible. If a read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing.
+- **Backward-compatible read schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns and creates newer reference tables when possible. If a symbol read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
 - **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain to find the shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
@@ -194,6 +200,9 @@ cdidx <projectPath>                          # 'index'の省略形
 # クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
 cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
 cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
@@ -213,18 +222,20 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/definition/symbols/files/excerpt/statusコマンド実行とクエリ引数解析
+  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/statusコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け検索出力を一致行中心に整形
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
-  Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ
-  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
+  Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
+  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
+  Indexer/ReferenceExtractor.cs — 正規表現による参照抽出（言語差分を考慮）
   Mcp/McpServer.cs          — MCPサーバー（stdin/stdout JSON-RPC 2.0、AIツール向けツール公開）
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord（プレーンDTO）
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord（プレーンDTO）
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitterテスト
+  ReferenceExtractorTests.cs — ReferenceExtractorテスト
   SymbolExtractorTests.cs   — SymbolExtractorテスト（多言語対応）
   FileIndexerTests.cs       — FileIndexerテスト（走査、検出、構築）
   DatabaseTests.cs          — DbContext/DbWriter統合テスト
@@ -242,10 +253,11 @@ tests/CodeIndex.Tests/
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
 - **デフォルトはリテラル安全検索** — 検索クエリは既定ではトークンごとに引用し、FTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
 - **パス考慮の絞り込みとランキング** — `search`、`definition`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` を共有する。クエリ結果は tests や docs より source を優先し、`search` はシンボル名やパスの exact match を追加ブーストする。
+- **言語差分を考慮した参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対して構築する参照テーブルに支えられる。未対応言語には低信頼な疑似グラフ結果を返さず、`search` を使う前提にする。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
-- **後方互換なシンボルスキーマ** — 新しいcdidxバイナリで古いDBを開いた場合は、可能なら不足するシンボル列を自動追加する。読み取り経路でその場移行できない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。
+- **後方互換な読み取りスキーマ** — 新しいcdidxバイナリで古いDBを開いた場合は、可能なら不足するシンボル列を自動追加し、新しい参照テーブルも作成する。読み取り経路でその場移行できない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Cli/IndexCommandRunner.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
 - **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。git worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿って`info/exclude`がある共通`.git/`を見つける。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。

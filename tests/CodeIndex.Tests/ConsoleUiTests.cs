@@ -27,6 +27,9 @@ public class ConsoleUiTests
         Assert.Contains("Usage:", output);
         Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]", output);
         Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
+        Assert.Contains("cdidx references <query>", output);
+        Assert.Contains("cdidx callers <query>", output);
+        Assert.Contains("cdidx callees <query>", output);
         Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--fts]", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.DoesNotContain("Easter eggs", output);

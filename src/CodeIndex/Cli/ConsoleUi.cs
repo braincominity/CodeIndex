@@ -292,6 +292,9 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]");
         Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--fts]");
         Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
+        Console.WriteLine("  cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
@@ -302,6 +305,9 @@ public static class ConsoleUi
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
         Console.WriteLine("  search <query>             Full-text search across indexed chunks");
         Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
+        Console.WriteLine("  references <query>         Find indexed references for a symbol");
+        Console.WriteLine("  callers <query>            Find callers of a symbol");
+        Console.WriteLine("  callees <query>            Find callees used by a caller");
         Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
         Console.WriteLine("  files [query]              List indexed files");
         Console.WriteLine("  excerpt <path>             Reconstruct a line-range excerpt from indexed chunks");
@@ -331,7 +337,7 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
-        Console.WriteLine("  --kind <kind>              Filter symbols by kind (function/class/import)");
+        Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
@@ -341,6 +347,9 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
+        Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
+        Console.WriteLine("  cdidx callers ResolveGitCommonDir             Find callers");
+        Console.WriteLine("  cdidx callees AddToGitExclude                 Find callees used by a caller");
         Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx files --lang python                      List Python files");

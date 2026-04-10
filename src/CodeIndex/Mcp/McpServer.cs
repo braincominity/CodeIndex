@@ -194,6 +194,60 @@ public class McpServer
                     ["required"] = new JsonArray { "query" }
                 }),
             CreateToolDefinition(
+                "references",
+                "Search indexed symbol references such as call sites. / 呼び出し箇所などのインデックス済みシンボル参照を検索。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Referenced symbol name pattern to search for" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                }),
+            CreateToolDefinition(
+                "callers",
+                "Find caller symbols that reference a callee. / 指定シンボルを参照している呼び出し元シンボルを探す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Callee symbol name pattern to search for" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                }),
+            CreateToolDefinition(
+                "callees",
+                "Find callees used by a caller/container symbol. / 呼び出し元シンボルが使っている呼び出し先を探す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Caller/container symbol name pattern to search for" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                }),
+            CreateToolDefinition(
                 "symbols",
                 "Search for code symbols (functions, classes, interfaces, imports) by name pattern. / シンボル（関数、クラス、インターフェース、import）を名前パターンで検索。",
                 new JsonObject
@@ -244,7 +298,7 @@ public class McpServer
                 }),
             CreateToolDefinition(
                 "status",
-                "Get database statistics: file count, chunk count, symbol count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、言語別内訳。",
+                "Get database statistics: file count, chunk count, symbol count, reference count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、参照数、言語別内訳。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -287,6 +341,9 @@ public class McpServer
             {
                 "search" => ExecuteSearch(id, args),
                 "definition" => ExecuteDefinition(id, args),
+                "references" => ExecuteReferences(id, args),
+                "callers" => ExecuteCallers(id, args),
+                "callees" => ExecuteCallees(id, args),
                 "symbols" => ExecuteSymbols(id, args),
                 "files" => ExecuteFiles(id, args),
                 "excerpt" => ExecuteExcerpt(id, args),
@@ -445,6 +502,108 @@ public class McpServer
         });
     }
 
+    private JsonNode ExecuteReferences(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.SearchReferences(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            var payload = new JsonObject
+            {
+                ["query"] = query,
+                ["kind"] = kind,
+                ["lang"] = lang,
+                ["path"] = pathPattern,
+                ["excludeTests"] = excludeTests,
+                ["count"] = results.Count,
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            return CreateToolResult(id,
+                results.Count == 0 ? "No references found." : $"Found {results.Count} reference(s).",
+                payload);
+        });
+    }
+
+    private JsonNode ExecuteCallers(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetCallers(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            var payload = new JsonObject
+            {
+                ["query"] = query,
+                ["kind"] = kind,
+                ["lang"] = lang,
+                ["path"] = pathPattern,
+                ["excludeTests"] = excludeTests,
+                ["count"] = results.Count,
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            return CreateToolResult(id,
+                results.Count == 0 ? "No callers found." : $"Found {results.Count} caller(s).",
+                payload);
+        });
+    }
+
+    private JsonNode ExecuteCallees(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetCallees(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            var payload = new JsonObject
+            {
+                ["query"] = query,
+                ["kind"] = kind,
+                ["lang"] = lang,
+                ["path"] = pathPattern,
+                ["excludeTests"] = excludeTests,
+                ["count"] = results.Count,
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            return CreateToolResult(id,
+                results.Count == 0 ? "No callees found." : $"Found {results.Count} callee(s).",
+                payload);
+        });
+    }
+
     private JsonNode ExecuteFiles(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -587,6 +746,8 @@ public class McpServer
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                 writer.InsertSymbols(symbols);
+                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
+                writer.InsertReferences(references);
                 txn.Commit();
             }
             catch
@@ -597,7 +758,7 @@ public class McpServer
         }
 
         writer.OptimizeFts();
-        var (totalFiles, totalChunks, totalSymbols) = writer.GetCounts();
+        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
         var structured = new JsonObject
         {
@@ -608,6 +769,7 @@ public class McpServer
                 ["files"] = totalFiles,
                 ["chunks"] = totalChunks,
                 ["symbols"] = totalSymbols,
+                ["references"] = totalReferences,
                 ["scanned"] = files.Count,
                 ["skipped"] = skipped,
                 ["purged"] = purged,
