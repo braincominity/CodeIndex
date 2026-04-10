@@ -51,9 +51,10 @@ public static class SymbolExtractor
         ],
         ["csharp"] =
         [
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",    new Regex(@"^\s*using\s+(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
-            new("class",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|partial|abstract|sealed|readonly)\s+)*(?:class|interface|enum|record|struct)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
+            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
+            new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
+            new("class",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|partial|abstract|sealed|readonly|file)\s+)*(?:class|interface|enum|record\s+struct|record\s+class|record|struct)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
         ],

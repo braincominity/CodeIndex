@@ -56,6 +56,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsFileScopedNamespaceAndRecordStruct()
+    {
+        // C# 10+: file-scoped namespace, global using, record struct
+        var content = "global using System.Text;\nnamespace MyApp.Models;\n\npublic record struct Point(int X, int Y);\n\npublic record class User(string Name);";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("System.Text"));
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Models");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNullableReturnTypeMethods()
     {
         var content = "public static class GitHelper\n{\n    public static string? ResolveGitCommonDir(string projectRoot)\n    {\n        return null;\n    }\n}";
