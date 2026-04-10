@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Make unsupported call-graph languages explicit in `inspect` / `analyze_symbol`** — Symbol analysis now returns `graph_language`, `graph_supported`, and `graph_support_reason`, so AI clients can distinguish "this language is not indexed for callers/callees/references" from "there were simply no graph hits." Human-readable `inspect` output also prints the same graph-support note. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
 - **Use a proper rotating braille spinner sequence** — The default spinner and progress bar now share the 10-frame braille sequence `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`, which reads as rotation instead of jitter. Added a regression test for the default frame list and removed the duplicated default frame definition so spinner and progress bar stay aligned. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 
 - **Expose workspace trust metadata in `inspect` / `analyze_symbol`** — `inspect --json` and MCP `analyze_symbol` now include `workspace_indexed_at`, `workspace_latest_modified`, `project_root`, `git_head`, and `git_is_dirty`, so AI clients can judge freshness and repository state during symbol analysis without a separate `status` call. Human-readable `inspect` output also prints the same trust signals before the bundled sections. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
@@ -188,6 +190,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 変更
+
+- **`inspect` / `analyze_symbol` で未対応言語の call graph 非対応を明示** — シンボル分析が `graph_language`、`graph_supported`、`graph_support_reason` を返すようになり、AIクライアントが「この言語では callers/callees/references が未対応」なのか「単にヒットが無い」だけなのかを区別できるようにした。人間向け `inspect` 出力でも同じ graph 対応メモを表示する。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **既定スピナーを回転して見えるブライユ列へ変更** — 既定のスピナーと進捗バーが、揺れて見える 6 コマではなく `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` の 10 コマ列を共有するようにした。既定フレーム列の回帰テストも追加し、スピナーと進捗バーで定義がずれないよう重複を除去した。対象: `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 

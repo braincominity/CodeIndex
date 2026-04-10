@@ -274,7 +274,7 @@ cdidx inspect ResolveGitCommonDir --exclude-tests
 cdidx inspect ResolveGitCommonDir --exclude-tests --json
 ```
 
-`inspect` bundles the primary definition, nearby symbols from the same file, references, callers, callees, file metadata, and workspace freshness metadata so AI clients can answer many symbol-oriented questions without chaining several separate commands.
+`inspect` bundles the primary definition, nearby symbols from the same file, references, callers, callees, file metadata, workspace freshness metadata, and call-graph support metadata so AI clients can answer many symbol-oriented questions without chaining several separate commands. When a language is unsupported for `references` / `callers` / `callees`, `inspect --json` now says so explicitly instead of leaving AI clients to infer that from empty arrays.
 
 ### Find references, callers, and callees
 
@@ -338,7 +338,7 @@ cdidx map --path src/ --exclude-tests --json
 
 `map` gives AI clients a fast repo overview with language breakdowns, module summaries, top files, largest files, symbol-rich files, reference-rich files, and likely entrypoints when heuristics can infer them.
 
-`status --json` and `map --json` also expose freshness metadata. In `map --json`, `indexed_at` / `latest_modified` stay scoped to the filtered result set, while `workspace_indexed_at` / `workspace_latest_modified` mirror whole-workspace freshness so AI clients can tell the difference between "this slice is old" and "the repo is old." `inspect --json` and MCP `analyze_symbol` now expose the same whole-workspace freshness plus `project_root`, `git_head`, and `git_is_dirty`, while `files --json` includes per-file `checksum`, `modified`, and `indexed_at` so cached assumptions can be checked at file granularity too.
+`status --json` and `map --json` also expose freshness metadata. In `map --json`, `indexed_at` / `latest_modified` stay scoped to the filtered result set, while `workspace_indexed_at` / `workspace_latest_modified` mirror whole-workspace freshness so AI clients can tell the difference between "this slice is old" and "the repo is old." `inspect --json` and MCP `analyze_symbol` now expose the same whole-workspace freshness plus `project_root`, `git_head`, and `git_is_dirty`, and also include `graph_language`, `graph_supported`, and `graph_support_reason` so language-aware clients can tell whether empty call-graph sections mean "unsupported" or just "no hits." `files --json` includes per-file `checksum`, `modified`, and `indexed_at` so cached assumptions can be checked at file granularity too.
 
 ## Options
 
@@ -437,7 +437,7 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 ## AI Integration
 
-cdidx is designed as an AI-friendly code search tool. All query commands support `--json` for JSON lines output, making them easy to parse programmatically. `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, and `inspect` share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`, so AI clients can cut noise before fetching excerpts. `inspect` plus MCP `analyze_symbol` bundle definition, nearby symbols, references, callers, callees, file metadata, and whole-workspace trust signals into one round-trip, while `map` gives a repo-level overview for the first 30 seconds of investigation. `status --json` surfaces whole-workspace freshness metadata, `map --json` distinguishes filtered-scope freshness (`indexed_at`, `latest_modified`) from whole-workspace freshness (`workspace_indexed_at`, `workspace_latest_modified`), and `inspect --json` mirrors those whole-workspace timestamps plus `project_root`, `git_head`, and `git_is_dirty`. `files --json` exposes per-file checksums plus modified/indexed timestamps. `search --json` plus MCP `search` emit compact match-centered snippets with explicit line metadata instead of whole chunks, and `--snippet-lines` lets callers cap snippet size up front. Call graph data remains language-aware: unsupported languages should use `search` instead of assuming `references`/`callers`/`callees` will be populated. Opening an older database with a newer cdidx version will auto-add missing file/symbol columns and create newer reference tables when possible. If the DB cannot be migrated in place, read paths fall back to the legacy layout instead of crashing.
+cdidx is designed as an AI-friendly code search tool. All query commands support `--json` for JSON lines output, making them easy to parse programmatically. `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, and `inspect` share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`, so AI clients can cut noise before fetching excerpts. `inspect` plus MCP `analyze_symbol` bundle definition, nearby symbols, references, callers, callees, file metadata, whole-workspace trust signals, and call-graph support metadata into one round-trip, while `map` gives a repo-level overview for the first 30 seconds of investigation. `status --json` surfaces whole-workspace freshness metadata, `map --json` distinguishes filtered-scope freshness (`indexed_at`, `latest_modified`) from whole-workspace freshness (`workspace_indexed_at`, `workspace_latest_modified`), and `inspect --json` mirrors those whole-workspace timestamps plus `project_root`, `git_head`, `git_is_dirty`, `graph_language`, `graph_supported`, and `graph_support_reason`. `files --json` exposes per-file checksums plus modified/indexed timestamps. `search --json` plus MCP `search` emit compact match-centered snippets with explicit line metadata instead of whole chunks, and `--snippet-lines` lets callers cap snippet size up front. Call graph data remains language-aware: unsupported languages should use `search` instead of assuming `references`/`callers`/`callees` will be populated. Opening an older database with a newer cdidx version will auto-add missing file/symbol columns and create newer reference tables when possible. If the DB cannot be migrated in place, read paths fall back to the legacy layout instead of crashing.
 
 ### Setup: Add to CLAUDE.md
 
@@ -656,7 +656,7 @@ Once configured, the AI can directly call these tools:
 | `files` | List indexed files |
 | `excerpt` | Reconstruct a specific line range from indexed chunks |
 | `map` | Summarize languages, modules, hotspots, and likely entrypoints |
-| `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, and workspace trust metadata |
+| `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata |
 | `status` | Database statistics |
 | `index` | Index or re-index a project directory |
 
@@ -949,7 +949,7 @@ cdidx inspect ResolveGitCommonDir --exclude-tests
 cdidx inspect ResolveGitCommonDir --exclude-tests --json
 ```
 
-`inspect` は、主定義、同一ファイル内の近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース鮮度メタデータをまとめて返すため、AIクライアントが複数コマンドを連鎖させずにシンボル調査を進められます。
+`inspect` は、主定義、同一ファイル内の近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース鮮度メタデータと call graph 対応メタデータをまとめて返すため、AIクライアントが複数コマンドを連鎖させずにシンボル調査を進められます。`references` / `callers` / `callees` が未対応言語で空になる場合も、`inspect --json` がその理由を明示します。
 
 ### 参照、callers、callees を調べる
 
@@ -1013,7 +1013,7 @@ cdidx map --path src/ --exclude-tests --json
 
 `map` は、言語別内訳、モジュール要約、主要ファイル、巨大ファイル、シンボル密度の高いファイル、参照密度の高いファイル、推定できる場合のエントリポイントをまとめて返し、AIクライアントが最初の30秒で地図を作れるようにします。
 
-さらに `status --json` と `map --json` は鮮度メタデータを返します。`map --json` では `indexed_at` / `latest_modified` はフィルタ後の結果集合に対する鮮度を維持しつつ、`workspace_indexed_at` / `workspace_latest_modified` でワークスペース全体の鮮度も返すため、AIクライアントは「この絞り込み範囲だけ古い」のか「リポジトリ全体が古い」のかを区別できます。`inspect --json` と MCP の `analyze_symbol` も同じワークスペース鮮度に加えて `project_root`、`git_head`、`git_is_dirty` を返します。`files --json` にはファイル単位の `checksum`、`modified`、`indexed_at` が含まれるため、AIクライアントは仮説が古くなっていないか判断できます。
+さらに `status --json` と `map --json` は鮮度メタデータを返します。`map --json` では `indexed_at` / `latest_modified` はフィルタ後の結果集合に対する鮮度を維持しつつ、`workspace_indexed_at` / `workspace_latest_modified` でワークスペース全体の鮮度も返すため、AIクライアントは「この絞り込み範囲だけ古い」のか「リポジトリ全体が古い」のかを区別できます。`inspect --json` と MCP の `analyze_symbol` も同じワークスペース鮮度に加えて `project_root`、`git_head`、`git_is_dirty`、さらに `graph_language`、`graph_supported`、`graph_support_reason` を返します。`files --json` にはファイル単位の `checksum`、`modified`、`indexed_at` が含まれるため、AIクライアントは仮説が古くなっていないか判断できます。
 
 ## オプション一覧
 
@@ -1112,7 +1112,7 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 
 ## AIとの連携
 
-cdidxはAI対応のコード検索ツールとして設計されています。すべてのクエリコマンドは `--json` でJSONライン出力に対応し、プログラムからのパースが容易です。`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`map`、`inspect` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` で共通に絞り込みできるため、AIクライアントは抜粋取得前にノイズを減らせます。`inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース全体の信頼シグナルを1往復でまとめて返し、`map` は調査開始直後の俯瞰を返します。`status --json` はワークスペース全体の鮮度を返し、`map --json` はフィルタ後集合の鮮度 (`indexed_at`, `latest_modified`) とワークスペース全体の鮮度 (`workspace_indexed_at`, `workspace_latest_modified`) を区別して返します。`inspect --json` はそれと同じワークスペース鮮度に加えて `project_root`、`git_head`、`git_is_dirty` も返します。`files --json` はファイルごとの checksum と modified/indexed timestamp を返します。`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットと明示的な行メタデータを返し、`--snippet-lines` でそのサイズを先に制限できます。call graph 系のデータは言語差分を考慮しており、未対応言語では `references` / `callers` / `callees` が空でも正常です。その場合は `search` を優先してください。古いDBを新しいcdidxで開いた場合も、可能なら不足する file/symbol 列を自動追加し、新しい参照テーブルも作成します。DBをその場で移行できない場合でも、読み取り経路は旧レイアウトへフォールバックし、クラッシュしません。
+cdidxはAI対応のコード検索ツールとして設計されています。すべてのクエリコマンドは `--json` でJSONライン出力に対応し、プログラムからのパースが容易です。`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`map`、`inspect` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` で共通に絞り込みできるため、AIクライアントは抜粋取得前にノイズを減らせます。`inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース全体の信頼シグナルと call graph 対応メタデータを1往復でまとめて返し、`map` は調査開始直後の俯瞰を返します。`status --json` はワークスペース全体の鮮度を返し、`map --json` はフィルタ後集合の鮮度 (`indexed_at`, `latest_modified`) とワークスペース全体の鮮度 (`workspace_indexed_at`, `workspace_latest_modified`) を区別して返します。`inspect --json` はそれと同じワークスペース鮮度に加えて `project_root`、`git_head`、`git_is_dirty`、`graph_language`、`graph_supported`、`graph_support_reason` も返します。`files --json` はファイルごとの checksum と modified/indexed timestamp を返します。`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットと明示的な行メタデータを返し、`--snippet-lines` でそのサイズを先に制限できます。call graph 系のデータは言語差分を考慮しており、未対応言語では `references` / `callers` / `callees` が空でも正常です。その場合は `search` を優先してください。古いDBを新しいcdidxで開いた場合も、可能なら不足する file/symbol 列を自動追加し、新しい参照テーブルも作成します。DBをその場で移行できない場合でも、読み取り経路は旧レイアウトへフォールバックし、クラッシュしません。
 
 ### セットアップ: CLAUDE.mdに追加
 
@@ -1331,7 +1331,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `files` | インデックス済みファイル一覧 |
 | `excerpt` | インデックス済みチャンクから特定行範囲を再構成 |
 | `map` | 言語、モジュール、ホットスポット、推定エントリポイントを要約 |
-| `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータをまとめて返す |
+| `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す |
 | `status` | データベース統計情報 |
 | `index` | プロジェクトのインデックス作成・更新 |
 

@@ -1,3 +1,4 @@
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -677,6 +678,8 @@ public class DbReader
         var primaryDefinition = definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
+        var graphLanguage = lang ?? file?.Lang;
+        bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
         var nearbySymbols = primaryDefinition != null
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
@@ -687,6 +690,9 @@ public class DbReader
             File = file,
             WorkspaceIndexedAt = freshness.IndexedAt,
             WorkspaceLatestModified = freshness.LatestModified,
+            GraphLanguage = graphLanguage,
+            GraphSupported = graphSupported,
+            GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
             References = SearchReferences(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
@@ -998,6 +1004,17 @@ public class DbReader
         return ParseDateTimeValue(value);
     }
 
+    private static string BuildGraphSupportReason(string? graphLanguage, bool? graphSupported)
+    {
+        if (graphLanguage == null || graphSupported == null)
+            return "Call-graph support could not be determined because no language filter or matching definition was available.";
+
+        if (graphSupported.Value)
+            return $"Call-graph extraction is indexed for '{graphLanguage}'.";
+
+        return $"Call-graph extraction is not indexed for '{graphLanguage}'. Use search, definition, excerpt, or files instead.";
+    }
+
     private HashSet<string> LoadColumns(string tableName)
     {
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1255,6 +1272,9 @@ public class SymbolAnalysisResult
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
+    public string? GraphLanguage { get; set; }
+    public bool? GraphSupported { get; set; }
+    public string? GraphSupportReason { get; set; }
     public List<DefinitionResult> Definitions { get; set; } = [];
     public List<SymbolResult> NearbySymbols { get; set; } = [];
     public List<ReferenceResult> References { get; set; } = [];

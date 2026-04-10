@@ -389,6 +389,12 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD             : {analysis.GitHead}");
                 if (analysis.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty            : {analysis.GitIsDirty}");
+                if (analysis.GraphLanguage != null)
+                    Console.WriteLine($"Graph Language       : {analysis.GraphLanguage}");
+                if (analysis.GraphSupported != null)
+                    Console.WriteLine($"Graph Supported      : {analysis.GraphSupported}");
+                if (analysis.GraphSupportReason != null)
+                    Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));

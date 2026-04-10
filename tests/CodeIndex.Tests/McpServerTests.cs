@@ -341,6 +341,18 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["workspaceIndexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["workspaceLatestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+        Assert.True(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("Use search, definition, excerpt, or files instead.", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]

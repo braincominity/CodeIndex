@@ -315,7 +315,7 @@ public class McpServer
                 }),
             CreateToolDefinition(
                 "analyze_symbol",
-                "Bundle definition, nearby symbols, references, callers, callees, and file metadata for one symbol query. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータをまとめて返す。",
+                "Bundle definition, nearby symbols, references, callers, callees, file metadata, and graph-support metadata for one symbol query. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、グラフ対応メタデータをまとめて返す。",
                 new JsonObject
                 {
                     ["type"] = "object",

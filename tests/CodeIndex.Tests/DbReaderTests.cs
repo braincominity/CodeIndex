@@ -495,8 +495,25 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/api.js", analysis.File!.Path);
         Assert.NotNull(analysis.WorkspaceIndexedAt);
         Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), analysis.WorkspaceLatestModified);
+        Assert.Equal("javascript", analysis.GraphLanguage);
+        Assert.True(analysis.GraphSupported);
+        Assert.Contains("indexed", analysis.GraphSupportReason);
         Assert.Contains(analysis.NearbySymbols, item => item.Name == "ApiClient");
         Assert.Contains(analysis.Callees, item => item.CalleeName == "fetch");
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_UnsupportedLanguage_ReportsGraphSupportMetadata()
+    {
+        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "markdown");
+
+        Assert.Equal("markdown", analysis.GraphLanguage);
+        Assert.False(analysis.GraphSupported);
+        Assert.Contains("not indexed", analysis.GraphSupportReason);
+        Assert.Empty(analysis.Definitions);
+        Assert.Empty(analysis.References);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.Callees);
     }
 
     public void Dispose()

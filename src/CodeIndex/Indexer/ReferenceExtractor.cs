@@ -31,14 +31,19 @@ public static class ReferenceExtractor
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
+    public static bool SupportsLanguage(string? lang) =>
+        lang != null && SupportedLanguages.Contains(lang);
+
     /// <summary>
     /// Extract indexed references for supported languages.
     /// 対応言語向けにインデックス化する参照を抽出する。
     /// </summary>
     public static List<ReferenceRecord> Extract(long fileId, string? lang, string content, IReadOnlyList<SymbolRecord> symbols)
     {
-        if (lang == null || !SupportedLanguages.Contains(lang))
+        if (!SupportsLanguage(lang))
             return [];
+
+        var language = lang!;
 
         var lines = content.Split('\n');
         var definitionNamesByLine = symbols
@@ -57,7 +62,7 @@ public static class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
-            var preparedLine = PrepareLine(lang, originalLine);
+            var preparedLine = PrepareLine(language, originalLine);
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
 
