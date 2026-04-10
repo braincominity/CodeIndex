@@ -187,6 +187,37 @@ public class GitHelperTests : IDisposable
         Assert.Equal(["feature.txt", "main.txt"], changedFiles.OrderBy(x => x).ToArray());
     }
 
+    [Fact]
+    public void TryGetHeadCommit_ReturnsHeadCommitForRepo()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        var expected = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+        var actual = GitHelper.TryGetHeadCommit(repoDir);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void TryIsWorktreeDirty_DetectsModifiedFiles()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        Assert.False(GitHelper.TryIsWorktreeDirty(repoDir));
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v2\n");
+
+        Assert.True(GitHelper.TryIsWorktreeDirty(repoDir));
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");

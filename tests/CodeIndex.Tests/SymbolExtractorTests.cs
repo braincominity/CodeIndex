@@ -56,6 +56,36 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsNullableReturnTypeMethods()
+    {
+        var content = "public static class GitHelper\n{\n    public static string? ResolveGitCommonDir(string projectRoot)\n    {\n        return null;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Name == "ResolveGitCommonDir"));
+        Assert.Equal("function", method.Kind);
+        Assert.Equal("string?", method.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_AssignsContainerAndRanges_ForNestedMembers()
+    {
+        var content = "public class UserService\n{\n    public async Task<User> GetUser(int id)\n    {\n        return default!;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var classSymbol = Assert.Single(symbols.Where(s => s.Kind == "class"));
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function"));
+
+        Assert.Equal(1, classSymbol.StartLine);
+        Assert.Equal(7, classSymbol.EndLine);
+        Assert.Equal(2, classSymbol.BodyStartLine);
+        Assert.Equal(7, classSymbol.BodyEndLine);
+        Assert.Equal("class", method.ContainerKind);
+        Assert.Equal("UserService", method.ContainerName);
+        Assert.Equal(3, method.StartLine);
+        Assert.Equal(6, method.EndLine);
+    }
+
+    [Fact]
     public void Extract_Go_DetectsFunctions()
     {
         // Should detect both regular and method functions
@@ -179,8 +209,8 @@ public class SymbolExtractorTests
         var content = "namespace MyApp {\nclass Handler {\n    void process(int data) {\n    }\n};\n}";
         var symbols = SymbolExtractor.Extract(1, "cpp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler" && s.ContainerName == "MyApp");
     }
 
     [Fact]

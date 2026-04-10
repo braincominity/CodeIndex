@@ -70,12 +70,49 @@ public class DbContext : IDisposable
         // Symbols table / シンボルテーブル
         Execute(@"
             CREATE TABLE IF NOT EXISTS symbols (
-                id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                kind    TEXT,
-                name    TEXT,
-                line    INTEGER
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT,
+                name            TEXT,
+                line            INTEGER,
+                start_line      INTEGER,
+                end_line        INTEGER,
+                body_start_line INTEGER,
+                body_end_line   INTEGER,
+                signature       TEXT,
+                container_kind  TEXT,
+                container_name  TEXT,
+                visibility      TEXT,
+                return_type     TEXT
             )");
+
+        // Indexed references table / 参照インデックステーブル
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT,
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                container_kind  TEXT,
+                container_name  TEXT
+            )");
+
+        // Schema migrations for existing DBs / 既存DB向けスキーマ移行
+        EnsureColumn("files", "checksum", "TEXT");
+        EnsureColumn("files", "modified", "DATETIME");
+        EnsureColumn("files", "indexed_at", "DATETIME");
+        EnsureColumn("symbols", "start_line", "INTEGER");
+        EnsureColumn("symbols", "end_line", "INTEGER");
+        EnsureColumn("symbols", "body_start_line", "INTEGER");
+        EnsureColumn("symbols", "body_end_line", "INTEGER");
+        EnsureColumn("symbols", "signature", "TEXT");
+        EnsureColumn("symbols", "container_kind", "TEXT");
+        EnsureColumn("symbols", "container_name", "TEXT");
+        EnsureColumn("symbols", "visibility", "TEXT");
+        EnsureColumn("symbols", "return_type", "TEXT");
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -85,6 +122,10 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_start  ON symbols(start_line)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
 
         // Full-text search / 全文検索
         Execute(@"
@@ -123,6 +164,7 @@ public class DbContext : IDisposable
         Execute("DROP TRIGGER IF EXISTS fts_chunks_ad");
         Execute("DROP TRIGGER IF EXISTS fts_chunks_au");
         Execute("DROP TABLE IF EXISTS fts_chunks");
+        Execute("DROP TABLE IF EXISTS symbol_references");
         Execute("DROP TABLE IF EXISTS symbols");
         Execute("DROP TABLE IF EXISTS chunks");
         Execute("DROP TABLE IF EXISTS files");
@@ -133,6 +175,31 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private void EnsureColumn(string tableName, string columnName, string definition)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({tableName})";
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        try
+        {
+            Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}");
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
+                                         ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+        {
+            // Another process or an earlier partial migration may have added the
+            // column after PRAGMA inspection. Treat it as already migrated.
+            // 別プロセスや直前の部分移行で列が追加済みの可能性があるため、移行済みとして扱う。
+        }
     }
 
     private string ExecuteScalar(string sql)

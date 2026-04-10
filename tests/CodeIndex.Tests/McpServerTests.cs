@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
 
@@ -47,6 +48,9 @@ public class McpServerTests : IDisposable
             Kind = "class",
             Name = "App",
             Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = "public class App { public void Run() { } }",
         },
         new SymbolRecord
         {
@@ -54,9 +58,42 @@ public class McpServerTests : IDisposable
             Kind = "function",
             Name = "Run",
             Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = "public void Run() { }",
+            ContainerKind = "class",
+            ContainerName = "App",
         }]);
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+    }
+
+    private void InsertIndexedFile(string path, string lang, string content)
+    {
+        var normalized = content.Replace("\r\n", "\n");
+        var lines = normalized.Split('\n');
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = lang,
+            Size = normalized.Length,
+            Lines = lines.Length,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = lines.Length,
+            Content = normalized,
+        }]);
+
+        var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
+        writer.InsertSymbols(symbols);
+        writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
     // --- Protocol tests / プロトコルテスト ---
@@ -142,18 +179,25 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns5Tools()
+    public void ToolsList_Returns12Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(5, tools.Count);
+        Assert.Equal(12, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
+        Assert.Contains("definition", names);
+        Assert.Contains("references", names);
+        Assert.Contains("callers", names);
+        Assert.Contains("callees", names);
         Assert.Contains("symbols", names);
         Assert.Contains("files", names);
+        Assert.Contains("excerpt", names);
+        Assert.Contains("map", names);
+        Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
         Assert.Contains("index", names);
     }
@@ -168,6 +212,21 @@ public class McpServerTests : IDisposable
         var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
         var required = searchTool["inputSchema"]!["required"]!.AsArray();
         Assert.Contains("query", required.Select(r => r!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolsList_SearchIncludesPathFilterParams()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var properties = searchTool["inputSchema"]!["properties"]!;
+
+        Assert.NotNull(properties["path"]);
+        Assert.NotNull(properties["excludePaths"]);
+        Assert.NotNull(properties["excludeTests"]);
     }
 
     [Fact]
@@ -196,6 +255,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("src/app.cs", structured["results"]![0]!["path"]!.GetValue<string>());
+        Assert.NotNull(structured["results"]![0]!["snippet"]);
+        Assert.NotNull(structured["results"]![0]!["matchLines"]);
+        Assert.NotNull(structured["results"]![0]!["highlights"]);
+        Assert.Null(structured["results"]![0]!["content"]);
     }
 
     [Fact]
@@ -221,6 +284,100 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_SnippetLinesControlsExcerptLength()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","snippetLines":3}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(3, response["result"]!["structuredContent"]!["snippetLines"]!.GetValue<int>());
+        var snippet = response["result"]!["structuredContent"]!["results"]![0]!["snippet"]!.GetValue<string>();
+        Assert.True(snippet.Split('\n').Length <= 3);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ExcludeTests_ReturnsOnlySourceMatches()
+    {
+        InsertIndexedFile("tests/app_test.cs", "csharp", "public class AppTests { public void RunScenario() { var app = new App(); } }");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludeTests":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.True(response["result"]!["structuredContent"]!["excludeTests"]!.GetValue<bool>());
+        Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Map_ReturnsRepoOverview()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp", "public class Program\n{\n    public static void Main(string[] args)\n    {\n        var app = new App();\n    }\n}\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"map","arguments":{"limit":5,"excludeTests":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(5, response["result"]!["structuredContent"]!["limit"]!.GetValue<int>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["languages"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["modules"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["topFiles"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+        Assert.Contains("Main", response["result"]!["structuredContent"]!["entrypoints"]!.ToJsonString());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ReturnsBundledContext()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","includeBody":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["query"]!.GetValue<string>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["file"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["definitions"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["nearbySymbols"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["callers"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["callees"]);
+    }
+
+    [Fact]
+    public void ToolsCall_References_ReturnsIndexedReference()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["containerName"]!.GetValue<string>());
+        Assert.Equal("call", response["result"]!["structuredContent"]!["results"]![0]!["referenceKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_ReturnsCallerSummary()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_ReturnsCalleeSummary()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"login"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_MissingQuery_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{}}}""")!;
@@ -241,6 +398,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("Found 1 symbol", text);
         Assert.Equal("App", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
         Assert.Equal("class", response["result"]!["structuredContent"]!["results"]![0]!["kind"]!.GetValue<string>());
+        Assert.Equal("public class App { public void Run() { } }", response["result"]!["structuredContent"]!["results"]![0]!["signature"]!.GetValue<string>());
     }
 
     [Fact]
@@ -256,6 +414,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Definition_ReturnsDefinitionContent()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"Run","includeBody":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Found 1 definition", text);
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
+        Assert.Contains("public void Run()", response["result"]!["structuredContent"]!["results"]![0]!["content"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Files_ReturnsResults()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{}}}""")!;
@@ -265,6 +435,20 @@ public class McpServerTests : IDisposable
         Assert.Contains("Found 1 file", text);
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
         Assert.Equal("csharp", response["result"]!["structuredContent"]!["results"]![0]!["lang"]!.GetValue<string>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["results"]![0]!["modified"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["results"]![0]!["indexedAt"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_ReturnsExcerpt()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"src/app.cs","startLine":1,"endLine":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Excerpt returned", text);
+        Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["path"]!.GetValue<string>());
+        Assert.Contains("public class App", response["result"]!["structuredContent"]!["content"]!.GetValue<string>());
     }
 
     [Fact]
@@ -278,6 +462,10 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["files"]!.GetValue<long>());
         Assert.Equal(1, response["result"]!["structuredContent"]!["chunks"]!.GetValue<long>());
         Assert.Equal(2, response["result"]!["structuredContent"]!["symbols"]!.GetValue<long>());
+        Assert.Equal(0, response["result"]!["structuredContent"]!["references"]!.GetValue<long>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
     }
 
     [Fact]
@@ -359,8 +547,29 @@ public class McpServerTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (File.Exists(_dbPath))
+        DeleteDbPath();
+    }
+
+    private void DeleteDbPath()
+    {
+        if (!File.Exists(_dbPath))
+            return;
+
+        try
+        {
             File.Delete(_dbPath);
+        }
+        catch (IOException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(_dbPath))
+                File.Delete(_dbPath);
+        }
     }
 }

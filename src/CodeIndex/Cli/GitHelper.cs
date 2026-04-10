@@ -92,4 +92,62 @@ public static class GitHelper
             .Select(p => p.Replace('\\', '/'))
             .ToList();
     }
+
+    /// <summary>
+    /// Try to resolve the current HEAD commit for the repository that contains the project root.
+    /// projectRoot を含むリポジトリの現在の HEAD コミットを安全に取得する。
+    /// </summary>
+    public static string? TryGetHeadCommit(string projectRoot)
+    {
+        var output = TryRunGit(projectRoot, "rev-parse", "HEAD");
+        var value = output?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    /// <summary>
+    /// Try to determine whether the worktree has uncommitted changes.
+    /// worktree に未コミット変更があるか安全に判定する。
+    /// </summary>
+    public static bool? TryIsWorktreeDirty(string projectRoot)
+    {
+        var output = TryRunGit(projectRoot, "status", "--porcelain");
+        return output == null ? null : output.Length > 0;
+    }
+
+    private static string? TryRunGit(string projectRoot, params string[] args)
+    {
+        if (ResolveGitCommonDir(projectRoot) == null)
+            return null;
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = projectRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            using var process = Process.Start(psi);
+            if (process == null)
+                return null;
+
+            var errorTask = process.StandardError.ReadToEndAsync();
+            var output = process.StandardOutput.ReadToEnd();
+            var error = errorTask.GetAwaiter().GetResult();
+            process.WaitForExit();
+
+            return process.ExitCode == 0 ? output : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

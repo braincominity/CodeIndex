@@ -20,9 +20,16 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # shorthand for 'index'
 
 # Query (default output: human-readable; use --json for AI consumption)
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
-cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
-cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
+cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
+cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx status [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -39,18 +46,20 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/symbols/files/status command execution and query arg parsing
-  Cli/SearchSnippetFormatter.cs — Center human-readable search output on matching lines
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/status command execution and query arg parsing
+  Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
-  Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge
-  Database/DbReader.cs      — Query operations (FTS search, symbol lookup, file listing, status)
+  Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
+  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, status)
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
+  Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
   Mcp/McpServer.cs          — MCP server (stdin/stdout JSON-RPC 2.0, tools for AI coding tools)
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord (plain DTOs)
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord (plain DTOs)
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitter tests
+  ReferenceExtractorTests.cs — ReferenceExtractor tests
   SymbolExtractorTests.cs   — SymbolExtractor tests (multi-language)
   FileIndexerTests.cs       — FileIndexer tests (scan, detect, build)
   DatabaseTests.cs          — DbContext/DbWriter integration tests
@@ -67,9 +76,16 @@ tests/CodeIndex.Tests/
 - **Batch commits** — 500 records per transaction for write performance. Supports nesting via SAVEPOINT.
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
 - **Literal-safe search by default** — Search queries are quoted token-by-token to avoid FTS syntax errors by default. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
-- **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
+- **Path-aware narrowing and ranking** — `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` share `--path`, repeatable `--exclude-path`, and `--exclude-tests`. Query ordering prefers source files over tests/docs, and `search` boosts exact symbol-name and path matches.
+- **Compact search snippets for AI** — `search --json` and MCP `search` return match-centered snippets with snippet ranges, match lines, highlights, and context counts instead of whole chunks. `--snippet-lines` lets clients cap payload size up front.
+- **Repo map for first-pass orientation** — `map` summarizes languages, modules, top files, file hot spots, and likely entrypoints so AI clients can form an initial navigation plan before issuing deeper queries.
+- **Freshness metadata for trust decisions** — `status`/`map` expose `indexed_at`, `latest_modified`, `git_head`, and `git_is_dirty`, while `files` exposes per-file checksum and timestamp metadata. Older DBs auto-add missing file columns when possible, and read paths avoid crashing if migration cannot happen in place.
+- **Bundled symbol analysis** — `inspect` and MCP `analyze_symbol` combine definition, nearby symbols, references, callers, callees, and file metadata so AI clients can answer common symbol questions with one request.
+- **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results.
+- **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
+- **Backward-compatible read schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns and creates newer reference tables when possible. If a symbol read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
 - **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain to find the shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
@@ -131,15 +147,18 @@ Before every commit, check whether each of the following needs updating. Don't b
 1. **Tests** — Does this change break existing tests or require new ones? Search for affected method/class names in `tests/`.
 2. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
 3. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
-4. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
-5. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
-6. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+4. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
+5. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
+6. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
+7. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
+8. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
 - **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections.
 - **CHANGELOG.md** — English section AND Japanese section
+- **SELF_IMPROVEMENT.md** — Dedicated operating contract for iterative AI-driven cdidx self-improvement
 - **CLAUDE.md** — This file; update architecture/design sections when code changes
 
 When modifying the CLAUDE.md template (code search rules for AI agents), update both instances in README (English and Japanese). DEVELOPER_GUIDE references README, so no separate update is needed there.
@@ -157,6 +176,9 @@ When modifying the CLAUDE.md template (code search rules for AI agents), update 
 
 ### Tests
 When changing public API signatures or adding new public methods, check if tests need updating. Run `dotnet test` to verify. If the build environment lacks .NET SDK, at minimum verify all callers are updated by searching for the method name.
+
+### Cross-platform changes
+cdidx targets Windows, macOS, and Linux. When changing filesystem behavior, path handling, process execution, console output, SQLite lifetime, or test cleanup, explicitly consider cross-platform differences such as path separators, file locking, newline behavior, and shell/tool availability. Add or update tests and docs when behavior depends on the OS.
 
 ### README structure
 - Section numbering must be consistent (don't have "2." without "1.").
@@ -187,9 +209,16 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # 'index'の省略形
 
 # クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
-cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
-cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
+cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
+cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx status [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
@@ -206,18 +235,20 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/symbols/files/statusコマンド実行とクエリ引数解析
-  Cli/SearchSnippetFormatter.cs — 人間向け検索出力を一致行中心に整形
+  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/statusコマンド実行とクエリ引数解析
+  Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
-  Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ
-  Database/DbReader.cs      — クエリ操作（FTS検索、シンボル検索、ファイル一覧、ステータス）
+  Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
+  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
+  Indexer/ReferenceExtractor.cs — 正規表現による参照抽出（言語差分を考慮）
   Mcp/McpServer.cs          — MCPサーバー（stdin/stdout JSON-RPC 2.0、AIツール向けツール公開）
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord（プレーンDTO）
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord（プレーンDTO）
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitterテスト
+  ReferenceExtractorTests.cs — ReferenceExtractorテスト
   SymbolExtractorTests.cs   — SymbolExtractorテスト（多言語対応）
   FileIndexerTests.cs       — FileIndexerテスト（走査、検出、構築）
   DatabaseTests.cs          — DbContext/DbWriter統合テスト
@@ -234,9 +265,16 @@ tests/CodeIndex.Tests/
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。SAVEPOINTによるネスト対応。
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
 - **デフォルトはリテラル安全検索** — 検索クエリは既定ではトークンごとに引用し、FTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
-- **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
+- **パス考慮の絞り込みとランキング** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` を共有する。クエリ結果は tests や docs より source を優先し、`search` はシンボル名やパスの exact match を追加ブーストする。
+- **AI向けの軽量検索スニペット** — `search --json` と MCP の `search` は、チャンク全文ではなく snippet range、match line、highlight、context count を含む一致中心スニペットを返す。`--snippet-lines` でペイロード量を先に制限できる。
+- **初動向けの repo map** — `map` は、言語、モジュール、主要ファイル、ホットスポット、推定エントリポイントを要約し、AIクライアントが深い検索前に移動計画を立てやすくする。
+- **信用判断のための鮮度メタデータ** — `status`/`map` は `indexed_at`、`latest_modified`、`git_head`、`git_is_dirty` を返し、`files` はファイルごとの checksum と timestamp を返す。古いDBに不足する file 列は可能なら自動追加し、その場移行できない場合も読み取りをクラッシュさせない。
+- **まとめて取るシンボル分析** — `inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータをまとめて返し、AIクライアントが1回の問い合わせで一般的なシンボル調査を終えやすくする。
+- **言語差分を考慮した参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対して構築する参照テーブルに支えられる。未対応言語には低信頼な疑似グラフ結果を返さず、`search` を使う前提にする。
+- **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
+- **後方互換な読み取りスキーマ** — 新しいcdidxバイナリで古いDBを開いた場合は、可能なら不足するシンボル列を自動追加し、新しい参照テーブルも作成する。読み取り経路でその場移行できない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Cli/IndexCommandRunner.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
 - **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。git worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿って`info/exclude`がある共通`.git/`を見つける。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
@@ -298,15 +336,18 @@ tests/CodeIndex.Tests/
 1. **テスト** — この変更で既存テストが壊れないか？新規テストが必要か？`tests/` 内で影響を受けるメソッド・クラス名を検索。
 2. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
 3. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
-4. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
-5. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
-6. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
+4. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
+5. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
+6. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
+7. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
+8. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:
 - **README.md** — 英語セクション AND 日本語セクション（両方一致させる）
 - **DEVELOPER_GUIDE.md** — CLAUDE.mdテンプレートと終了コードはREADMEを参照。設計判断・アーキテクチャは独自セクション。
 - **CHANGELOG.md** — 英語セクション AND 日本語セクション
+- **SELF_IMPROVEMENT.md** — AIが cdidx 自身を継続改善するときの専用運用契約
 - **CLAUDE.md** — このファイル。コード変更時にアーキテクチャ・設計セクションも更新
 
 CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する場合、READMEの両インスタンス（英語・日本語）を更新すること。DEVELOPER_GUIDEはREADMEを参照しているため個別の更新は不要。
@@ -324,6 +365,9 @@ CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する
 
 ### テスト
 公開APIのシグネチャ変更や新しい公開メソッド追加時はテストの更新要否を確認する。`dotnet test`で検証。ビルド環境に.NET SDKがない場合でも、最低限メソッド名を検索して全呼び出し元が更新されていることを確認する。
+
+### クロスプラットフォーム変更
+cdidx は Windows、macOS、Linux を対象にする。ファイルシステム挙動、パス処理、プロセス実行、コンソール出力、SQLite のライフタイム、テスト後片付けを変更するときは、パス区切り、ファイルロック、改行、shell/tool の有無など OS 差分を明示的に考慮すること。挙動が OS に依存する場合は、テストとドキュメントも更新する。
 
 ### READMEの構成
 - セクション番号は一貫させる（「1.」なしに「2.」を書かない）。

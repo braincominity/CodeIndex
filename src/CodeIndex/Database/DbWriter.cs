@@ -246,6 +246,11 @@ public class DbWriter
         cmd2.CommandText = "DELETE FROM symbols WHERE file_id = @fid";
         cmd2.Parameters.AddWithValue("@fid", fileId);
         cmd2.ExecuteNonQuery();
+
+        using var cmd3 = _conn.CreateCommand();
+        cmd3.CommandText = "DELETE FROM symbol_references WHERE file_id = @fid";
+        cmd3.Parameters.AddWithValue("@fid", fileId);
+        cmd3.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -316,21 +321,100 @@ public class DbWriter
             // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = @"
-                INSERT INTO symbols (file_id, kind, name, line)
-                VALUES (@fid, @kind, @name, @line)";
+                INSERT INTO symbols (
+                    file_id, kind, name, line, start_line, end_line,
+                    body_start_line, body_end_line, signature,
+                    container_kind, container_name, visibility, return_type
+                )
+                VALUES (
+                    @fid, @kind, @name, @line, @startLine, @endLine,
+                    @bodyStartLine, @bodyEndLine, @signature,
+                    @containerKind, @containerName, @visibility, @returnType
+                )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
             var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
             var pName = cmd.Parameters.Add("@name", SqliteType.Text);
             var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
+            var pStartLine = cmd.Parameters.Add("@startLine", SqliteType.Integer);
+            var pEndLine = cmd.Parameters.Add("@endLine", SqliteType.Integer);
+            var pBodyStartLine = cmd.Parameters.Add("@bodyStartLine", SqliteType.Integer);
+            var pBodyEndLine = cmd.Parameters.Add("@bodyEndLine", SqliteType.Integer);
+            var pSignature = cmd.Parameters.Add("@signature", SqliteType.Text);
+            var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
+            var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
+            var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
+            var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
             cmd.Prepare();
 
             for (int j = i; j < end; j++)
             {
                 var symbol = symbols[j];
+                var startLine = symbol.StartLine > 0 ? symbol.StartLine : symbol.Line;
+                var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
                 pFid.Value = symbol.FileId;
                 pKind.Value = symbol.Kind;
                 pName.Value = symbol.Name;
                 pLine.Value = symbol.Line;
+                pStartLine.Value = startLine;
+                pEndLine.Value = endLine;
+                pBodyStartLine.Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
+                pBodyEndLine.Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
+                pSignature.Value = (object?)symbol.Signature ?? DBNull.Value;
+                pContainerKind.Value = (object?)symbol.ContainerKind ?? DBNull.Value;
+                pContainerName.Value = (object?)symbol.ContainerName ?? DBNull.Value;
+                pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
+                pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
+                cmd.ExecuteNonQuery();
+            }
+
+            transaction?.Commit();
+        }
+    }
+
+    /// <summary>
+    /// Insert indexed references in batches.
+    /// インデックス済み参照をバッチ挿入する。
+    /// </summary>
+    public void InsertReferences(IReadOnlyList<ReferenceRecord> references)
+    {
+        if (references.Count == 0) return;
+
+        for (int i = 0; i < references.Count; i += BatchSize)
+        {
+            int end = Math.Min(i + BatchSize, references.Count);
+            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO symbol_references (
+                    file_id, symbol_name, reference_kind, line, column_number,
+                    context, container_kind, container_name
+                )
+                VALUES (
+                    @fid, @symbolName, @referenceKind, @line, @columnNumber,
+                    @context, @containerKind, @containerName
+                )";
+            var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
+            var pSymbolName = cmd.Parameters.Add("@symbolName", SqliteType.Text);
+            var pReferenceKind = cmd.Parameters.Add("@referenceKind", SqliteType.Text);
+            var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
+            var pColumnNumber = cmd.Parameters.Add("@columnNumber", SqliteType.Integer);
+            var pContext = cmd.Parameters.Add("@context", SqliteType.Text);
+            var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
+            var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
+            cmd.Prepare();
+
+            for (int j = i; j < end; j++)
+            {
+                var reference = references[j];
+                pFid.Value = reference.FileId;
+                pSymbolName.Value = reference.SymbolName;
+                pReferenceKind.Value = reference.ReferenceKind;
+                pLine.Value = reference.Line;
+                pColumnNumber.Value = reference.Column;
+                pContext.Value = reference.Context;
+                pContainerKind.Value = (object?)reference.ContainerKind ?? DBNull.Value;
+                pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
             }
 
@@ -405,12 +489,13 @@ public class DbWriter
     /// Get total counts for the summary output.
     /// サマリー出力用の合計件数を取得する。
     /// </summary>
-    public (long files, long chunks, long symbols) GetCounts()
+    public (long files, long chunks, long symbols, long references) GetCounts()
     {
         long files = ExecuteScalar("SELECT COUNT(*) FROM files");
         long chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
-        return (files, chunks, symbols);
+        long references = ExecuteScalar("SELECT COUNT(*) FROM symbol_references");
+        return (files, chunks, symbols, references);
     }
 
     /// <summary>
