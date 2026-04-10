@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Escalate local-binary failures in the self-improvement loop** — `SELF_IMPROVEMENT.md` now explicitly requires agents to report crashes, abnormal exits, or newly discovered defects in the freshly built local binary to the user instead of silently working around them or falling back to an older/global install. The loop must surface the concrete failure and propose a dedicated fix as the next task or next approved priority. Affected: `SELF_IMPROVEMENT.md`.
+
 - **Add file-based entrypoint fallbacks to `map`** — Repo-map entrypoints now fall back to known top-level entry files such as `Program.cs` and `main.py` when symbol extraction does not emit an explicit `Main`-style symbol. This improves first-pass orientation for top-level script or top-level-statement projects without changing the `entrypoints` shape. Affected: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **Expose unsupported-language hints in direct graph queries** — Human-readable `references`, `callers`, and `callees` now print an explicit note when `--lang` targets a language without indexed call-graph extraction. MCP graph tools also return `graph_language`, `graph_supported`, and `graph_support_reason` so zero-hit unsupported-language queries are distinguishable from real zero-hit supported-language searches. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
@@ -222,6 +224,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP ツールアノテーションで AI クライアントの信頼判断を支援** — 全 MCP ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返すようになった。クエリツールは読み取り専用かつ冪等に、`index` ツールは破壊的かつ非冪等にマークされる（`--rebuild` で DB を削除でき、再インデックスでファイルごとにチャンク・シンボルを置き換えるため）。これにより AI クライアントがユーザー確認なしに安全に呼べるツールを判断しやすくなる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### 変更
+
+- **自己改善ループでローカル版バイナリの失敗を明示的にエスカレーション** — `SELF_IMPROVEMENT.md` に、ビルド直後のローカル版バイナリがクラッシュしたり異常終了したり新しい不具合を見せた場合、黙って回避したり古い版・グローバル版へ逃げたりせず、具体的な失敗内容をユーザーへ通知して、次タスクまたは次の承認済み優先事項として修正提案を出すことを明記した。対象: `SELF_IMPROVEMENT.md`.
 
 - **`map` にファイルベースのエントリポイント補完を追加** — repo map の entrypoints は、シンボル抽出が `Main` 系シンボルを出さない場合でも、`Program.cs` や `main.py` のような既知のトップレベル実行ファイルへフォールバックするようになった。`entrypoints` の形は変えずに、トップレベルスクリプトや top-level statements のプロジェクトでも初動の入口把握を改善する。対象: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 

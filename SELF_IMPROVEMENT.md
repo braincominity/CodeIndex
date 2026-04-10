@@ -38,6 +38,7 @@ The loop is not just "suggest ideas". It is:
 - Prefer the **locally built latest binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) over an older globally installed `cdidx` whenever the repository code has changed. **Never fall back to a global `cdidx`** — the global version may have an older DB schema, missing query features, or stale extraction logic that silently produces wrong results.
 - After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, re-index with the **locally built binary** using `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .` (full scan, not `--commits HEAD`) so stale files are purged against the current checkout.
 - When searching and navigating code to investigate bugs, plan fixes, or verify changes, always use the **locally built binary** — not the globally installed version. This ensures query results reflect the latest extraction rules and DB schema from this branch.
+- If the **locally built binary** crashes, aborts unexpectedly, or exposes a new defect during this loop, do not silently work around it or fall back to an older/global binary. Notify the user with the concrete failure, explain that the self-improvement loop is now blocked or tainted by that defect, and propose fixing it as a separate task or as the next approved priority.
 - If a change may be breaking, migration-heavy, destructive, or likely to impose manual work on users, **stop and ask for approval before implementing**.
 - Respect language differences. Do not pretend every query type is meaningful for every language.
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
@@ -277,6 +278,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。
 - `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .`（フルスキャン。`--commits HEAD` ではない）を実行し、現在の checkout に対する stale file を掃除する。
 - バグ調査、修正計画、変更検証のためにコード検索・ナビゲーションを行うときも、常に **ローカルビルド版** を使う。グローバルインストール版は使わない。これにより、このブランチの最新の抽出ルールと DB スキーマを反映した検索結果が得られる。
+- このループ中に **ローカルビルド版** がクラッシュしたり、異常終了したり、新しい不具合を露呈した場合は、黙って回避したり古い版・グローバル版へ逃げたりしないこと。具体的な失敗内容をユーザーに通知し、その不具合によって自己改善ループがブロックされている、または結果の信頼性が損なわれていることを説明したうえで、別タスクまたは次の承認済み優先事項として修正提案を出すこと。
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
