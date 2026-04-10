@@ -58,6 +58,16 @@ public class ConsoleUiTests
         Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
     }
 
+    [Fact]
+    public void LoadVersion_ReturnsNonEmptyString()
+    {
+        // In the test environment the built version.json should be present
+        // テスト環境ではビルド済みの version.json が存在するはず
+        var version = ConsoleUi.LoadVersion();
+        Assert.False(string.IsNullOrWhiteSpace(version));
+        Assert.NotEqual("", version);
+    }
+
     private static string CaptureUsageOutput(bool showBanner = true)
     {
         lock (TestConsoleLock.Gate)
