@@ -731,18 +731,13 @@ public class DbReader
     }
 
     /// <summary>
-    /// Build a repo-level overview to help AI clients orient before deep queries.
-    /// 深掘り前の把握に使うリポジトリ俯瞰情報を構築する。
-    /// </summary>
-    /// <summary>
     /// Delegate to RepoMapBuilder for repo-level overview generation.
     /// RepoMapBuilderに委譲してリポジトリ俯瞰情報を生成する。
     /// </summary>
     public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         var builder = new RepoMapBuilder(_conn, _fileColumns);
-        var freshness = GetWorkspaceFreshness();
-        return builder.Build(limit, lang, pathPattern, excludePathPatterns, excludeTests, freshness);
+        return builder.Build(limit, lang, pathPattern, excludePathPatterns, excludeTests, GetWorkspaceFreshness);
     }
 
     private long ExecuteScalar(string sql)

@@ -54,9 +54,16 @@ internal sealed class RepoMapBuilder
     /// </summary>
     public RepoMapResult Build(int limit, string? lang, string? pathPattern,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
-        (DateTime? IndexedAt, DateTime? LatestModified) freshness)
+        Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness)
     {
+        // Query file stats first, then workspace freshness — preserves original
+        // ordering so concurrent indexing cannot make workspace timestamps older
+        // than scoped timestamps.
+        // ファイル統計を先に取得し、その後にワークスペース鮮度を取得 — 元の順序を
+        // 維持し、並行インデックス時にワークスペースのタイムスタンプがスコープ付き
+        // タイムスタンプより古くならないようにする。
         var fileStats = GetFileStats(lang, pathPattern, excludePathPatterns, excludeTests);
+        var freshness = getFreshness();
         return new RepoMapResult
         {
             FileCount = fileStats.Count,
