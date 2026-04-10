@@ -117,6 +117,13 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*(?<visibility>public|private|internal|open|fileprivate)?\s*(?:final\s+)?(?:class|struct|enum|protocol)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
+        ["dart"] =
+        [
+            new("function", new Regex(@"^\s*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
+            new("class",    new Regex(@"^\s*(?:abstract\s+)?(?:class|mixin|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*extension\s+(?<name>\w+)\s+on\s+", RegexOptions.Compiled), BodyStyle.Brace),
+            new("import",   new Regex(@"^\s*import\s+'(?<name>[^']+)'", RegexOptions.Compiled), BodyStyle.None),
+        ],
     };
 
     private static readonly HashSet<string> ContainerKinds =

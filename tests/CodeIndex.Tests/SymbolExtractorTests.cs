@@ -223,4 +223,27 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IUser");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
     }
+
+    [Fact]
+    public void Extract_Dart_DetectsClassFunctionAndMixin()
+    {
+        // Dart: class, mixin, function / Dart: クラス、mixin、関数
+        var content = "abstract class Widget {\n  void build(BuildContext ctx) {\n  }\n}\nmixin Logging on Widget {\n}";
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Logging");
+    }
+
+    [Fact]
+    public void Extract_Dart_DetectsImportAndEnum()
+    {
+        // Dart: import, enum / Dart: インポート、列挙型
+        var content = "import 'package:flutter/material.dart';\n\nenum Status {\n  active,\n  inactive,\n}";
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("flutter"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+    }
 }
