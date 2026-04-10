@@ -33,7 +33,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (13 languages)
+    SymbolExtractor.cs        — Regex-based symbol extraction (17 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools)
@@ -333,6 +333,12 @@ Supported symbol kinds by language:
 | C++ | functions | class, struct, namespace, enum | -- |
 | PHP | function | class, interface, trait, enum | -- |
 | Swift | func | class, struct, enum, protocol | -- |
+| Dart | functions | class, mixin, enum, extension | import |
+| Scala | def | class, object, trait, case class, enum | import |
+| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
+| Lua | function, local function | -- | require |
+
+R is detected and indexed as raw text but has no symbol extraction patterns.
 
 Regex-based extraction is intentionally simple. Speed and portability are prioritized over AST-level accuracy.
 
@@ -496,7 +502,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — 正規表現によるシンボル抽出（13言語対応）
+    SymbolExtractor.cs        — 正規表現によるシンボル抽出（17言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -796,6 +802,12 @@ LIMIT 20;
 | C++ | 関数 | class, struct, namespace, enum | -- |
 | PHP | function | class, interface, trait, enum | -- |
 | Swift | func | class, struct, enum, protocol | -- |
+| Dart | 関数 | class, mixin, enum, extension | import |
+| Scala | def | class, object, trait, case class, enum | import |
+| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
+| Lua | function, local function | -- | require |
+
+R は言語検出・テキストインデックスのみで、シンボル抽出パターンはありません。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 
