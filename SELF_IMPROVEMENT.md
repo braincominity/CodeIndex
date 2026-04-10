@@ -192,6 +192,15 @@ Do not use one search strategy for every language.
 - When proposing new language-specific features, state clearly which languages are in scope and why.
 - When a heuristic is language-specific, document the limitation in README and tests.
 
+## Platform-Aware Guidance
+
+Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
+
+- Windows can hold SQLite files longer because of file locking and connection pooling, so cleanup code and tests must tolerate delayed release.
+- Path separators, casing assumptions, shell commands, and process launch behavior differ across Windows, macOS, and Linux.
+- If you change temp-file handling, DB lifecycle, or CLI process behavior, add verification that is robust across supported platforms.
+- If a workaround is OS-specific, document why it exists instead of leaving it as unexplained test fragility.
+
 ## Product and Branding Lens
 
 Self-improvement is not limited to search mechanics. Also evaluate:
@@ -416,15 +425,6 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - C#、Java、Go、Rust、TypeScript/JavaScript、Python、Kotlin、Ruby、C/C++、PHP、Swift と、Markdown、YAML、JSON、TOML、Shell、SQL、HTML/CSS、Vue、Svelte、Terraform は分けて考えてください。
 - 新しい言語依存機能を提案するときは、どの言語を対象にするのか、その理由を明記してください。
 - ヒューリスティックが言語依存なら、README とテストに制限事項を残してください。
-
-## Platform-Aware Guidance
-
-Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
-
-- Windows can hold SQLite files longer because of file locking and connection pooling, so cleanup code and tests must tolerate delayed release.
-- Path separators, casing assumptions, shell commands, and process launch behavior differ across Windows, macOS, and Linux.
-- If you change temp-file handling, DB lifecycle, or CLI process behavior, add verification that is robust across supported platforms.
-- If a workaround is OS-specific, document why it exists instead of leaving it as unexplained test fragility.
 
 ## プラットフォーム差分を前提にする指針
 
