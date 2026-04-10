@@ -138,13 +138,25 @@ public class McpServer
             ["protocolVersion"] = ProtocolVersion,
             ["capabilities"] = new JsonObject
             {
-                ["tools"] = new JsonObject()
+                ["tools"] = new JsonObject
+                {
+                    ["listChanged"] = false
+                }
             },
             ["serverInfo"] = new JsonObject
             {
                 ["name"] = "cdidx",
                 ["version"] = _version
-            }
+            },
+            // Server instructions — tool-selection guidance for AI clients
+            // サーバー指示 — AIクライアント向けツール選択ガイダンス
+            ["instructions"] = "cdidx is a code-index server. "
+                + "Start with 'map' for repo orientation, then use 'search' for text queries or 'definition' for symbol lookup. "
+                + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
+                + "Graph tools (references, callers, callees) only work for supported languages (C#, Java, Go, Rust, TypeScript/JavaScript, Python, Kotlin, Ruby, C/C++, PHP, Swift); "
+                + "for other languages, use 'search' instead. "
+                + "Use 'excerpt' to read specific line ranges from indexed files. "
+                + "Check 'status' to verify index freshness before trusting results."
         };
         return CreateSuccessResponse(id, result);
     }

@@ -87,6 +87,7 @@ tests/CodeIndex.Tests/
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
 - **MCP tool annotations** — All tools emit `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) per the MCP spec so AI clients can auto-approve safe read-only queries.
+- **MCP server instructions** — The `initialize` response includes an `instructions` string with tool-selection guidance so AI clients can choose the right tool on first connection.
 - **Backward-compatible read schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns and creates newer reference tables when possible. If a symbol read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing. Query paths use `TryMigrateForRead()` instead of `InitializeSchema()` so that read-only databases (e.g. on read-only filesystems) silently degrade rather than crashing.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
@@ -282,7 +283,8 @@ tests/CodeIndex.Tests/
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
-- **MCPツールアノテーション** — 全ツールが MCP 2024-11-05 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返し、AIクライアントが安全な読み取り専用クエリを自動承認できるようにする。
+- **MCPツールアノテーション** — 全ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返し、AIクライアントが安全な読み取り専用クエリを自動承認できるようにする。
+- **MCPサーバー instructions** — `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列を含め、AIクライアントが初回接続時に適切なツールを選べるようにする。
 - **後方互換な読み取りスキーマ** — 新しいcdidxバイナリで古いDBを開いた場合は、可能なら不足するシンボル列を自動追加し、新しい参照テーブルも作成する。読み取り経路でその場移行できない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。クエリパスは `InitializeSchema()` ではなく `TryMigrateForRead()` を使い、読み取り専用DBでも黙って縮退する。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Cli/IndexCommandRunner.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。

@@ -118,6 +118,20 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.NotNull(response["result"]!["capabilities"]!["tools"]);
+        Assert.False(response["result"]!["capabilities"]!["tools"]!["listChanged"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Initialize_ReturnsInstructions()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var instructions = response["result"]!["instructions"]?.GetValue<string>();
+        Assert.NotNull(instructions);
+        Assert.Contains("map", instructions!);
+        Assert.Contains("analyze_symbol", instructions);
+        Assert.Contains("search", instructions);
     }
 
     [Fact]
