@@ -19,7 +19,7 @@ public class McpServer
     private readonly JsonSerializerOptions _jsonOptions;
     private bool _running = true;
 
-    private const string ProtocolVersion = "2024-11-05";
+    private const string ProtocolVersion = "2025-03-26";
     private const int MaxLimit = 200;
     private const int MaxQueryLength = 1000;
     private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
@@ -150,13 +150,7 @@ public class McpServer
             },
             // Server instructions — tool-selection guidance for AI clients
             // サーバー指示 — AIクライアント向けツール選択ガイダンス
-            ["instructions"] = "cdidx is a code-index server. "
-                + "Start with 'map' for repo orientation, then use 'search' for text queries or 'definition' for symbol lookup. "
-                + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
-                + "Graph tools (references, callers, callees) only work for supported languages (C#, Java, Go, Rust, TypeScript/JavaScript, Python, Kotlin, Ruby, C/C++, PHP, Swift); "
-                + "for other languages, use 'search' instead. "
-                + "Use 'excerpt' to read specific line ranges from indexed files. "
-                + "Check 'status' to verify index freshness before trusting results."
+            ["instructions"] = BuildInstructions()
         };
         return CreateSuccessResponse(id, result);
     }
@@ -421,6 +415,25 @@ public class McpServer
     }
 
     // --- Tool implementations / ツール実装 ---
+
+    /// <summary>
+    /// Build the server instructions string for the initialize response.
+    /// Uses the actual supported-language list from ReferenceExtractor.
+    /// initializeレスポンス用のサーバー指示文字列を構築。
+    /// ReferenceExtractorの実際の対応言語リストを使用。
+    /// </summary>
+    private static string BuildInstructions()
+    {
+        var langs = string.Join(", ", ReferenceExtractor.GetSupportedLanguages());
+        return "cdidx is a code-index server. "
+            + "If queries fail because no index exists, run 'index' first to build it. "
+            + "Start with 'map' for repo orientation, then use 'search' for text queries or 'definition' for symbol lookup. "
+            + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
+            + $"Graph tools (references, callers, callees) only work for supported languages ({langs}); "
+            + "for other languages, use 'search' instead. "
+            + "Use 'excerpt' to read specific line ranges from indexed files. "
+            + "Check 'status' to verify index freshness before trusting results.";
+    }
 
     /// <summary>
     /// Clamp limit to a safe range to prevent resource exhaustion.

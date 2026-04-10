@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
-- **MCP server instructions and listChanged capability** — The MCP `initialize` response now includes an `instructions` string with tool-selection guidance (start with `map`, use `analyze_symbol` to bundle queries, graph tools only for supported languages, etc.) and sets `capabilities.tools.listChanged` to `false`. This helps AI clients choose the right tool on first connection without trial-and-error. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+- **MCP server instructions and listChanged capability** — The MCP `initialize` response now includes an `instructions` string with tool-selection guidance (start with `map`, use `analyze_symbol` to bundle queries, graph tools only for supported languages, run `index` first if no DB exists, etc.) and sets `capabilities.tools.listChanged` to `false`. The supported-language list in instructions is derived from `ReferenceExtractor.GetSupportedLanguages()` to stay in sync automatically. Protocol version bumped from `2024-11-05` to `2025-03-26` to match the spec revision that introduced `instructions` and tool annotations. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **Add a dedicated testing guide** — Added bilingual `TESTING_GUIDE.md` covering test suite layout, shared helpers, cross-platform rules, and test-writing conventions. Updated the maintenance checklists so test-code changes now explicitly review the testing guide in the same commit. Affected: `TESTING_GUIDE.md`, `README.md`, `DEVELOPER_GUIDE.md`, `SELF_IMPROVEMENT.md`, `CLAUDE.md`.
 
@@ -215,7 +215,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 追加
 
-- **MCP サーバー instructions と listChanged ケイパビリティ** — MCP の `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列（`map` から始める、`analyze_symbol` でクエリをまとめる、graph ツールは対応言語のみ等）を追加し、`capabilities.tools.listChanged` を `false` に設定した。これにより AI クライアントが初回接続時に試行錯誤せず適切なツールを選べるようになる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+- **MCP サーバー instructions と listChanged ケイパビリティ** — MCP の `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列（`map` から始める、`analyze_symbol` でクエリをまとめる、graph ツールは対応言語のみ、DB 未作成時は `index` を先に実行等）を追加し、`capabilities.tools.listChanged` を `false` に設定した。instructions 内の対応言語リストは `ReferenceExtractor.GetSupportedLanguages()` から動的に生成して自動同期する。プロトコルバージョンを `2024-11-05` から `2025-03-26` に更新し、`instructions` とツールアノテーションを導入した仕様改訂に合わせた。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **専用のテストガイドを追加** — テストスイート構成、共有ヘルパー、クロスプラットフォーム上の注意点、テスト作法をまとめた英日併記の `TESTING_GUIDE.md` を追加した。あわせて保守チェックリストを更新し、今後はテストコード変更時に同じコミットでテストガイドも明示的に確認・更新する運用にした。対象: `TESTING_GUIDE.md`, `README.md`, `DEVELOPER_GUIDE.md`, `SELF_IMPROVEMENT.md`, `CLAUDE.md`.
 

@@ -106,7 +106,7 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("2.0", response["jsonrpc"]!.GetValue<string>());
         Assert.Equal(1, response["id"]!.GetValue<int>());
-        Assert.Equal("2024-11-05", response["result"]!["protocolVersion"]!.GetValue<string>());
+        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
         Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
         Assert.Equal(ConsoleUi.LoadVersion(), response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
     }
@@ -132,6 +132,13 @@ public class McpServerTests : IDisposable
         Assert.Contains("map", instructions!);
         Assert.Contains("analyze_symbol", instructions);
         Assert.Contains("search", instructions);
+        // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
+        Assert.Contains("index", instructions);
+        // Verify language list comes from ReferenceExtractor / 言語リストがReferenceExtractorから来ることを検証
+        foreach (var lang in ReferenceExtractor.GetSupportedLanguages())
+        {
+            Assert.Contains(lang, instructions);
+        }
     }
 
     [Fact]
