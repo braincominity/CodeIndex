@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+
+- **Rich symbol metadata and backward-compatible symbol reads** — Symbol indexing now stores definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when the language extractor can infer them. Query paths auto-initialize missing columns for older databases when possible, and symbol reads fall back to the legacy schema instead of crashing if in-place migration is unavailable. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Models/SymbolRecord.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbWriter.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
 ### [1.0.5] - 2026-04-10
 
 #### Changed
@@ -150,6 +154,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+
+- **リッチなシンボルメタデータと後方互換なシンボル読み取り** — シンボルのインデックス時に、言語パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型も保存するようにした。古いDBに対しては、可能なら不足する列を自動追加し、読み取り経路でその場移行できない場合も旧スキーマへフォールバックしてクラッシュを避ける。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Models/SymbolRecord.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbWriter.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 ### [1.0.5] - 2026-04-10
 

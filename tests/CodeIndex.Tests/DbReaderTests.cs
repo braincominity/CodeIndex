@@ -39,7 +39,12 @@ public class DbReaderTests : IDisposable
             Content = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False",
         }]);
         _writer.InsertSymbols([
-            new SymbolRecord { FileId = pyId, Kind = "function", Name = "authenticate", Line = 1 },
+            new SymbolRecord
+            {
+                FileId = pyId, Kind = "function", Name = "authenticate", Line = 1,
+                StartLine = 1, EndLine = 4, BodyStartLine = 2, BodyEndLine = 4,
+                Signature = "def authenticate(user, password):"
+            },
         ]);
 
         var jsId = _writer.UpsertFile(new FileRecord
@@ -53,8 +58,18 @@ public class DbReaderTests : IDisposable
             Content = "export class ApiClient {\n  async fetchData(url) {\n    return fetch(url)\n  }\n}",
         }]);
         _writer.InsertSymbols([
-            new SymbolRecord { FileId = jsId, Kind = "class", Name = "ApiClient", Line = 1 },
-            new SymbolRecord { FileId = jsId, Kind = "function", Name = "fetchData", Line = 2 },
+            new SymbolRecord
+            {
+                FileId = jsId, Kind = "class", Name = "ApiClient", Line = 1,
+                StartLine = 1, EndLine = 4, BodyStartLine = 1, BodyEndLine = 4,
+                Signature = "export class ApiClient {", Visibility = "export"
+            },
+            new SymbolRecord
+            {
+                FileId = jsId, Kind = "function", Name = "fetchData", Line = 2,
+                StartLine = 2, EndLine = 3, BodyStartLine = 2, BodyEndLine = 3,
+                Signature = "async fetchData(url) {", ContainerKind = "class", ContainerName = "ApiClient"
+            },
         ]);
     }
 
@@ -108,6 +123,21 @@ public class DbReaderTests : IDisposable
         Assert.Single(results);
         Assert.Equal("function", results[0].Kind);
         Assert.Equal("src/auth.py", results[0].Path);
+    }
+
+    [Fact]
+    public void SearchSymbols_ReturnsRichMetadataWhenAvailable()
+    {
+        var results = _reader.SearchSymbols("fetchData");
+
+        var symbol = Assert.Single(results);
+        Assert.Equal(2, symbol.StartLine);
+        Assert.Equal(3, symbol.EndLine);
+        Assert.Equal(2, symbol.BodyStartLine);
+        Assert.Equal(3, symbol.BodyEndLine);
+        Assert.Equal("ApiClient", symbol.ContainerName);
+        Assert.Equal("class", symbol.ContainerKind);
+        Assert.Equal("async fetchData(url) {", symbol.Signature);
     }
 
     [Fact]

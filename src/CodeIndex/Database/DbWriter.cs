@@ -316,21 +316,49 @@ public class DbWriter
             // トランザクション開始後に準備し、接続のトランザクション状態を引き継ぐ
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = @"
-                INSERT INTO symbols (file_id, kind, name, line)
-                VALUES (@fid, @kind, @name, @line)";
+                INSERT INTO symbols (
+                    file_id, kind, name, line, start_line, end_line,
+                    body_start_line, body_end_line, signature,
+                    container_kind, container_name, visibility, return_type
+                )
+                VALUES (
+                    @fid, @kind, @name, @line, @startLine, @endLine,
+                    @bodyStartLine, @bodyEndLine, @signature,
+                    @containerKind, @containerName, @visibility, @returnType
+                )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
             var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
             var pName = cmd.Parameters.Add("@name", SqliteType.Text);
             var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
+            var pStartLine = cmd.Parameters.Add("@startLine", SqliteType.Integer);
+            var pEndLine = cmd.Parameters.Add("@endLine", SqliteType.Integer);
+            var pBodyStartLine = cmd.Parameters.Add("@bodyStartLine", SqliteType.Integer);
+            var pBodyEndLine = cmd.Parameters.Add("@bodyEndLine", SqliteType.Integer);
+            var pSignature = cmd.Parameters.Add("@signature", SqliteType.Text);
+            var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
+            var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
+            var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
+            var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
             cmd.Prepare();
 
             for (int j = i; j < end; j++)
             {
                 var symbol = symbols[j];
+                var startLine = symbol.StartLine > 0 ? symbol.StartLine : symbol.Line;
+                var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
                 pFid.Value = symbol.FileId;
                 pKind.Value = symbol.Kind;
                 pName.Value = symbol.Name;
                 pLine.Value = symbol.Line;
+                pStartLine.Value = startLine;
+                pEndLine.Value = endLine;
+                pBodyStartLine.Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
+                pBodyEndLine.Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
+                pSignature.Value = (object?)symbol.Signature ?? DBNull.Value;
+                pContainerKind.Value = (object?)symbol.ContainerKind ?? DBNull.Value;
+                pContainerName.Value = (object?)symbol.ContainerName ?? DBNull.Value;
+                pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
+                pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
             }
 

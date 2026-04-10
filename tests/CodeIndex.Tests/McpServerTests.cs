@@ -47,6 +47,9 @@ public class McpServerTests : IDisposable
             Kind = "class",
             Name = "App",
             Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = "public class App { public void Run() { } }",
         },
         new SymbolRecord
         {
@@ -54,6 +57,11 @@ public class McpServerTests : IDisposable
             Kind = "function",
             Name = "Run",
             Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = "public void Run() { }",
+            ContainerKind = "class",
+            ContainerName = "App",
         }]);
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
@@ -241,6 +249,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("Found 1 symbol", text);
         Assert.Equal("App", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
         Assert.Equal("class", response["result"]!["structuredContent"]!["results"]![0]!["kind"]!.GetValue<string>());
+        Assert.Equal("public class App { public void Run() { } }", response["result"]!["structuredContent"]!["results"]![0]!["signature"]!.GetValue<string>());
     }
 
     [Fact]

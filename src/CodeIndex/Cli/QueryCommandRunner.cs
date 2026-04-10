@@ -72,7 +72,12 @@ public static class QueryCommandRunner
             else
             {
                 foreach (var r in results)
-                    Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{r.Line}");
+                {
+                    var lineRange = r.EndLine > r.StartLine
+                        ? $"{r.StartLine}-{r.EndLine}"
+                        : r.StartLine.ToString();
+                    Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{lineRange}");
+                }
                 Console.Error.WriteLine($"({results.Count} symbols)");
             }
             return CommandExitCodes.Success;
@@ -212,6 +217,7 @@ public static class QueryCommandRunner
         try
         {
             using var db = new DbContext(dbPath);
+            db.InitializeSchema();
             var reader = new DbReader(db.Connection);
             return action(reader);
         }

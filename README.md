@@ -241,10 +241,16 @@ cdidx symbols --kind function --lang python
 Output:
 
 ```
-class      UserService                              src/Services/UserService.cs:8
-function   GetUserById                              src/Services/UserService.cs:24
-function   CreateUser                               src/Services/UserService.cs:45
+class      UserService                              src/Services/UserService.cs:8-72
+function   GetUserById                              src/Services/UserService.cs:24-41
+function   CreateUser                               src/Services/UserService.cs:45-61
 (3 symbols)
+```
+
+With `--json`, symbol results also include definition ranges, optional body ranges, signature text, container symbol, visibility, and return type when the language extractor can infer them:
+
+```json
+{"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
 
 ### List files
@@ -369,7 +375,7 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 ## AI Integration
 
-cdidx is designed as an AI-friendly code search tool. All query commands support `--json` for JSON lines output, making them easy to parse programmatically.
+cdidx is designed as an AI-friendly code search tool. All query commands support `--json` for JSON lines output, making them easy to parse programmatically. Symbol JSON now carries richer definition metadata, and opening an older database with a newer cdidx version will auto-add missing symbol columns when possible. If the DB cannot be migrated in place, read queries fall back to the legacy layout instead of crashing.
 
 ### Setup: Add to CLAUDE.md
 
@@ -819,10 +825,16 @@ cdidx symbols --kind function --lang python
 出力:
 
 ```
-class      UserService                              src/Services/UserService.cs:8
-function   GetUserById                              src/Services/UserService.cs:24
-function   CreateUser                               src/Services/UserService.cs:45
+class      UserService                              src/Services/UserService.cs:8-72
+function   GetUserById                              src/Services/UserService.cs:24-41
+function   CreateUser                               src/Services/UserService.cs:45-61
 (3 symbols)
+```
+
+`--json` を使うと、シンボル結果には定義範囲、判定できる場合の本体範囲、シグネチャ文字列、親シンボル、可視性、戻り値型も含まれます。
+
+```json
+{"path":"src/Services/UserService.cs","lang":"csharp","kind":"function","name":"GetUserById","line":24,"start_line":24,"end_line":41,"body_start_line":26,"body_end_line":41,"signature":"public async Task<User> GetUserById(int id)","container_kind":"class","container_name":"UserService","visibility":"public","return_type":"Task<User>"}
 ```
 
 ### ファイル一覧
@@ -947,7 +959,7 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 
 ## AIとの連携
 
-cdidxはAI対応のコード検索ツールとして設計されています。すべてのクエリコマンドは `--json` でJSONライン出力に対応し、プログラムからのパースが容易です。
+cdidxはAI対応のコード検索ツールとして設計されています。すべてのクエリコマンドは `--json` でJSONライン出力に対応し、プログラムからのパースが容易です。シンボルJSONにはより豊富な定義メタデータが含まれ、古いDBを新しいcdidxで開いた場合も、可能なら不足するシンボル列を自動追加します。DBをその場で移行できない場合でも、読み取り系クエリは旧レイアウトへフォールバックし、クラッシュしません。
 
 ### セットアップ: CLAUDE.mdに追加
 

@@ -9,10 +9,12 @@ namespace CodeIndex.Database;
 public class DbReader
 {
     private readonly SqliteConnection _conn;
+    private readonly HashSet<string> _symbolColumns;
 
     public DbReader(SqliteConnection connection)
     {
         _conn = connection;
+        _symbolColumns = LoadColumns("symbols");
     }
 
     /// <summary>
@@ -100,8 +102,17 @@ public class DbReader
     {
         using var cmd = _conn.CreateCommand();
 
-        var sql = @"
-            SELECT f.path, f.lang, s.kind, s.name, s.line
+        var sql = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
+                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE 1=1";
@@ -135,6 +146,15 @@ public class DbReader
                 Kind = reader.GetString(2),
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
+                StartLine = reader.IsDBNull(5) ? reader.GetInt32(4) : reader.GetInt32(5),
+                EndLine = reader.IsDBNull(6) ? reader.GetInt32(4) : reader.GetInt32(6),
+                BodyStartLine = reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                BodyEndLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                Signature = reader.IsDBNull(9) ? null : reader.GetString(9),
+                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
+                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
+                Visibility = reader.IsDBNull(12) ? null : reader.GetString(12),
+                ReturnType = reader.IsDBNull(13) ? null : reader.GetString(13),
             });
         }
         return results;
@@ -218,6 +238,27 @@ public class DbReader
         cmd.CommandText = sql;
         return (long)cmd.ExecuteScalar()!;
     }
+
+    private HashSet<string> LoadColumns(string tableName)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({tableName})";
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            columns.Add(reader.GetString(1));
+
+        return columns;
+    }
+
+    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null)
+    {
+        if (_symbolColumns.Contains(columnName))
+            return $"s.{columnName}";
+
+        return fallbackSql ?? "NULL";
+    }
 }
 
 // Result DTOs for query operations / クエリ操作用の結果DTO
@@ -239,6 +280,15 @@ public class SymbolResult
     public string Kind { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public int Line { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public int? BodyStartLine { get; set; }
+    public int? BodyEndLine { get; set; }
+    public string? Signature { get; set; }
+    public string? ContainerKind { get; set; }
+    public string? ContainerName { get; set; }
+    public string? Visibility { get; set; }
+    public string? ReturnType { get; set; }
 }
 
 public class FileResult

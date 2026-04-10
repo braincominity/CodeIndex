@@ -67,9 +67,10 @@ tests/CodeIndex.Tests/
 - **Batch commits** — 500 records per transaction for write performance. Supports nesting via SAVEPOINT.
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
 - **Literal-safe search by default** — Search queries are quoted token-by-token to avoid FTS syntax errors by default. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
-- **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability.
+- **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
+- **Backward-compatible symbol schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns when possible. If a read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
 - **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain to find the shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
@@ -234,9 +235,10 @@ tests/CodeIndex.Tests/
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。SAVEPOINTによるネスト対応。
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
 - **デフォルトはリテラル安全検索** — 検索クエリは既定ではトークンごとに引用し、FTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
-- **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先。
+- **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
+- **後方互換なシンボルスキーマ** — 新しいcdidxバイナリで古いDBを開いた場合は、可能なら不足するシンボル列を自動追加する。読み取り経路でその場移行できない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Cli/IndexCommandRunner.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
 - **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。git worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿って`info/exclude`がある共通`.git/`を見つける。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。

@@ -477,6 +477,7 @@ public class McpServer
             return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
 
         using var db = new DbContext(_dbPath);
+        db.InitializeSchema();
         var reader = new DbReader(db.Connection);
         return action(reader);
     }
