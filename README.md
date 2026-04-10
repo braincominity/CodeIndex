@@ -564,7 +564,6 @@ FROM symbols s
 JOIN files f ON f.id = s.file_id
 WHERE s.kind = 'function' AND s.name LIKE '%keyword%';
 ```
-````
 
 ### Incremental updates for CI / hooks
 
@@ -586,12 +585,12 @@ cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a stan
 
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
-```
-┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐
-│  Claude Code │ ──────────────────→ │  cdidx   │
-│  / Cursor    │ ←────────────────── │  mcp     │
-│  / Windsurf  │  stdout (JSON-RPC) │  server  │
-└──────────────┘                    └──────────┘
+```mermaid
+flowchart LR
+    tools["Claude Code<br/>Cursor<br/>Windsurf"]
+    server["cdidx<br/>mcp server"]
+    tools -->|"stdin (JSON-RPC)"| server
+    server -->|"stdout (JSON-RPC)"| tools
 ```
 
 **Setup — add to your AI tool's config:**
@@ -1264,7 +1263,6 @@ FROM symbols s
 JOIN files f ON f.id = s.file_id
 WHERE s.kind = 'function' AND s.name LIKE '%キーワード%';
 ```
-````
 
 ### CI / フック向けインクリメンタル更新
 
@@ -1286,12 +1284,12 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 
-```
-┌──────────────┐  stdin (JSON-RPC)  ┌──────────┐
-│  Claude Code │ ──────────────────→ │  cdidx   │
-│  / Cursor    │ ←────────────────── │  mcp     │
-│  / Windsurf  │  stdout (JSON-RPC) │  server  │
-└──────────────┘                    └──────────┘
+```mermaid
+flowchart LR
+    tools["Claude Code<br/>Cursor<br/>Windsurf"]
+    server["cdidx<br/>mcp server"]
+    tools -->|"stdin (JSON-RPC)"| server
+    server -->|"stdout (JSON-RPC)"| tools
 ```
 
 **セットアップ — AIツールの設定ファイルに追加するだけ:**

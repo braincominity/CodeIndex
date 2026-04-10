@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **README MCP diagrams render reliably in Markdown preview** — Replaced the ASCII box diagrams in the English and Japanese MCP sections with Mermaid flowcharts and removed stray code fences that could break the surrounding layout. Affected: `README.md`.
+
 - **Code quality sweep** — Extract `IsProjectPathArg` helper in `Program.cs` for readability; replace magic numbers with named constants in `ConsoleUi` (`SpinnerFrameDelayMs`, `SpinnerStopDelayMs`, `ConsoleLineMargin`); use C# range syntax in `GitHelper`; deduplicate `WorkspaceMetadataEnricher` with a shared `Apply` helper; document FTS5 token normalization in `SearchSnippetFormatter`. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
 
 - **Clearer CLI error messages and help text** — `--rebuild` conflict error now explains "rebuild requires a full rescan"; database-not-found error shows the full absolute path via `Path.GetFullPath`; `--snippet-lines` help shows "1-20, default: 8" instead of "default: 8, max: 20". Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
@@ -256,6 +258,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP search サマリにファイルパスを含める** — MCP の `search` ツールが content サマリにトップファイルパスを表示し、AI が構造化結果をパースする前に素早く位置を把握できるようにした。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
 #### 変更
+
+- **README の MCP 図が Markdown プレビューで安定表示されるよう改善** — 英語版・日本語版の MCP セクションにあった ASCII 罫線の図を Mermaid フローチャートへ置き換え、周辺レイアウトを壊していた余分なコードフェンスも削除した。対象: `README.md`.
 
 - **コード品質の一括改善** — `Program.cs` のパス検出ロジックを `IsProjectPathArg` に抽出して可読性向上、`ConsoleUi` のマジックナンバーに名前付き定数（`SpinnerFrameDelayMs`、`SpinnerStopDelayMs`、`ConsoleLineMargin`）を導入、`GitHelper` で C# range syntax を使用、`WorkspaceMetadataEnricher` の重複ロジックを `Apply` ヘルパーに共通化、`SearchSnippetFormatter` のトークン正規化にコメント追加。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
 
