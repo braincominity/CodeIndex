@@ -32,6 +32,8 @@ public class FileIndexer
         [".hpp"]    = "cpp",
         [".hxx"]    = "cpp",
         [".cs"]     = "csharp",
+        [".cshtml"] = "csharp",  // Razor (ASP.NET MVC/Pages) / Razor テンプレート
+        [".razor"]  = "csharp",  // Blazor component / Blazor コンポーネント
         [".php"]    = "php",
         [".sh"]     = "shell",
         [".sql"]    = "sql",
