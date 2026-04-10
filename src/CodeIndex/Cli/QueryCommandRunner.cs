@@ -15,7 +15,7 @@ public static class QueryCommandRunner
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: search requires a query argument");
-            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--fts]");
+            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]");
             return CommandExitCodes.UsageError;
         }
 
@@ -32,14 +32,14 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines), jsonOptions));
             }
             else
             {
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
@@ -357,6 +357,7 @@ public static class QueryCommandRunner
         int? endLine = null;
         int contextBefore = 0;
         int contextAfter = 0;
+        int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
         string? pathPattern = null;
         var excludePaths = new List<string>();
         bool excludeTests = false;
@@ -414,6 +415,9 @@ public static class QueryCommandRunner
                 case "--after" when i + 1 < args.Length:
                     contextAfter = ParseNonNegativeInt(args[++i], "--after");
                     break;
+                case "--snippet-lines" when i + 1 < args.Length:
+                    snippetLines = SearchSnippetFormatter.ClampSnippetLines(ParsePositiveInt(args[++i], "--snippet-lines") ?? SearchSnippetFormatter.DefaultSnippetLines);
+                    break;
                 default:
                     if (args[i].StartsWith('-'))
                     {
@@ -441,6 +445,7 @@ public static class QueryCommandRunner
             EndLine = endLine,
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
+            SnippetLines = snippetLines,
             PathPattern = pathPattern,
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
@@ -514,6 +519,7 @@ public sealed class QueryCommandOptions
     public int? EndLine { get; init; }
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
+    public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
     public string? PathPattern { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }

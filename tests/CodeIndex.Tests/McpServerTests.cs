@@ -253,6 +253,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("src/app.cs", structured["results"]![0]!["path"]!.GetValue<string>());
+        Assert.NotNull(structured["results"]![0]!["snippet"]);
+        Assert.NotNull(structured["results"]![0]!["matchLines"]);
+        Assert.NotNull(structured["results"]![0]!["highlights"]);
+        Assert.Null(structured["results"]![0]!["content"]);
     }
 
     [Fact]
@@ -275,6 +279,17 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.True(response["result"]!["structuredContent"]!["rawQuery"]!.GetValue<bool>());
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_SnippetLinesControlsExcerptLength()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","snippetLines":3}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(3, response["result"]!["structuredContent"]!["snippetLines"]!.GetValue<int>());
+        var snippet = response["result"]!["structuredContent"]!["results"]![0]!["snippet"]!.GetValue<string>();
+        Assert.True(snippet.Split('\n').Length <= 3);
     }
 
     [Fact]

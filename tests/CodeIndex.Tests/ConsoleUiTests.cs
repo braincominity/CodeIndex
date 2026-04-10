@@ -30,7 +30,8 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>", output);
         Assert.Contains("cdidx callers <query>", output);
         Assert.Contains("cdidx callees <query>", output);
-        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--fts]", output);
+        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]", output);
+        Assert.Contains("--snippet-lines <n>        Search snippet length (default: 8, max: 20)", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);

@@ -20,7 +20,7 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # shorthand for 'index'
 
 # Query (default output: human-readable; use --json for AI consumption)
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
@@ -45,7 +45,7 @@ src/CodeIndex/
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
   Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/status command execution and query arg parsing
-  Cli/SearchSnippetFormatter.cs — Center human-readable search output on matching lines
+  Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
   Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, status)
@@ -74,7 +74,8 @@ tests/CodeIndex.Tests/
 - **Batch commits** — 500 records per transaction for write performance. Supports nesting via SAVEPOINT.
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
 - **Literal-safe search by default** — Search queries are quoted token-by-token to avoid FTS syntax errors by default. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
-- **Path-aware narrowing and ranking** — `search`, `definition`, `symbols`, and `files` share `--path`, repeatable `--exclude-path`, and `--exclude-tests`. Query ordering prefers source files over tests/docs, and `search` boosts exact symbol-name and path matches.
+- **Path-aware narrowing and ranking** — `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` share `--path`, repeatable `--exclude-path`, and `--exclude-tests`. Query ordering prefers source files over tests/docs, and `search` boosts exact symbol-name and path matches.
+- **Compact search snippets for AI** — `search --json` and MCP `search` return match-centered snippets with snippet ranges, match lines, highlights, and context counts instead of whole chunks. `--snippet-lines` lets clients cap payload size up front.
 - **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
@@ -198,7 +199,7 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # 'index'の省略形
 
 # クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
@@ -223,7 +224,7 @@ src/CodeIndex/
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
   Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/statusコマンド実行とクエリ引数解析
-  Cli/SearchSnippetFormatter.cs — 人間向け検索出力を一致行中心に整形
+  Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
   Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
@@ -252,7 +253,8 @@ tests/CodeIndex.Tests/
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。SAVEPOINTによるネスト対応。
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
 - **デフォルトはリテラル安全検索** — 検索クエリは既定ではトークンごとに引用し、FTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
-- **パス考慮の絞り込みとランキング** — `search`、`definition`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` を共有する。クエリ結果は tests や docs より source を優先し、`search` はシンボル名やパスの exact match を追加ブーストする。
+- **パス考慮の絞り込みとランキング** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` を共有する。クエリ結果は tests や docs より source を優先し、`search` はシンボル名やパスの exact match を追加ブーストする。
+- **AI向けの軽量検索スニペット** — `search --json` と MCP の `search` は、チャンク全文ではなく snippet range、match line、highlight、context count を含む一致中心スニペットを返す。`--snippet-lines` でペイロード量を先に制限できる。
 - **言語差分を考慮した参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対して構築する参照テーブルに支えられる。未対応言語には低信頼な疑似グラフ結果を返さず、`search` を使う前提にする。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。

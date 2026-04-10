@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 
@@ -158,7 +159,7 @@ public class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Full-text search across indexed code chunks using FTS5. Returns matching code snippets with file path, line numbers, and content. / FTS5を使ったコードチャンクの全文検索。ファイルパス、行番号、コンテンツ付きのコードスニペットを返す。",
+                "Full-text search across indexed code chunks using FTS5. Returns compact match-centered snippets with line metadata. / FTS5を使ったコードチャンクの全文検索。一致中心の軽量スニペットと行メタデータを返す。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -167,6 +168,7 @@ public class McpServer
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
+                        ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Max snippet lines per result (default: 8, max: 20)", ["default"] = 8, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
                         ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting", ["default"] = false },
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
@@ -387,6 +389,7 @@ public class McpServer
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>();
+        var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
         var pathPattern = args?["path"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -401,6 +404,7 @@ public class McpServer
                 {
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
+                    ["snippetLines"] = snippetLines,
                     ["path"] = pathPattern,
                     ["excludeTests"] = excludeTests,
                     ["count"] = 0,
@@ -413,10 +417,11 @@ public class McpServer
             {
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
+                ["snippetLines"] = snippetLines,
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines)), _jsonOptions)
             };
             return CreateToolResult(id, $"Found {results.Count} search result(s).", structured);
         });
