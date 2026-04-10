@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Use a proper rotating braille spinner sequence** — The default spinner and progress bar now share the 10-frame braille sequence `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`, which reads as rotation instead of jitter. Added a regression test for the default frame list and removed the duplicated default frame definition so spinner and progress bar stay aligned. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
 - **Expose workspace trust metadata in `inspect` / `analyze_symbol`** — `inspect --json` and MCP `analyze_symbol` now include `workspace_indexed_at`, `workspace_latest_modified`, `project_root`, `git_head`, and `git_is_dirty`, so AI clients can judge freshness and repository state during symbol analysis without a separate `status` call. Human-readable `inspect` output also prints the same trust signals before the bundled sections. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **Split scoped and workspace freshness in `map` output** — `map` keeps `indexed_at` and `latest_modified` scoped to the filtered result set for backward compatibility, and now also exposes `workspace_indexed_at` and `workspace_latest_modified` so AI clients can compare slice-level freshness with whole-workspace freshness without falling back to a separate `status` call. Human-readable `map` output now labels the scoped/workspace timestamps explicitly. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
@@ -186,6 +188,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 変更
+
+- **既定スピナーを回転して見えるブライユ列へ変更** — 既定のスピナーと進捗バーが、揺れて見える 6 コマではなく `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` の 10 コマ列を共有するようにした。既定フレーム列の回帰テストも追加し、スピナーと進捗バーで定義がずれないよう重複を除去した。対象: `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 
 - **`inspect` / `analyze_symbol` にワークスペース信頼メタデータを追加** — `inspect --json` と MCP の `analyze_symbol` が `workspace_indexed_at`、`workspace_latest_modified`、`project_root`、`git_head`、`git_is_dirty` を返すようになり、AIクライアントがシンボル分析中に別途 `status` を呼ばなくても鮮度とリポジトリ状態を判断できるようにした。人間向け `inspect` 出力でも、まとめられた各セクションの前に同じ信頼シグナルを表示する。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
