@@ -225,6 +225,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Elixir_DetectsModuleAndFunctions()
+    {
+        // Elixir: defmodule, def, defp / Elixir: モジュール、関数、プライベート関数
+        var content = "defmodule MyApp.Router do\n  def call(conn, _opts) do\n    conn\n  end\n\n  defp parse(data) do\n    data\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Router");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "call");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse");
+    }
+
+    [Fact]
     public void Extract_Scala_DetectsObjectTraitAndDef()
     {
         // Scala: object, trait, def, case class / Scala: オブジェクト、トレイト、def、ケースクラス
