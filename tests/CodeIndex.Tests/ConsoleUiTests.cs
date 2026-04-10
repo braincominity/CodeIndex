@@ -50,6 +50,14 @@ public class ConsoleUiTests
         Assert.Contains("cdidx index ./myproject --commits abc123", output);
     }
 
+    [Fact]
+    public void GetSpinnerFrames_Default_UsesRotatingBrailleSequence()
+    {
+        var frames = ConsoleUi.GetSpinnerFrames(null);
+
+        Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+    }
+
     private static string CaptureUsageOutput(bool showBanner = true)
     {
         lock (TestConsoleLock.Gate)

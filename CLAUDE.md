@@ -51,6 +51,7 @@ src/CodeIndex/
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
   Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, status)
+  Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
@@ -78,14 +79,17 @@ tests/CodeIndex.Tests/
 - **Literal-safe search by default** — Search queries are quoted token-by-token to avoid FTS syntax errors by default. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
 - **Path-aware narrowing and ranking** — `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` share `--path`, repeatable `--exclude-path`, and `--exclude-tests`. Query ordering prefers source files over tests/docs, and `search` boosts exact symbol-name and path matches.
 - **Compact search snippets for AI** — `search --json` and MCP `search` return match-centered snippets with snippet ranges, match lines, highlights, and context counts instead of whole chunks. `--snippet-lines` lets clients cap payload size up front.
-- **Repo map for first-pass orientation** — `map` summarizes languages, modules, top files, file hot spots, and likely entrypoints so AI clients can form an initial navigation plan before issuing deeper queries.
-- **Freshness metadata for trust decisions** — `status`/`map` expose `indexed_at`, `latest_modified`, `git_head`, and `git_is_dirty`, while `files` exposes per-file checksum and timestamp metadata. Older DBs auto-add missing file columns when possible, and read paths avoid crashing if migration cannot happen in place.
-- **Bundled symbol analysis** — `inspect` and MCP `analyze_symbol` combine definition, nearby symbols, references, callers, callees, and file metadata so AI clients can answer common symbol questions with one request.
+- **Repo map for first-pass orientation** — `map` summarizes languages, modules, top files, file hot spots, and likely entrypoints so AI clients can form an initial navigation plan before issuing deeper queries. Entrypoint inference falls back to known top-level entry files when symbol extraction does not yield an explicit `Main`-style symbol.
+- **Freshness metadata for trust decisions** — `status` exposes whole-workspace freshness plus `git_head` / `git_is_dirty`. `map` keeps `indexed_at` / `latest_modified` scoped to the filtered result set and also exposes `workspace_indexed_at` / `workspace_latest_modified` for whole-workspace freshness. `inspect` mirrors those whole-workspace timestamps and git fields so symbol-oriented AI flows can judge trust without a separate `status` call. `files` exposes per-file checksum and timestamp metadata. Older DBs auto-add missing file columns when possible, and read paths avoid crashing if migration cannot happen in place. MCP zero-result responses include `indexed_file_count` and `indexed_at` so AI clients can self-diagnose stale or empty indexes without a separate `status` call.
+- **Bundled symbol analysis** — `inspect` and MCP `analyze_symbol` combine definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph-support metadata so AI clients can answer common symbol questions with one request.
 - **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results.
+- **Explicit graph-support hints** — `inspect`, MCP `analyze_symbol`, and direct MCP graph tools annotate unsupported language filters with graph-support metadata so AI clients can distinguish "unsupported language" from "supported but zero hits."
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
-- **Backward-compatible read schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns and creates newer reference tables when possible. If a symbol read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing.
+- **MCP tool annotations** — All tools emit `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) per the MCP spec so AI clients can auto-approve safe read-only queries.
+- **MCP server instructions** — The `initialize` response includes an `instructions` string with tool-selection guidance so AI clients can choose the right tool on first connection.
+- **Backward-compatible read schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns and creates newer reference tables when possible. If a symbol read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing. Query paths use `TryMigrateForRead()` instead of `InitializeSchema()` so that read-only databases (e.g. on read-only filesystems) silently degrade rather than crashing.
 - **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
 - **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain to find the shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
@@ -145,17 +149,19 @@ Features that exist in the spinner (braille frames, themed emoji+text) must carr
 ### Per-commit checklist
 Before every commit, check whether each of the following needs updating. Don't batch these up — evaluate and act on each commit:
 1. **Tests** — Does this change break existing tests or require new ones? Search for affected method/class names in `tests/`.
-2. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
-3. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
-4. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
-5. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
-6. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
-7. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
-8. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+2. **TESTING_GUIDE.md** — If test code, helpers, execution flow, or testing conventions changed, update both English and Japanese sections.
+3. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
+4. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
+5. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
+6. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
+7. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
+8. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
+9. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
+- **TESTING_GUIDE.md** — English section AND Japanese section (both must match); update when test helpers, structure, or conventions change
 - **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections.
 - **CHANGELOG.md** — English section AND Japanese section
 - **SELF_IMPROVEMENT.md** — Dedicated operating contract for iterative AI-driven cdidx self-improvement
@@ -176,6 +182,7 @@ When modifying the CLAUDE.md template (code search rules for AI agents), update 
 
 ### Tests
 When changing public API signatures or adding new public methods, check if tests need updating. Run `dotnet test` to verify. If the build environment lacks .NET SDK, at minimum verify all callers are updated by searching for the method name.
+When changing test code, shared test helpers, test execution flow, or testing conventions, update `TESTING_GUIDE.md` in the same commit.
 When tests create temporary git repositories and run `git commit`, configure a repo-local `user.name` and `user.email` inside the test setup instead of assuming CI has a global git identity.
 
 ### Cross-platform changes
@@ -242,6 +249,7 @@ src/CodeIndex/
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
   Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
+  Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
@@ -269,14 +277,17 @@ tests/CodeIndex.Tests/
 - **デフォルトはリテラル安全検索** — 検索クエリは既定ではトークンごとに引用し、FTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
 - **パス考慮の絞り込みとランキング** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` を共有する。クエリ結果は tests や docs より source を優先し、`search` はシンボル名やパスの exact match を追加ブーストする。
 - **AI向けの軽量検索スニペット** — `search --json` と MCP の `search` は、チャンク全文ではなく snippet range、match line、highlight、context count を含む一致中心スニペットを返す。`--snippet-lines` でペイロード量を先に制限できる。
-- **初動向けの repo map** — `map` は、言語、モジュール、主要ファイル、ホットスポット、推定エントリポイントを要約し、AIクライアントが深い検索前に移動計画を立てやすくする。
-- **信用判断のための鮮度メタデータ** — `status`/`map` は `indexed_at`、`latest_modified`、`git_head`、`git_is_dirty` を返し、`files` はファイルごとの checksum と timestamp を返す。古いDBに不足する file 列は可能なら自動追加し、その場移行できない場合も読み取りをクラッシュさせない。
-- **まとめて取るシンボル分析** — `inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータをまとめて返し、AIクライアントが1回の問い合わせで一般的なシンボル調査を終えやすくする。
+- **初動向けの repo map** — `map` は、言語、モジュール、主要ファイル、ホットスポット、推定エントリポイントを要約し、AIクライアントが深い検索前に移動計画を立てやすくする。シンボル抽出だけで入口が取れない場合も、既知のトップレベル実行ファイルへフォールバックして候補を補う。
+- **信用判断のための鮮度メタデータ** — `status` はワークスペース全体の鮮度に加えて `git_head` / `git_is_dirty` を返す。`map` は `indexed_at` / `latest_modified` を絞り込み結果の鮮度として維持しつつ、`workspace_indexed_at` / `workspace_latest_modified` でワークスペース全体の鮮度も返す。`inspect` も同じワークスペース鮮度と git フィールドを返すため、シンボル中心の AI フローで `status` を別途呼ばずに済む。`files` はファイルごとの checksum と timestamp を返す。古いDBに不足する file 列は可能なら自動追加し、その場移行できない場合も読み取りをクラッシュさせない。MCP の 0 件レスポンスは `indexed_file_count` と `indexed_at` を含み、AIクライアントが別途 `status` を呼ばなくてもインデックスの古さや空を自己診断できる。
+- **まとめて取るシンボル分析** — `inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返し、AIクライアントが1回の問い合わせで一般的なシンボル調査を終えやすくする。
 - **言語差分を考慮した参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対して構築する参照テーブルに支えられる。未対応言語には低信頼な疑似グラフ結果を返さず、`search` を使う前提にする。
+- **graph 対応ヒントの明示** — `inspect`、MCP の `analyze_symbol`、直接の MCP graph ツールは、未対応言語フィルタに graph 対応メタデータを付けて返し、AI クライアントが「未対応言語」と「対応言語だが 0 件」を区別できるようにする。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
-- **後方互換な読み取りスキーマ** — 新しいcdidxバイナリで古いDBを開いた場合は、可能なら不足するシンボル列を自動追加し、新しい参照テーブルも作成する。読み取り経路でその場移行できない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。
+- **MCPツールアノテーション** — 全ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返し、AIクライアントが安全な読み取り専用クエリを自動承認できるようにする。
+- **MCPサーバー instructions** — `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列を含め、AIクライアントが初回接続時に適切なツールを選べるようにする。
+- **後方互換な読み取りスキーマ** — 新しいcdidxバイナリで古いDBを開いた場合は、可能なら不足するシンボル列を自動追加し、新しい参照テーブルも作成する。読み取り経路でその場移行できない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。クエリパスは `InitializeSchema()` ではなく `TryMigrateForRead()` を使い、読み取り専用DBでも黙って縮退する。
 - **構造化終了コード** — 0=成功、1=引数エラー、2=未検出、3=DBエラー。
 - **ライブラリコードから直接Console出力しない** — `FileIndexer.BuildRecord()`は警告を戻り値`(FileRecord, string, string?)`で返す。表示は呼び出し元（`Cli/IndexCommandRunner.cs`）が`ConsoleUi.ClearProgressLine()`でプログレスバーをクリアしてから行う。
 - **`.cdidx/`ディレクトリ** — `cdidx index` の既定では、インデックスファイルは呼び出し元のcwdではなく `<projectPath>/.cdidx/codeindex.db` に格納される。初回の`cdidx index`でディレクトリを自動作成し、`.git/info/exclude`に自動追加するためユーザーが`.gitignore`を編集する必要なし。git worktreeでは`.git`がディレクトリではなくファイルのため、`GitHelper.ResolveGitCommonDir()`で解決チェーンを辿って`info/exclude`がある共通`.git/`を見つける。Git標準の仕組み（git-lfs、Husky、JetBrains IDE等が利用）。
@@ -336,17 +347,19 @@ tests/CodeIndex.Tests/
 ### コミットごとのチェックリスト
 コミットのたびに、以下の各項目について更新要否を判断すること。後回しにせず、各コミット単位で確認・対応する:
 1. **テスト** — この変更で既存テストが壊れないか？新規テストが必要か？`tests/` 内で影響を受けるメソッド・クラス名を検索。
-2. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
-3. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
-4. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
-5. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
-6. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
-7. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
-8. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
+2. **TESTING_GUIDE.md** — テストコード、共有ヘルパー、実行フロー、テスト規約を変えたなら、英語・日本語の両セクションを更新。
+3. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
+4. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
+5. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
+6. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
+7. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
+8. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
+9. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:
 - **README.md** — 英語セクション AND 日本語セクション（両方一致させる）
+- **TESTING_GUIDE.md** — 英語セクション AND 日本語セクション（両方一致させる）。テストヘルパー、構成、規約を変えたら更新する
 - **DEVELOPER_GUIDE.md** — CLAUDE.mdテンプレートと終了コードはREADMEを参照。設計判断・アーキテクチャは独自セクション。
 - **CHANGELOG.md** — 英語セクション AND 日本語セクション
 - **SELF_IMPROVEMENT.md** — AIが cdidx 自身を継続改善するときの専用運用契約
@@ -367,6 +380,7 @@ CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する
 
 ### テスト
 公開APIのシグネチャ変更や新しい公開メソッド追加時はテストの更新要否を確認する。`dotnet test`で検証。ビルド環境に.NET SDKがない場合でも、最低限メソッド名を検索して全呼び出し元が更新されていることを確認する。
+テストコード、共有テストヘルパー、テスト実行フロー、またはテスト規約を変更した場合は、同じコミットで `TESTING_GUIDE.md` も更新する。
 テスト内で一時 git リポジトリを作って `git commit` する場合は、CI に global の git identity が入っている前提にせず、テストセットアップ内で repo-local の `user.name` と `user.email` を設定すること。
 
 ### クロスプラットフォーム変更

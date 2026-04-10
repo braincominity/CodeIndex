@@ -106,7 +106,7 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("2.0", response["jsonrpc"]!.GetValue<string>());
         Assert.Equal(1, response["id"]!.GetValue<int>());
-        Assert.Equal("2024-11-05", response["result"]!["protocolVersion"]!.GetValue<string>());
+        Assert.Equal("2025-03-26", response["result"]!["protocolVersion"]!.GetValue<string>());
         Assert.Equal("cdidx", response["result"]!["serverInfo"]!["name"]!.GetValue<string>());
         Assert.Equal(ConsoleUi.LoadVersion(), response["result"]!["serverInfo"]!["version"]!.GetValue<string>());
     }
@@ -118,6 +118,27 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         Assert.NotNull(response["result"]!["capabilities"]!["tools"]);
+        Assert.False(response["result"]!["capabilities"]!["tools"]!["listChanged"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Initialize_ReturnsInstructions()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var instructions = response["result"]!["instructions"]?.GetValue<string>();
+        Assert.NotNull(instructions);
+        Assert.Contains("map", instructions!);
+        Assert.Contains("analyze_symbol", instructions);
+        Assert.Contains("search", instructions);
+        // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
+        Assert.Contains("index", instructions);
+        // Verify language list comes from ReferenceExtractor / 言語リストがReferenceExtractorから来ることを検証
+        foreach (var lang in ReferenceExtractor.GetSupportedLanguages())
+        {
+            Assert.Contains(lang, instructions);
+        }
     }
 
     [Fact]
@@ -241,6 +262,43 @@ public class McpServerTests : IDisposable
         Assert.Contains("path", required.Select(r => r!.GetValue<string>()));
     }
 
+    [Fact]
+    public void ToolsList_QueryToolsHaveReadOnlyAnnotations()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var queryToolNames = new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "excerpt", "map", "analyze_symbol", "status" };
+
+        foreach (var name in queryToolNames)
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var annotations = tool["annotations"];
+            Assert.NotNull(annotations);
+            Assert.True(annotations!["readOnlyHint"]!.GetValue<bool>(), $"{name} should have readOnlyHint=true");
+            Assert.False(annotations["destructiveHint"]!.GetValue<bool>(), $"{name} should have destructiveHint=false");
+            Assert.True(annotations["idempotentHint"]!.GetValue<bool>(), $"{name} should have idempotentHint=true");
+            Assert.False(annotations["openWorldHint"]!.GetValue<bool>(), $"{name} should have openWorldHint=false");
+        }
+    }
+
+    [Fact]
+    public void ToolsList_IndexToolHasWriteAnnotations()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var indexTool = tools.First(t => t!["name"]!.GetValue<string>() == "index")!;
+        var annotations = indexTool["annotations"];
+        Assert.NotNull(annotations);
+        Assert.False(annotations!["readOnlyHint"]!.GetValue<bool>());
+        Assert.True(annotations["destructiveHint"]!.GetValue<bool>());
+        Assert.False(annotations["idempotentHint"]!.GetValue<bool>());
+        Assert.False(annotations["openWorldHint"]!.GetValue<bool>());
+    }
+
     // --- tools/call tests / ツール呼び出しテスト ---
 
     [Fact]
@@ -269,7 +327,11 @@ public class McpServerTests : IDisposable
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("No results found", text);
-        Assert.Equal(0, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        // Zero-result responses include freshness hint / 0件時に鮮度ヒントを含む
+        Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.NotNull(structured["indexed_at"]);
     }
 
     [Fact]
@@ -321,6 +383,8 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["topFiles"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceIndexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceLatestModified"]);
         Assert.Contains("Main", response["result"]!["structuredContent"]!["entrypoints"]!.ToJsonString());
     }
 
@@ -336,6 +400,21 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["nearbySymbols"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callers"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callees"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceIndexedAt"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceLatestModified"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+        Assert.True(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("Use search, definition, excerpt, or files instead.", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -352,6 +431,17 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_ReturnsCallerSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -365,6 +455,17 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Callers_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callees_ReturnsCalleeSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -375,6 +476,17 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -423,6 +535,24 @@ public class McpServerTests : IDisposable
         Assert.Contains("Found 1 definition", text);
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
         Assert.Contains("public void Run()", response["result"]!["structuredContent"]!["results"]![0]!["content"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("definition", """{"query":"nonexistent_xyz_123"}""")]
+    [InlineData("symbols", """{"query":"nonexistent_xyz_123"}""")]
+    [InlineData("references", """{"query":"nonexistent_xyz_123"}""")]
+    [InlineData("callers", """{"query":"nonexistent_xyz_123"}""")]
+    [InlineData("callees", """{"query":"nonexistent_xyz_123"}""")]
+    [InlineData("files", """{"query":"nonexistent_xyz_123","lang":"nonexistent"}""")]
+    public void ToolsCall_ZeroResults_IncludesFreshnessHint(string toolName, string argsJson)
+    {
+        var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0, $"{toolName} should include indexed_file_count");
+        Assert.NotNull(structured["indexed_at"]);
     }
 
     [Fact]

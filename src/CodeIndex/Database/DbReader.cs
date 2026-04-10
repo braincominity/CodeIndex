@@ -1,3 +1,4 @@
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -11,7 +12,7 @@ public class DbReader
     private readonly SqliteConnection _conn;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
-    private const string TestPathCondition = @"
+    internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
             lower(f.path) LIKE '%/tests/%' OR
@@ -60,35 +61,6 @@ public class DbReader
             WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
             ELSE 1
         END";
-    private static readonly Dictionary<string, string[]> EntrypointNameHints = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["csharp"] = ["Main", "Program", "App", "Startup", "CreateHostBuilder"],
-        ["python"] = ["main", "app", "cli"],
-        ["javascript"] = ["main", "bootstrap", "start", "createApp", "App"],
-        ["typescript"] = ["main", "bootstrap", "start", "createApp", "App"],
-        ["go"] = ["main"],
-        ["rust"] = ["main"],
-        ["java"] = ["main", "Application", "App"],
-        ["kotlin"] = ["main", "Application", "App"],
-        ["ruby"] = ["main", "call", "App"],
-        ["php"] = ["main", "handle", "App"],
-        ["swift"] = ["main", "App"],
-    };
-    private static readonly Dictionary<string, string[]> EntrypointPathHints = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "App.cs"],
-        ["python"] = ["main.py", "__main__.py", "app.py", "cli.py"],
-        ["javascript"] = ["index.js", "main.js", "app.js", "server.js"],
-        ["typescript"] = ["index.ts", "main.ts", "app.ts", "server.ts"],
-        ["go"] = ["main.go"],
-        ["rust"] = ["main.rs", "lib.rs"],
-        ["java"] = ["Main.java", "App.java", "Application.java"],
-        ["kotlin"] = ["Main.kt", "App.kt", "Application.kt"],
-        ["ruby"] = ["app.rb", "main.rb", "cli.rb"],
-        ["php"] = ["index.php", "app.php"],
-        ["swift"] = ["main.swift", "App.swift"],
-    };
-
     public DbReader(SqliteConnection connection)
     {
         _conn = connection;
@@ -171,7 +143,7 @@ public class DbReader
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
     /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
     /// </summary>
-    private static string EscapeLikeQuery(string input)
+    internal static string EscapeLikeQuery(string input)
     {
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
@@ -599,8 +571,34 @@ public class DbReader
     /// </summary>
     public FileResult? GetFileByPath(string path)
     {
-        return ListFiles(query: path, limit: 50)
-            .FirstOrDefault(file => string.Equals(file.Path, path, StringComparison.Ordinal));
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT f.path, f.lang, f.size, f.lines,
+                   COUNT(s.id) AS symbol_count,
+                   {GetFileColumnSql("checksum")} AS checksum,
+                   {GetFileColumnSql("modified")} AS modified,
+                   {GetFileColumnSql("indexed_at")} AS indexed_at
+            FROM files f
+            LEFT JOIN symbols s ON s.file_id = f.id
+            WHERE f.path = @path
+            GROUP BY f.id";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+            return null;
+
+        return new FileResult
+        {
+            Path = reader.GetString(0),
+            Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+            Size = reader.GetInt64(2),
+            Lines = reader.GetInt32(3),
+            SymbolCount = reader.GetInt32(4),
+            Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
+            Modified = GetNullableDateTime(reader, 6),
+            IndexedAt = GetNullableDateTime(reader, 7),
+        };
     }
 
     /// <summary>
@@ -676,6 +674,9 @@ public class DbReader
         var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPattern, excludePathPatterns, excludeTests);
         var primaryDefinition = definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
+        var freshness = GetWorkspaceFreshness();
+        var graphLanguage = lang ?? file?.Lang;
+        bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
         var nearbySymbols = primaryDefinition != null
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
@@ -684,6 +685,11 @@ public class DbReader
         {
             Query = query,
             File = file,
+            WorkspaceIndexedAt = freshness.IndexedAt,
+            WorkspaceLatestModified = freshness.LatestModified,
+            GraphLanguage = graphLanguage,
+            GraphSupported = graphSupported,
+            GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
             References = SearchReferences(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
@@ -702,6 +708,7 @@ public class DbReader
         var chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
         var references = ExecuteScalar("SELECT COUNT(*) FROM symbol_references");
+        var freshness = GetWorkspaceFreshness();
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -717,249 +724,20 @@ public class DbReader
             Chunks = chunks,
             Symbols = symbols,
             References = references,
-            IndexedAt = ExecuteNullableDateTime(_fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null),
-            LatestModified = ExecuteNullableDateTime(_fileColumns.Contains("modified") ? "SELECT MAX(modified) FROM files" : null),
+            IndexedAt = freshness.IndexedAt,
+            LatestModified = freshness.LatestModified,
             Languages = langs,
         };
     }
 
     /// <summary>
-    /// Build a repo-level overview to help AI clients orient before deep queries.
-    /// 深掘り前の把握に使うリポジトリ俯瞰情報を構築する。
+    /// Delegate to RepoMapBuilder for repo-level overview generation.
+    /// RepoMapBuilderに委譲してリポジトリ俯瞰情報を生成する。
     /// </summary>
     public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
-        var fileStats = GetRepoMapFileStats(lang, pathPattern, excludePathPatterns, excludeTests);
-        var result = new RepoMapResult
-        {
-            FileCount = fileStats.Count,
-            TotalLines = fileStats.Sum(file => (long)file.Lines),
-            TotalSymbols = fileStats.Sum(file => (long)file.SymbolCount),
-            TotalReferences = fileStats.Sum(file => (long)file.ReferenceCount),
-            IndexedAt = fileStats.Max(file => file.IndexedAt),
-            LatestModified = fileStats.Max(file => file.Modified),
-            Languages = fileStats
-                .GroupBy(file => file.Lang ?? "unknown")
-                .Select(group => new RepoLanguageResult
-                {
-                    Lang = group.Key,
-                    Files = group.Count(),
-                    Lines = group.Sum(file => (long)file.Lines),
-                    Symbols = group.Sum(file => (long)file.SymbolCount),
-                    References = group.Sum(file => (long)file.ReferenceCount),
-                })
-                .OrderByDescending(group => group.Files)
-                .ThenBy(group => group.Lang)
-                .Take(limit)
-                .ToList(),
-            Modules = fileStats
-                .GroupBy(file => GetModuleKey(file.Path))
-                .Select(group => new RepoModuleResult
-                {
-                    Module = group.Key,
-                    Files = group.Count(),
-                    Lines = group.Sum(file => (long)file.Lines),
-                    Symbols = group.Sum(file => (long)file.SymbolCount),
-                    References = group.Sum(file => (long)file.ReferenceCount),
-                })
-                .OrderByDescending(group => group.References)
-                .ThenByDescending(group => group.Symbols)
-                .ThenByDescending(group => group.Lines)
-                .ThenBy(group => group.Module)
-                .Take(limit)
-                .ToList(),
-            TopFiles = fileStats
-                .Select(file => CreateScoredFileSummary(file))
-                .OrderByDescending(file => file.Score)
-                .ThenByDescending(file => file.ReferenceCount)
-                .ThenByDescending(file => file.SymbolCount)
-                .ThenByDescending(file => file.Lines)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .ToList(),
-            LargestFiles = fileStats
-                .OrderByDescending(file => file.Lines)
-                .ThenByDescending(file => file.Size)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .Select(CreateUnscoredFileSummary)
-                .ToList(),
-            SymbolRichFiles = fileStats
-                .OrderByDescending(file => file.SymbolCount)
-                .ThenByDescending(file => file.ReferenceCount)
-                .ThenByDescending(file => file.Lines)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .Select(CreateUnscoredFileSummary)
-                .ToList(),
-            ReferenceRichFiles = fileStats
-                .OrderByDescending(file => file.ReferenceCount)
-                .ThenByDescending(file => file.SymbolCount)
-                .ThenByDescending(file => file.Lines)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .Select(CreateUnscoredFileSummary)
-                .ToList(),
-            Entrypoints = GetEntrypoints(limit, lang, pathPattern, excludePathPatterns, excludeTests),
-        };
-
-        return result;
-    }
-
-    private List<RepoFileStat> GetRepoMapFileStats(string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
-    {
-        using var cmd = _conn.CreateCommand();
-        var sql = @"
-            SELECT f.path, f.lang, f.size, f.lines,
-                   (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) AS symbol_count,
-                   (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id) AS reference_count,
-                   " + GetFileColumnSql("checksum") + @" AS checksum,
-                   " + GetFileColumnSql("modified") + @" AS modified,
-                   " + GetFileColumnSql("indexed_at") + @" AS indexed_at
-            FROM files f
-            WHERE 1=1";
-
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += " ORDER BY f.path";
-
-        cmd.CommandText = sql;
-        if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
-
-        var results = new List<RepoFileStat>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            results.Add(new RepoFileStat
-            {
-                Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
-                Size = reader.GetInt64(2),
-                Lines = reader.GetInt32(3),
-                SymbolCount = reader.GetInt32(4),
-                ReferenceCount = reader.GetInt32(5),
-                Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
-                Modified = GetNullableDateTime(reader, 7),
-                IndexedAt = GetNullableDateTime(reader, 8),
-            });
-        }
-
-        return results;
-    }
-
-    private List<RepoEntrypointResult> GetEntrypoints(int limit, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
-    {
-        using var cmd = _conn.CreateCommand();
-        var sql = @"
-            SELECT f.path, f.lang, s.kind, s.name, s.line
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE s.kind IN ('function', 'class')";
-
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += " ORDER BY f.path, s.line";
-
-        cmd.CommandText = sql;
-        if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
-
-        var results = new List<RepoEntrypointResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            var path = reader.GetString(0);
-            var candidateLang = reader.IsDBNull(1) ? null : reader.GetString(1);
-            var kind = reader.GetString(2);
-            var name = reader.GetString(3);
-            var line = reader.GetInt32(4);
-            var score = ScoreEntrypoint(path, candidateLang, kind, name);
-            if (score <= 0)
-                continue;
-
-            results.Add(new RepoEntrypointResult
-            {
-                Path = path,
-                Lang = candidateLang,
-                Kind = kind,
-                Name = name,
-                Line = line,
-                Score = score,
-            });
-        }
-
-        return results
-            .OrderByDescending(result => result.Score)
-            .ThenBy(result => result.Path)
-            .ThenBy(result => result.Line)
-            .Take(limit)
-            .ToList();
-    }
-
-    private static RepoFileSummaryResult CreateScoredFileSummary(RepoFileStat file)
-    {
-        var summary = CreateUnscoredFileSummary(file);
-        summary.Score = (file.Lines * 1L) + (file.SymbolCount * 5L) + (file.ReferenceCount * 2L);
-        return summary;
-    }
-
-    private static RepoFileSummaryResult CreateUnscoredFileSummary(RepoFileStat file)
-    {
-        return new RepoFileSummaryResult
-        {
-            Path = file.Path,
-            Lang = file.Lang,
-            Lines = file.Lines,
-            Size = file.Size,
-            SymbolCount = file.SymbolCount,
-            ReferenceCount = file.ReferenceCount,
-        };
-    }
-
-    private static string GetModuleKey(string path)
-    {
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0)
-            return ".";
-        if (segments.Length == 1)
-            return segments[0];
-
-        return segments[0] switch
-        {
-            "src" or "app" or "lib" or "tests" or "test" or "docs" or "packages" when segments.Length >= 3 => $"{segments[0]}/{segments[1]}",
-            "src" or "app" or "lib" or "tests" or "test" or "docs" or "packages" => segments[0],
-            _ => segments[0],
-        };
-    }
-
-    private static int ScoreEntrypoint(string path, string? lang, string kind, string name)
-    {
-        if (lang == null)
-            return 0;
-
-        var score = 0;
-        if (EntrypointNameHints.TryGetValue(lang, out var names) && names.Any(candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)))
-            score += 4;
-
-        var fileName = Path.GetFileName(path);
-        if (EntrypointPathHints.TryGetValue(lang, out var fileHints) && fileHints.Any(candidate => string.Equals(candidate, fileName, StringComparison.OrdinalIgnoreCase)))
-            score += 3;
-
-        if (score == 0)
-            return 0;
-
-        if (kind == "function")
-            score += 1;
-
-        if (kind == "class" && string.Equals(Path.GetFileNameWithoutExtension(fileName), name, StringComparison.OrdinalIgnoreCase))
-            score += 1;
-
-        return score;
+        var builder = new RepoMapBuilder(_conn, _fileColumns);
+        return builder.Build(limit, lang, pathPattern, excludePathPatterns, excludeTests, GetWorkspaceFreshness);
     }
 
     private long ExecuteScalar(string sql)
@@ -967,6 +745,26 @@ public class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         return (long)cmd.ExecuteScalar()!;
+    }
+
+    /// <summary>
+    /// Return a lightweight freshness hint for zero-result MCP responses.
+    /// 0件MCPレスポンス向けの軽量な鮮度ヒントを返す。
+    /// </summary>
+    public (long FileCount, DateTime? IndexedAt) GetFreshnessHint()
+    {
+        var fileCount = ExecuteScalar("SELECT COUNT(*) FROM files");
+        var indexedAt = ExecuteNullableDateTime(
+            _fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null);
+        return (fileCount, indexedAt);
+    }
+
+    private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()
+    {
+        return (
+            ExecuteNullableDateTime(_fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null),
+            ExecuteNullableDateTime(_fileColumns.Contains("modified") ? "SELECT MAX(modified) FROM files" : null)
+        );
     }
 
     private DateTime? ExecuteNullableDateTime(string? sql)
@@ -981,6 +779,12 @@ public class DbReader
             return null;
 
         return ParseDateTimeValue(value);
+    }
+
+    private static string BuildGraphSupportReason(string? graphLanguage, bool? graphSupported)
+    {
+        return ReferenceExtractor.BuildGraphSupportReason(graphLanguage, graphSupported)
+            ?? "Call-graph support could not be determined because no language filter or matching definition was available.";
     }
 
     private HashSet<string> LoadColumns(string tableName)
@@ -1004,7 +808,7 @@ public class DbReader
         return fallbackSql ?? "NULL";
     }
 
-    private string GetFileColumnSql(string columnName, string? fallbackSql = null)
+    internal string GetFileColumnSql(string columnName, string? fallbackSql = null)
     {
         if (_fileColumns.Contains(columnName))
             return $"f.{columnName}";
@@ -1012,7 +816,7 @@ public class DbReader
         return fallbackSql ?? "NULL";
     }
 
-    private static void AppendPathFilters(ref string sql, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    internal static void AppendPathFilters(ref string sql, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (pathPattern != null)
             sql += " AND f.path LIKE @pathPattern ESCAPE '\\'";
@@ -1032,7 +836,7 @@ public class DbReader
         return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, rank, f.path";
     }
 
-    private static void AddPathFilterParameters(SqliteCommand cmd, string? pathPattern, IReadOnlyList<string>? excludePathPatterns)
+    internal static void AddPathFilterParameters(SqliteCommand cmd, string? pathPattern, IReadOnlyList<string>? excludePathPatterns)
     {
         if (pathPattern != null)
             cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
@@ -1044,7 +848,7 @@ public class DbReader
         }
     }
 
-    private static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)
+    internal static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal))
             return null;
@@ -1178,6 +982,8 @@ public class RepoMapResult
     public long TotalReferences { get; set; }
     public DateTime? IndexedAt { get; set; }
     public DateTime? LatestModified { get; set; }
+    public DateTime? WorkspaceIndexedAt { get; set; }
+    public DateTime? WorkspaceLatestModified { get; set; }
     public string? ProjectRoot { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
@@ -1233,6 +1039,14 @@ public class SymbolAnalysisResult
 {
     public string Query { get; set; } = string.Empty;
     public FileResult? File { get; set; }
+    public DateTime? WorkspaceIndexedAt { get; set; }
+    public DateTime? WorkspaceLatestModified { get; set; }
+    public string? ProjectRoot { get; set; }
+    public string? GitHead { get; set; }
+    public bool? GitIsDirty { get; set; }
+    public string? GraphLanguage { get; set; }
+    public bool? GraphSupported { get; set; }
+    public string? GraphSupportReason { get; set; }
     public List<DefinitionResult> Definitions { get; set; } = [];
     public List<SymbolResult> NearbySymbols { get; set; } = [];
     public List<ReferenceResult> References { get; set; } = [];

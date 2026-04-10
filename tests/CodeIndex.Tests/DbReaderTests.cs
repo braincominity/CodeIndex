@@ -455,6 +455,68 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_AddsFileFallbackEntrypointForTopLevelProgram()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp", "var client = new ApiClient();\nConsole.WriteLine(client);\n");
+
+        var map = _reader.GetRepoMap(limit: 5, pathPattern: "src/Program.cs");
+
+        Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
+    }
+
+    [Fact]
+    public void GetRepoMap_KeepsScopedFreshnessAndAddsWorkspaceFreshness()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp", "public class Program\n{\n    public static void Main(string[] args)\n    {\n    }\n}\n",
+            modified: new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile("docs/guide.md", "markdown", "# Guide\n",
+            modified: new DateTime(2025, 6, 3, 0, 0, 0, DateTimeKind.Utc));
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE files
+            SET indexed_at = CASE path
+                WHEN 'src/auth.py' THEN '2025-06-01 00:00:00'
+                WHEN 'src/api.js' THEN '2025-06-01 00:00:00'
+                WHEN 'src/Program.cs' THEN '2025-06-02 00:00:00'
+                WHEN 'docs/guide.md' THEN '2025-06-04 00:00:00'
+                ELSE indexed_at
+            END
+            WHERE path IN ('src/auth.py', 'src/api.js', 'src/Program.cs', 'docs/guide.md')
+            """;
+        cmd.ExecuteNonQuery();
+
+        var map = _reader.GetRepoMap(limit: 5, pathPattern: "src/Program.cs");
+
+        Assert.Equal(new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc), map.IndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc), map.LatestModified);
+        Assert.Equal(new DateTime(2025, 6, 4, 0, 0, 0, DateTimeKind.Utc), map.WorkspaceIndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 3, 0, 0, 0, DateTimeKind.Utc), map.WorkspaceLatestModified);
+    }
+
+    [Fact]
+    public void GetFileByPath_ReturnsExactMatchWithFullMetadata()
+    {
+        // Seed data: src/api.js — Size=800, Lines=50, Modified=2025-06-01, 2 symbols (ApiClient, fetchData)
+        // シードデータ: src/api.js — Size=800, Lines=50, Modified=2025-06-01, シンボル2個
+        var file = _reader.GetFileByPath("src/api.js");
+        Assert.NotNull(file);
+        Assert.Equal("src/api.js", file!.Path);
+        Assert.Equal("javascript", file.Lang);
+        Assert.Equal(800, file.Size);
+        Assert.Equal(50, file.Lines);
+        Assert.Equal(2, file.SymbolCount);
+        Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), file.Modified);
+        Assert.NotNull(file.IndexedAt);
+
+        // Substring or partial path must return null / 部分一致は null を返す
+        Assert.Null(_reader.GetFileByPath("api.js"));
+        Assert.Null(_reader.GetFileByPath("api"));
+        Assert.Null(_reader.GetFileByPath("src/api"));
+        Assert.Null(_reader.GetFileByPath("nonexistent.py"));
+    }
+
+    [Fact]
     public void AnalyzeSymbol_BundlesDefinitionGraphAndNearbyContext()
     {
         var analysis = _reader.AnalyzeSymbol("fetchData", limit: 5, lang: "javascript", includeBody: true);
@@ -463,8 +525,27 @@ public class DbReaderTests : IDisposable
         Assert.Equal("fetchData", definition.Name);
         Assert.NotNull(analysis.File);
         Assert.Equal("src/api.js", analysis.File!.Path);
+        Assert.NotNull(analysis.WorkspaceIndexedAt);
+        Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), analysis.WorkspaceLatestModified);
+        Assert.Equal("javascript", analysis.GraphLanguage);
+        Assert.True(analysis.GraphSupported);
+        Assert.Contains("indexed", analysis.GraphSupportReason);
         Assert.Contains(analysis.NearbySymbols, item => item.Name == "ApiClient");
         Assert.Contains(analysis.Callees, item => item.CalleeName == "fetch");
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_UnsupportedLanguage_ReportsGraphSupportMetadata()
+    {
+        var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "markdown");
+
+        Assert.Equal("markdown", analysis.GraphLanguage);
+        Assert.False(analysis.GraphSupported);
+        Assert.Contains("not indexed", analysis.GraphSupportReason);
+        Assert.Empty(analysis.Definitions);
+        Assert.Empty(analysis.References);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.Callees);
     }
 
     public void Dispose()

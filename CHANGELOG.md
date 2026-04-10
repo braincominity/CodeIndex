@@ -9,6 +9,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+
+- **Freshness hints in zero-result MCP responses** — When MCP query tools (`search`, `definition`, `symbols`, `references`, `callers`, `callees`, `files`) return zero results, the response now includes `indexed_file_count` and `indexed_at` so AI clients can immediately tell whether the index is stale or empty without a separate `status` round-trip. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **MCP server instructions and listChanged capability** — The MCP `initialize` response now includes an `instructions` string with tool-selection guidance (start with `map`, use `analyze_symbol` to bundle queries, graph tools only for supported languages, run `index` first if no DB exists, etc.) and sets `capabilities.tools.listChanged` to `false`. The supported-language list in instructions is derived from `ReferenceExtractor.GetSupportedLanguages()` to stay in sync automatically. Protocol version bumped from `2024-11-05` to `2025-03-26` to match the spec revision that introduced `instructions` and tool annotations. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **Add a dedicated testing guide** — Added bilingual `TESTING_GUIDE.md` covering test suite layout, shared helpers, cross-platform rules, and test-writing conventions. Updated the maintenance checklists so test-code changes now explicitly review the testing guide in the same commit. Affected: `TESTING_GUIDE.md`, `README.md`, `DEVELOPER_GUIDE.md`, `SELF_IMPROVEMENT.md`, `CLAUDE.md`.
+
+- **MCP tool annotations for AI client trust decisions** — All MCP tools now emit `annotations` with `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` per the MCP spec. Query tools are marked read-only and idempotent; the `index` tool is marked destructive and non-idempotent (it can drop the DB via `--rebuild` and replaces chunks/symbols per file). This helps AI clients decide which tools are safe to call without user confirmation. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+#### Changed
+
+- **Extract `RepoMapBuilder` from `DbReader`** — Moved the repo-map logic (~280 lines: `GetRepoMap`, file stats, entrypoint scoring, module grouping) into a dedicated `RepoMapBuilder` class, reducing `DbReader` from 1174 to 1073 lines. The public API (`DbReader.GetRepoMap`) is unchanged; it delegates to `RepoMapBuilder` internally. Shared query helpers (`AppendPathFilters`, `AddPathFilterParameters`, `EscapeLikeQuery`, `GetNullableDateTime`) became `internal static` for reuse. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
+
+- **Treat the self-improvement loop as regression and monkey testing** — `SELF_IMPROVEMENT.md` now states that the loop is not only for implementing improvements but also for exercising the freshly built local binary as ongoing regression coverage and light monkey testing. Agents are instructed to actively use recent, less-common, and edge-path features instead of only safe happy-path workflows so crashes and integration defects are more likely to surface early. Affected: `SELF_IMPROVEMENT.md`.
+
+- **Escalate local-binary failures in the self-improvement loop** — `SELF_IMPROVEMENT.md` now explicitly requires agents to report crashes, abnormal exits, or newly discovered defects in the freshly built local binary to the user instead of silently working around them or falling back to an older/global install. The loop must surface the concrete failure and propose a dedicated fix as the next task or next approved priority. Affected: `SELF_IMPROVEMENT.md`.
+
+- **Add file-based entrypoint fallbacks to `map`** — Repo-map entrypoints now fall back to known top-level entry files such as `Program.cs` and `main.py` when symbol extraction does not emit an explicit `Main`-style symbol. This improves first-pass orientation for top-level script or top-level-statement projects without changing the `entrypoints` shape. Affected: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **Expose unsupported-language hints in direct graph queries** — Human-readable `references`, `callers`, and `callees` now print an explicit note when `--lang` targets a language without indexed call-graph extraction. MCP graph tools also return `graph_language`, `graph_supported`, and `graph_support_reason` so zero-hit unsupported-language queries are distinguishable from real zero-hit supported-language searches. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **Make unsupported call-graph languages explicit in `inspect` / `analyze_symbol`** — Symbol analysis now returns `graph_language`, `graph_supported`, and `graph_support_reason`, so AI clients can distinguish "this language is not indexed for callers/callees/references" from "there were simply no graph hits." Human-readable `inspect` output also prints the same graph-support note. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **Use a proper rotating braille spinner sequence** — The default spinner and progress bar now share the 10-frame braille sequence `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`, which reads as rotation instead of jitter. Added a regression test for the default frame list and removed the duplicated default frame definition so spinner and progress bar stay aligned. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **Expose workspace trust metadata in `inspect` / `analyze_symbol`** — `inspect --json` and MCP `analyze_symbol` now include `workspace_indexed_at`, `workspace_latest_modified`, `project_root`, `git_head`, and `git_is_dirty`, so AI clients can judge freshness and repository state during symbol analysis without a separate `status` call. Human-readable `inspect` output also prints the same trust signals before the bundled sections. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **Split scoped and workspace freshness in `map` output** — `map` keeps `indexed_at` and `latest_modified` scoped to the filtered result set for backward compatibility, and now also exposes `workspace_indexed_at` and `workspace_latest_modified` so AI clients can compare slice-level freshness with whole-workspace freshness without falling back to a separate `status` call. Human-readable `map` output now labels the scoped/workspace timestamps explicitly. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **Consolidate `BuildGraphSupportReason` into `ReferenceExtractor`** — Moved the shared graph-support-reason message logic from duplicated private methods in `DbReader` and `McpServer` into a single `ReferenceExtractor.BuildGraphSupportReason()` static helper. `DbReader` adds a fallback message for the null-language case; `McpServer` passes through the null. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
+#### Fixed
+
+- **Tolerate read-only databases in query paths** — Query commands (`search`, `definition`, `inspect`, etc.) and MCP read tools now call `TryMigrateForRead()` instead of `InitializeSchema()`. `TryMigrateForRead()` creates the `symbol_references` table and indexes if missing, runs column migrations, and catches only `SQLITE_READONLY` errors so read-only filesystems silently degrade while other failures propagate. Affected: `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **Use exact-match query in `GetFileByPath`** — Replaced the substring `LIKE '%path%'` approach (via `ListFiles` + in-memory filter) with a direct `WHERE path = @path` query, eliminating false positives and unnecessary work. Affected: `src/CodeIndex/Database/DbReader.cs`.
+
+- **Guard `GetRepoMap` against empty filter results** — `fileStats.Max()` now checks `fileStats.Count > 0` before aggregating, preventing `InvalidOperationException` when no files match the filter criteria. Affected: `src/CodeIndex/Database/DbReader.cs`.
+
+- **Guard `WriteGraphSupportHint` against null language** — The CLI graph-support hint now skips printing when `--lang` is not specified, avoiding a confusing `"not indexed for ''"` message. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 ### [1.1.0] - 2026-04-10
 
 #### Changed
@@ -178,6 +220,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+- **0件 MCP レスポンスに鮮度ヒントを追加** — MCP クエリツール（`search`、`definition`、`symbols`、`references`、`callers`、`callees`、`files`）が 0 件を返すとき、レスポンスに `indexed_file_count` と `indexed_at` を含めるようにした。AI クライアントが別途 `status` を呼ばなくても、インデックスの古さや空を即座に判断できる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **MCP サーバー instructions と listChanged ケイパビリティ** — MCP の `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列（`map` から始める、`analyze_symbol` でクエリをまとめる、graph ツールは対応言語のみ、DB 未作成時は `index` を先に実行等）を追加し、`capabilities.tools.listChanged` を `false` に設定した。instructions 内の対応言語リストは `ReferenceExtractor.GetSupportedLanguages()` から動的に生成して自動同期する。プロトコルバージョンを `2024-11-05` から `2025-03-26` に更新し、`instructions` とツールアノテーションを導入した仕様改訂に合わせた。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **専用のテストガイドを追加** — テストスイート構成、共有ヘルパー、クロスプラットフォーム上の注意点、テスト作法をまとめた英日併記の `TESTING_GUIDE.md` を追加した。あわせて保守チェックリストを更新し、今後はテストコード変更時に同じコミットでテストガイドも明示的に確認・更新する運用にした。対象: `TESTING_GUIDE.md`, `README.md`, `DEVELOPER_GUIDE.md`, `SELF_IMPROVEMENT.md`, `CLAUDE.md`.
+
+- **MCP ツールアノテーションで AI クライアントの信頼判断を支援** — 全 MCP ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返すようになった。クエリツールは読み取り専用かつ冪等に、`index` ツールは破壊的かつ非冪等にマークされる（`--rebuild` で DB を削除でき、再インデックスでファイルごとにチャンク・シンボルを置き換えるため）。これにより AI クライアントがユーザー確認なしに安全に呼べるツールを判断しやすくなる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+#### 変更
+
+- **`RepoMapBuilder` を `DbReader` から分離** — repo map ロジック（約280行: `GetRepoMap`、ファイル統計、エントリポイント採点、モジュールグループ化）を専用の `RepoMapBuilder` クラスに移動し、`DbReader` を 1174 行から 1073 行に縮小した。公開 API（`DbReader.GetRepoMap`）は変更なし、内部で `RepoMapBuilder` に委譲する。共有クエリヘルパー（`AppendPathFilters`、`AddPathFilterParameters`、`EscapeLikeQuery`、`GetNullableDateTime`）は再利用のため `internal static` に変更。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
+
+- **自己改善ループをリグレッションテスト兼モンキーテストとして扱う方針を明記** — `SELF_IMPROVEMENT.md` に、このループが単なる改善実装だけでなく、ビルドしたばかりのローカル版バイナリに対する継続的なリグレッション確認と軽いモンキーテストも兼ねることを明記した。最も安全な happy path だけでなく、新機能、利用頻度の低い機能、エッジ寄りの経路も積極的に使い、クラッシュや統合不具合を早めに表面化させるよう指示した。対象: `SELF_IMPROVEMENT.md`.
+
+- **自己改善ループでローカル版バイナリの失敗を明示的にエスカレーション** — `SELF_IMPROVEMENT.md` に、ビルド直後のローカル版バイナリがクラッシュしたり異常終了したり新しい不具合を見せた場合、黙って回避したり古い版・グローバル版へ逃げたりせず、具体的な失敗内容をユーザーへ通知して、次タスクまたは次の承認済み優先事項として修正提案を出すことを明記した。対象: `SELF_IMPROVEMENT.md`.
+
+- **`map` にファイルベースのエントリポイント補完を追加** — repo map の entrypoints は、シンボル抽出が `Main` 系シンボルを出さない場合でも、`Program.cs` や `main.py` のような既知のトップレベル実行ファイルへフォールバックするようになった。`entrypoints` の形は変えずに、トップレベルスクリプトや top-level statements のプロジェクトでも初動の入口把握を改善する。対象: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **直接の graph クエリでも未対応言語ヒントを返すよう改善** — 人間向けの `references`、`callers`、`callees` は、`--lang` が call graph 非対応言語を指しているときに明示的な補足メモを出すようにした。MCP の graph ツールも `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語の 0 件結果と、対応言語の本当の 0 件を区別できるようにした。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **`inspect` / `analyze_symbol` で未対応言語の call graph 非対応を明示** — シンボル分析が `graph_language`、`graph_supported`、`graph_support_reason` を返すようになり、AIクライアントが「この言語では callers/callees/references が未対応」なのか「単にヒットが無い」だけなのかを区別できるようにした。人間向け `inspect` 出力でも同じ graph 対応メモを表示する。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **既定スピナーを回転して見えるブライユ列へ変更** — 既定のスピナーと進捗バーが、揺れて見える 6 コマではなく `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` の 10 コマ列を共有するようにした。既定フレーム列の回帰テストも追加し、スピナーと進捗バーで定義がずれないよう重複を除去した。対象: `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **`inspect` / `analyze_symbol` にワークスペース信頼メタデータを追加** — `inspect --json` と MCP の `analyze_symbol` が `workspace_indexed_at`、`workspace_latest_modified`、`project_root`、`git_head`、`git_is_dirty` を返すようになり、AIクライアントがシンボル分析中に別途 `status` を呼ばなくても鮮度とリポジトリ状態を判断できるようにした。人間向け `inspect` 出力でも、まとめられた各セクションの前に同じ信頼シグナルを表示する。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **`map` 出力の鮮度を絞り込み範囲とワークスペース全体で分離** — 後方互換のため `map` の `indexed_at` と `latest_modified` は絞り込み結果に対する値のまま維持しつつ、`workspace_indexed_at` と `workspace_latest_modified` を追加し、AIクライアントが別途 `status` を呼ばなくても「この範囲だけ古い」のか「ワークスペース全体が古い」のかを比較できるようにした。人間向け `map` 出力でも scoped/workspace の時刻ラベルを明示した。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **`BuildGraphSupportReason` を `ReferenceExtractor` に統合** — `DbReader` と `McpServer` に重複していた graph 対応理由メッセージのロジックを、`ReferenceExtractor.BuildGraphSupportReason()` 静的ヘルパーに一本化した。`DbReader` は null 言語時のフォールバックメッセージを付加し、`McpServer` は null をそのまま返す。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
+#### 修正
+
+- **読み取り専用 DB でのクエリパスを安全化** — クエリコマンド (`search`、`definition`、`inspect` 等) と MCP 読み取りツールが、`InitializeSchema()` の代わりに `TryMigrateForRead()` を呼ぶようにした。`TryMigrateForRead()` は `symbol_references` テーブルとインデックスが無ければ作成し、列の移行も行い、`SQLITE_READONLY` エラーだけを無視して読み取り専用 FS では黙って縮退する。それ以外のエラーは伝播する。対象: `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **`GetFileByPath` を完全一致クエリに修正** — `ListFiles` 経由のサブストリング `LIKE '%path%'` + メモリフィルタを、直接 `WHERE path = @path` クエリに置き換え、誤ヒットと不要な処理を除去した。対象: `src/CodeIndex/Database/DbReader.cs`.
+
+- **`GetRepoMap` で空のフィルタ結果によるクラッシュを防止** — `fileStats.Max()` 呼び出し前に `fileStats.Count > 0` をチェックし、条件に一致するファイルがゼロの場合の `InvalidOperationException` を防いだ。対象: `src/CodeIndex/Database/DbReader.cs`.
+
+- **`WriteGraphSupportHint` の null 言語ガードを追加** — `--lang` 未指定時に graph サポートヒントの出力をスキップするようにし、`"not indexed for ''"` という紛らわしいメッセージを防いだ。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 ### [1.1.0] - 2026-04-10
 

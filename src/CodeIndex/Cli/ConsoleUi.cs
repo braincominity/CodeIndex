@@ -6,6 +6,12 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class ConsoleUi
 {
+    private static readonly string[] DefaultBrailleSpinnerFrames =
+    [
+        "⠋", "⠙", "⠹", "⠸", "⠼",
+        "⠴", "⠦", "⠧", "⠇", "⠏",
+    ];
+
     // --- Spinner / スピナー ---
 
     /// <summary>
@@ -115,14 +121,14 @@ public static class ConsoleUi
             "\U0001f943 Slainte!      ",
         ],
         // Default: Braille spinner / デフォルト: ブレイルスピナー
-        _ => ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"],
+        _ => DefaultBrailleSpinnerFrames,
     };
 
     // --- Progress bar / プログレスバー ---
 
     // Active spinner frames for progress bar (themed or default braille)
     // プログレスバー用アクティブスピナーフレーム（テーマ付きまたはデフォルトブレイル）
-    private static string[] _progressSpinnerFrames = ["\u2807", "\u280b", "\u280f", "\u2838", "\u280f", "\u2839"];
+    private static string[] _progressSpinnerFrames = DefaultBrailleSpinnerFrames;
     // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
     private static int _lastProgressLineLength;
 

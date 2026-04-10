@@ -19,7 +19,7 @@ public class McpServer
     private readonly JsonSerializerOptions _jsonOptions;
     private bool _running = true;
 
-    private const string ProtocolVersion = "2024-11-05";
+    private const string ProtocolVersion = "2025-03-26";
     private const int MaxLimit = 200;
     private const int MaxQueryLength = 1000;
     private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
@@ -138,13 +138,19 @@ public class McpServer
             ["protocolVersion"] = ProtocolVersion,
             ["capabilities"] = new JsonObject
             {
-                ["tools"] = new JsonObject()
+                ["tools"] = new JsonObject
+                {
+                    ["listChanged"] = false
+                }
             },
             ["serverInfo"] = new JsonObject
             {
                 ["name"] = "cdidx",
                 ["version"] = _version
-            }
+            },
+            // Server instructions — tool-selection guidance for AI clients
+            // サーバー指示 — AIクライアント向けツール選択ガイダンス
+            ["instructions"] = BuildInstructions()
         };
         return CreateSuccessResponse(id, result);
     }
@@ -175,7 +181,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "definition",
                 "Resolve symbol definitions with definition ranges, signatures, and optional body content. / 定義範囲、シグネチャ、必要に応じて本体内容付きでシンボル定義を解決。",
@@ -194,7 +201,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "references",
                 "Search indexed symbol references such as call sites. / 呼び出し箇所などのインデックス済みシンボル参照を検索。",
@@ -212,7 +220,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callers",
                 "Find caller symbols that reference a callee. / 指定シンボルを参照している呼び出し元シンボルを探す。",
@@ -230,7 +239,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callees",
                 "Find callees used by a caller/container symbol. / 呼び出し元シンボルが使っている呼び出し先を探す。",
@@ -248,7 +258,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "symbols",
                 "Search for code symbols (functions, classes, interfaces, imports) by name pattern. / シンボル（関数、クラス、インターフェース、import）を名前パターンで検索。",
@@ -265,7 +276,8 @@ public class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "files",
                 "List indexed files, optionally filtered by name pattern and language. / インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。",
@@ -281,7 +293,8 @@ public class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "excerpt",
                 "Reconstruct a file excerpt from indexed chunks for a given line range. / 指定行範囲について、インデックス済みチャンクからファイル抜粋を再構成。",
@@ -297,7 +310,8 @@ public class McpServer
                         ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines after the range", ["default"] = 0 }
                     },
                     ["required"] = new JsonArray { "path", "startLine" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "map",
                 "Return a repo-level overview with languages, modules, top files, and likely entrypoints. / 言語、モジュール、主要ファイル、推定エントリポイントを含むリポジトリ俯瞰情報を返す。",
@@ -312,10 +326,11 @@ public class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "analyze_symbol",
-                "Bundle definition, nearby symbols, references, callers, callees, and file metadata for one symbol query. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータをまとめて返す。",
+                "Bundle definition, nearby symbols, references, callers, callees, file metadata, and graph-support metadata for one symbol query. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、グラフ対応メタデータをまとめて返す。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -330,7 +345,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "status",
                 "Get database statistics: file count, chunk count, symbol count, reference count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、参照数、言語別内訳。",
@@ -338,7 +354,8 @@ public class McpServer
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject()
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "index",
                 "Index or re-index a project directory. Scans source files, extracts symbols, and builds FTS5 search index. / プロジェクトディレクトリをインデックス（再インデックス）。ソースファイルをスキャンし、シンボルを抽出してFTS5検索インデックスを構築。",
@@ -351,7 +368,8 @@ public class McpServer
                         ["rebuild"] = new JsonObject { ["type"] = "boolean", ["description"] = "Delete existing index and rebuild from scratch (default: false)", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "path" }
-                })
+                },
+                IndexAnnotations())
         };
 
         var result = new JsonObject { ["tools"] = tools };
@@ -399,6 +417,39 @@ public class McpServer
     // --- Tool implementations / ツール実装 ---
 
     /// <summary>
+    /// Build the server instructions string for the initialize response.
+    /// Uses the actual supported-language list from ReferenceExtractor.
+    /// initializeレスポンス用のサーバー指示文字列を構築。
+    /// ReferenceExtractorの実際の対応言語リストを使用。
+    /// </summary>
+    private static string BuildInstructions()
+    {
+        var langs = string.Join(", ", ReferenceExtractor.GetSupportedLanguages());
+        return "cdidx is a code-index server. "
+            + "If queries fail because no index exists, run 'index' first to build it. "
+            + "Start with 'map' for repo orientation, then use 'search' for text queries or 'definition' for symbol lookup. "
+            + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
+            + $"Graph tools (references, callers, callees) only work for supported languages ({langs}); "
+            + "for other languages, use 'search' instead. "
+            + "Use 'excerpt' to read specific line ranges from indexed files. "
+            + "Check 'status' to verify index freshness before trusting results.";
+    }
+
+    /// <summary>
+    /// Add freshness hint fields to a zero-result payload so AI clients
+    /// can self-diagnose stale or empty indexes without a separate status call.
+    /// 0件レスポンスに鮮度ヒントを追加し、AIクライアントが別途statusを
+    /// 呼ばなくてもインデックスの古さや空を自己診断できるようにする。
+    /// </summary>
+    private static void AddFreshnessHint(JsonObject payload, DbReader reader)
+    {
+        var (fileCount, indexedAt) = reader.GetFreshnessHint();
+        payload["indexed_file_count"] = fileCount;
+        if (indexedAt.HasValue)
+            payload["indexed_at"] = JsonSerializer.SerializeToNode(indexedAt.Value);
+    }
+
+    /// <summary>
     /// Clamp limit to a safe range to prevent resource exhaustion.
     /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
     /// </summary>
@@ -412,6 +463,17 @@ public class McpServer
                 .Cast<string>()
                 .ToList()
             : [];
+    }
+
+    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported)
+    {
+        if (count > 0)
+            return $"Found {count} {label}.";
+
+        if (graphSupported == false && lang != null)
+            return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
+
+        return $"No {label} found.";
     }
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
@@ -445,6 +507,7 @@ public class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
 
@@ -489,6 +552,7 @@ public class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No symbols found.", payload);
             }
 
@@ -536,6 +600,8 @@ public class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
                 results.Count == 0 ? "No definitions found." : $"Found {results.Count} definition(s).",
                 payload);
@@ -560,6 +626,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -567,11 +634,16 @@ public class McpServer
                 ["lang"] = lang,
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
+                ["graphLanguage"] = lang,
+                ["graphSupported"] = graphSupported,
+                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
-                results.Count == 0 ? "No references found." : $"Found {results.Count} reference(s).",
+                BuildGraphSummary("references", results.Count, lang, graphSupported),
                 payload);
         });
     }
@@ -594,6 +666,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -601,11 +674,16 @@ public class McpServer
                 ["lang"] = lang,
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
+                ["graphLanguage"] = lang,
+                ["graphSupported"] = graphSupported,
+                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
-                results.Count == 0 ? "No callers found." : $"Found {results.Count} caller(s).",
+                BuildGraphSummary("callers", results.Count, lang, graphSupported),
                 payload);
         });
     }
@@ -628,6 +706,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -635,11 +714,16 @@ public class McpServer
                 ["lang"] = lang,
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
+                ["graphLanguage"] = lang,
+                ["graphSupported"] = graphSupported,
+                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
-                results.Count == 0 ? "No callees found." : $"Found {results.Count} callee(s).",
+                BuildGraphSummary("callees", results.Count, lang, graphSupported),
                 payload);
         });
     }
@@ -669,6 +753,7 @@ public class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No files found.", payload);
             }
 
@@ -724,6 +809,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPattern, excludePaths, excludeTests);
+            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             structured["lang"] = lang;
             structured["path"] = pathPattern;
@@ -770,6 +856,7 @@ public class McpServer
                     ["path"] = path,
                     ["count"] = 0
                 };
+                AddFreshnessHint(emptyPayload, reader);
                 return CreateToolResult(id, "No excerpt found.", emptyPayload);
             }
 
@@ -875,7 +962,7 @@ public class McpServer
             return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
 
         using var db = new DbContext(_dbPath);
-        db.InitializeSchema();
+        db.TryMigrateForRead();
         var reader = new DbReader(db.Connection);
         return action(reader);
     }
@@ -953,13 +1040,45 @@ public class McpServer
         return CreateSuccessResponse(id, result);
     }
 
-    private static JsonObject CreateToolDefinition(string name, string description, JsonObject inputSchema)
+    private static JsonObject CreateToolDefinition(string name, string description, JsonObject inputSchema,
+        JsonObject? annotations = null)
     {
-        return new JsonObject
+        var def = new JsonObject
         {
             ["name"] = name,
             ["description"] = description,
             ["inputSchema"] = inputSchema
         };
+        if (annotations != null)
+            def["annotations"] = annotations;
+        return def;
     }
+
+    /// <summary>
+    /// Build MCP tool annotations for a read-only query tool.
+    /// 読み取り専用クエリツール用のMCPツールアノテーションを構築。
+    /// </summary>
+    private static JsonObject ReadOnlyAnnotations() => new()
+    {
+        ["readOnlyHint"] = true,
+        ["destructiveHint"] = false,
+        ["idempotentHint"] = true,
+        ["openWorldHint"] = false
+    };
+
+    /// <summary>
+    /// Build MCP tool annotations for the index (write) tool.
+    /// index（書き込み）ツール用のMCPツールアノテーションを構築。
+    /// Destructive because --rebuild drops the DB; not idempotent because
+    /// re-indexing replaces chunks/symbols/references per file.
+    /// --rebuildでDBを削除するため破壊的。再インデックスはファイルごとに
+    /// チャンク・シンボル・参照を置き換えるため冪等ではない。
+    /// </summary>
+    private static JsonObject IndexAnnotations() => new()
+    {
+        ["readOnlyHint"] = false,
+        ["destructiveHint"] = true,
+        ["idempotentHint"] = false,
+        ["openWorldHint"] = false
+    };
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -118,7 +119,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No references found.");
+                    WriteGraphSupportHint(options.Lang);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -157,7 +161,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No callers found.");
+                    WriteGraphSupportHint(options.Lang);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -192,7 +199,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No callees found.");
+                    WriteGraphSupportHint(options.Lang);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -334,9 +344,13 @@ public static class QueryCommandRunner
                 Console.WriteLine($"Symbols    : {map.TotalSymbols:N0}");
                 Console.WriteLine($"References : {map.TotalReferences:N0}");
                 if (map.IndexedAt != null)
-                    Console.WriteLine($"Indexed At : {map.IndexedAt:O}");
+                    Console.WriteLine($"Scope Indexed At     : {map.IndexedAt:O}");
                 if (map.LatestModified != null)
-                    Console.WriteLine($"Modified   : {map.LatestModified:O}");
+                    Console.WriteLine($"Scope Modified       : {map.LatestModified:O}");
+                if (map.WorkspaceIndexedAt != null)
+                    Console.WriteLine($"Workspace Indexed At : {map.WorkspaceIndexedAt:O}");
+                if (map.WorkspaceLatestModified != null)
+                    Console.WriteLine($"Workspace Modified   : {map.WorkspaceLatestModified:O}");
                 if (map.GitHead != null)
                     Console.WriteLine($"Git HEAD   : {map.GitHead}");
                 if (map.GitIsDirty != null)
@@ -367,6 +381,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
@@ -376,6 +391,20 @@ public static class QueryCommandRunner
                 Console.WriteLine($"Query: {analysis.Query}");
                 if (analysis.File != null)
                     Console.WriteLine($"File : {analysis.File.Path} ({analysis.File.Lang ?? "?"}, {analysis.File.Lines} lines)");
+                if (analysis.WorkspaceIndexedAt != null)
+                    Console.WriteLine($"Workspace Indexed At : {analysis.WorkspaceIndexedAt:O}");
+                if (analysis.WorkspaceLatestModified != null)
+                    Console.WriteLine($"Workspace Modified   : {analysis.WorkspaceLatestModified:O}");
+                if (analysis.GitHead != null)
+                    Console.WriteLine($"Git HEAD             : {analysis.GitHead}");
+                if (analysis.GitIsDirty != null)
+                    Console.WriteLine($"Git Dirty            : {analysis.GitIsDirty}");
+                if (analysis.GraphLanguage != null)
+                    Console.WriteLine($"Graph Language       : {analysis.GraphLanguage}");
+                if (analysis.GraphSupported != null)
+                    Console.WriteLine($"Graph Supported      : {analysis.GraphSupported}");
+                if (analysis.GraphSupportReason != null)
+                    Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
@@ -546,7 +575,7 @@ public static class QueryCommandRunner
         try
         {
             using var db = new DbContext(dbPath);
-            db.InitializeSchema();
+            db.TryMigrateForRead();
             var reader = new DbReader(db.Connection);
             return action(reader);
         }
@@ -574,6 +603,12 @@ public static class QueryCommandRunner
         Console.WriteLine($"{title}:");
         foreach (var row in materialized)
             Console.WriteLine($"  {row}");
+    }
+
+    private static void WriteGraphSupportHint(string? lang)
+    {
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+            Console.Error.WriteLine($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
     }
 
     private static int? ParsePositiveInt(string rawValue, string optionName)

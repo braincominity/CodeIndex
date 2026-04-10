@@ -18,6 +18,8 @@ Keep making `cdidx` more useful to:
 - terminal-first users
 - MCP-based coding workflows
 
+Treat the loop itself as part implementation loop, part regression test, and part monkey test for the freshly built local binary.
+
 The loop is not just "suggest ideas". It is:
 1. inspect the current product with `cdidx`
 2. identify the next high-value gap
@@ -35,13 +37,17 @@ The loop is not just "suggest ideas". It is:
 - Before every commit, explicitly work through the `CLAUDE.md` per-commit checklist.
 - Before every commit, review README `# Code Search Rules` and `# コードベース検索ルール`; strengthen them if AI behavior should change.
 - After every commit, rebuild `cdidx` from the latest local source and refresh `.cdidx/codeindex.db` using that freshly built binary.
-- Prefer the **locally built latest binary** over an older globally installed `cdidx` whenever the repository code has changed.
-- After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, prefer `cdidx .` over `cdidx . --commits HEAD` so stale files are purged against the current checkout.
+- Prefer the **locally built latest binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) over an older globally installed `cdidx` whenever the repository code has changed. **Never fall back to a global `cdidx`** — the global version may have an older DB schema, missing query features, or stale extraction logic that silently produces wrong results.
+- After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, re-index with the **locally built binary** using `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .` (full scan, not `--commits HEAD`) so stale files are purged against the current checkout.
+- When searching and navigating code to investigate bugs, plan fixes, or verify changes, always use the **locally built binary** — not the globally installed version. This ensures query results reflect the latest extraction rules and DB schema from this branch.
+- If the **locally built binary** crashes, aborts unexpectedly, or exposes a new defect during this loop, do not silently work around it or fall back to an older/global binary. Notify the user with the concrete failure, explain that the self-improvement loop is now blocked or tainted by that defect, and propose fixing it as a separate task or as the next approved priority.
+- Treat the loop itself as ongoing regression coverage and light monkey testing. Do not limit yourself to only the safest or most standard workflows; actively exercise recent features, edge features, and less-traveled commands/options so the loop can indirectly surface crashes, bad assumptions, stale help text, and integration defects.
 - If a change may be breaking, migration-heavy, destructive, or likely to impose manual work on users, **stop and ask for approval before implementing**.
 - Respect language differences. Do not pretend every query type is meaningful for every language.
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
 - Favor implementation over brainstorming when the next improvement is clear and non-breaking.
 - Keep docs and tests in sync with behavior.
+- If test code, shared test helpers, test execution flow, or testing conventions change, update `TESTING_GUIDE.md` in the same commit.
 - Do not push tags or branches unless explicitly asked.
 
 ## Breaking-Change Gate
@@ -97,6 +103,8 @@ dotnet run --project src/CodeIndex -- . --json
 
 Use `cdidx` as your primary navigation tool. Prefer structured and low-token queries first.
 
+Do not only exercise the obvious happy-path commands. Regularly touch newer features and less-common options as well, because this exploration phase also serves as opportunistic regression and monkey testing for the freshly built binary.
+
 Typical sequence:
 
 ```bash
@@ -107,6 +115,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --excl
 ```
 
 Use `inspect` when you already have a likely symbol name. Use `search` for raw text or unsupported languages. Use `map` first when you need orientation.
+Also rotate through features that are easy to neglect, such as JSON output variants, path filters, graph queries on supported languages, unsupported-language behavior, and help/usage flows.
 
 ### 5. Make a plan before editing
 
@@ -155,13 +164,14 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 
 Before committing, explicitly review:
 1. Tests
-2. CHANGELOG.md
-3. README.md
-4. README `# Code Search Rules` / `# コードベース検索ルール`
-5. DEVELOPER_GUIDE.md
-6. CLAUDE.md
-7. This file (`SELF_IMPROVEMENT.md`)
-8. PR description, if a PR already exists
+2. TESTING_GUIDE.md
+3. CHANGELOG.md
+4. README.md
+5. README `# Code Search Rules` / `# コードベース検索ルール`
+6. DEVELOPER_GUIDE.md
+7. CLAUDE.md
+8. This file (`SELF_IMPROVEMENT.md`)
+9. PR description, if a PR already exists
 
 Then commit one coherent task.
 
@@ -190,6 +200,15 @@ Do not use one search strategy for every language.
 - Treat C#, Java, Go, Rust, TypeScript/JavaScript, Python, Kotlin, Ruby, C/C++, PHP, and Swift differently from Markdown, YAML, JSON, TOML, Shell, SQL, HTML/CSS, Vue, Svelte, and Terraform.
 - When proposing new language-specific features, state clearly which languages are in scope and why.
 - When a heuristic is language-specific, document the limitation in README and tests.
+
+## Platform-Aware Guidance
+
+Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
+
+- Windows can hold SQLite files longer because of file locking and connection pooling, so cleanup code and tests must tolerate delayed release.
+- Path separators, casing assumptions, shell commands, and process launch behavior differ across Windows, macOS, and Linux.
+- If you change temp-file handling, DB lifecycle, or CLI process behavior, add verification that is robust across supported platforms.
+- If a workaround is OS-specific, document why it exists instead of leaving it as unexplained test fragility.
 
 ## Product and Branding Lens
 
@@ -245,6 +264,8 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - ターミナル中心のユーザー
 - MCPベースのコーディングワークフロー
 
+このループ自体を、実装サイクルであると同時に、ローカルでビルドした最新版バイナリに対するリグレッションテストと軽いモンキーテストの場として扱います。
+
 このループは「アイデアを出すだけ」ではありません。流れは次のとおりです:
 1. `cdidx` 自身で現状を観察する
 2. 次に改善すべき価値の高いギャップを見つける
@@ -262,12 +283,16 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 毎コミット前に、`CLAUDE.md` の「コミットごとのチェックリスト」を明示的に確認する。
 - 毎コミット前に、README の `# Code Search Rules` と `# コードベース検索ルール` を見直し、AIの検索行動を変えるべきなら強化する。
 - 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
-- リポジトリのコードを変更した後は、古いグローバルインストール版より **ローカルでビルドした最新版バイナリ** を優先する。
-- `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、`cdidx . --commits HEAD` より `cdidx .` を優先し、現在の checkout に対する stale file を掃除する。
+- リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。
+- `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .`（フルスキャン。`--commits HEAD` ではない）を実行し、現在の checkout に対する stale file を掃除する。
+- バグ調査、修正計画、変更検証のためにコード検索・ナビゲーションを行うときも、常に **ローカルビルド版** を使う。グローバルインストール版は使わない。これにより、このブランチの最新の抽出ルールと DB スキーマを反映した検索結果が得られる。
+- このループ中に **ローカルビルド版** がクラッシュしたり、異常終了したり、新しい不具合を露呈した場合は、黙って回避したり古い版・グローバル版へ逃げたりしないこと。具体的な失敗内容をユーザーに通知し、その不具合によって自己改善ループがブロックされている、または結果の信頼性が損なわれていることを説明したうえで、別タスクまたは次の承認済み優先事項として修正提案を出すこと。
+- このループ自体を、継続的なリグレッション確認と軽いモンキーテストとして扱うこと。最も安全で標準的なワークフローだけに偏らず、新しい機能、利用頻度の低い機能、枝葉末節のオプションも積極的に触り、間接的にクラッシュ、古いヘルプ文、想定漏れ、統合不具合をあぶり出すこと。
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
 - ドキュメントとテストを挙動と同期させる。
+- テストコード、共有テストヘルパー、テスト実行フロー、またはテスト規約を変更した場合は、同じコミットで `TESTING_GUIDE.md` も更新する。
 - `git push` や `git tag` は、明示的に依頼されたときだけ行う。
 
 ## 破壊的変更のゲート
@@ -323,6 +348,8 @@ dotnet run --project src/CodeIndex -- . --json
 
 主なナビゲーション手段は `cdidx` にしてください。まずは構造化された、低トークンの問い合わせを優先します。
 
+分かりやすい happy path のコマンドだけをなぞらないこと。ここでの探索は、ビルドしたばかりのバイナリに対する日和見的なリグレッションテスト兼モンキーテストでもあります。
+
 典型例:
 
 ```bash
@@ -333,6 +360,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --excl
 ```
 
 候補シンボル名が分かっているなら `inspect`、生テキストや未対応言語なら `search`、全体像が欲しいなら `map` を優先します。
+加えて、JSON 出力の別経路、path filter、対応言語での graph クエリ、未対応言語の挙動、help / usage など、見落とされやすい経路も意識的に回してください。
 
 ### 5. 編集前に計画を立てる
 
@@ -379,13 +407,14 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 
 コミット前に、明示的に次を確認します:
 1. Tests
-2. CHANGELOG.md
-3. README.md
-4. README `# Code Search Rules` / `# コードベース検索ルール`
-5. DEVELOPER_GUIDE.md
-6. CLAUDE.md
-7. このファイル（`SELF_IMPROVEMENT.md`）
-8. 既存PRがあるなら PR説明
+2. TESTING_GUIDE.md
+3. CHANGELOG.md
+4. README.md
+5. README `# Code Search Rules` / `# コードベース検索ルール`
+6. DEVELOPER_GUIDE.md
+7. CLAUDE.md
+8. このファイル（`SELF_IMPROVEMENT.md`）
+9. 既存PRがあるなら PR説明
 
 そのうえで、1つのまとまりだけをコミットします。
 
@@ -414,15 +443,6 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - C#、Java、Go、Rust、TypeScript/JavaScript、Python、Kotlin、Ruby、C/C++、PHP、Swift と、Markdown、YAML、JSON、TOML、Shell、SQL、HTML/CSS、Vue、Svelte、Terraform は分けて考えてください。
 - 新しい言語依存機能を提案するときは、どの言語を対象にするのか、その理由を明記してください。
 - ヒューリスティックが言語依存なら、README とテストに制限事項を残してください。
-
-## Platform-Aware Guidance
-
-Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
-
-- Windows can hold SQLite files longer because of file locking and connection pooling, so cleanup code and tests must tolerate delayed release.
-- Path separators, casing assumptions, shell commands, and process launch behavior differ across Windows, macOS, and Linux.
-- If you change temp-file handling, DB lifecycle, or CLI process behavior, add verification that is robust across supported platforms.
-- If a workaround is OS-specific, document why it exists instead of leaving it as unexplained test fragility.
 
 ## プラットフォーム差分を前提にする指針
 
