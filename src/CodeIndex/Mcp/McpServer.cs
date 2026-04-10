@@ -314,6 +314,24 @@ public class McpServer
                     }
                 }),
             CreateToolDefinition(
+                "analyze_symbol",
+                "Bundle definition, nearby symbols, references, callers, callees, and file metadata for one symbol query. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータをまとめて返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name to inspect" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max items per section (default: 10)", ["default"] = 10 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content in definitions when available", ["default"] = false },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                }),
+            CreateToolDefinition(
                 "status",
                 "Get database statistics: file count, chunk count, symbol count, reference count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、参照数、言語別内訳。",
                 new JsonObject
@@ -365,6 +383,7 @@ public class McpServer
                 "files" => ExecuteFiles(id, args),
                 "excerpt" => ExecuteExcerpt(id, args),
                 "map" => ExecuteMap(id, args),
+                "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
                 "status" => ExecuteStatus(id),
                 "index" => ExecuteIndex(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
@@ -684,6 +703,32 @@ public class McpServer
             structured["path"] = pathPattern;
             structured["excludeTests"] = excludeTests;
             return CreateToolResult(id, "Repo map returned.", structured);
+        });
+    }
+
+    private JsonNode ExecuteAnalyzeSymbol(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
+        var lang = args?["lang"]?.GetValue<string>();
+        var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPattern, excludePaths, excludeTests);
+            var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
+            structured["lang"] = lang;
+            structured["path"] = pathPattern;
+            structured["excludeTests"] = excludeTests;
+            return CreateToolResult(id, "Symbol analysis returned.", structured);
         });
     }
 

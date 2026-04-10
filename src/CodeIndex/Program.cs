@@ -50,6 +50,7 @@ return args[0] switch
     "files" => QueryCommandRunner.RunFiles(args[1..], jsonOptions),
     "excerpt" => QueryCommandRunner.RunExcerpt(args[1..], jsonOptions),
     "map" => QueryCommandRunner.RunMap(args[1..], jsonOptions),
+    "inspect" => QueryCommandRunner.RunInspect(args[1..], jsonOptions),
     "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions),
     "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
     _ when !args[0].StartsWith('-') && (Directory.Exists(args[0]) || args[0].Contains('/') || args[0].Contains('\\') || args[0] == ".")

@@ -179,13 +179,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns11Tools()
+    public void ToolsList_Returns12Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(11, tools.Count);
+        Assert.Equal(12, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -197,6 +197,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("files", names);
         Assert.Contains("excerpt", names);
         Assert.Contains("map", names);
+        Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
         Assert.Contains("index", names);
     }
@@ -321,6 +322,20 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
         Assert.Contains("Main", response["result"]!["structuredContent"]!["entrypoints"]!.ToJsonString());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ReturnsBundledContext()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","includeBody":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["query"]!.GetValue<string>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["file"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["definitions"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["nearbySymbols"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["callers"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["callees"]);
     }
 
     [Fact]

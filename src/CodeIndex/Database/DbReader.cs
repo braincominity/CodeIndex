@@ -594,6 +594,105 @@ public class DbReader
     }
 
     /// <summary>
+    /// Get one indexed file by exact path.
+    /// 完全一致パスでインデックス済みファイルを1件取得する。
+    /// </summary>
+    public FileResult? GetFileByPath(string path)
+    {
+        return ListFiles(query: path, limit: 50)
+            .FirstOrDefault(file => string.Equals(file.Path, path, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Get nearby symbols in the same file ordered by proximity to a focus line.
+    /// 同一ファイル内の近傍シンボルを、注目行からの近さ順で取得する。
+    /// </summary>
+    public List<SymbolResult> GetNearbySymbols(string path, int focusLine, int limit = 10, string? excludeName = null, int? excludeStartLine = null)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
+                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path";
+
+        if (excludeName != null && excludeStartLine != null)
+            sql += " AND NOT (s.name = @excludeName AND " + GetSymbolColumnSql("start_line", "s.line") + " = @excludeStartLine)";
+
+        sql += " ORDER BY CASE WHEN @focusLine BETWEEN " + GetSymbolColumnSql("start_line", "s.line") + " AND " + GetSymbolColumnSql("end_line", "s.line") + " THEN 0 ELSE abs(" + GetSymbolColumnSql("start_line", "s.line") + " - @focusLine) END, " + GetSymbolColumnSql("start_line", "s.line") + " LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@path", path);
+        cmd.Parameters.AddWithValue("@focusLine", focusLine);
+        cmd.Parameters.AddWithValue("@limit", limit);
+        if (excludeName != null && excludeStartLine != null)
+        {
+            cmd.Parameters.AddWithValue("@excludeName", excludeName);
+            cmd.Parameters.AddWithValue("@excludeStartLine", excludeStartLine.Value);
+        }
+
+        var results = new List<SymbolResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new SymbolResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Kind = reader.GetString(2),
+                Name = reader.GetString(3),
+                Line = reader.GetInt32(4),
+                StartLine = reader.IsDBNull(5) ? reader.GetInt32(4) : reader.GetInt32(5),
+                EndLine = reader.IsDBNull(6) ? reader.GetInt32(4) : reader.GetInt32(6),
+                BodyStartLine = reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                BodyEndLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                Signature = reader.IsDBNull(9) ? null : reader.GetString(9),
+                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
+                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
+                Visibility = reader.IsDBNull(12) ? null : reader.GetString(12),
+                ReturnType = reader.IsDBNull(13) ? null : reader.GetString(13),
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Bundle definition, graph, and local file context for one symbol query.
+    /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
+    /// </summary>
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPattern, excludePathPatterns, excludeTests);
+        var primaryDefinition = definitions.FirstOrDefault();
+        var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
+        var nearbySymbols = primaryDefinition != null
+            ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
+            : [];
+
+        return new SymbolAnalysisResult
+        {
+            Query = query,
+            File = file,
+            Definitions = definitions,
+            NearbySymbols = nearbySymbols,
+            References = SearchReferences(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
+            Callers = GetCallers(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
+            Callees = GetCallees(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
+        };
+    }
+
+    /// <summary>
     /// Get database statistics.
     /// データベースの統計情報を取得する。
     /// </summary>
@@ -1128,6 +1227,17 @@ public class RepoEntrypointResult
     public string Name { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Score { get; set; }
+}
+
+public class SymbolAnalysisResult
+{
+    public string Query { get; set; } = string.Empty;
+    public FileResult? File { get; set; }
+    public List<DefinitionResult> Definitions { get; set; } = [];
+    public List<SymbolResult> NearbySymbols { get; set; } = [];
+    public List<ReferenceResult> References { get; set; } = [];
+    public List<CallerResult> Callers { get; set; } = [];
+    public List<CalleeResult> Callees { get; set; } = [];
 }
 
 internal sealed class RepoFileStat

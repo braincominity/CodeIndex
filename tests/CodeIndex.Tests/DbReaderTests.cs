@@ -454,6 +454,19 @@ public class DbReaderTests : IDisposable
         Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
     }
 
+    [Fact]
+    public void AnalyzeSymbol_BundlesDefinitionGraphAndNearbyContext()
+    {
+        var analysis = _reader.AnalyzeSymbol("fetchData", limit: 5, lang: "javascript", includeBody: true);
+
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("fetchData", definition.Name);
+        Assert.NotNull(analysis.File);
+        Assert.Equal("src/api.js", analysis.File!.Path);
+        Assert.Contains(analysis.NearbySymbols, item => item.Name == "ApiClient");
+        Assert.Contains(analysis.Callees, item => item.CalleeName == "fetch");
+    }
+
     public void Dispose()
     {
         _db.Dispose();
