@@ -167,7 +167,10 @@ public class McpServer
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
-                        ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting", ["default"] = false }
+                        ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting", ["default"] = false },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 }),
@@ -183,7 +186,10 @@ public class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
-                        ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content when body ranges are available", ["default"] = false }
+                        ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content when body ranges are available", ["default"] = false },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 }),
@@ -198,7 +204,10 @@ public class McpServer
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name pattern to search for" },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind (function, class, interface, import, etc.)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
-                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 }
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
                 }),
             CreateToolDefinition(
@@ -211,7 +220,10 @@ public class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "File path pattern to filter by" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
-                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 }
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Additional path filter text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
                 }),
             CreateToolDefinition(
@@ -298,6 +310,16 @@ public class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
+    private static List<string> ReadStringList(JsonNode? args, string propertyName)
+    {
+        return args?[propertyName] is JsonArray array
+            ? array.Select(node => node?.GetValue<string>())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Cast<string>()
+                .ToList()
+            : [];
+    }
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -309,16 +331,21 @@ public class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>();
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.Search(query, limit, lang, rawQuery);
+            var results = reader.Search(query, limit, lang, rawQuery, pathPattern, excludePaths, excludeTests);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
                 {
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
+                    ["path"] = pathPattern,
+                    ["excludeTests"] = excludeTests,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
@@ -329,6 +356,8 @@ public class McpServer
             {
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
+                ["path"] = pathPattern,
+                ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
@@ -344,10 +373,13 @@ public class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchSymbols(query, limit, kind, lang);
+            var results = reader.SearchSymbols(query, limit, kind, lang, pathPattern, excludePaths, excludeTests);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -355,6 +387,8 @@ public class McpServer
                     ["query"] = query,
                     ["kind"] = kind,
                     ["lang"] = lang,
+                    ["path"] = pathPattern,
+                    ["excludeTests"] = excludeTests,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
@@ -366,6 +400,8 @@ public class McpServer
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
+                ["path"] = pathPattern,
+                ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
@@ -385,16 +421,21 @@ public class McpServer
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody);
+            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPattern, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
                 ["includeBody"] = includeBody,
+                ["path"] = pathPattern,
+                ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
@@ -411,16 +452,21 @@ public class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.ListFiles(query, limit, lang);
+            var results = reader.ListFiles(query, limit, lang, pathPattern, excludePaths, excludeTests);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
                 {
                     ["query"] = query,
                     ["lang"] = lang,
+                    ["path"] = pathPattern,
+                    ["excludeTests"] = excludeTests,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
@@ -431,6 +477,8 @@ public class McpServer
             {
                 ["query"] = query,
                 ["lang"] = lang,
+                ["path"] = pathPattern,
+                ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };

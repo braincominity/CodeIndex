@@ -20,10 +20,10 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # shorthand for 'index'
 
 # Query (default output: human-readable; use --json for AI consumption)
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
-cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--body] [--json]
-cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
-cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx status [--json]
 
@@ -69,6 +69,7 @@ tests/CodeIndex.Tests/
 - **Batch commits** — 500 records per transaction for write performance. Supports nesting via SAVEPOINT.
 - **FTS5** — `fts_chunks` virtual table mirrors `chunks.content` for full-text search. Sync via database triggers (AFTER INSERT/DELETE/UPDATE on chunks). FTS5 optimize runs after indexing.
 - **Literal-safe search by default** — Search queries are quoted token-by-token to avoid FTS syntax errors by default. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
+- **Path-aware narrowing and ranking** — `search`, `definition`, `symbols`, and `files` share `--path`, repeatable `--exclude-path`, and `--exclude-tests`. Query ordering prefers source files over tests/docs, and `search` boosts exact symbol-name and path matches.
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
@@ -134,9 +135,10 @@ Before every commit, check whether each of the following needs updating. Don't b
 1. **Tests** — Does this change break existing tests or require new ones? Search for affected method/class names in `tests/`.
 2. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
 3. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
-4. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
-5. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
-6. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+4. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
+5. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
+6. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
+7. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
@@ -190,10 +192,10 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # 'index'の省略形
 
 # クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--json]
-cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--body] [--json]
-cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>]
-cdidx files [query] [--lang <lang>] [--limit <n>]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx status [--json]
 
@@ -239,6 +241,7 @@ tests/CodeIndex.Tests/
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。SAVEPOINTによるネスト対応。
 - **FTS5** — `fts_chunks`仮想テーブルが`chunks.content`をミラーして全文検索を提供。データベーストリガー（chunksのAFTER INSERT/DELETE/UPDATE）で同期。インデックス後にFTS5 optimizeを実行。
 - **デフォルトはリテラル安全検索** — 検索クエリは既定ではトークンごとに引用し、FTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
+- **パス考慮の絞り込みとランキング** — `search`、`definition`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` を共有する。クエリ結果は tests や docs より source を優先し、`search` はシンボル名やパスの exact match を追加ブーストする。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
@@ -304,9 +307,10 @@ tests/CodeIndex.Tests/
 1. **テスト** — この変更で既存テストが壊れないか？新規テストが必要か？`tests/` 内で影響を受けるメソッド・クラス名を検索。
 2. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
 3. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
-4. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
-5. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
-6. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
+4. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
+5. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
+6. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
+7. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:

@@ -181,6 +181,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_SearchIncludesPathFilterParams()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var properties = searchTool["inputSchema"]!["properties"]!;
+
+        Assert.NotNull(properties["path"]);
+        Assert.NotNull(properties["excludePaths"]);
+        Assert.NotNull(properties["excludeTests"]);
+    }
+
+    [Fact]
     public void ToolsList_IndexHasRequiredPathParam()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -227,6 +242,36 @@ public class McpServerTests : IDisposable
 
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.True(response["result"]!["structuredContent"]!["rawQuery"]!.GetValue<bool>());
+        Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ExcludeTests_ReturnsOnlySourceMatches()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var testFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/app_test.cs",
+            Lang = "csharp",
+            Size = 120,
+            Lines = 6,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = "test456",
+        });
+        writer.InsertChunks([new ChunkRecord
+        {
+            FileId = testFileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 6,
+            Content = "public class AppTests { public void RunScenario() { var app = new App(); } }",
+        }]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","excludeTests":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.True(response["result"]!["structuredContent"]!["excludeTests"]!.GetValue<bool>());
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
     }
 

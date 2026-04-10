@@ -83,6 +83,48 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_PrefersSourceFilesOverTests()
+    {
+        var testFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/auth_test.py", Lang = "python", Size = 300, Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = testFileId, ChunkIndex = 0, StartLine = 1, EndLine = 3,
+            Content = "def authenticate_test_case():\n    authenticate('a', 'b')\n    return True",
+        }]);
+
+        var results = _reader.Search("authenticate", limit: 2);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal("src/auth.py", results[0].Path);
+        Assert.Equal("tests/auth_test.py", results[1].Path);
+    }
+
+    [Fact]
+    public void Search_PrefersDefinitionFileOverReferenceOnlySourceFile()
+    {
+        var refFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/session.py", Lang = "python", Size = 300, Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = refFileId, ChunkIndex = 0, StartLine = 1, EndLine = 3,
+            Content = "def login(user, password):\n    return authenticate(user, password)\n",
+        }]);
+
+        var results = _reader.Search("authenticate", limit: 2);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal("src/auth.py", results[0].Path);
+        Assert.Equal("src/session.py", results[1].Path);
+    }
+
+    [Fact]
     public void Search_ReturnsEmptyForNoMatch()
     {
         var results = _reader.Search("nonexistent_term_xyz");
@@ -194,6 +236,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_ExcludeTests_RemovesLikelyTestPaths()
+    {
+        var testFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/auth_test.py", Lang = "python", Size = 300, Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = testFileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+
+        var results = _reader.SearchSymbols(query: "authenticate", excludeTests: true);
+
+        Assert.Single(results);
+        Assert.Equal("src/auth.py", results[0].Path);
+    }
+
+    [Fact]
+    public void Search_ExcludeTests_RemovesLikelyTestPaths()
+    {
+        var testFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/auth_test.py", Lang = "python", Size = 300, Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = testFileId, ChunkIndex = 0, StartLine = 1, EndLine = 3,
+            Content = "def authenticate_test_case():\n    authenticate('a', 'b')\n    return True",
+        }]);
+
+        var results = _reader.Search("authenticate", limit: 5, excludeTests: true);
+
+        Assert.Single(results);
+        Assert.Equal("src/auth.py", results[0].Path);
+    }
+
+    [Fact]
     public void ListFiles_ReturnsAllFiles()
     {
         var results = _reader.ListFiles();
@@ -214,6 +294,15 @@ public class DbReaderTests : IDisposable
         var results = _reader.ListFiles(query: "api");
         Assert.Single(results);
         Assert.Equal("src/api.js", results[0].Path);
+    }
+
+    [Fact]
+    public void ListFiles_PathFiltersAndExcludePaths_WorkTogether()
+    {
+        var results = _reader.ListFiles(pathPattern: "src/", excludePathPatterns: ["api"]);
+
+        Assert.Single(results);
+        Assert.Equal("src/auth.py", results[0].Path);
     }
 
     [Fact]

@@ -10,6 +10,55 @@ public class DbReader
 {
     private readonly SqliteConnection _conn;
     private readonly HashSet<string> _symbolColumns;
+    private const string TestPathCondition = @"
+        (
+            lower(f.path) LIKE 'tests/%' OR
+            lower(f.path) LIKE '%/tests/%' OR
+            lower(f.path) LIKE 'test/%' OR
+            lower(f.path) LIKE '%/test/%' OR
+            lower(f.path) LIKE '%tests.%' OR
+            lower(f.path) LIKE '%test.%' OR
+            lower(f.path) LIKE '%_test.%' OR
+            lower(f.path) LIKE '%.spec.%' OR
+            lower(f.path) LIKE '%.test.%'
+        )";
+    private const string PathBucketOrder = @"
+        CASE
+            WHEN " + TestPathCondition + @" THEN 1
+            WHEN lower(f.path) LIKE 'docs/%' OR lower(f.path) LIKE '%/docs/%' OR lower(f.path) LIKE 'readme%' OR lower(f.path) LIKE 'changelog%' OR lower(f.path) LIKE '%.md'
+                THEN 2
+            ELSE 0
+        END";
+    private const string ExactSymbolMatchOrder = @"
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM symbols sx
+                WHERE sx.file_id = f.id
+                  AND lower(sx.name) = lower(@rankingQuery)
+            ) THEN 0
+            ELSE 1
+        END";
+    private const string PrefixSymbolMatchOrder = @"
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM symbols sx
+                WHERE sx.file_id = f.id
+                  AND lower(sx.name) LIKE lower(@rankingQueryPrefix) ESCAPE '\'
+            ) THEN 0
+            ELSE 1
+        END";
+    private const string PathTextMatchOrder = @"
+        CASE
+            WHEN instr(lower(f.path), lower(@rankingQuery)) > 0 THEN 0
+            ELSE 1
+        END";
+    private const string ChunkTextMatchOrder = @"
+        CASE
+            WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
+            ELSE 1
+        END";
 
     public DbReader(SqliteConnection connection)
     {
@@ -38,7 +87,7 @@ public class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -55,18 +104,21 @@ public class DbReader
             JOIN chunks c ON fts_chunks.rowid = c.id
             JOIN files f ON c.file_id = f.id";
 
+        sql += " WHERE fts_chunks MATCH @query";
         if (lang != null)
-            sql += " WHERE f.lang = @lang AND fts_chunks MATCH @query";
-        else
-            sql += " WHERE fts_chunks MATCH @query";
+            sql += " AND f.lang = @lang";
 
-        sql += " ORDER BY rank LIMIT @limit";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {GetSearchOrderSql()} LIMIT @limit";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
         cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
 
         var results = new List<SearchResult>();
         using var reader = cmd.ExecuteReader();
@@ -98,7 +150,7 @@ public class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -123,8 +175,8 @@ public class DbReader
             sql += " AND s.kind = @kind";
         if (lang != null)
             sql += " AND f.lang = @lang";
-
-        sql += " ORDER BY s.name, f.path, s.line LIMIT @limit";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {PathBucketOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -133,6 +185,7 @@ public class DbReader
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<SymbolResult>();
@@ -164,7 +217,7 @@ public class DbReader
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
     /// </summary>
-    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null)
+    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -179,14 +232,15 @@ public class DbReader
             sql += " AND f.path LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
-
-        sql += " GROUP BY f.id ORDER BY f.path LIMIT @limit";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" GROUP BY f.id ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
             cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<FileResult>();
@@ -292,9 +346,9 @@ public class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
-        var symbols = SearchSymbols(query, limit, kind, lang);
+        var symbols = SearchSymbols(query, limit, kind, lang, pathPattern, excludePathPatterns, excludeTests);
         var results = new List<DefinitionResult>();
 
         foreach (var symbol in symbols)
@@ -386,6 +440,38 @@ public class DbReader
             return $"s.{columnName}";
 
         return fallbackSql ?? "NULL";
+    }
+
+    private static void AppendPathFilters(ref string sql, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (pathPattern != null)
+            sql += " AND f.path LIKE @pathPattern ESCAPE '\\'";
+
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND f.path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+        }
+
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition}";
+    }
+
+    private static string GetSearchOrderSql()
+    {
+        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, rank, f.path";
+    }
+
+    private static void AddPathFilterParameters(SqliteCommand cmd, string? pathPattern, IReadOnlyList<string>? excludePathPatterns)
+    {
+        if (pathPattern != null)
+            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@excludePathPattern{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
+        }
     }
 }
 

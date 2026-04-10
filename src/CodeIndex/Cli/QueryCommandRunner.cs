@@ -21,7 +21,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (!options.Json)
@@ -62,7 +62,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody);
+            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (!options.Json)
@@ -108,7 +108,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchSymbols(options.Query, options.Limit, options.Kind, options.Lang);
+            var results = reader.SearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (!options.Json)
@@ -142,7 +142,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang);
+            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (!options.Json)
@@ -247,6 +247,9 @@ public static class QueryCommandRunner
         int? endLine = null;
         int contextBefore = 0;
         int contextAfter = 0;
+        string? pathPattern = null;
+        var excludePaths = new List<string>();
+        bool excludeTests = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -279,6 +282,15 @@ public static class QueryCommandRunner
                     break;
                 case "--body":
                     includeBody = true;
+                    break;
+                case "--path" when i + 1 < args.Length:
+                    pathPattern = args[++i];
+                    break;
+                case "--exclude-path" when i + 1 < args.Length:
+                    excludePaths.Add(args[++i]);
+                    break;
+                case "--exclude-tests":
+                    excludeTests = true;
                     break;
                 case "--start" when i + 1 < args.Length:
                     startLine = ParsePositiveInt(args[++i], "--start");
@@ -319,6 +331,9 @@ public static class QueryCommandRunner
             EndLine = endLine,
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
+            PathPattern = pathPattern,
+            ExcludePaths = excludePaths,
+            ExcludeTests = excludeTests,
         };
     }
 
@@ -389,4 +404,7 @@ public sealed class QueryCommandOptions
     public int? EndLine { get; init; }
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
+    public string? PathPattern { get; init; }
+    public List<string> ExcludePaths { get; init; } = [];
+    public bool ExcludeTests { get; init; }
 }

@@ -290,10 +290,10 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]");
-        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--fts]");
-        Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]");
-        Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
-        Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>]");
+        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--fts]");
+        Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
+        Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
         Console.WriteLine("  cdidx mcp [--db <path>]");
@@ -327,6 +327,9 @@ public static class ConsoleUi
         Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
         Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
+        Console.WriteLine("  --path <pattern>           Restrict matches to paths containing this text");
+        Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
+        Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --kind <kind>              Filter symbols by kind (function/class/import)");
         Console.WriteLine();
