@@ -82,4 +82,10 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "println");
         Assert.Contains(references, r => r.SymbolName == "compute");
     }
+
+    [Fact]
+    public void SupportsLanguage_FSharp_ReturnsTrue()
+    {
+        Assert.True(ReferenceExtractor.SupportsLanguage("fsharp"));
+    }
 }
