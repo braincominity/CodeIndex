@@ -225,6 +225,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsFunctionAssignmentAndLibrary()
+    {
+        // R: function assignment, library / R: 関数代入、library
+        var content = "library(ggplot2)\n\nmy_plot <- function(data, x, y) {\n  ggplot(data, aes(x, y))\n}";
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ggplot2");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_plot");
+    }
+
+    [Fact]
     public void Extract_Lua_DetectsFunctionsAndRequire()
     {
         // Lua: function, local function, require / Lua: 関数、ローカル関数、require
