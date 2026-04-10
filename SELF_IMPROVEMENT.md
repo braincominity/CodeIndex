@@ -35,8 +35,9 @@ The loop is not just "suggest ideas". It is:
 - Before every commit, explicitly work through the `CLAUDE.md` per-commit checklist.
 - Before every commit, review README `# Code Search Rules` and `# コードベース検索ルール`; strengthen them if AI behavior should change.
 - After every commit, rebuild `cdidx` from the latest local source and refresh `.cdidx/codeindex.db` using that freshly built binary.
-- Prefer the **locally built latest binary** over an older globally installed `cdidx` whenever the repository code has changed.
-- After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, prefer `cdidx .` over `cdidx . --commits HEAD` so stale files are purged against the current checkout.
+- Prefer the **locally built latest binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) over an older globally installed `cdidx` whenever the repository code has changed. **Never fall back to a global `cdidx`** — the global version may have an older DB schema, missing query features, or stale extraction logic that silently produces wrong results.
+- After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, re-index with the **locally built binary** using `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .` (full scan, not `--commits HEAD`) so stale files are purged against the current checkout.
+- When searching and navigating code to investigate bugs, plan fixes, or verify changes, always use the **locally built binary** — not the globally installed version. This ensures query results reflect the latest extraction rules and DB schema from this branch.
 - If a change may be breaking, migration-heavy, destructive, or likely to impose manual work on users, **stop and ask for approval before implementing**.
 - Respect language differences. Do not pretend every query type is meaningful for every language.
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
@@ -262,8 +263,9 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 毎コミット前に、`CLAUDE.md` の「コミットごとのチェックリスト」を明示的に確認する。
 - 毎コミット前に、README の `# Code Search Rules` と `# コードベース検索ルール` を見直し、AIの検索行動を変えるべきなら強化する。
 - 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
-- リポジトリのコードを変更した後は、古いグローバルインストール版より **ローカルでビルドした最新版バイナリ** を優先する。
-- `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、`cdidx . --commits HEAD` より `cdidx .` を優先し、現在の checkout に対する stale file を掃除する。
+- リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。
+- `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .`（フルスキャン。`--commits HEAD` ではない）を実行し、現在の checkout に対する stale file を掃除する。
+- バグ調査、修正計画、変更検証のためにコード検索・ナビゲーションを行うときも、常に **ローカルビルド版** を使う。グローバルインストール版は使わない。これにより、このブランチの最新の抽出ルールと DB スキーマを反映した検索結果が得られる。
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
