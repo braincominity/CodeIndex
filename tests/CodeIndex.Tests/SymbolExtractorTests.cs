@@ -291,6 +291,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_FSharp_DoesNotMatchValueBindings()
+    {
+        // Value bindings should not be detected as functions / 値束縛は関数として検出されないこと
+        var content = "let x = 5\nlet name = \"hello\"\nlet list = [1; 2; 3]";
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsCompoundVisibility()
+    {
+        // VB.NET compound visibility: Protected Friend / VB.NET 複合可視性
+        var content = "Protected Friend Sub OnInit()\nEnd Sub\n\nPrivate Protected Function GetData() As String\n    Return \"\"\nEnd Function";
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnInit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetData");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotMatchFieldDeclarations()
+    {
+        // Fields should not be detected as properties / フィールドはプロパティとして検出されないこと
+        var content = "public class Config\n{\n    public string Name;\n    private int _count;\n    public readonly string Id = \"x\";\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "_count");
+        Assert.DoesNotContain(symbols, s => s.Name == "Id" && s.Kind == "function");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsSubFunctionClassModule()
     {
         // VB.NET: Sub, Function, Class, Module, Imports / VB.NET: サブ、関数、クラス、モジュール、Imports

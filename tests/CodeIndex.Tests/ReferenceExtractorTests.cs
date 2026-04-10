@@ -84,8 +84,12 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void SupportsLanguage_FSharp_ReturnsTrue()
+    public void SupportsLanguage_FSharp_ReturnsFalse()
     {
-        Assert.True(ReferenceExtractor.SupportsLanguage("fsharp"));
+        // F# uses space-separated call syntax (foo x) not parenthesized, so
+        // the regex-based extractor cannot reliably detect call sites.
+        // F#はスペース区切りの呼び出し構文(foo x)を使うため、正規表現ベースの
+        // 抽出では呼び出し箇所を正確に検出できない。
+        Assert.False(ReferenceExtractor.SupportsLanguage("fsharp"));
     }
 }
