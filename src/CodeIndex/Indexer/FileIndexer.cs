@@ -56,6 +56,8 @@ public class FileIndexer
         [".ex"]     = "elixir",
         [".exs"]    = "elixir",
         [".lua"]    = "lua",
+        [".vb"]     = "vb",
+        [".vbs"]    = "vb",
         [".hs"]     = "haskell",
         [".lhs"]    = "haskell",
         [".zig"]    = "zig",

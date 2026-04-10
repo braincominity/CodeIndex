@@ -238,6 +238,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsSubFunctionClassModule()
+    {
+        // VB.NET: Sub, Function, Class, Module, Imports / VB.NET: サブ、関数、クラス、モジュール、Imports
+        var content = "Imports System.IO\n\nPublic Class UserService\n    Public Sub Save(user As User)\n    End Sub\n\n    Private Function Validate(user As User) As Boolean\n        Return True\n    End Function\nEnd Class";
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("System.IO"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Save");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Validate");
+    }
+
+    [Fact]
     public void Extract_Haskell_DetectsIndentedAndLiterateSignatures()
     {
         // Indented where-clause signature and literate Haskell '>' prefix
