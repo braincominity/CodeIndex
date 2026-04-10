@@ -28,10 +28,12 @@ internal sealed class RepoMapBuilder
         ["swift"] = ["main", "App"],
         ["dart"] = ["main", "runApp"],
         ["scala"] = ["main", "App"],
+        ["fsharp"] = ["main", "Program", "App"],
+        ["vb"] = ["Main", "Program", "App"],
     };
     private static readonly Dictionary<string, string[]> EntrypointPathHints = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "App.cs"],
+        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "App.cs", "App.razor"],
         ["python"] = ["main.py", "__main__.py", "app.py", "cli.py"],
         ["javascript"] = ["index.js", "main.js", "app.js", "server.js"],
         ["typescript"] = ["index.ts", "main.ts", "app.ts", "server.ts"],
@@ -44,6 +46,8 @@ internal sealed class RepoMapBuilder
         ["swift"] = ["main.swift", "App.swift"],
         ["dart"] = ["main.dart", "app.dart"],
         ["scala"] = ["Main.scala", "App.scala", "Application.scala"],
+        ["fsharp"] = ["Program.fs", "App.fs"],
+        ["vb"] = ["Program.vb", "Module1.vb", "App.vb"],
     };
 
     public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns)
