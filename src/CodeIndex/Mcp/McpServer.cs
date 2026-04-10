@@ -445,6 +445,7 @@ public class McpServer
             + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
             + $"Graph tools (references, callers, callees) only work for supported languages ({langs}); "
             + "for other languages, use 'search' instead. "
+            + "Use 'outline' to see the full symbol structure of a single file (functions, classes, imports with line numbers) without reading the file content. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results.";
     }
