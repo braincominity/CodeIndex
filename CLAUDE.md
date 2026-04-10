@@ -149,14 +149,16 @@ Before every commit, check whether each of the following needs updating. Don't b
 3. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
 4. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
 5. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
-6. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
-7. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+6. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
+7. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
+8. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
 - **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections.
 - **CHANGELOG.md** — English section AND Japanese section
+- **SELF_IMPROVEMENT.md** — Dedicated operating contract for iterative AI-driven cdidx self-improvement
 - **CLAUDE.md** — This file; update architecture/design sections when code changes
 
 When modifying the CLAUDE.md template (code search rules for AI agents), update both instances in README (English and Japanese). DEVELOPER_GUIDE references README, so no separate update is needed there.
@@ -333,14 +335,16 @@ tests/CodeIndex.Tests/
 3. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
 4. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
 5. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
-6. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
-7. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
+6. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
+7. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
+8. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:
 - **README.md** — 英語セクション AND 日本語セクション（両方一致させる）
 - **DEVELOPER_GUIDE.md** — CLAUDE.mdテンプレートと終了コードはREADMEを参照。設計判断・アーキテクチャは独自セクション。
 - **CHANGELOG.md** — 英語セクション AND 日本語セクション
+- **SELF_IMPROVEMENT.md** — AIが cdidx 自身を継続改善するときの専用運用契約
 - **CLAUDE.md** — このファイル。コード変更時にアーキテクチャ・設計セクションも更新
 
 CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する場合、READMEの両インスタンス（英語・日本語）を更新すること。DEVELOPER_GUIDEはREADMEを参照しているため個別の更新は不要。
