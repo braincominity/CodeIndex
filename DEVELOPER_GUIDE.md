@@ -29,6 +29,7 @@ src/CodeIndex/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
     DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, inspect bundles, file listing, status
+    RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
@@ -491,6 +492,7 @@ src/CodeIndex/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ、参照書き込み
     DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、抜粋再構成、inspect向け集約、ファイル一覧、ステータス
+    RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）

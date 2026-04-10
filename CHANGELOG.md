@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Extract `RepoMapBuilder` from `DbReader`** — Moved the repo-map logic (~280 lines: `GetRepoMap`, file stats, entrypoint scoring, module grouping) into a dedicated `RepoMapBuilder` class, reducing `DbReader` from 1174 to 1073 lines. The public API (`DbReader.GetRepoMap`) is unchanged; it delegates to `RepoMapBuilder` internally. Shared query helpers (`AppendPathFilters`, `AddPathFilterParameters`, `EscapeLikeQuery`, `GetNullableDateTime`) became `internal static` for reuse. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
+
 - **Treat the self-improvement loop as regression and monkey testing** — `SELF_IMPROVEMENT.md` now states that the loop is not only for implementing improvements but also for exercising the freshly built local binary as ongoing regression coverage and light monkey testing. Agents are instructed to actively use recent, less-common, and edge-path features instead of only safe happy-path workflows so crashes and integration defects are more likely to surface early. Affected: `SELF_IMPROVEMENT.md`.
 
 - **Escalate local-binary failures in the self-improvement loop** — `SELF_IMPROVEMENT.md` now explicitly requires agents to report crashes, abnormal exits, or newly discovered defects in the freshly built local binary to the user instead of silently working around them or falling back to an older/global install. The loop must surface the concrete failure and propose a dedicated fix as the next task or next approved priority. Affected: `SELF_IMPROVEMENT.md`.
@@ -230,6 +232,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP ツールアノテーションで AI クライアントの信頼判断を支援** — 全 MCP ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返すようになった。クエリツールは読み取り専用かつ冪等に、`index` ツールは破壊的かつ非冪等にマークされる（`--rebuild` で DB を削除でき、再インデックスでファイルごとにチャンク・シンボルを置き換えるため）。これにより AI クライアントがユーザー確認なしに安全に呼べるツールを判断しやすくなる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### 変更
+
+- **`RepoMapBuilder` を `DbReader` から分離** — repo map ロジック（約280行: `GetRepoMap`、ファイル統計、エントリポイント採点、モジュールグループ化）を専用の `RepoMapBuilder` クラスに移動し、`DbReader` を 1174 行から 1073 行に縮小した。公開 API（`DbReader.GetRepoMap`）は変更なし、内部で `RepoMapBuilder` に委譲する。共有クエリヘルパー（`AppendPathFilters`、`AddPathFilterParameters`、`EscapeLikeQuery`、`GetNullableDateTime`）は再利用のため `internal static` に変更。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
 
 - **自己改善ループをリグレッションテスト兼モンキーテストとして扱う方針を明記** — `SELF_IMPROVEMENT.md` に、このループが単なる改善実装だけでなく、ビルドしたばかりのローカル版バイナリに対する継続的なリグレッション確認と軽いモンキーテストも兼ねることを明記した。最も安全な happy path だけでなく、新機能、利用頻度の低い機能、エッジ寄りの経路も積極的に使い、クラッシュや統合不具合を早めに表面化させるよう指示した。対象: `SELF_IMPROVEMENT.md`.
 
