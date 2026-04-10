@@ -59,13 +59,16 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void LoadVersion_ReturnsNonEmptyString()
+    public void LoadVersion_ReturnsActualVersion_NotFallback()
     {
-        // In the test environment the built version.json should be present
-        // テスト環境ではビルド済みの version.json が存在するはず
+        // In the test environment the built version.json should be present.
+        // Verify the returned value is a real version, not the "0.0.0" fallback.
+        // テスト環境ではビルド済みの version.json が存在するはず。
+        // フォールバックの "0.0.0" ではなく実際のバージョンが返ることを検証。
         var version = ConsoleUi.LoadVersion();
         Assert.False(string.IsNullOrWhiteSpace(version));
-        Assert.NotEqual("", version);
+        Assert.NotEqual("0.0.0", version);
+        Assert.Contains('.', version);
     }
 
     private static string CaptureUsageOutput(bool showBanner = true)

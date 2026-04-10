@@ -84,4 +84,32 @@ public class SearchSnippetFormatterTests
         Assert.DoesNotContain("...", formatted);
         Assert.Contains(formatted, line => line.Contains("Target"));
     }
+
+    [Fact]
+    public void Format_TruncatedAfterOnly_WhenMatchIsNearStart()
+    {
+        // Match on line 1 with maxLines=2 out of 6 — truncated after only
+        // 1行目に一致、maxLines=2/全6行 — 後ろだけトランケート
+        var lines = Enumerable.Range(1, 6).Select(i => i == 1 ? "call Target()" : $"line {i}");
+        var content = string.Join('\n', lines);
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 2);
+
+        Assert.NotEqual("...", formatted[0]);
+        Assert.Equal("...", formatted[^1]);
+    }
+
+    [Fact]
+    public void Format_TruncatedBeforeOnly_WhenMatchIsNearEnd()
+    {
+        // Match on last line with maxLines=2 out of 6 — truncated before only
+        // 最終行に一致、maxLines=2/全6行 — 前だけトランケート
+        var lines = Enumerable.Range(1, 6).Select(i => i == 6 ? "call Target()" : $"line {i}");
+        var content = string.Join('\n', lines);
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 2);
+
+        Assert.Equal("...", formatted[0]);
+        Assert.NotEqual("...", formatted[^1]);
+    }
 }

@@ -247,7 +247,8 @@ public class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
         Assert.Contains("Error: database not found at", stderr);
-        Assert.Contains(Path.GetFileName(missingDbPath), stderr);
+        // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
+        Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
         Assert.Contains("Run 'cdidx index <projectPath>' first to create the index.", stderr);
     }
 
