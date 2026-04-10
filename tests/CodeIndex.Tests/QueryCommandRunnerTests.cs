@@ -246,7 +246,8 @@ public class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-        Assert.Contains($"Error: database not found: {missingDbPath}", stderr);
+        Assert.Contains("Error: database not found at", stderr);
+        Assert.Contains(Path.GetFileName(missingDbPath), stderr);
         Assert.Contains("Run 'cdidx index <projectPath>' first to create the index.", stderr);
     }
 

@@ -567,7 +567,7 @@ public static class QueryCommandRunner
     {
         if (!File.Exists(dbPath))
         {
-            Console.Error.WriteLine($"Error: database not found: {dbPath}");
+            Console.Error.WriteLine($"Error: database not found at {Path.GetFullPath(dbPath)}");
             Console.Error.WriteLine("Run 'cdidx index <projectPath>' first to create the index.");
             return CommandExitCodes.DatabaseError;
         }
