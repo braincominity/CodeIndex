@@ -165,7 +165,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 Before committing, explicitly review:
 1. Tests
 2. TESTING_GUIDE.md
-3. CHANGELOG.md
+3. CHANGELOG.md — New entries go under `[Unreleased]` only. Never add to or modify an existing versioned heading. See CLAUDE.md "CHANGELOG style" for the full rules.
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
 6. DEVELOPER_GUIDE.md
@@ -408,7 +408,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 コミット前に、明示的に次を確認します:
 1. Tests
 2. TESTING_GUIDE.md
-3. CHANGELOG.md
+3. CHANGELOG.md — 新エントリは `[Unreleased]` のみに書く。既存のバージョン見出しには追加も変更もしない。完全なルールは CLAUDE.md「CHANGELOGのスタイル」参照。
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
 6. DEVELOPER_GUIDE.md

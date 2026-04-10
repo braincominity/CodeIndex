@@ -171,6 +171,7 @@ When modifying the CLAUDE.md template (code search rules for AI agents), update 
 
 ### CHANGELOG style
 - **Always write new entries under `[Unreleased]`**, never under a versioned heading like `[1.2.0]`. Version headings are created only at release time by the maintainer. Writing entries directly into a version heading causes premature version claims and stale compare links.
+- **Never delete, move, or modify entries under an existing versioned heading** (e.g. `[1.2.0]`). Those entries are part of a published release and must not be touched. If you accidentally wrote new entries under a versioned heading, move only your new entries to `[Unreleased]` — do not delete the version heading or disturb its original entries. Before editing CHANGELOG.md, always check the existing structure first so you know which headings and entries already exist.
 - One entry per distinct change. Don't merge unrelated fixes into a single entry just to reduce line count.
 - But don't write separate entries for iterative commits toward the same fix — consolidate them into one entry describing the final result.
 - Use [Keep a Changelog](https://keepachangelog.com/) categories: Added, Changed, Fixed, Removed.
@@ -370,6 +371,7 @@ CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する
 
 ### CHANGELOGのスタイル
 - **新しいエントリは必ず `[Unreleased]` の下に書く**。`[1.2.0]` のようなバージョン見出しの下には絶対に書かない。バージョン見出しはリリース時にメンテナが作成する。バージョン見出しに直接書くと、早すぎるバージョン宣言と古い compare リンクの原因になる。
+- **既存のバージョン見出し配下のエントリは絶対に削除・移動・変更しない**（例: `[1.2.0]`）。それらはリリース済みの記録であり、触れてはならない。もし誤ってバージョン見出しの下に新エントリを書いてしまった場合は、自分が追加した新エントリだけを `[Unreleased]` に移す — バージョン見出しを消したり元のエントリを巻き込んだりしないこと。CHANGELOG.md を編集する前に、まず既存の構造を確認し、どの見出しとエントリが既に存在するかを把握すること。
 - 変更ごとに1エントリ。無関係な修正を行数削減のために1エントリにまとめない。
 - ただし、同じ修正に向けた段階的なコミットは1エントリに統合し、最終結果を記述する。
 - [Keep a Changelog](https://keepachangelog.com/)のカテゴリを使用: Added, Changed, Fixed, Removed（日本語: 追加, 変更, 修正, 削除）。
