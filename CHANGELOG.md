@@ -23,6 +23,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Split scoped and workspace freshness in `map` output** — `map` keeps `indexed_at` and `latest_modified` scoped to the filtered result set for backward compatibility, and now also exposes `workspace_indexed_at` and `workspace_latest_modified` so AI clients can compare slice-level freshness with whole-workspace freshness without falling back to a separate `status` call. Human-readable `map` output now labels the scoped/workspace timestamps explicitly. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
+#### Fixed
+
+- **Use exact-match query in `GetFileByPath`** — Replaced the substring `LIKE '%path%'` approach (via `ListFiles` + in-memory filter) with a direct `WHERE path = @path` query, eliminating false positives and unnecessary work. Affected: `src/CodeIndex/Database/DbReader.cs`.
+
+- **Guard `GetRepoMap` against empty filter results** — `fileStats.Max()` now checks `fileStats.Count > 0` before aggregating, preventing `InvalidOperationException` when no files match the filter criteria. Affected: `src/CodeIndex/Database/DbReader.cs`.
+
+- **Guard `WriteGraphSupportHint` against null language** — The CLI graph-support hint now skips printing when `--lang` is not specified, avoiding a confusing `"not indexed for ''"` message. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 ### [1.1.0] - 2026-04-10
 
 #### Changed
@@ -206,6 +214,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`inspect` / `analyze_symbol` にワークスペース信頼メタデータを追加** — `inspect --json` と MCP の `analyze_symbol` が `workspace_indexed_at`、`workspace_latest_modified`、`project_root`、`git_head`、`git_is_dirty` を返すようになり、AIクライアントがシンボル分析中に別途 `status` を呼ばなくても鮮度とリポジトリ状態を判断できるようにした。人間向け `inspect` 出力でも、まとめられた各セクションの前に同じ信頼シグナルを表示する。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **`map` 出力の鮮度を絞り込み範囲とワークスペース全体で分離** — 後方互換のため `map` の `indexed_at` と `latest_modified` は絞り込み結果に対する値のまま維持しつつ、`workspace_indexed_at` と `workspace_latest_modified` を追加し、AIクライアントが別途 `status` を呼ばなくても「この範囲だけ古い」のか「ワークスペース全体が古い」のかを比較できるようにした。人間向け `map` 出力でも scoped/workspace の時刻ラベルを明示した。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+#### 修正
+
+- **`GetFileByPath` を完全一致クエリに修正** — `ListFiles` 経由のサブストリング `LIKE '%path%'` + メモリフィルタを、直接 `WHERE path = @path` クエリに置き換え、誤ヒットと不要な処理を除去した。対象: `src/CodeIndex/Database/DbReader.cs`.
+
+- **`GetRepoMap` で空のフィルタ結果によるクラッシュを防止** — `fileStats.Max()` 呼び出し前に `fileStats.Count > 0` をチェックし、条件に一致するファイルがゼロの場合の `InvalidOperationException` を防いだ。対象: `src/CodeIndex/Database/DbReader.cs`.
+
+- **`WriteGraphSupportHint` の null 言語ガードを追加** — `--lang` 未指定時に graph サポートヒントの出力をスキップするようにし、`"not indexed for ''"` という紛らわしいメッセージを防いだ。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 ### [1.1.0] - 2026-04-10
 

@@ -600,8 +600,34 @@ public class DbReader
     /// </summary>
     public FileResult? GetFileByPath(string path)
     {
-        return ListFiles(query: path, limit: 50)
-            .FirstOrDefault(file => string.Equals(file.Path, path, StringComparison.Ordinal));
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT f.path, f.lang, f.size, f.lines,
+                   COUNT(s.id) AS symbol_count,
+                   {GetFileColumnSql("checksum")} AS checksum,
+                   {GetFileColumnSql("modified")} AS modified,
+                   {GetFileColumnSql("indexed_at")} AS indexed_at
+            FROM files f
+            LEFT JOIN symbols s ON s.file_id = f.id
+            WHERE f.path = @path
+            GROUP BY f.id";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+            return null;
+
+        return new FileResult
+        {
+            Path = reader.GetString(0),
+            Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+            Size = reader.GetInt64(2),
+            Lines = reader.GetInt32(3),
+            SymbolCount = reader.GetInt32(4),
+            Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
+            Modified = GetNullableDateTime(reader, 6),
+            IndexedAt = GetNullableDateTime(reader, 7),
+        };
     }
 
     /// <summary>
