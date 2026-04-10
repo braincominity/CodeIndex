@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 
+- **Tolerate read-only databases in query paths** — Query commands (`search`, `definition`, `inspect`, etc.) and MCP read tools now call `TryMigrateForRead()` instead of `InitializeSchema()`. `TryMigrateForRead()` creates the `symbol_references` table and indexes if missing, runs column migrations, and catches only `SQLITE_READONLY` errors so read-only filesystems silently degrade while other failures propagate. Affected: `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
 - **Use exact-match query in `GetFileByPath`** — Replaced the substring `LIKE '%path%'` approach (via `ListFiles` + in-memory filter) with a direct `WHERE path = @path` query, eliminating false positives and unnecessary work. Affected: `src/CodeIndex/Database/DbReader.cs`.
 
 - **Guard `GetRepoMap` against empty filter results** — `fileStats.Max()` now checks `fileStats.Count > 0` before aggregating, preventing `InvalidOperationException` when no files match the filter criteria. Affected: `src/CodeIndex/Database/DbReader.cs`.
@@ -220,6 +222,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`BuildGraphSupportReason` を `ReferenceExtractor` に統合** — `DbReader` と `McpServer` に重複していた graph 対応理由メッセージのロジックを、`ReferenceExtractor.BuildGraphSupportReason()` 静的ヘルパーに一本化した。`DbReader` は null 言語時のフォールバックメッセージを付加し、`McpServer` は null をそのまま返す。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
 
 #### 修正
+
+- **読み取り専用 DB でのクエリパスを安全化** — クエリコマンド (`search`、`definition`、`inspect` 等) と MCP 読み取りツールが、`InitializeSchema()` の代わりに `TryMigrateForRead()` を呼ぶようにした。`TryMigrateForRead()` は `symbol_references` テーブルとインデックスが無ければ作成し、列の移行も行い、`SQLITE_READONLY` エラーだけを無視して読み取り専用 FS では黙って縮退する。それ以外のエラーは伝播する。対象: `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **`GetFileByPath` を完全一致クエリに修正** — `ListFiles` 経由のサブストリング `LIKE '%path%'` + メモリフィルタを、直接 `WHERE path = @path` クエリに置き換え、誤ヒットと不要な処理を除去した。対象: `src/CodeIndex/Database/DbReader.cs`.
 

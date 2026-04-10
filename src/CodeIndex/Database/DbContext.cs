@@ -177,6 +177,57 @@ public class DbContext : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// Attempt opportunistic schema migration for read-only query paths.
+    /// Failures (e.g. read-only filesystem) are silently ignored — the DbReader
+    /// fallback logic handles missing columns gracefully.
+    /// 読み取り専用クエリパス向けの機会的スキーマ移行を試みる。
+    /// 失敗（読み取り専用FS等）は無視する — DbReaderのフォールバックが欠損列を安全に処理する。
+    /// </summary>
+    public void TryMigrateForRead()
+    {
+        try
+        {
+            // Ensure the references table exists for older DBs missing it
+            // 古いDBに参照テーブルが無い場合に作成する
+            Execute(@"
+                CREATE TABLE IF NOT EXISTS symbol_references (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    symbol_name     TEXT,
+                    reference_kind  TEXT,
+                    line            INTEGER,
+                    column_number   INTEGER,
+                    context         TEXT,
+                    container_kind  TEXT,
+                    container_name  TEXT
+                )");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
+
+            EnsureColumn("files", "checksum", "TEXT");
+            EnsureColumn("files", "modified", "DATETIME");
+            EnsureColumn("files", "indexed_at", "DATETIME");
+            EnsureColumn("symbols", "start_line", "INTEGER");
+            EnsureColumn("symbols", "end_line", "INTEGER");
+            EnsureColumn("symbols", "body_start_line", "INTEGER");
+            EnsureColumn("symbols", "body_end_line", "INTEGER");
+            EnsureColumn("symbols", "signature", "TEXT");
+            EnsureColumn("symbols", "container_kind", "TEXT");
+            EnsureColumn("symbols", "container_name", "TEXT");
+            EnsureColumn("symbols", "visibility", "TEXT");
+            EnsureColumn("symbols", "return_type", "TEXT");
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 8 /* SQLITE_READONLY */)
+        {
+            // Read-only DB or filesystem — silently degrade.
+            // DbReader.LoadColumns() will detect what is available.
+            // 読み取り専用DBまたはFS — 黙って縮退する。
+            // DbReader.LoadColumns() が利用可能な列を検出する。
+        }
+    }
+
     private void EnsureColumn(string tableName, string columnName, string definition)
     {
         using var cmd = _connection.CreateCommand();

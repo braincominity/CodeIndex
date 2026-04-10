@@ -575,7 +575,7 @@ public static class QueryCommandRunner
         try
         {
             using var db = new DbContext(dbPath);
-            db.InitializeSchema();
+            db.TryMigrateForRead();
             var reader = new DbReader(db.Connection);
             return action(reader);
         }
