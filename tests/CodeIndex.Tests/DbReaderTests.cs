@@ -495,6 +495,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileByPath_ReturnsExactMatchWithFullMetadata()
+    {
+        // Seed data: src/api.js — Size=800, Lines=50, Modified=2025-06-01, 2 symbols (ApiClient, fetchData)
+        // シードデータ: src/api.js — Size=800, Lines=50, Modified=2025-06-01, シンボル2個
+        var file = _reader.GetFileByPath("src/api.js");
+        Assert.NotNull(file);
+        Assert.Equal("src/api.js", file!.Path);
+        Assert.Equal("javascript", file.Lang);
+        Assert.Equal(800, file.Size);
+        Assert.Equal(50, file.Lines);
+        Assert.Equal(2, file.SymbolCount);
+        Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), file.Modified);
+        Assert.NotNull(file.IndexedAt);
+
+        // Substring or partial path must return null / 部分一致は null を返す
+        Assert.Null(_reader.GetFileByPath("api.js"));
+        Assert.Null(_reader.GetFileByPath("api"));
+        Assert.Null(_reader.GetFileByPath("src/api"));
+        Assert.Null(_reader.GetFileByPath("nonexistent.py"));
+    }
+
+    [Fact]
     public void AnalyzeSymbol_BundlesDefinitionGraphAndNearbyContext()
     {
         var analysis = _reader.AnalyzeSymbol("fetchData", limit: 5, lang: "javascript", includeBody: true);
