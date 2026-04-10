@@ -21,6 +21,13 @@ public class FileIndexerTests
     [InlineData("page.vue", "vue")]
     [InlineData("page.svelte", "svelte")]
     [InlineData("main.tf", "terraform")]
+    [InlineData("app.dart", "dart")]
+    [InlineData("Main.scala", "scala")]
+    [InlineData("analysis.r", "r")]
+    [InlineData("analysis.R", "r")]
+    [InlineData("web.ex", "elixir")]
+    [InlineData("test.exs", "elixir")]
+    [InlineData("script.lua", "lua")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));

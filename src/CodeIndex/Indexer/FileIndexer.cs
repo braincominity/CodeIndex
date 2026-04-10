@@ -46,6 +46,14 @@ public class FileIndexer
         [".vue"]    = "vue",
         [".svelte"] = "svelte",
         [".tf"]     = "terraform",
+        [".dart"]   = "dart",
+        [".scala"]  = "scala",
+        [".sc"]     = "scala",
+        [".r"]      = "r",
+        [".R"]      = "r",
+        [".ex"]     = "elixir",
+        [".exs"]    = "elixir",
+        [".lua"]    = "lua",
     };
 
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
