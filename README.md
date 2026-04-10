@@ -288,6 +288,15 @@ These commands use the indexed reference graph and are intended for languages wh
 
 When you pass `--lang` for an unsupported language, human-readable graph commands now say so explicitly, and MCP graph tools expose `graph_language`, `graph_supported`, and `graph_support_reason` alongside the empty result list.
 
+### Outline a single file
+
+```bash
+cdidx outline src/CodeIndex/Cli/GitHelper.cs
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
+```
+
+Shows all symbols in a single file ordered by line, with kind, signature, visibility, and container nesting. Lets AI agents understand file structure in one call instead of reading the whole file or chaining `symbols` + `definition`.
+
 ### Reconstruct a file excerpt
 
 ```bash
@@ -664,6 +673,7 @@ Once configured, the AI can directly call these tools:
 | `excerpt` | Reconstruct a specific line range from indexed chunks |
 | `map` | Summarize languages, modules, hotspots, and likely entrypoints |
 | `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata |
+| `outline` | Show all symbols in a single file with line numbers, signatures, and nesting |
 | `status` | Database statistics |
 | `index` | Index or re-index a project directory |
 
@@ -974,6 +984,15 @@ cdidx callees AddToGitExclude --exclude-tests
 これらのコマンドはインデックス済み参照グラフを使います。対象は、cdidx が名前付きシンボルと call 相当の参照を抽出している言語、つまり Python、JavaScript/TypeScript、C#、Go、Rust、Java、Kotlin、Ruby、C/C++、PHP、Swift です。ドキュメント、設定ファイル、マークアップなどの未対応言語では `search` に戻してください。
 
 未対応言語を `--lang` で指定した場合、人間向けの graph コマンドはその旨を明示し、MCP の graph ツールは空結果に加えて `graph_language`、`graph_supported`、`graph_support_reason` を返します。
+
+### 1ファイルのアウトラインを見る
+
+```bash
+cdidx outline src/CodeIndex/Cli/GitHelper.cs
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
+```
+
+1ファイル内の全シンボルを行順に、種別・シグネチャ・可視性・コンテナネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
 
 ### ファイル抜粋を再構成する
 
@@ -1351,6 +1370,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `excerpt` | インデックス済みチャンクから特定行範囲を再構成 |
 | `map` | 言語、モジュール、ホットスポット、推定エントリポイントを要約 |
 | `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す |
+| `outline` | 1ファイルの全シンボルを行番号・シグネチャ・ネスト構造付きで表示 |
 | `status` | データベース統計情報 |
 | `index` | プロジェクトのインデックス作成・更新 |
 

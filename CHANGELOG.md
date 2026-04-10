@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Skip additional lock files and build cache dirs** — Added `Gemfile.lock`, `Cargo.lock`, `composer.lock`, `poetry.lock`, `bun.lockb` to skip-files; `.terraform`, `.cargo`, `.pub-cache`, `_build` to skip-dirs. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
 
+- **`outline` command for single-file symbol structure** — New CLI command `cdidx outline <path>` and MCP tool `outline` that return all symbols in a file ordered by line, with kind, signature, visibility, container nesting, and body ranges. Lets AI agents understand file structure in one call instead of chaining `symbols` + `definition`. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **R symbol extraction and Haskell/Zig language detection** — R now supports `name <- function()` and `library()`/`require()` extraction. Haskell (`.hs`, `.lhs`) gains type-signature, data/class/import extraction. Zig (`.zig`) is detected for text search. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/`.
+
+- **MCP search summary includes file paths** — The MCP `search` tool now shows top file paths in its content summary for quick AI orientation. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
 #### Changed
 
 - **Code quality sweep** — Extract `IsProjectPathArg` helper in `Program.cs` for readability; replace magic numbers with named constants in `ConsoleUi` (`SpinnerFrameDelayMs`, `SpinnerStopDelayMs`, `ConsoleLineMargin`); use C# range syntax in `GitHelper`; deduplicate `WorkspaceMetadataEnricher` with a shared `Apply` helper; document FTS5 token normalization in `SearchSnippetFormatter`. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
@@ -242,6 +248,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Dart、Scala、Elixir、Lua、R 言語サポート** — 言語検出（`.dart`、`.scala`、`.sc`、`.r`、`.R`、`.ex`、`.exs`、`.lua`）、Dart（class/mixin/enum/extension/function/import）・Scala（class/object/trait/case class/def/import）・Elixir（defmodule/defprotocol/def/defp/import/alias/use）・Lua（function/local function/require）のシンボル抽出を追加。Dart と Scala は call graph 参照抽出と `map` 向けエントリポイントヒントにも対応。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
 
 - **ロックファイルとビルドキャッシュディレクトリの追加除外** — `Gemfile.lock`、`Cargo.lock`、`composer.lock`、`poetry.lock`、`bun.lockb` をスキップファイルに、`.terraform`、`.cargo`、`.pub-cache`、`_build` をスキップディレクトリに追加。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **`outline` コマンドで1ファイルのシンボル構造を取得** — 新 CLI コマンド `cdidx outline <path>` と MCP ツール `outline` を追加。1ファイル内の全シンボルを行順に、種別・シグネチャ・可視性・コンテナネスト・本体範囲付きで返す。`symbols` + `definition` のチェーンを1回で置き換え。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/`.
+
+- **R シンボル抽出と Haskell/Zig 言語検出** — R は `name <- function()` と `library()`/`require()` のシンボル抽出に対応。Haskell（`.hs`、`.lhs`）は型シグネチャ・data/class/import の抽出に対応。Zig（`.zig`）はテキスト検索用に検出のみ。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/`.
+
+- **MCP search サマリにファイルパスを含める** — MCP の `search` ツールが content サマリにトップファイルパスを表示し、AI が構造化結果をパースする前に素早く位置を把握できるようにした。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
 #### 変更
 
