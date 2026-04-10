@@ -286,6 +286,8 @@ cdidx callees AddToGitExclude --exclude-tests
 
 These commands use the indexed reference graph and are intended for languages where cdidx already extracts named symbols and call-like references: Python, JavaScript/TypeScript, C#, Go, Rust, Java, Kotlin, Ruby, C/C++, PHP, and Swift. For docs, config, markup, or other unsupported languages, fall back to `search`.
 
+When you pass `--lang` for an unsupported language, human-readable graph commands now say so explicitly, and MCP graph tools expose `graph_language`, `graph_supported`, and `graph_support_reason` alongside the empty result list.
+
 ### Reconstruct a file excerpt
 
 ```bash
@@ -662,6 +664,8 @@ Once configured, the AI can directly call these tools:
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
 
+Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
+
 ### Why cdidx over grep/ripgrep for AI workflows?
 
 | | `grep` / `rg` | `cdidx` |
@@ -960,6 +964,8 @@ cdidx callees AddToGitExclude --exclude-tests
 ```
 
 これらのコマンドはインデックス済み参照グラフを使います。対象は、cdidx が名前付きシンボルと call 相当の参照を抽出している言語、つまり Python、JavaScript/TypeScript、C#、Go、Rust、Java、Kotlin、Ruby、C/C++、PHP、Swift です。ドキュメント、設定ファイル、マークアップなどの未対応言語では `search` に戻してください。
+
+未対応言語を `--lang` で指定した場合、人間向けの graph コマンドはその旨を明示し、MCP の graph ツールは空結果に加えて `graph_language`、`graph_supported`、`graph_support_reason` を返します。
 
 ### ファイル抜粋を再構成する
 
@@ -1336,6 +1342,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `index` | プロジェクトのインデックス作成・更新 |
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
+
+`references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
 ### AIワークフローで grep/ripgrep より cdidx が優れる理由
 

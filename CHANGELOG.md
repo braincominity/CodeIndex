@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Expose unsupported-language hints in direct graph queries** — Human-readable `references`, `callers`, and `callees` now print an explicit note when `--lang` targets a language without indexed call-graph extraction. MCP graph tools also return `graph_language`, `graph_supported`, and `graph_support_reason` so zero-hit unsupported-language queries are distinguishable from real zero-hit supported-language searches. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
 - **Make unsupported call-graph languages explicit in `inspect` / `analyze_symbol`** — Symbol analysis now returns `graph_language`, `graph_supported`, and `graph_support_reason`, so AI clients can distinguish "this language is not indexed for callers/callees/references" from "there were simply no graph hits." Human-readable `inspect` output also prints the same graph-support note. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **Use a proper rotating braille spinner sequence** — The default spinner and progress bar now share the 10-frame braille sequence `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`, which reads as rotation instead of jitter. Added a regression test for the default frame list and removed the duplicated default frame definition so spinner and progress bar stay aligned. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
@@ -190,6 +192,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 変更
+
+- **直接の graph クエリでも未対応言語ヒントを返すよう改善** — 人間向けの `references`、`callers`、`callees` は、`--lang` が call graph 非対応言語を指しているときに明示的な補足メモを出すようにした。MCP の graph ツールも `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語の 0 件結果と、対応言語の本当の 0 件を区別できるようにした。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **`inspect` / `analyze_symbol` で未対応言語の call graph 非対応を明示** — シンボル分析が `graph_language`、`graph_supported`、`graph_support_reason` を返すようになり、AIクライアントが「この言語では callers/callees/references が未対応」なのか「単にヒットが無い」だけなのかを区別できるようにした。人間向け `inspect` 出力でも同じ graph 対応メモを表示する。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 

@@ -369,6 +369,17 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_ReturnsCallerSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -382,6 +393,17 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Callers_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callees_ReturnsCalleeSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -392,6 +414,17 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_UnsupportedLanguage_ReturnsGraphSupportHint()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Run","lang":"markdown"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]

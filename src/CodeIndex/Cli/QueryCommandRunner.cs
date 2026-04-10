@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -118,7 +119,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No references found.");
+                    WriteGraphSupportHint(options.Lang);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -157,7 +161,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No callers found.");
+                    WriteGraphSupportHint(options.Lang);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -192,7 +199,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No callees found.");
+                    WriteGraphSupportHint(options.Lang);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -593,6 +603,12 @@ public static class QueryCommandRunner
         Console.WriteLine($"{title}:");
         foreach (var row in materialized)
             Console.WriteLine($"  {row}");
+    }
+
+    private static void WriteGraphSupportHint(string? lang)
+    {
+        if (!ReferenceExtractor.SupportsLanguage(lang))
+            Console.Error.WriteLine($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
     }
 
     private static int? ParsePositiveInt(string rawValue, string optionName)

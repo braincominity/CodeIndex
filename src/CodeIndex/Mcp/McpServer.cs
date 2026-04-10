@@ -414,6 +414,28 @@ public class McpServer
             : [];
     }
 
+    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported)
+    {
+        if (count > 0)
+            return $"Found {count} {label}.";
+
+        if (graphSupported == false && lang != null)
+            return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
+
+        return $"No {label} found.";
+    }
+
+    private static string? BuildGraphSupportReason(string? lang, bool? graphSupported)
+    {
+        if (lang == null || graphSupported == null)
+            return null;
+
+        if (graphSupported.Value)
+            return $"Call-graph extraction is indexed for '{lang}'.";
+
+        return $"Call-graph extraction is not indexed for '{lang}'. Use search, definition, excerpt, or files instead.";
+    }
+
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -560,6 +582,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -567,11 +590,14 @@ public class McpServer
                 ["lang"] = lang,
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
+                ["graphLanguage"] = lang,
+                ["graphSupported"] = graphSupported,
+                ["graphSupportReason"] = BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             return CreateToolResult(id,
-                results.Count == 0 ? "No references found." : $"Found {results.Count} reference(s).",
+                BuildGraphSummary("references", results.Count, lang, graphSupported),
                 payload);
         });
     }
@@ -594,6 +620,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -601,11 +628,14 @@ public class McpServer
                 ["lang"] = lang,
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
+                ["graphLanguage"] = lang,
+                ["graphSupported"] = graphSupported,
+                ["graphSupportReason"] = BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             return CreateToolResult(id,
-                results.Count == 0 ? "No callers found." : $"Found {results.Count} caller(s).",
+                BuildGraphSummary("callers", results.Count, lang, graphSupported),
                 payload);
         });
     }
@@ -628,6 +658,7 @@ public class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -635,11 +666,14 @@ public class McpServer
                 ["lang"] = lang,
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
+                ["graphLanguage"] = lang,
+                ["graphSupported"] = graphSupported,
+                ["graphSupportReason"] = BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             return CreateToolResult(id,
-                results.Count == 0 ? "No callees found." : $"Found {results.Count} callee(s).",
+                BuildGraphSummary("callees", results.Count, lang, graphSupported),
                 payload);
         });
     }
