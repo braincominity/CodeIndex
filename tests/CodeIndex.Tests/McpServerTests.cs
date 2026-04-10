@@ -273,8 +273,8 @@ public class McpServerTests : IDisposable
         var annotations = indexTool["annotations"];
         Assert.NotNull(annotations);
         Assert.False(annotations!["readOnlyHint"]!.GetValue<bool>());
-        Assert.False(annotations["destructiveHint"]!.GetValue<bool>());
-        Assert.True(annotations["idempotentHint"]!.GetValue<bool>());
+        Assert.True(annotations["destructiveHint"]!.GetValue<bool>());
+        Assert.False(annotations["idempotentHint"]!.GetValue<bool>());
         Assert.False(annotations["openWorldHint"]!.GetValue<bool>());
     }
 

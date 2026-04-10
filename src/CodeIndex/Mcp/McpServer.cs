@@ -1018,12 +1018,16 @@ public class McpServer
     /// <summary>
     /// Build MCP tool annotations for the index (write) tool.
     /// index（書き込み）ツール用のMCPツールアノテーションを構築。
+    /// Destructive because --rebuild drops the DB; not idempotent because
+    /// re-indexing replaces chunks/symbols/references per file.
+    /// --rebuildでDBを削除するため破壊的。再インデックスはファイルごとに
+    /// チャンク・シンボル・参照を置き換えるため冪等ではない。
     /// </summary>
     private static JsonObject IndexAnnotations() => new()
     {
         ["readOnlyHint"] = false,
-        ["destructiveHint"] = false,
-        ["idempotentHint"] = true,
+        ["destructiveHint"] = true,
+        ["idempotentHint"] = false,
         ["openWorldHint"] = false
     };
 }
