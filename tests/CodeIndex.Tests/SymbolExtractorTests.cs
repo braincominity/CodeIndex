@@ -225,6 +225,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Haskell_DetectsTypeSignaturesAndDataTypes()
+    {
+        // Haskell: type signature, data, import / Haskell: 型シグネチャ、data型、import
+        var content = "import Data.List\nimport qualified Data.Map as Map\n\ndata Tree a = Leaf | Node a (Tree a) (Tree a)\n\ninsert :: Ord a => a -> Tree a -> Tree a\ninsert x Leaf = Node x Leaf Leaf";
+        var symbols = SymbolExtractor.Extract(1, "haskell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Data.List");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Data.Map");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Tree");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "insert");
+    }
+
+    [Fact]
     public void Extract_R_DetectsFunctionAssignmentAndLibrary()
     {
         // R: function assignment, library / R: 関数代入、library

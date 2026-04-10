@@ -54,6 +54,9 @@ public class FileIndexer
         [".ex"]     = "elixir",
         [".exs"]    = "elixir",
         [".lua"]    = "lua",
+        [".hs"]     = "haskell",
+        [".lhs"]    = "haskell",
+        [".zig"]    = "zig",
     };
 
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
