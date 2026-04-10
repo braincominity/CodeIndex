@@ -77,6 +77,7 @@ public class FileIndexer
     {
         ".DS_Store", "Thumbs.db",
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+        "Gemfile.lock", "Cargo.lock", "composer.lock", "poetry.lock", "bun.lockb",
     };
 
     // Maximum file size to index (10 MB) / インデックス対象の最大ファイルサイズ (10 MB)

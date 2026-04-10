@@ -78,6 +78,8 @@ public class FileIndexerTests
             Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
             File.WriteAllText(Path.Combine(tempDir, "package-lock.json"), "{}");
+            File.WriteAllText(Path.Combine(tempDir, "Cargo.lock"), "# lock");
+            File.WriteAllText(Path.Combine(tempDir, "Gemfile.lock"), "GEM");
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles();
