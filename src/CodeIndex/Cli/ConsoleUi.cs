@@ -6,6 +6,10 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class ConsoleUi
 {
+    private const int SpinnerFrameDelayMs = 100;
+    private const int SpinnerStopDelayMs = 20;
+    private const int ConsoleLineMargin = 1;
+
     private static readonly string[] DefaultBrailleSpinnerFrames =
     [
         "⠋", "⠙", "⠹", "⠸", "⠼",
@@ -42,7 +46,7 @@ public static class ConsoleUi
                 Console.Write(line);
                 Console.Out.Flush();
                 i++;
-                try { Task.Delay(100, ct).Wait(ct); } catch (OperationCanceledException) { break; }
+                try { Task.Delay(SpinnerFrameDelayMs, ct).Wait(ct); } catch (OperationCanceledException) { break; }
             }
         }, ct);
         return cts;
@@ -57,10 +61,10 @@ public static class ConsoleUi
         if (cts == null) return;
         cts.Cancel();
         // Small delay to let the spinner task exit / スピナータスク終了のための短い待機
-        Thread.Sleep(20);
+        Thread.Sleep(SpinnerStopDelayMs);
         if (!Console.IsOutputRedirected)
         {
-            Console.Write($"\r{new string(' ', GetWindowWidth() - 1)}\r");
+            Console.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
             Console.Out.Flush();
         }
         cts.Dispose();
