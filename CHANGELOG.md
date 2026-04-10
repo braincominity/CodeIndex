@@ -13,7 +13,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Dart, Scala, Elixir, Lua, and R language support** — Added language detection (`.dart`, `.scala`, `.sc`, `.r`, `.R`, `.ex`, `.exs`, `.lua`), symbol extraction for Dart (class/mixin/enum/extension/function/import), Scala (class/object/trait/case class/def/import), Elixir (defmodule/defprotocol/def/defp/import/alias/use), and Lua (function/local function/require). Dart and Scala also gain call-graph reference extraction and entrypoint hints for `map`. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
-- **Skip additional lock files and build cache dirs** — Added `Gemfile.lock`, `Cargo.lock`, `composer.lock`, `poetry.lock`, `bun.lockb` to skip-files; `.terraform`, `.cargo`, `.pub-cache`, `_build`, `deps` to skip-dirs. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+- **Skip additional lock files and build cache dirs** — Added `Gemfile.lock`, `Cargo.lock`, `composer.lock`, `poetry.lock`, `bun.lockb` to skip-files; `.terraform`, `.cargo`, `.pub-cache`, `_build` to skip-dirs. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+#### Changed
+
+- **Code quality sweep** — Extract `IsProjectPathArg` helper in `Program.cs` for readability; replace magic numbers with named constants in `ConsoleUi` (`SpinnerFrameDelayMs`, `SpinnerStopDelayMs`, `ConsoleLineMargin`); use C# range syntax in `GitHelper`; deduplicate `WorkspaceMetadataEnricher` with a shared `Apply` helper; document FTS5 token normalization in `SearchSnippetFormatter`. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
+
+- **Clearer CLI error messages and help text** — `--rebuild` conflict error now explains "rebuild requires a full rescan"; database-not-found error shows the full absolute path via `Path.GetFullPath`; `--snippet-lines` help shows "1-20, default: 8" instead of "default: 8, max: 20". Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **Additional test coverage** — Added truncation-marker tests for `SearchSnippetFormatter.Format` (both-sides, before-only, after-only, no-markers), and a `ConsoleUi.LoadVersion` test that verifies the real version is returned instead of the "0.0.0" fallback. Affected: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+### [1.2.0] - 2026-04-11
+
+#### Added
 
 - **Freshness hints in zero-result MCP responses** — When MCP query tools (`search`, `definition`, `symbols`, `references`, `callers`, `callees`, `files`) return zero results, the response now includes `indexed_file_count` and `indexed_at` so AI clients can immediately tell whether the index is stale or empty without a separate `status` round-trip. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
@@ -24,12 +36,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP tool annotations for AI client trust decisions** — All MCP tools now emit `annotations` with `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` per the MCP spec. Query tools are marked read-only and idempotent; the `index` tool is marked destructive and non-idempotent (it can drop the DB via `--rebuild` and replaces chunks/symbols per file). This helps AI clients decide which tools are safe to call without user confirmation. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### Changed
-
-- **Code quality sweep** — Extract `IsProjectPathArg` helper in `Program.cs` for readability; replace magic numbers with named constants in `ConsoleUi` (`SpinnerFrameDelayMs`, `SpinnerStopDelayMs`, `ConsoleLineMargin`); use C# range syntax in `GitHelper`; deduplicate `WorkspaceMetadataEnricher` with a shared `Apply` helper; document FTS5 token normalization in `SearchSnippetFormatter`. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
-
-- **Clearer CLI error messages and help text** — `--rebuild` conflict error now explains "rebuild requires a full rescan"; database-not-found error shows the full absolute path via `Path.GetFullPath`; `--snippet-lines` help shows "1-20, default: 8" instead of "default: 8, max: 20". Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
-
-- **Additional test coverage** — Added truncation-marker tests for `SearchSnippetFormatter.Format` (both-sides, before-only, after-only, no-markers), and a `ConsoleUi.LoadVersion` test that verifies the real version is returned instead of the "0.0.0" fallback. Affected: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 
 - **Extract `RepoMapBuilder` from `DbReader`** — Moved the repo-map logic (~280 lines: `GetRepoMap`, file stats, entrypoint scoring, module grouping) into a dedicated `RepoMapBuilder` class, reducing `DbReader` from 1174 to 1073 lines. The public API (`DbReader.GetRepoMap`) is unchanged; it delegates to `RepoMapBuilder` internally. Shared query helpers (`AppendPathFilters`, `AddPathFilterParameters`, `EscapeLikeQuery`, `GetNullableDateTime`) became `internal static` for reuse. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
 
@@ -235,7 +241,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Dart、Scala、Elixir、Lua、R 言語サポート** — 言語検出（`.dart`、`.scala`、`.sc`、`.r`、`.R`、`.ex`、`.exs`、`.lua`）、Dart（class/mixin/enum/extension/function/import）・Scala（class/object/trait/case class/def/import）・Elixir（defmodule/defprotocol/def/defp/import/alias/use）・Lua（function/local function/require）のシンボル抽出を追加。Dart と Scala は call graph 参照抽出と `map` 向けエントリポイントヒントにも対応。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
 
-- **ロックファイルとビルドキャッシュディレクトリの追加除外** — `Gemfile.lock`、`Cargo.lock`、`composer.lock`、`poetry.lock`、`bun.lockb` をスキップファイルに、`.terraform`、`.cargo`、`.pub-cache`、`_build`、`deps` をスキップディレクトリに追加。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+- **ロックファイルとビルドキャッシュディレクトリの追加除外** — `Gemfile.lock`、`Cargo.lock`、`composer.lock`、`poetry.lock`、`bun.lockb` をスキップファイルに、`.terraform`、`.cargo`、`.pub-cache`、`_build` をスキップディレクトリに追加。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+#### 変更
+
+- **コード品質の一括改善** — `Program.cs` のパス検出ロジックを `IsProjectPathArg` に抽出して可読性向上、`ConsoleUi` のマジックナンバーに名前付き定数（`SpinnerFrameDelayMs`、`SpinnerStopDelayMs`、`ConsoleLineMargin`）を導入、`GitHelper` で C# range syntax を使用、`WorkspaceMetadataEnricher` の重複ロジックを `Apply` ヘルパーに共通化、`SearchSnippetFormatter` のトークン正規化にコメント追加。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
+
+- **CLI エラーメッセージとヘルプの明確化** — `--rebuild` の競合エラーに理由（full rescan が必要）を追加、DB 未検出エラーに `Path.GetFullPath` でフルパスを表示、`--snippet-lines` のヘルプを "1-20, default: 8" に変更。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **テストカバレッジの追加** — `SearchSnippetFormatter.Format` のトランケーションマーカーテスト（両側・前のみ・後ろのみ・なし）と、`ConsoleUi.LoadVersion` が "0.0.0" フォールバックではなく実バージョンを返すことを検証するテストを追加。対象: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+### [1.2.0] - 2026-04-11
+
+#### 追加
 
 - **0件 MCP レスポンスに鮮度ヒントを追加** — MCP クエリツール（`search`、`definition`、`symbols`、`references`、`callers`、`callees`、`files`）が 0 件を返すとき、レスポンスに `indexed_file_count` と `indexed_at` を含めるようにした。AI クライアントが別途 `status` を呼ばなくても、インデックスの古さや空を即座に判断できる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
@@ -246,12 +264,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP ツールアノテーションで AI クライアントの信頼判断を支援** — 全 MCP ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返すようになった。クエリツールは読み取り専用かつ冪等に、`index` ツールは破壊的かつ非冪等にマークされる（`--rebuild` で DB を削除でき、再インデックスでファイルごとにチャンク・シンボルを置き換えるため）。これにより AI クライアントがユーザー確認なしに安全に呼べるツールを判断しやすくなる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### 変更
-
-- **コード品質の一括改善** — `Program.cs` のパス検出ロジックを `IsProjectPathArg` に抽出して可読性向上、`ConsoleUi` のマジックナンバーに名前付き定数（`SpinnerFrameDelayMs`、`SpinnerStopDelayMs`、`ConsoleLineMargin`）を導入、`GitHelper` で C# range syntax を使用、`WorkspaceMetadataEnricher` の重複ロジックを `Apply` ヘルパーに共通化、`SearchSnippetFormatter` のトークン正規化にコメント追加。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
-
-- **CLI エラーメッセージとヘルプの明確化** — `--rebuild` の競合エラーに理由（full rescan が必要）を追加、DB 未検出エラーに `Path.GetFullPath` でフルパスを表示、`--snippet-lines` のヘルプを "1-20, default: 8" に変更。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
-
-- **テストカバレッジの追加** — `SearchSnippetFormatter.Format` のトランケーションマーカーテスト（両側・前のみ・後ろのみ・なし）と、`ConsoleUi.LoadVersion` が "0.0.0" フォールバックではなく実バージョンを返すことを検証するテストを追加。対象: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 
 - **`RepoMapBuilder` を `DbReader` から分離** — repo map ロジック（約280行: `GetRepoMap`、ファイル統計、エントリポイント採点、モジュールグループ化）を専用の `RepoMapBuilder` クラスに移動し、`DbReader` を 1174 行から 1073 行に縮小した。公開 API（`DbReader.GetRepoMap`）は変更なし、内部で `RepoMapBuilder` に委譲する。共有クエリヘルパー（`AppendPathFilters`、`AddPathFilterParameters`、`EscapeLikeQuery`、`GetNullableDateTime`）は再利用のため `internal static` に変更。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`.
 
@@ -447,7 +459,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Widthdom/CodeIndex/compare/v1.0.3...v1.0.4
