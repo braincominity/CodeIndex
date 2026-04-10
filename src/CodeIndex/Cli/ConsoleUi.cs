@@ -350,7 +350,7 @@ public static class ConsoleUi
         Console.WriteLine("  --path <pattern>           Restrict matches to paths containing this text");
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
-        Console.WriteLine("  --snippet-lines <n>        Search snippet length (default: 8, max: 20)");
+        Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine();
