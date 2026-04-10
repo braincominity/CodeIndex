@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- **Hardened test cleanup for Windows SQLite file locks** — `IndexCommandRunnerTests` now clears SQLite pools before retrying temporary directory deletion, avoiding CI failures where Windows still held an external DB file open during cleanup. Also documented cross-platform expectations for filesystem, process, and SQLite-lifetime changes in the AI workflow docs. Affected: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`, `CLAUDE.md`, `SELF_IMPROVEMENT.md`.
+
 - **Synchronized README tables with the expanded CLI/MCP surface** — Updated the README English and Japanese tables for MCP tools and query options so they match the current command set, including `definition`, `references`, `callers`, `callees`, `excerpt`, `map`, `inspect`, and MCP `analyze_symbol`. Affected: `README.md`.
 
 - **Added a dedicated self-improvement playbook for AI agents** — Added `SELF_IMPROVEMENT.md`, a bilingual operating contract for iterative cdidx self-improvement loops, including branch/commit discipline, rebuild-and-refresh requirements, approval gates for breaking changes, and language-aware search guidance. Updated README discoverability and CLAUDE.md checklist/sync rules to keep the playbook current. Affected: `SELF_IMPROVEMENT.md`, `README.md`, `CLAUDE.md`.
@@ -174,6 +176,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 変更
+
+- **Windows の SQLite ファイルロックに耐えるテスト後片付けへ強化** — `IndexCommandRunnerTests` で、一時ディレクトリ削除の再試行前に SQLite の pool をクリアするようにし、Windows で外部 DB ファイルがまだ開かれていて CI が落ちる問題を防いだ。あわせて、ファイルシステム、プロセス、SQLite ライフタイム変更におけるクロスプラットフォーム前提を AI 向け運用ドキュメントへ追記した。対象: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`, `CLAUDE.md`, `SELF_IMPROVEMENT.md`.
 
 - **拡張後のCLI/MCP機能面にREADME表を同期** — README の英語版・日本語版にある MCP ツール表とクエリオプション表を、現在のコマンドセットに合わせて更新した。`definition`、`references`、`callers`、`callees`、`excerpt`、`map`、`inspect`、MCP の `analyze_symbol` を反映している。対象: `README.md`.
 

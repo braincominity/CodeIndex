@@ -38,6 +38,7 @@ The loop is not just "suggest ideas". It is:
 - Prefer the **locally built latest binary** over an older globally installed `cdidx` whenever the repository code has changed.
 - If a change may be breaking, migration-heavy, destructive, or likely to impose manual work on users, **stop and ask for approval before implementing**.
 - Respect language differences. Do not pretend every query type is meaningful for every language.
+- Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
 - Favor implementation over brainstorming when the next improvement is clear and non-breaking.
 - Keep docs and tests in sync with behavior.
 - Do not push tags or branches unless explicitly asked.
@@ -115,6 +116,7 @@ Before implementation, write a concrete plan that covers:
 - which files and tests are affected
 - how you will verify it
 - how language-specific behavior should differ
+- how platform-specific behavior should differ, if paths/processes/filesystem semantics are involved
 
 ### 6. Implement immediately if safe
 
@@ -137,6 +139,7 @@ At minimum, do the checks that match the change:
 - MCP behavior checks if MCP was touched
 - documentation spot-checks
 - language-specific behavior checks if logic differs by language
+- platform-sensitive checks if behavior depends on files, paths, processes, console I/O, or SQLite cleanup
 
 Examples:
 
@@ -409,6 +412,24 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - C#、Java、Go、Rust、TypeScript/JavaScript、Python、Kotlin、Ruby、C/C++、PHP、Swift と、Markdown、YAML、JSON、TOML、Shell、SQL、HTML/CSS、Vue、Svelte、Terraform は分けて考えてください。
 - 新しい言語依存機能を提案するときは、どの言語を対象にするのか、その理由を明記してください。
 - ヒューリスティックが言語依存なら、README とテストに制限事項を残してください。
+
+## Platform-Aware Guidance
+
+Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
+
+- Windows can hold SQLite files longer because of file locking and connection pooling, so cleanup code and tests must tolerate delayed release.
+- Path separators, casing assumptions, shell commands, and process launch behavior differ across Windows, macOS, and Linux.
+- If you change temp-file handling, DB lifecycle, or CLI process behavior, add verification that is robust across supported platforms.
+- If a workaround is OS-specific, document why it exists instead of leaving it as unexplained test fragility.
+
+## プラットフォーム差分を前提にする指針
+
+パス処理、プロセス後始末、ファイル削除がすべての OS で同じだと考えてはいけません。
+
+- Windows では SQLite の接続プールやファイルロックにより、DB ファイル解放が遅れることがあるため、後片付けコードやテストは遅延解放に耐える必要があります。
+- パス区切り、大小文字前提、shell コマンド、プロセス起動挙動は Windows、macOS、Linux で異なります。
+- 一時ファイル処理、DB ライフサイクル、CLI プロセス挙動を変える場合は、対応プラットフォーム全体で壊れにくい検証を追加してください。
+- OS 固有の回避策を入れる場合は、説明のない不安定テストにせず、なぜ必要かをドキュメントに残してください。
 
 ## プロダクトとブランディングの観点
 

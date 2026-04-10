@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -64,7 +65,7 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(projectRoot, recursive: true);
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -88,7 +89,7 @@ public class IndexCommandRunnerTests
         {
             if (File.Exists(outsideFile))
                 File.Delete(outsideFile);
-            Directory.Delete(projectRoot, recursive: true);
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -111,7 +112,7 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            Directory.Delete(projectRoot, recursive: true);
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -137,8 +138,8 @@ public class IndexCommandRunnerTests
         finally
         {
             if (Directory.Exists(outsideDir))
-                Directory.Delete(outsideDir, recursive: true);
-            Directory.Delete(projectRoot, recursive: true);
+                DeleteDirectory(outsideDir);
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -171,7 +172,7 @@ public class IndexCommandRunnerTests
         finally
         {
             if (Directory.Exists(tempRoot))
-                Directory.Delete(tempRoot, recursive: true);
+                DeleteDirectory(tempRoot);
         }
     }
 
@@ -224,5 +225,28 @@ public class IndexCommandRunnerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
     }
 }
