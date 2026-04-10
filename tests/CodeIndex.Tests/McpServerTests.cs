@@ -241,6 +241,43 @@ public class McpServerTests : IDisposable
         Assert.Contains("path", required.Select(r => r!.GetValue<string>()));
     }
 
+    [Fact]
+    public void ToolsList_QueryToolsHaveReadOnlyAnnotations()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var queryToolNames = new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "excerpt", "map", "analyze_symbol", "status" };
+
+        foreach (var name in queryToolNames)
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var annotations = tool["annotations"];
+            Assert.NotNull(annotations);
+            Assert.True(annotations!["readOnlyHint"]!.GetValue<bool>(), $"{name} should have readOnlyHint=true");
+            Assert.False(annotations["destructiveHint"]!.GetValue<bool>(), $"{name} should have destructiveHint=false");
+            Assert.True(annotations["idempotentHint"]!.GetValue<bool>(), $"{name} should have idempotentHint=true");
+            Assert.False(annotations["openWorldHint"]!.GetValue<bool>(), $"{name} should have openWorldHint=false");
+        }
+    }
+
+    [Fact]
+    public void ToolsList_IndexToolHasWriteAnnotations()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var indexTool = tools.First(t => t!["name"]!.GetValue<string>() == "index")!;
+        var annotations = indexTool["annotations"];
+        Assert.NotNull(annotations);
+        Assert.False(annotations!["readOnlyHint"]!.GetValue<bool>());
+        Assert.False(annotations["destructiveHint"]!.GetValue<bool>());
+        Assert.True(annotations["idempotentHint"]!.GetValue<bool>());
+        Assert.False(annotations["openWorldHint"]!.GetValue<bool>());
+    }
+
     // --- tools/call tests / ツール呼び出しテスト ---
 
     [Fact]

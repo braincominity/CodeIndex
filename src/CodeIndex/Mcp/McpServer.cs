@@ -175,7 +175,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "definition",
                 "Resolve symbol definitions with definition ranges, signatures, and optional body content. / 定義範囲、シグネチャ、必要に応じて本体内容付きでシンボル定義を解決。",
@@ -194,7 +195,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "references",
                 "Search indexed symbol references such as call sites. / 呼び出し箇所などのインデックス済みシンボル参照を検索。",
@@ -212,7 +214,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callers",
                 "Find caller symbols that reference a callee. / 指定シンボルを参照している呼び出し元シンボルを探す。",
@@ -230,7 +233,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callees",
                 "Find callees used by a caller/container symbol. / 呼び出し元シンボルが使っている呼び出し先を探す。",
@@ -248,7 +252,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "symbols",
                 "Search for code symbols (functions, classes, interfaces, imports) by name pattern. / シンボル（関数、クラス、インターフェース、import）を名前パターンで検索。",
@@ -265,7 +270,8 @@ public class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "files",
                 "List indexed files, optionally filtered by name pattern and language. / インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。",
@@ -281,7 +287,8 @@ public class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "excerpt",
                 "Reconstruct a file excerpt from indexed chunks for a given line range. / 指定行範囲について、インデックス済みチャンクからファイル抜粋を再構成。",
@@ -297,7 +304,8 @@ public class McpServer
                         ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines after the range", ["default"] = 0 }
                     },
                     ["required"] = new JsonArray { "path", "startLine" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "map",
                 "Return a repo-level overview with languages, modules, top files, and likely entrypoints. / 言語、モジュール、主要ファイル、推定エントリポイントを含むリポジトリ俯瞰情報を返す。",
@@ -312,7 +320,8 @@ public class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "analyze_symbol",
                 "Bundle definition, nearby symbols, references, callers, callees, file metadata, and graph-support metadata for one symbol query. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、グラフ対応メタデータをまとめて返す。",
@@ -330,7 +339,8 @@ public class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "status",
                 "Get database statistics: file count, chunk count, symbol count, reference count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、参照数、言語別内訳。",
@@ -338,7 +348,8 @@ public class McpServer
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject()
-                }),
+                },
+                ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "index",
                 "Index or re-index a project directory. Scans source files, extracts symbols, and builds FTS5 search index. / プロジェクトディレクトリをインデックス（再インデックス）。ソースファイルをスキャンし、シンボルを抽出してFTS5検索インデックスを構築。",
@@ -351,7 +362,8 @@ public class McpServer
                         ["rebuild"] = new JsonObject { ["type"] = "boolean", ["description"] = "Delete existing index and rebuild from scratch (default: false)", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "path" }
-                })
+                },
+                IndexAnnotations())
         };
 
         var result = new JsonObject { ["tools"] = tools };
@@ -977,13 +989,41 @@ public class McpServer
         return CreateSuccessResponse(id, result);
     }
 
-    private static JsonObject CreateToolDefinition(string name, string description, JsonObject inputSchema)
+    private static JsonObject CreateToolDefinition(string name, string description, JsonObject inputSchema,
+        JsonObject? annotations = null)
     {
-        return new JsonObject
+        var def = new JsonObject
         {
             ["name"] = name,
             ["description"] = description,
             ["inputSchema"] = inputSchema
         };
+        if (annotations != null)
+            def["annotations"] = annotations;
+        return def;
     }
+
+    /// <summary>
+    /// Build MCP tool annotations for a read-only query tool.
+    /// 読み取り専用クエリツール用のMCPツールアノテーションを構築。
+    /// </summary>
+    private static JsonObject ReadOnlyAnnotations() => new()
+    {
+        ["readOnlyHint"] = true,
+        ["destructiveHint"] = false,
+        ["idempotentHint"] = true,
+        ["openWorldHint"] = false
+    };
+
+    /// <summary>
+    /// Build MCP tool annotations for the index (write) tool.
+    /// index（書き込み）ツール用のMCPツールアノテーションを構築。
+    /// </summary>
+    private static JsonObject IndexAnnotations() => new()
+    {
+        ["readOnlyHint"] = false,
+        ["destructiveHint"] = false,
+        ["idempotentHint"] = true,
+        ["openWorldHint"] = false
+    };
 }

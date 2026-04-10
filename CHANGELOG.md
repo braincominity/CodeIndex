@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+
+- **MCP tool annotations for AI client trust decisions** — All MCP tools now emit `annotations` with `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` per the MCP 2024-11-05 spec. Query tools are marked read-only and idempotent; the `index` tool is marked as non-read-only and idempotent. This helps AI clients decide which tools are safe to call without user confirmation. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
 #### Changed
 
 - **Add file-based entrypoint fallbacks to `map`** — Repo-map entrypoints now fall back to known top-level entry files such as `Program.cs` and `main.py` when symbol extraction does not emit an explicit `Main`-style symbol. This improves first-pass orientation for top-level script or top-level-statement projects without changing the `entrypoints` shape. Affected: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
@@ -204,6 +208,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+- **MCP ツールアノテーションで AI クライアントの信頼判断を支援** — 全 MCP ツールが MCP 2024-11-05 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返すようになった。クエリツールは読み取り専用かつ冪等に、`index` ツールは書き込み可能かつ冪等にマークされる。これにより AI クライアントがユーザー確認なしに安全に呼べるツールを判断しやすくなる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### 変更
 

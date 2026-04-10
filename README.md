@@ -666,6 +666,8 @@ No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx nativ
 
 Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
 
+All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) per the MCP spec so AI clients can auto-approve safe read-only queries without prompting the user.
+
 ### Why cdidx over grep/ripgrep for AI workflows?
 
 | | `grep` / `rg` | `cdidx` |
@@ -1344,6 +1346,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
+
+全 MCP ツールは MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を含み、AIクライアントがユーザーへの確認なしに安全な読み取り専用クエリを自動承認できるようにしています。
 
 ### AIワークフローで grep/ripgrep より cdidx が優れる理由
 
