@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Split scoped and workspace freshness in `map` output** — `map` keeps `indexed_at` and `latest_modified` scoped to the filtered result set for backward compatibility, and now also exposes `workspace_indexed_at` and `workspace_latest_modified` so AI clients can compare slice-level freshness with whole-workspace freshness without falling back to a separate `status` call. Human-readable `map` output now labels the scoped/workspace timestamps explicitly. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
+- **Consolidate `BuildGraphSupportReason` into `ReferenceExtractor`** — Moved the shared graph-support-reason message logic from duplicated private methods in `DbReader` and `McpServer` into a single `ReferenceExtractor.BuildGraphSupportReason()` static helper. `DbReader` adds a fallback message for the null-language case; `McpServer` passes through the null. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
 #### Fixed
 
 - **Use exact-match query in `GetFileByPath`** — Replaced the substring `LIKE '%path%'` approach (via `ListFiles` + in-memory filter) with a direct `WHERE path = @path` query, eliminating false positives and unnecessary work. Affected: `src/CodeIndex/Database/DbReader.cs`.
@@ -214,6 +216,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`inspect` / `analyze_symbol` にワークスペース信頼メタデータを追加** — `inspect --json` と MCP の `analyze_symbol` が `workspace_indexed_at`、`workspace_latest_modified`、`project_root`、`git_head`、`git_is_dirty` を返すようになり、AIクライアントがシンボル分析中に別途 `status` を呼ばなくても鮮度とリポジトリ状態を判断できるようにした。人間向け `inspect` 出力でも、まとめられた各セクションの前に同じ信頼シグナルを表示する。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **`map` 出力の鮮度を絞り込み範囲とワークスペース全体で分離** — 後方互換のため `map` の `indexed_at` と `latest_modified` は絞り込み結果に対する値のまま維持しつつ、`workspace_indexed_at` と `workspace_latest_modified` を追加し、AIクライアントが別途 `status` を呼ばなくても「この範囲だけ古い」のか「ワークスペース全体が古い」のかを比較できるようにした。人間向け `map` 出力でも scoped/workspace の時刻ラベルを明示した。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **`BuildGraphSupportReason` を `ReferenceExtractor` に統合** — `DbReader` と `McpServer` に重複していた graph 対応理由メッセージのロジックを、`ReferenceExtractor.BuildGraphSupportReason()` 静的ヘルパーに一本化した。`DbReader` は null 言語時のフォールバックメッセージを付加し、`McpServer` は null をそのまま返す。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
 
 #### 修正
 

@@ -1077,13 +1077,8 @@ public class DbReader
 
     private static string BuildGraphSupportReason(string? graphLanguage, bool? graphSupported)
     {
-        if (graphLanguage == null || graphSupported == null)
-            return "Call-graph support could not be determined because no language filter or matching definition was available.";
-
-        if (graphSupported.Value)
-            return $"Call-graph extraction is indexed for '{graphLanguage}'.";
-
-        return $"Call-graph extraction is not indexed for '{graphLanguage}'. Use search, definition, excerpt, or files instead.";
+        return ReferenceExtractor.BuildGraphSupportReason(graphLanguage, graphSupported)
+            ?? "Call-graph support could not be determined because no language filter or matching definition was available.";
     }
 
     private HashSet<string> LoadColumns(string tableName)

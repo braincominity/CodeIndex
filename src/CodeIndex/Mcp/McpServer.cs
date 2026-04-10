@@ -425,17 +425,6 @@ public class McpServer
         return $"No {label} found.";
     }
 
-    private static string? BuildGraphSupportReason(string? lang, bool? graphSupported)
-    {
-        if (lang == null || graphSupported == null)
-            return null;
-
-        if (graphSupported.Value)
-            return $"Call-graph extraction is indexed for '{lang}'.";
-
-        return $"Call-graph extraction is not indexed for '{lang}'. Use search, definition, excerpt, or files instead.";
-    }
-
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
@@ -592,7 +581,7 @@ public class McpServer
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
                 ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = BuildGraphSupportReason(lang, graphSupported),
+                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
@@ -630,7 +619,7 @@ public class McpServer
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
                 ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = BuildGraphSupportReason(lang, graphSupported),
+                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
@@ -668,7 +657,7 @@ public class McpServer
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
                 ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = BuildGraphSupportReason(lang, graphSupported),
+                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
