@@ -535,7 +535,11 @@ public class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines)), _jsonOptions)
             };
-            return CreateToolResult(id, $"Found {results.Count} search result(s).", structured);
+            // Include top file paths in summary for quick AI orientation
+            // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
+            var topPaths = results.Select(r => r.Path).Distinct().Take(3);
+            var summary = $"Found {results.Count} search result(s) in {string.Join(", ", topPaths)}.";
+            return CreateToolResult(id, summary, structured);
         });
     }
 
