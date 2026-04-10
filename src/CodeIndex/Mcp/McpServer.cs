@@ -446,7 +446,7 @@ public class McpServer
         var (fileCount, indexedAt) = reader.GetFreshnessHint();
         payload["indexed_file_count"] = fileCount;
         if (indexedAt.HasValue)
-            payload["indexed_at"] = indexedAt.Value.ToString("o");
+            payload["indexed_at"] = JsonSerializer.SerializeToNode(indexedAt.Value);
     }
 
     /// <summary>
@@ -856,6 +856,7 @@ public class McpServer
                     ["path"] = path,
                     ["count"] = 0
                 };
+                AddFreshnessHint(emptyPayload, reader);
                 return CreateToolResult(id, "No excerpt found.", emptyPayload);
             }
 
