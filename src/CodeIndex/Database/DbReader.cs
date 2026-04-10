@@ -699,6 +699,78 @@ public class DbReader
     }
 
     /// <summary>
+    /// Return a structured outline of symbols in a single file, ordered by line.
+    /// 1ファイルのシンボルを行順に構造化アウトラインとして返す。
+    /// </summary>
+    public OutlineResult? GetOutline(string filePath)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT id, path, lang, lines FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", filePath);
+
+        string? lang = null;
+        int totalLines = 0;
+        long fileId = 0;
+        using (var reader = cmd.ExecuteReader())
+        {
+            if (!reader.Read())
+                return null;
+            fileId = reader.GetInt64(0);
+            lang = reader.IsDBNull(2) ? null : reader.GetString(2);
+            totalLines = reader.GetInt32(3);
+        }
+
+        using var symCmd = _conn.CreateCommand();
+        symCmd.CommandText = $@"
+            SELECT s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
+                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type
+            FROM symbols s
+            WHERE s.file_id = @fileId
+            ORDER BY s.line";
+        symCmd.Parameters.AddWithValue("@fileId", fileId);
+
+        var symbols = new List<OutlineSymbol>();
+        using (var reader = symCmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                symbols.Add(new OutlineSymbol
+                {
+                    Kind = reader.GetString(0),
+                    Name = reader.GetString(1),
+                    Line = reader.GetInt32(2),
+                    StartLine = reader.GetInt32(3),
+                    EndLine = reader.GetInt32(4),
+                    BodyStartLine = reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                    BodyEndLine = reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                    Signature = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    ContainerKind = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    ContainerName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    Visibility = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    ReturnType = reader.IsDBNull(11) ? null : reader.GetString(11),
+                });
+            }
+        }
+
+        return new OutlineResult
+        {
+            Path = filePath,
+            Lang = lang,
+            TotalLines = totalLines,
+            SymbolCount = symbols.Count,
+            Symbols = symbols,
+        };
+    }
+
+    /// <summary>
     /// Get database statistics.
     /// データベースの統計情報を取得する。
     /// </summary>
@@ -1052,6 +1124,35 @@ public class SymbolAnalysisResult
     public List<ReferenceResult> References { get; set; } = [];
     public List<CallerResult> Callers { get; set; } = [];
     public List<CalleeResult> Callees { get; set; } = [];
+}
+
+/// <summary>
+/// Structured symbol outline for a single file.
+/// 1ファイルの構造化シンボルアウトライン。
+/// </summary>
+public class OutlineResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int TotalLines { get; set; }
+    public int SymbolCount { get; set; }
+    public List<OutlineSymbol> Symbols { get; set; } = [];
+}
+
+public class OutlineSymbol
+{
+    public string Kind { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public int? BodyStartLine { get; set; }
+    public int? BodyEndLine { get; set; }
+    public string? Signature { get; set; }
+    public string? ContainerKind { get; set; }
+    public string? ContainerName { get; set; }
+    public string? Visibility { get; set; }
+    public string? ReturnType { get; set; }
 }
 
 internal sealed class RepoFileStat
