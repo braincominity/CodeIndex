@@ -30,6 +30,7 @@ cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -50,7 +51,7 @@ src/CodeIndex/
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
-  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, status)
+  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, outline, status)
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
@@ -230,6 +231,7 @@ cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
@@ -250,7 +252,7 @@ src/CodeIndex/
   Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
-  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
+  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、アウトライン、ステータス）
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）

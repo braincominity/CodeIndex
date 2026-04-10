@@ -28,12 +28,12 @@ src/CodeIndex/
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
-    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, inspect bundles, file listing, status
+    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (17 languages)
+    SymbolExtractor.cs        — Regex-based symbol extraction (19 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools)
@@ -337,8 +337,10 @@ Supported symbol kinds by language:
 | Scala | def | class, object, trait, case class, enum | import |
 | Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
 | Lua | function, local function | -- | require |
+| R | name <- function() | -- | library, require |
+| Haskell | type signatures (name ::) | data, newtype, type, class, instance | import |
 
-R is detected and indexed as raw text but has no symbol extraction patterns.
+Zig is detected and indexed as raw text but has no symbol extraction patterns yet.
 
 Regex-based extraction is intentionally simple. Speed and portability are prioritized over AST-level accuracy.
 
@@ -497,7 +499,7 @@ src/CodeIndex/
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ、参照書き込み
-    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、抜粋再構成、inspect向け集約、ファイル一覧、ステータス
+    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、抜粋再構成、アウトライン、inspect向け集約、ファイル一覧、ステータス
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
@@ -806,8 +808,10 @@ LIMIT 20;
 | Scala | def | class, object, trait, case class, enum | import |
 | Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
 | Lua | function, local function | -- | require |
+| R | name <- function() | -- | library, require |
+| Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import |
 
-R は言語検出・テキストインデックスのみで、シンボル抽出パターンはありません。
+Zig は言語検出・テキストインデックスのみで、シンボル抽出パターンはまだありません。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 
