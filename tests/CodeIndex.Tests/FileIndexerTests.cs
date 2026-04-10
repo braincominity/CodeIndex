@@ -34,6 +34,9 @@ public class FileIndexerTests
     [InlineData("script.vbs", "vb")]
     [InlineData("Index.cshtml", "csharp")]
     [InlineData("Counter.razor", "csharp")]
+    [InlineData("MainWindow.xaml", "xml")]
+    [InlineData("App.axaml", "xml")]
+    [InlineData("MyApp.csproj", "xml")]
     [InlineData("Main.hs", "haskell")]
     [InlineData("main.zig", "zig")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)

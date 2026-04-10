@@ -42,6 +42,13 @@ public class FileIndexer
         [".yml"]    = "yaml",
         [".json"]   = "json",
         [".toml"]   = "toml",
+        [".xaml"]   = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
+        [".axaml"]  = "xml",    // Avalonia XAML / Avalonia XAML
+        [".csproj"] = "xml",    // C# project file / C# プロジェクトファイル
+        [".fsproj"] = "xml",    // F# project file / F# プロジェクトファイル
+        [".vbproj"] = "xml",    // VB.NET project file / VB.NET プロジェクトファイル
+        [".props"]  = "xml",    // MSBuild props / MSBuild プロパティ
+        [".targets"]= "xml",    // MSBuild targets / MSBuild ターゲット
         [".html"]   = "html",
         [".css"]    = "css",
         [".scss"]   = "css",
