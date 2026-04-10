@@ -69,6 +69,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsDelegateAndEvent()
+    {
+        // C# delegate and event / C# デリゲートとイベント
+        var content = "public delegate void EventHandler(object sender, EventArgs e);\n\npublic class Button\n{\n    public event EventHandler Click;\n    public static event Action<string> OnLog;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "EventHandler");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Button");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Click");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnLog");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsProperties()
     {
         // C# property with get/set / C# プロパティ（get/set付き）
