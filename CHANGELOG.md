@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **README Code Search Rules updated with deps, --since, --dry-run, --count** — Query strategy sections (EN/JP) now cover `deps`, `--reverse`, `--since`, `--dry-run`, and `--count`. Updated symbol-aware language list to 29. Removed Shell/SQL/Terraform from "no symbol extraction" list. Affected: `README.md`.
+
 - **DEVELOPER_GUIDE language pattern reference table** — Replaced the old 21-language table with a comprehensive 29-language table including Graph support column. Added maintenance rule to CLAUDE.md per-commit checklist: update the table when language patterns change. Affected: `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
 - **TESTING_GUIDE updated with new test files** — Added ConcurrencyTests, PerformanceTests, DbRecoveryTests to both English and Japanese test layout sections. Affected: `TESTING_GUIDE.md`.
@@ -442,6 +444,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **README Code Search Rules を deps, --since, --dry-run, --count で更新** — クエリ戦略セクション（英語・日本語）に `deps`、`--reverse`、`--since`、`--dry-run`、`--count` を追加。シンボル対応言語リストを29に更新。Shell/SQL/Terraform を「シンボル抽出なし」リストから削除。対象: `README.md`.
 
 - **DEVELOPER_GUIDE 言語パターン参照表** — 旧21言語表を Graph 対応列を含む29言語の包括的な表に差し替え。CLAUDE.md のコミットごとチェックリストに言語パターン変更時の表更新ルールを追加。対象: `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
 
