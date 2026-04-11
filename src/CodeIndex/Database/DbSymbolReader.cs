@@ -73,7 +73,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, s.name, f.path, s.line LIMIT @limit";
+        sql += $" ORDER BY {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)

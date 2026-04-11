@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **CSS/SCSS symbol extraction** — Added symbol extraction for CSS/SCSS: `.class` selectors (class), `#id` selectors (function), `@mixin` (function), `@keyframes` (function), `@import`/`@use` (import), `$variable` (property). Affected: `SymbolExtractor.cs`.
 - **`hotspots` CLI command and `symbol_hotspots` MCP tool** — Find the most-referenced symbols in the codebase, ordered by reference count. Useful for identifying central, high-impact code that changes may affect widely. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `Program.cs`, `ConsoleUi.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
 
+#### Changed
+- **Visibility-weighted symbol ranking** — `symbols` and `definition` results now rank public symbols above private/internal ones. Ranking tiers: public/open/pub/export (0) > protected (1) > internal (2) > private (3) > unknown (4). AI agents searching for API surface get the most relevant results first. Affected: `DbReader.cs`, `DbSymbolReader.cs`.
+
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
 
@@ -520,6 +523,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`unused` CLIコマンドと `unused_symbols` MCPツール** — インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する（潜在的なデッドコード）。参照抽出対応言語でのみ意味がある。`cdidx unused` CLIコマンドと `unused_symbols` MCPツールとして利用可能。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`Program.cs`、`ConsoleUi.cs`、`McpToolDefinitions.cs`、`McpToolHandlers.cs`、`McpServer.cs`。
 - **CSS/SCSSシンボル抽出** — CSS/SCSS向けシンボル抽出を追加: `.class`セレクタ（class）、`#id`セレクタ（function）、`@mixin`（function）、`@keyframes`（function）、`@import`/`@use`（import）、`$variable`（property）。対象: `SymbolExtractor.cs`。
 - **`hotspots` CLIコマンドと `symbol_hotspots` MCPツール** — コードベースで最も参照されるシンボルを参照回数順に検索する。変更が広範囲に影響する中心的なコードの特定に有用。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`Program.cs`、`ConsoleUi.cs`、`McpToolDefinitions.cs`、`McpToolHandlers.cs`、`McpServer.cs`。
+
+#### 変更
+- **可視性に基づくシンボルランキング** — `symbols` と `definition` の結果が public シンボルを private/internal より上位に表示するようになった。ランキング階層: public/open/pub/export (0) > protected (1) > internal (2) > private (3) > 不明 (4)。AIエージェントが API サーフェスを探す際に最も関連性の高い結果が先に得られる。対象: `DbReader.cs`、`DbSymbolReader.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
