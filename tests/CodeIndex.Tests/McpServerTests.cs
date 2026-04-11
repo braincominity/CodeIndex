@@ -200,13 +200,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns15Tools()
+    public void ToolsList_Returns16Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(15, tools.Count);
+        Assert.Equal(16, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -221,6 +221,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
         Assert.Contains("outline", names);
+        Assert.Contains("batch_query", names);
         Assert.Contains("deps", names);
         Assert.Contains("languages", names);
         Assert.Contains("index", names);
@@ -601,6 +602,30 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ExecutesMultipleQueries()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"status"},{"tool":"files","arguments":{}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Executed 2 queries", text);
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Equal(2, results.Count);
+        Assert.Equal("status", results[0]!["tool"]!.GetValue<string>());
+        Assert.Equal("files", results[1]!["tool"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_BlocksIndexInBatch()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"."}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Contains("not allowed", results[0]!["error"]!.GetValue<string>());
     }
 
     [Fact]

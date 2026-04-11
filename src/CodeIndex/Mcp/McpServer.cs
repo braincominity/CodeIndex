@@ -396,6 +396,33 @@ public class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "batch_query",
+                "Execute multiple read-only queries in a single call and return all results. Dramatically reduces round-trips for AI agents. / 複数の読み取り専用クエリを1回の呼び出しで実行し、全結果を返す。AIエージェントの往復回数を劇的に削減。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["queries"] = new JsonObject
+                        {
+                            ["type"] = "array",
+                            ["description"] = "Array of {tool, arguments} objects. Only read-only tools are allowed (not index).",
+                            ["items"] = new JsonObject
+                            {
+                                ["type"] = "object",
+                                ["properties"] = new JsonObject
+                                {
+                                    ["tool"] = new JsonObject { ["type"] = "string", ["description"] = "Tool name (e.g. search, definition, symbols)" },
+                                    ["arguments"] = new JsonObject { ["type"] = "object", ["description"] = "Tool arguments" }
+                                },
+                                ["required"] = new JsonArray { "tool" }
+                            }
+                        }
+                    },
+                    ["required"] = new JsonArray { "queries" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "index",
                 "Index or re-index a project directory. Scans source files, extracts symbols, and builds FTS5 search index. / プロジェクトディレクトリをインデックス（再インデックス）。ソースファイルをスキャンし、シンボルを抽出してFTS5検索インデックスを構築。",
                 new JsonObject
@@ -443,6 +470,7 @@ public class McpServer
                 "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
                 "status" => ExecuteStatus(id),
                 "outline" => ExecuteOutline(id, args),
+                "batch_query" => ExecuteBatchQuery(id, args),
                 "deps" => ExecuteDeps(id, args),
                 "languages" => ExecuteLanguages(id),
                 "index" => ExecuteIndex(id, args),
@@ -942,6 +970,86 @@ public class McpServer
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
+    }
+
+    private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
+    {
+        var queries = args?["queries"]?.AsArray();
+        if (queries == null || queries.Count == 0)
+            return CreateToolErrorResponse(id, "Missing or empty required parameter: queries");
+
+        const int maxBatchSize = 10;
+        if (queries.Count > maxBatchSize)
+            return CreateToolErrorResponse(id, $"Batch too large: {queries.Count} queries (max {maxBatchSize})");
+
+        var resultsArray = new JsonArray();
+        foreach (var q in queries)
+        {
+            var toolName = q?["tool"]?.GetValue<string>();
+            var toolArgs = q?["arguments"];
+
+            if (string.IsNullOrEmpty(toolName))
+            {
+                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = "Missing tool name" });
+                continue;
+            }
+
+            // Block write operations in batch / バッチ内では書き込み操作をブロック
+            if (toolName == "index")
+            {
+                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = "index is not allowed in batch_query (write operation)" });
+                continue;
+            }
+
+            try
+            {
+                // Execute the tool and extract the structured content / ツールを実行し構造化コンテンツを抽出
+                var response = toolName switch
+                {
+                    "search" => ExecuteSearch(null, toolArgs),
+                    "definition" => ExecuteDefinition(null, toolArgs),
+                    "references" => ExecuteReferences(null, toolArgs),
+                    "callers" => ExecuteCallers(null, toolArgs),
+                    "callees" => ExecuteCallees(null, toolArgs),
+                    "symbols" => ExecuteSymbols(null, toolArgs),
+                    "files" => ExecuteFiles(null, toolArgs),
+                    "excerpt" => ExecuteExcerpt(null, toolArgs),
+                    "map" => ExecuteMap(null, toolArgs),
+                    "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
+                    "status" => ExecuteStatus(null),
+                    "outline" => ExecuteOutline(null, toolArgs),
+                    "deps" => ExecuteDeps(null, toolArgs),
+                    "languages" => ExecuteLanguages(null),
+                    _ => null,
+                };
+
+                if (response == null)
+                {
+                    resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = $"Unknown tool: {toolName}" });
+                    continue;
+                }
+
+                // Extract structured content from the tool response
+                // ツールレスポンスから構造化コンテンツを抽出
+                var structured = response["result"]?["structuredContent"];
+                resultsArray.Add(new JsonObject
+                {
+                    ["tool"] = toolName,
+                    ["result"] = structured?.DeepClone()
+                });
+            }
+            catch (Exception ex)
+            {
+                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = ex.Message });
+            }
+        }
+
+        var payload = new JsonObject
+        {
+            ["count"] = resultsArray.Count,
+            ["results"] = resultsArray,
+        };
+        return CreateToolResult(id, $"Executed {resultsArray.Count} queries.", payload);
     }
 
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
