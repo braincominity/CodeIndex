@@ -45,7 +45,8 @@ public static class QueryCommandRunner
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
                 }
-                Console.Error.WriteLine($"({results.Count} results)");
+                var fileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -97,7 +98,8 @@ public static class QueryCommandRunner
                     }
                     Console.WriteLine();
                 }
-                Console.Error.WriteLine($"({results.Count} definitions)");
+                var defFileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} definitions in {defFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -139,7 +141,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"{r.ReferenceKind,-12} {r.SymbolName,-32} {r.Path}:{r.Line}:{r.Column}{owner}");
                     Console.WriteLine($"  {r.Context}");
                 }
-                Console.Error.WriteLine($"({results.Count} references)");
+                var refFileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} references in {refFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -177,7 +180,8 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                     Console.WriteLine($"{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
-                Console.Error.WriteLine($"({results.Count} callers)");
+                var callerFileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} callers in {callerFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -215,7 +219,8 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                     Console.WriteLine($"{r.ReferenceKind,-12} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
-                Console.Error.WriteLine($"({results.Count} callees)");
+                var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} callees in {calleeFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
@@ -249,7 +254,8 @@ public static class QueryCommandRunner
                         : r.StartLine.ToString();
                     Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{lineRange}");
                 }
-                Console.Error.WriteLine($"({results.Count} symbols)");
+                var symFileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} symbols in {symFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
