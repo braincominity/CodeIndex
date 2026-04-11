@@ -34,7 +34,8 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" },
-                        ["noDedup"] = new JsonObject { ["type"] = "boolean", ["description"] = "Disable overlapping-chunk deduplication for raw results", ["default"] = false }
+                        ["noDedup"] = new JsonObject { ["type"] = "boolean", ["description"] = "Disable overlapping-chunk deduplication for raw results", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive exact substring match (bypasses FTS5)", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },

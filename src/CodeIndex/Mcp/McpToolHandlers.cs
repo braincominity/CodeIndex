@@ -99,10 +99,11 @@ public partial class McpServer
         if (sinceStr != null && DateTime.TryParse(sinceStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
             since = parsedSince.ToUniversalTime();
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
+        var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.Search(query, limit, lang, rawQuery, pathPattern, excludePaths, excludeTests, deduplicate, since);
+            var results = reader.Search(query, limit, lang, rawQuery, pathPattern, excludePaths, excludeTests, deduplicate, since, exact);
             if (results.Count == 0)
             {
                 var payload = new JsonObject

@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **MCP `search` tool `exact` parameter** — The MCP `search` tool now accepts `exact` boolean for case-sensitive substring matching, matching the CLI `--exact` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
 - **`search --exact` flag for case-sensitive substring match** — New `--exact` option bypasses FTS5 tokenization and uses direct `instr()` for case-sensitive exact substring matching. Useful when FTS5's case-insensitive token matching returns too many results. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
 
 - **README Code Search Rules updated with deps, --since, --dry-run, --count** — Query strategy sections (EN/JP) now cover `deps`, `--reverse`, `--since`, `--dry-run`, and `--count`. Updated symbol-aware language list to 29. Removed Shell/SQL/Terraform from "no symbol extraction" list. Affected: `README.md`.
@@ -446,6 +448,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **MCP `search` ツールに `exact` パラメータ** — MCP の `search` ツールに `exact` ブーリアンを追加し、CLI の `--exact` フラグと同等の大文字小文字区別一致に対応。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 
 - **`search --exact` フラグで大文字小文字区別の部分一致検索** — FTS5 トークナイズをバイパスし、`instr()` による大文字小文字区別の完全部分一致検索を行う `--exact` オプション。FTS5 の大文字小文字無視マッチが多すぎる場合に有用。対象: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
 
