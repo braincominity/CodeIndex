@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **MCP `search` tool `noDedup` parameter** — The MCP `search` tool now accepts a `noDedup` boolean to disable overlapping-chunk deduplication, matching the CLI `--no-dedup` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
 - **`search --since` filter** — The `--since` option now works on `search` (CLI and MCP), not just `files`. AI agents can search only within recently modified files, reducing noise in large repositories. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 
 - **`--dry-run` flag for index command** — New `--dry-run` option scans files without writing to the database. Shows file count and language breakdown, useful for verifying what would be indexed. Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
@@ -430,6 +432,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **MCP `search` ツールに `noDedup` パラメータ** — MCP の `search` ツールに `noDedup` ブーリアンを追加し、CLI の `--no-dedup` フラグと同等のオーバーラップチャンク重複排除無効化に対応。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 
 - **`search --since` フィルタ** — `--since` オプションが `files` だけでなく `search`（CLI・MCP 両方）でも使えるようになった。AI エージェントが最近変更されたファイル内のみを検索でき、大規模リポジトリでのノイズ削減に有効。対象: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 
