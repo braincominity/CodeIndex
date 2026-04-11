@@ -351,7 +351,11 @@ public static class QueryCommandRunner
                 if (options.CountOnly)
                     Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0 }, jsonOptions) : "0");
                 else if (!options.Json)
+                {
                     Console.Error.WriteLine("No files found.");
+                    WriteLangHint(options.Lang, reader);
+                    WriteZeroResultHints(options, reader);
+                }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
@@ -896,6 +900,18 @@ public static class QueryCommandRunner
     /// Show available symbol kinds when --kind produces zero results.
     /// --kind で 0 件のとき、有効なシンボル種別を表示する。
     /// </summary>
+    /// <summary>
+    /// Show available languages when --lang produces zero results.
+    /// --lang で 0 件のとき、有効な言語を表示する。
+    /// </summary>
+    private static void WriteLangHint(string? lang, DbReader reader)
+    {
+        if (lang == null) return;
+        var status = reader.GetStatus();
+        if (status.Languages.Count > 0 && !status.Languages.ContainsKey(lang))
+            Console.Error.WriteLine($"Hint: '{lang}' not found in index. Available: {string.Join(", ", status.Languages.Keys.OrderBy(l => l))}");
+    }
+
     private static void WriteKindHint(string? kind, DbReader reader)
     {
         if (kind == null) return;

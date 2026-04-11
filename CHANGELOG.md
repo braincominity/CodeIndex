@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--lang` validation with available languages hint** — When `files` with `--lang` returns zero results due to no files in that language, shows available languages from the index. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 - **`--reverse` flag for `deps` command** — `deps --reverse --path <file>` shows which files depend on the specified file (reverse dependency lookup). Essential for refactoring impact analysis. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **Help text shows --top alias** — `--help` output now shows `--top <n>` as an alias alongside `--limit <n>`. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`.
@@ -338,6 +340,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`--lang` バリデーションと利用可能言語ヒント** — `files` で `--lang` に該当ファイルがない場合、インデックス内の言語一覧を表示。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **`deps` コマンドに `--reverse` フラグ** — `deps --reverse --path <file>` で指定ファイルに依存しているファイルを表示（逆引き依存関係）。リファクタリング影響分析に不可欠。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
