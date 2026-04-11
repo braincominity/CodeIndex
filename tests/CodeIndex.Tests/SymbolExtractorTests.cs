@@ -447,6 +447,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Makefile_DetectsTargets()
+    {
+        var content = "all: build test\n\nbuild:\n\tgcc -o main main.c\n\ntest:\n\t./run_tests\n\nclean:\n\trm -f main\n";
+        var symbols = SymbolExtractor.Extract(1, "makefile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "all");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "test");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "clean");
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsStages()
+    {
+        var content = "FROM node:18 AS builder\nWORKDIR /app\nCOPY . .\nRUN npm build\n\nFROM alpine:3.18\nCOPY --from=builder /app/dist /app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        // Named stages (AS builder) take priority over base image on the same line
+        // 同一行では名前付きステージ(AS builder)がベースイメージより優先
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        // Unnamed FROM lines produce base image class / 名前なしFROM行はベースイメージclassを生成
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.18");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
     public void Extract_Protobuf_DetectsSymbols()
     {
         var content = """
