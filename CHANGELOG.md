@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# enum member extraction** — Enum members like `Red`, `Green = 1`, `Blue = 2` are now extracted as function symbols inside enum bodies. Enables `outline` and `symbols` to show enum values for navigation. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **C# record variant test coverage** — Added tests for `record`, `sealed record class`, `readonly record struct` with parameter lists to verify signatures are correctly captured. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`--lang` validation with available languages hint** — When `files` with `--lang` returns zero results due to no files in that language, shows available languages from the index. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -342,6 +344,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# enum メンバー抽出** — `Red`、`Green = 1`、`Blue = 2` のような enum メンバーを enum 本体内の function シンボルとして抽出。`outline` と `symbols` で enum 値をナビゲーション可能に。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# record バリアントのテストカバレッジ** — `record`、`sealed record class`、`readonly record struct` のパラメータリスト付き定義がシグネチャに正しく含まれることのテストを追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

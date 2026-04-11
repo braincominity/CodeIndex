@@ -96,6 +96,9 @@ public static class SymbolExtractor
             new("function",  new Regex(@"^\s*static\s+(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
             new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
+            // Enum member (e.g. Red, Green = 1,) — only matches isolated identifier lines typical of enum bodies
+            // enum メンバー（例: Red, Green = 1,）— enum 本体内に典型的な単独識別子行のみマッチ
+            new("function",  new Regex(@"^\s{4,}(?<name>[A-Z]\w*)\s*(?:=\s*[^,]+)?,?\s*$", RegexOptions.Compiled), BodyStyle.None),
             // #region for navigation / ナビゲーション用 #region
             new("namespace", new Regex(@"^\s*#region\s+(?<name>.+)$", RegexOptions.Compiled), BodyStyle.None),
         ],

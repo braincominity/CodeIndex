@@ -226,6 +226,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsEnumMembers()
+    {
+        var content = "public enum Color\n{\n    Red,\n    Green = 1,\n    Blue = 2,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Green");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Blue");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRegionDirectives()
     {
         var content = "#region Private Methods\nvoid Helper() { }\n#endregion\n\n#region Properties\npublic int X { get; set; }\n#endregion";
