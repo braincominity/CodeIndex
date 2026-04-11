@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Final dogfooding verification** — Full rebuild and self-analysis: 61 files, 1254 symbols, 4798 references, 46 languages detected, 29 with symbol extraction, 18 with graph queries. 322 tests (320 pass + 2 skip). All documentation synchronized. Affected: `CHANGELOG.md`.
+
 - **CLAUDE.md architecture: SymbolExtractor count updated to 29 languages** — Affected: `CLAUDE.md`.
 
 - **README graph language list updated to 18 languages** — Added Lua and VB.NET to graph-supported language lists in both EN/JP sections. Affected: `README.md`.
@@ -468,6 +470,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **最終ドッグフーディング検証** — 全再構築と自己分析: 61ファイル、1254シンボル、4798参照、46言語検出、29シンボル抽出対応、18グラフクエリ対応。322テスト（320パス+2スキップ）。全ドキュメント同期完了。対象: `CHANGELOG.md`.
 
 - **CLAUDE.md アーキテクチャ: SymbolExtractor を29言語に更新** — 対象: `CLAUDE.md`.
 
