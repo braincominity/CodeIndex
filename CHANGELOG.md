@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# `using` declaration reference exclusion test** — Verified that `using var x = ...;` does not generate false-positive references while real calls within the using scope are still captured. Affected: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
 - **C# partial method test coverage** — Added test verifying C# 9 extended partial methods (`partial void OnInit();`, `public partial string GetName();`) are correctly extracted. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **DEVELOPER_GUIDE architecture updated for deps and batch_query** — DbReader description mentions file-level deps; McpServer mentions batch_query. Affected: `DEVELOPER_GUIDE.md`.
@@ -366,6 +368,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# `using` 宣言の参照除外テスト** — `using var x = ...;` が偽陽性参照を生成せず、using スコープ内の実呼び出しは正しく抽出されることを検証。対象: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **C# partial メソッドのテストカバレッジ** — C# 9 拡張 partial メソッド（`partial void OnInit();`、`public partial string GetName();`）が正しく抽出されることのテスト追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

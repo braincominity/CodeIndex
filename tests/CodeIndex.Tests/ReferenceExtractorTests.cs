@@ -154,6 +154,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpUsingDeclaration_NotExtractedAsReference()
+    {
+        // 'using var x = ...' should not generate a reference for 'using'
+        // 'using var x = ...' で 'using' が参照として生成されないこと
+        const string content = """
+            public class Db
+            {
+                public void Query()
+                {
+                    using var cmd = CreateCommand();
+                    using (var reader = cmd.ExecuteReader()) { }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "using");
+        // Real calls should still be captured / 実際の呼び出しは抽出されるべき
+        Assert.Contains(references, r => r.SymbolName == "CreateCommand");
+        Assert.Contains(references, r => r.SymbolName == "ExecuteReader");
+    }
+
+    [Fact]
     public void SupportsLanguage_FSharp_ReturnsFalse()
     {
         // F# uses space-separated call syntax (foo x) not parenthesized, so
