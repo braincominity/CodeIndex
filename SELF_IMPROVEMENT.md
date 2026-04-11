@@ -46,6 +46,7 @@ The loop is not just "suggest ideas". It is:
 - Respect language differences. Do not pretend every query type is meaningful for every language.
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
 - Favor implementation over brainstorming when the next improvement is clear and non-breaking.
+- **Dogfooding-driven feature insertion** — During the loop, you may realize "if cdidx had feature X, this search/navigation would be much faster and more accurate." When that happens, insert the feature into your current plan and implement it immediately — as long as it is non-breaking. If the feature risks being a breaking change, note it down and propose it to the user after the current task is complete rather than implementing it silently.
 - Keep docs and tests in sync with behavior.
 - If test code, shared test helpers, test execution flow, or testing conventions change, update `TESTING_GUIDE.md` in the same commit.
 - Do not push tags or branches unless explicitly asked.
@@ -319,6 +320,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
+- **ドッグフーディング駆動の機能挿入** — ループ中に「cdidx にこの機能があれば、もっと速く正確に検索できるのに」と気付くことがある。その場合、非破壊な変更であれば現在の計画に組み入れてそのまま実装して構わない。破壊的変更のリスクがある場合は、メモしておき、現在のタスク完了後にユーザーに実装可否を打診すること。
 - ドキュメントとテストを挙動と同期させる。
 - テストコード、共有テストヘルパー、テスト実行フロー、またはテスト規約を変更した場合は、同じコミットで `TESTING_GUIDE.md` も更新する。
 - `git push` や `git tag` は、明示的に依頼されたときだけ行う。
