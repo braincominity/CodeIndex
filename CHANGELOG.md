@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`languages` CLI command and MCP tool** — New `cdidx languages [--json]` command and MCP `languages` tool that list all supported languages with their file extensions, symbol extraction support, and call-graph query support. Lets AI agents and new users discover cdidx capabilities at runtime without consulting documentation. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
+- **Shell completion generation (bash/zsh/fish)** — New `cdidx --completions <shell>` generates tab-completion scripts for bash, zsh, and fish. Covers all commands, subcommand options, and value completions for `--lang` and `--kind`. Terminal-first users can add `eval "$(cdidx --completions bash)"` to their shell profile for instant command discovery. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
 - **Graph-supported languages and version in `status` output** — `status` now includes `graph_supported_languages` (sorted list of languages with call-graph indexing) and `version` (cdidx binary version) in both human-readable and JSON output. AI agents can check upfront which languages support `callers`/`callees`/`references` without trial-and-error. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Program.cs`.
 
 - **`--count` flag for query commands** — New `--count` option for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` that returns only the result count without full data. With `--json`, returns `{"count": N, "files": M}`. Lets AI agents estimate result size before fetching full data, saving tokens. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
@@ -266,6 +268,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 追加
 
 - **`languages` CLI コマンドと MCP ツール** — 新コマンド `cdidx languages [--json]` と MCP ツール `languages` を追加。対応言語の一覧を拡張子・シンボル抽出対応・コールグラフ対応の情報付きで返す。AI エージェントや新規ユーザーがドキュメントを参照せずに cdidx の対応範囲を実行時に確認できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **シェル補完スクリプト生成（bash/zsh/fish）** — `cdidx --completions <shell>` で bash、zsh、fish 向けのタブ補完スクリプトを生成。全コマンド、サブコマンドオプション、`--lang`/`--kind` の値補完に対応。`eval "$(cdidx --completions bash)"` をシェルプロファイルに追加すれば即座にコマンド補完が有効になる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
 
 - **`status` に graph 対応言語とバージョンを追加** — `status` の出力に `graph_supported_languages`（コールグラフ対応言語のソート済みリスト）と `version`（cdidx バイナリのバージョン）を追加。人間向け・JSON 向け両方に対応。AI エージェントが試行錯誤なしで `callers`/`callees`/`references` を使える言語を事前に確認できる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Program.cs`.
 

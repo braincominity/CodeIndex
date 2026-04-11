@@ -29,6 +29,12 @@ if (args[0] is "--version" or "-V")
     return CommandExitCodes.Success;
 }
 
+if (args[0] == "--completions" && args.Length >= 2)
+{
+    ConsoleUi.PrintCompletions(args[1]);
+    return CommandExitCodes.Success;
+}
+
 var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");
 if (easterEgg != null && !args.Any(a => !a.StartsWith('-')))
 {

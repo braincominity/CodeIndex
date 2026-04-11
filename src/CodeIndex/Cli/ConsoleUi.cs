@@ -341,6 +341,7 @@ public static class ConsoleUi
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
+        Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish)");
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
         Console.WriteLine("  Use --commits with a project path to update only files changed by specific commits.");
@@ -377,6 +378,120 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx outline src/app.cs --json                Symbol outline of a single file");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
+    }
+
+    // --- Shell Completions / シェル補完 ---
+
+    private static readonly string[] Commands =
+    [
+        "index", "search", "definition", "references", "callers", "callees",
+        "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
+        "languages", "mcp",
+    ];
+
+    /// <summary>
+    /// Print shell completion script for the specified shell.
+    /// 指定シェル向けの補完スクリプトを出力する。
+    /// </summary>
+    public static void PrintCompletions(string shell)
+    {
+        switch (shell.ToLowerInvariant())
+        {
+            case "bash":
+                PrintBashCompletions();
+                break;
+            case "zsh":
+                PrintZshCompletions();
+                break;
+            case "fish":
+                PrintFishCompletions();
+                break;
+            default:
+                Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish");
+                break;
+        }
+    }
+
+    private static void PrintBashCompletions()
+    {
+        var cmds = string.Join(" ", Commands);
+        Console.WriteLine($@"_cdidx() {{
+    local cur prev commands
+    cur=""${{COMP_WORDS[COMP_CWORD]}}""
+    prev=""${{COMP_WORDS[COMP_CWORD-1]}}""
+    commands=""{cmds}""
+
+    if [ $COMP_CWORD -eq 1 ]; then
+        COMPREPLY=($(compgen -W ""$commands --help --version"" -- ""$cur""))
+        return
+    fi
+
+    case ""$prev"" in
+        --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
+        --lang) COMPREPLY=($(compgen -W ""python javascript typescript csharp go rust java kotlin ruby c cpp php swift"" -- ""$cur"")) ;;
+        --kind) COMPREPLY=($(compgen -W ""function class namespace import"" -- ""$cur"")) ;;
+        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --help"" -- ""$cur"")) ;;
+    esac
+}}
+complete -F _cdidx cdidx");
+    }
+
+    private static void PrintZshCompletions()
+    {
+        var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
+        Console.WriteLine($@"#compdef cdidx
+_cdidx() {{
+    local -a commands
+    commands=(
+        {cmds}
+    )
+
+    _arguments -C \
+        '1:command:->cmds' \
+        '*::arg:->args'
+
+    case $state in
+        cmds) _describe 'command' commands ;;
+        args)
+            _arguments \
+                '--db[Database path]:file:_files' \
+                '--json[JSON output]' \
+                '--limit[Max results]:number' \
+                '--lang[Filter by language]:language:(python javascript typescript csharp go rust java kotlin ruby c cpp php swift)' \
+                '--kind[Filter by kind]:kind:(function class namespace import)' \
+                '--path[Path filter]:pattern' \
+                '--exclude-path[Exclude path]:pattern' \
+                '--exclude-tests[Exclude tests]' \
+                '--body[Include body]' \
+                '--count[Count only]' \
+                '--fts[Raw FTS5 syntax]' \
+                '--snippet-lines[Snippet length]:number' \
+                '*:query'
+            ;;
+    esac
+}}
+_cdidx");
+    }
+
+    private static void PrintFishCompletions()
+    {
+        Console.WriteLine("# cdidx fish completions");
+        foreach (var cmd in Commands)
+            Console.WriteLine($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
+        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
+        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
+
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files excerpt map inspect outline status' -l db -r -d 'Database path'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files excerpt map inspect outline status' -l json -d 'JSON output'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l limit -r -d 'Max results'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l lang -r -d 'Filter by language'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l count -d 'Count only'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l path -r -d 'Path filter'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l exclude-path -r -d 'Exclude path'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l exclude-tests -d 'Exclude tests'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
     }
 
     // --- Helpers / ヘルパー ---
