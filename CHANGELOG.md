@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.3.0] - 2026-04-11
+
 #### Added
 
 - **C# ecosystem enhancements** — Razor/Blazor (`.cshtml`, `.razor`) detected as csharp; VB.NET (`.vb`, `.vbs`) with Sub/Function/Class/Module symbol extraction; F# (`.fs`, `.fsx`, `.fsi`) with let/type/module/open extraction (graph queries not supported due to space-separated call syntax); XAML/MSBuild files (`.xaml`, `.axaml`, `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets`) detected as xml. C# improvements: file-scoped namespace (C# 10+), `global using`, `using static`, `record struct`/`record class`, property extraction (get/set/init), delegate and event declarations, `file` class modifier. F#/VB.NET entrypoint hints added for `map`. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
@@ -249,6 +251,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.3.0] - 2026-04-11
+
 #### 追加
 
 - **C# エコシステム強化** — Razor/Blazor（`.cshtml`、`.razor`）を csharp として検出、VB.NET（`.vb`、`.vbs`）の Sub/Function/Class/Module シンボル抽出、F#（`.fs`、`.fsx`、`.fsi`）の let/type/module/open 抽出（スペース区切りの呼び出し構文のため graph クエリは非対応）、XAML/MSBuild ファイル（`.xaml`、`.axaml`、`.csproj`、`.fsproj`、`.vbproj`、`.props`、`.targets`）を xml として検出。C# 改善: file-scoped namespace（C# 10+）、`global using`、`using static`、`record struct`/`record class`、プロパティ抽出（get/set/init）、delegate/event 宣言、`file` クラス修飾子。F#/VB.NET の `map` 向けエントリポイントヒントも追加。対象: `src/CodeIndex/Indexer/`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
@@ -483,7 +487,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/Widthdom/CodeIndex/compare/v1.0.4...v1.0.5
