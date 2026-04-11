@@ -938,6 +938,45 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "customTask");
     }
 
+    [Theory]
+    [InlineData("csharp", "public interface IFoo { }", "interface")]
+    [InlineData("csharp", "public enum Color { }", "enum")]
+    [InlineData("csharp", "public struct Point { }", "struct")]
+    [InlineData("csharp", "public delegate void Handler();", "delegate")]
+    [InlineData("csharp", "public event EventHandler Click;", "event")]
+    [InlineData("csharp", "public string Name { get; set; }", "property")]
+    [InlineData("java", "interface Foo { }", "interface")]
+    [InlineData("java", "enum Color { RED }", "enum")]
+    [InlineData("kotlin", "interface Foo", "interface")]
+    [InlineData("kotlin", "enum class Color { RED }", "enum")]
+    [InlineData("kotlin", "val name: String = \"\"", "property")]
+    [InlineData("typescript", "export interface IFoo { }", "interface")]
+    [InlineData("typescript", "export enum Status { A }", "enum")]
+    [InlineData("go", "type Foo struct { }", "struct")]
+    [InlineData("go", "type Foo interface { }", "interface")]
+    [InlineData("rust", "pub struct Config { }", "struct")]
+    [InlineData("rust", "pub enum Color { }", "enum")]
+    [InlineData("rust", "pub trait Foo { }", "interface")]
+    [InlineData("swift", "struct Config { }", "struct")]
+    [InlineData("swift", "enum Color { }", "enum")]
+    [InlineData("swift", "protocol Foo { }", "interface")]
+    [InlineData("c", "struct Config { };", "struct")]
+    [InlineData("c", "enum Color { RED };", "enum")]
+    [InlineData("cpp", "struct Config { };", "struct")]
+    [InlineData("cpp", "enum Color { RED };", "enum")]
+    [InlineData("php", "interface Foo { }", "interface")]
+    [InlineData("php", "enum Color { }", "enum")]
+    [InlineData("scala", "trait Foo", "interface")]
+    [InlineData("scala", "enum Color", "enum")]
+    [InlineData("dart", "enum Status { active }", "enum")]
+    [InlineData("graphql", "interface Node { }", "interface")]
+    [InlineData("graphql", "enum Role { ADMIN }", "enum")]
+    public void Extract_CrossLanguage_GranularKindsAreConsistent(string lang, string content, string expectedKind)
+    {
+        var symbols = SymbolExtractor.Extract(1, lang, content);
+        Assert.Contains(symbols, s => s.Kind == expectedKind);
+    }
+
     [Fact]
     public void Extract_CSS_DetectsSymbols()
     {
