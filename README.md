@@ -375,6 +375,10 @@ cdidx map --path src/ --exclude-tests --json
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits |
 | `--files <path...>` | `index` | Update only the specified files |
+| `--since <datetime>` | `files` | Filter to files modified since this ISO 8601 timestamp |
+| `--no-dedup` | `search` | Disable overlapping-chunk deduplication for raw results |
+| `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
+| `--top <n>` | Query commands | Alias for `--limit` |
 
 ### Exit codes
 
@@ -1091,6 +1095,10 @@ cdidx map --path src/ --exclude-tests --json
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新 |
 | `--files <path...>` | `index` | 指定ファイルのみ更新 |
+| `--since <datetime>` | `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601） |
+| `--no-dedup` | `search` | オーバーラップチャンク重複排除を無効化 |
+| `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
+| `--top <n>` | クエリ系 | `--limit` のエイリアス |
 
 ### 終了コード
 
