@@ -723,6 +723,7 @@ public static class QueryCommandRunner
                     json = false;
                     break;
                 case "--limit" when i + 1 < args.Length:
+                case "--top" when i + 1 < args.Length:
                     if (!int.TryParse(args[++i], out limit) || limit <= 0)
                     {
                         Console.Error.WriteLine($"Error: --limit requires a positive integer, got '{args[i]}'");

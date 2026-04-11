@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--top` alias for `--limit`** — More intuitive option name for limiting results. `cdidx symbols --top 5` is equivalent to `--limit 5`. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 - **MCP `batch_query` tool for multi-query execution** — New MCP tool that accepts an array of `{tool, arguments}` objects and executes them all in a single call, returning an array of results. Dramatically reduces round-trips for AI agents that need multiple pieces of information (e.g. status + symbols + definition in one call). Max 10 queries per batch. Write operations (index) are blocked. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **`deps` command for file-level dependency analysis** — New `cdidx deps` CLI command and MCP `deps` tool that computes file-level dependency edges from the indexed reference graph. Shows which files reference symbols defined in which other files, with reference counts and symbol lists. Helps AI agents understand project architecture in one call. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
@@ -322,6 +324,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`--top` を `--limit` のエイリアスとして追加** — 結果数制限のより直感的なオプション名。`cdidx symbols --top 5` は `--limit 5` と同等。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **MCP `batch_query` ツールで複数クエリ一括実行** — `{tool, arguments}` の配列を受け取り、1回の呼び出しで全て実行して結果配列を返す新 MCP ツール。AI エージェントの往復回数を劇的に削減（例: status + symbols + definition を1回で取得）。1バッチ最大10クエリ。書き込み操作（index）はブロック。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
