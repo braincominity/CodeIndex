@@ -330,7 +330,7 @@ public static class QueryCommandRunner
                     var lineRange = r.EndLine > r.StartLine
                         ? $"{r.StartLine}-{r.EndLine}"
                         : r.StartLine.ToString();
-                    Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{lineRange}");
+                    Console.WriteLine($"{ConsoleUi.ColorizeKind(r.Kind, 10)} {r.Name,-40} {r.Path}:{lineRange}");
                 }
                 var symFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} symbols in {symFileCount} files)");
@@ -678,7 +678,7 @@ public static class QueryCommandRunner
                 foreach (var (s, refCount) in results)
                 {
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                    Console.WriteLine($"{refCount,5} refs  {s.Kind,-12} {s.Name,-40} {s.Path}:{s.Line}{vis}");
+                    Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
                 Console.Error.WriteLine($"({results.Count} symbol hotspots)");
             }
@@ -716,7 +716,7 @@ public static class QueryCommandRunner
                 {
                     var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                     var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
-                    Console.WriteLine($"{s.Kind,-12} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
+                    Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
                 }
                 Console.Error.WriteLine($"({results.Count} potentially unused symbols)");
             }

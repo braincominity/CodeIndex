@@ -522,6 +522,36 @@ _cdidx");
     // --- Helpers / ヘルパー ---
 
     /// <summary>
+    /// Colorize a symbol kind name with ANSI escape codes for terminal output.
+    /// Degrades to plain text when output is redirected (not a terminal).
+    /// シンボル種別名をANSIエスケープコードで色付けする。出力がリダイレクトされている場合は無色テキスト。
+    /// </summary>
+    public static string ColorizeKind(string kind, int padWidth = 0)
+    {
+        var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
+        if (!Console.IsOutputRedirected)
+        {
+            var color = kind switch
+            {
+                "class" => "\x1b[36m",      // cyan / シアン
+                "struct" => "\x1b[36m",     // cyan / シアン
+                "interface" => "\x1b[34m",  // blue / 青
+                "enum" => "\x1b[35m",       // magenta / マゼンタ
+                "function" => "\x1b[33m",   // yellow / 黄
+                "property" => "\x1b[32m",   // green / 緑
+                "event" => "\x1b[31m",      // red / 赤
+                "delegate" => "\x1b[35m",   // magenta / マゼンタ
+                "namespace" => "\x1b[90m",  // dim / 暗灰
+                "import" => "\x1b[90m",     // dim / 暗灰
+                _ => "",
+            };
+            if (color.Length > 0)
+                return $"{color}{padded}\x1b[0m";
+        }
+        return padded;
+    }
+
+    /// <summary>
     /// Get console window width safely (some environments throw IOException).
     /// コンソール幅を安全に取得する（一部環境ではIOExceptionが発生する）。
     /// </summary>

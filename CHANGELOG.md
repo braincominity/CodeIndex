@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP instructions: symbol kind filter guidance** — AI clients now receive guidance on filtering symbols by kind (function, class, struct, interface, enum, property, event, delegate) in the MCP initialize instructions. Affected: `McpToolHandlers.cs`.
 - **SQL reference extraction** — SQL now supports call-graph queries. SQL function calls like `COALESCE()`, `LOWER()`, `LENGTH()`, `NOW()` are detected. SQL keywords (uppercase) added to the ignore list. Affected: `ReferenceExtractor.cs`.
 - **README MCP tool table sync** — Updated MCP tool tables (English and Japanese) to list all 21 tools including `unused_symbols`, `symbol_hotspots`, `validate`, `ping`, and `suggest_improvement`. Updated tool count from 16 to 21. Affected: `README.md`.
+- **ANSI color-coded symbol kinds** — `symbols`, `unused`, and `hotspots` CLI output now color-codes symbol kinds: cyan for class/struct, blue for interface, magenta for enum/delegate, yellow for function, green for property, red for event, dim for namespace/import. Colors degrade to plain text when output is piped. Affected: `ConsoleUi.cs`, `QueryCommandRunner.cs`.
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
@@ -540,6 +541,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **MCP instructions: シンボル種別フィルタのガイダンス** — AIクライアントが MCP initialize 応答で、シンボルの種別フィルタ（function, class, struct, interface, enum, property, event, delegate）の使い方を案内されるようになった。対象: `McpToolHandlers.cs`。
 - **SQL 参照抽出** — SQL でコールグラフクエリが利用可能に。`COALESCE()`、`LOWER()`、`LENGTH()`、`NOW()` 等の SQL 関数呼び出しを検出。SQL キーワード（大文字）を除外リストに追加。対象: `ReferenceExtractor.cs`。
 - **README MCPツール表の同期** — MCPツール表（英語・日本語）を全21ツール（`unused_symbols`、`symbol_hotspots`、`validate`、`ping`、`suggest_improvement` を含む）にリストアップ。ツール数を16から21に更新。対象: `README.md`。
+- **ANSIカラーコード付きシンボル種別** — `symbols`、`unused`、`hotspots` のCLI出力でシンボル種別を色分け表示: シアン（class/struct）、青（interface）、マゼンタ（enum/delegate）、黄（function）、緑（property）、赤（event）、暗灰（namespace/import）。パイプ時は無色テキストに自動退化。対象: `ConsoleUi.cs`、`QueryCommandRunner.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
