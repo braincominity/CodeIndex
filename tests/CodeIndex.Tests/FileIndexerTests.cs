@@ -122,6 +122,48 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_HandlesUnicodeAndCjkContent()
+    {
+        // Files with Unicode/CJK characters in content should be indexed correctly
+        // Unicode/CJK文字を含むファイルが正しくインデックスされること
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var content = "// コメント: 日本語テスト\npublic class 日本語クラス\n{\n    public string 名前 { get; set; }\n    // 中文注释\n    // 한국어 주석\n}\n";
+            var filePath = Path.Combine(tempDir, "unicode.cs");
+            File.WriteAllText(filePath, content);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, fileContent, warning) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("unicode.cs", record.Path);
+            Assert.Equal("csharp", record.Lang);
+            Assert.Null(warning); // Valid UTF-8, no warning / 有効なUTF-8なので警告なし
+            Assert.Contains("日本語クラス", fileContent);
+            Assert.Contains("中文注释", fileContent);
+            Assert.Contains("한국어", fileContent);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_CjkSymbolsExtractedCorrectly()
+    {
+        var content = "// 日本語コメント\npublic class ユーザーサービス\n{\n    public string 名前を取得(int id) { return \"\"; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // CJK class and method names should be extracted / CJKのクラス名・メソッド名が抽出されること
+        // Note: \w in .NET regex matches Unicode letters, so CJK identifiers work
+        // 注: .NET の \w は Unicode 文字にマッチするため CJK 識別子も動作する
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ユーザーサービス");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "名前を取得");
+    }
+
+    [Fact]
     public void ScanFiles_IncludesFileNameBasedLanguages()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

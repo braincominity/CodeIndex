@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Unicode/CJK character tests** — Added tests verifying Japanese, Chinese, and Korean characters in file content, class names, and method names are correctly indexed and extracted. .NET `\w` regex matches Unicode letters. Affected: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
 - **DB corruption recovery tests** — Added `DbRecoveryTests.cs` with tests for corrupted DB handling (no crash), rebuild-after-corruption, and proper exit code on missing DB. Affected: `tests/CodeIndex.Tests/DbRecoveryTests.cs`.
 
 - **`--rebuild` flag behavior tests** — Added tests verifying `--rebuild` drops and re-scans all files, and that `--rebuild` conflicts with `--commits`. Affected: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
@@ -398,6 +400,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Unicode/CJK文字テスト** — 日本語・中国語・韓国語の文字がファイル内容・クラス名・メソッド名で正しくインデックス・抽出されることのテスト追加。.NET の `\w` は Unicode 文字にマッチ。対象: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
 
 - **DB破損復旧テスト** — 破損DBのクラッシュ回避、破損後の再構築、欠損DBへの適切な終了コードのテストを `DbRecoveryTests.cs` に追加。対象: `tests/CodeIndex.Tests/DbRecoveryTests.cs`.
 
