@@ -445,4 +445,36 @@ public class SymbolExtractorTests
         // main() should still be detected / main()は検出されるべき
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
     }
+
+    [Fact]
+    public void Extract_Protobuf_DetectsSymbols()
+    {
+        var content = """
+            syntax = "proto3";
+            import "google/protobuf/timestamp.proto";
+
+            message User {
+              string name = 1;
+              int32 age = 2;
+            }
+
+            enum Status {
+              UNKNOWN = 0;
+              ACTIVE = 1;
+            }
+
+            service UserService {
+              rpc GetUser (GetUserRequest) returns (User);
+              rpc ListUsers (ListUsersRequest) returns (ListUsersResponse);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "protobuf", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "google/protobuf/timestamp.proto");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ListUsers");
+    }
 }

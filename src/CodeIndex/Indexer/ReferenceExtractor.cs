@@ -13,7 +13,7 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala"
+        "dart", "scala", "elixir"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -175,7 +175,7 @@ public static class ReferenceExtractor
     }
 
     private static bool UsesHashComments(string lang) =>
-        lang is "python" or "ruby" or "php";
+        lang is "python" or "ruby" or "php" or "elixir";
 
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby";

@@ -84,6 +84,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ElixirCall_DetectsReferences()
+    {
+        const string content = """
+            defmodule MyApp do
+              def run() do
+                IO.puts("hello")
+                GenServer.start_link(MyWorker, [])
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "puts");
+        Assert.Contains(references, r => r.SymbolName == "start_link");
+    }
+
+    [Fact]
     public void SupportsLanguage_FSharp_ReturnsFalse()
     {
         // F# uses space-separated call syntax (foo x) not parenthesized, so
