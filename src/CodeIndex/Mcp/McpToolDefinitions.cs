@@ -229,7 +229,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "deps",
-                "Show file-level dependency edges from the indexed reference graph. / インデックス済み参照グラフか��ファイル間の依存エッジを返す。",
+                "Show file-level dependency edges from the indexed reference graph. / インデックス済み参照グラフからファイル間の依存エッジを返す。",
                 new JsonObject
                 {
                     ["type"] = "object",

@@ -147,7 +147,7 @@ public class DbReaderTests : IDisposable
     public void Search_DeduplicatesOverlappingChunks()
     {
         // Create two overlapping chunks in the same file that both match
-        // 同じファイル内でオーバー��ップし、両方マッチする2チャンクを作成
+        // 同じファイル内でオーバーラップし、両方マッチする2チャンクを作成
         var overlapFileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/overlap.py", Lang = "python", Size = 2000, Lines = 100,

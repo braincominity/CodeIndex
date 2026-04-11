@@ -5,7 +5,7 @@ namespace CodeIndex.Database;
 
 /// <summary>
 /// Symbol query operations: search, definitions, outline, analyze (partial class split from DbReader.cs).
-/// シンボルクエ��操作: 検索、定義、アウトライン、分析（DbReader.csからのpartial class分割）。
+/// シンボルクエリ操作: 検索、定義、アウトライン、分析（DbReader.csからのpartial class分割）。
 /// </summary>
 public partial class DbReader
 {
