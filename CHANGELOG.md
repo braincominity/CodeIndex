@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 
+- **Enum member pattern restricted to avoid object initializer false positives** — Tightened the C# enum member regex to only match when the optional `=` value is numeric, hex, or another PascalCase identifier (with optional `|` for flags). String and object assignments in initializers no longer produce false symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **`batch_query` now surfaces subquery validation errors** — When a subquery fails validation (e.g. `search` without `query`), the error message is now included in the batch result instead of silently returning `null`. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **`deps` false edges from same-name symbols and missing exclude-path** — The `deps` query now uses DISTINCT triples `(source_path, target_path, symbol_name)` to avoid inflated reference counts from same-name symbols across files (e.g. multiple `Run` or `Dispose` methods). Also wired `excludePathPatterns` into the SQL and parameter binding — previously accepted but silently ignored. Affected: `src/CodeIndex/Database/DbReader.cs`.
@@ -380,6 +382,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 追加
 
 #### 修正
+
+- **enum メンバーパターンをオブジェクト初期化子の偽陽性回避で制限** — C# enum メンバーの正規表現を、`=` 後の値が数値・16進数・他の PascalCase 識別子（フラグ用 `|` 含む）の場合のみマッチするよう厳格化。初期化子の文字列・オブジェクト代入が偽シンボルを生まなくなった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`batch_query` サブクエリのバリデーションエラーを表面化** — サブクエリがバリデーション失敗した場合（例: `search` に `query` なし）、`null` の代わりにエラーメッセージをバッチ結果に含めるようにした。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 

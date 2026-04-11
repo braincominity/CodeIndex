@@ -271,6 +271,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_EnumMemberDoesNotMatchObjectInitializer()
+    {
+        // Object initializer lines should not be extracted as enum members
+        // オブジェクト初期化子行は enum メンバーとして抽出されないこと
+        var content = "var user = new User\n{\n    Name = \"Alice\",\n    Age = 30,\n    Email = GetEmail(),\n};";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "Email" && s.Kind == "function");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRegionDirectives()
     {
         var content = "#region Private Methods\nvoid Helper() { }\n#endregion\n\n#region Properties\npublic int X { get; set; }\n#endregion";
