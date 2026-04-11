@@ -544,7 +544,7 @@ public static class QueryCommandRunner
         });
     }
 
-    public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
 
@@ -552,6 +552,10 @@ public static class QueryCommandRunner
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath);
+            // Attach runtime metadata / ランタイムメタデータを付加
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
+            if (appVersion != null)
+                status.Version = appVersion;
 
             if (options.Json)
             {
@@ -559,6 +563,8 @@ public static class QueryCommandRunner
             }
             else
             {
+                if (status.Version != null)
+                    Console.WriteLine($"Version : cdidx v{status.Version}");
                 Console.WriteLine($"Files   : {status.Files:N0}");
                 Console.WriteLine($"Chunks  : {status.Chunks:N0}");
                 Console.WriteLine($"Symbols : {status.Symbols:N0}");
@@ -577,6 +583,8 @@ public static class QueryCommandRunner
                     foreach (var (lang, count) in status.Languages)
                         Console.WriteLine($"  {lang,-12} {count,6}");
                 }
+                if (status.GraphSupportedLanguages is { Count: > 0 })
+                    Console.WriteLine($"Graph   : {string.Join(", ", status.GraphSupportedLanguages)}");
             }
             return CommandExitCodes.Success;
         });

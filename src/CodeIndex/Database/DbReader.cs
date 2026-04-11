@@ -1044,6 +1044,8 @@ public class StatusResult
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
+    public List<string>? GraphSupportedLanguages { get; set; }
+    public string? Version { get; set; }
 }
 
 public class RepoMapResult

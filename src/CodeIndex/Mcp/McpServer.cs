@@ -854,6 +854,8 @@ public class McpServer
         {
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath);
+            status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
+            status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             return CreateToolResult(id, "Database stats returned.", structured);
         });
