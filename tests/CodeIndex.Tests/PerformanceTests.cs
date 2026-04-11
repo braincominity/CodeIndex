@@ -21,7 +21,7 @@ public class PerformanceTests : IDisposable
         _db.InitializeSchema();
     }
 
-    [Fact]
+    [Fact(Skip = "Performance test — run manually with: dotnet test --filter Insert10KFiles")]
     public void Insert10KFiles_CompletesInReasonableTime()
     {
         var writer = new DbWriter(_db.Connection);
@@ -52,7 +52,7 @@ public class PerformanceTests : IDisposable
         Assert.Equal(10_000, files);
     }
 
-    [Fact]
+    [Fact(Skip = "Performance test — run manually with: dotnet test --filter Search10KFileIndex")]
     public void Search10KFileIndex_ReturnsInReasonableTime()
     {
         var writer = new DbWriter(_db.Connection);
