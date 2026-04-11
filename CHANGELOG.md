@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Large-scale performance tests (10K+ files)** — Added `PerformanceTests.cs` with 10K file insert benchmark and 1K file FTS5 search latency test. Affected: `tests/CodeIndex.Tests/PerformanceTests.cs`.
+
 - **Concurrent access tests** — Added `ConcurrencyTests.cs` with tests for concurrent reads (WAL mode allows parallel readers) and concurrent read-during-write scenarios. Affected: `tests/CodeIndex.Tests/ConcurrencyTests.cs`.
 
 - **"Why SQLite?" section in developer guide** — Documents the rationale for choosing SQLite over alternatives (PostgreSQL, DuckDB, LiteDB, Tantivy, vector DBs), what makes it the right fit, and when it would not be enough. Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
@@ -392,6 +394,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **大規模パフォーマンステスト（10K+ファイル）** — 10Kファイル挿入ベンチマークと1KファイルFTS5検索レイテンシテストを `PerformanceTests.cs` に追加。対象: `tests/CodeIndex.Tests/PerformanceTests.cs`.
 
 - **並行アクセステスト** — 並行読み取り（WALモードによる並列リーダー）と書き込み中読み取りシナリオのテストを `ConcurrencyTests.cs` に追加。対象: `tests/CodeIndex.Tests/ConcurrencyTests.cs`.
 
