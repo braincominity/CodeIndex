@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
-- **Split DbReader.cs and McpServer.cs for maintainability** — Extracted 21 result DTOs from `DbReader.cs` into `Models/QueryResults.cs` (243 lines). Split `McpServer.cs` (1349 lines) into three partial-class files: core protocol handling (332 lines), tool definitions (299 lines), and tool execution handlers (749 lines). All public APIs unchanged. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+- **Split DbReader.cs and McpServer.cs for maintainability** — Extracted 21 result DTOs from `DbReader.cs` into `Models/QueryResults.cs` (243 lines). Split `McpServer.cs` (1349 lines) into three partial-class files: core protocol handling (332 lines), tool definitions (299 lines), and tool execution handlers (749 lines). Further split `DbReader.cs` (1071 lines) into three partial-class files: core file/reference/metadata queries (651 lines), full-text search (116 lines), and symbol queries (327 lines). All public APIs unchanged. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
 
 #### Fixed
 
@@ -395,7 +395,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 変更
 
-- **DbReader.cs と McpServer.cs の保守性向上のための分割** — `DbReader.cs` から21個の結果DTOを `Models/QueryResults.cs`（243行）に抽出。`McpServer.cs`（1349行）をpartial classで3ファイルに分割: コアプロトコル処理（332行）、ツール定義（299行）、ツール実行ハンドラ（749行）。公開APIは変更なし。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+- **DbReader.cs と McpServer.cs の保守性向上のための分割** — `DbReader.cs` から21個の結果DTOを `Models/QueryResults.cs`（243行）に抽出。`McpServer.cs`（1349行）をpartial classで3ファイルに分割: コアプロトコル処理（332行）、ツール定義（299行）、ツール実行ハンドラ（749行）。さらに `DbReader.cs`（1071行）を3ファイルに分割: コアクエリ（651行）、全文検索（116行）、シンボルクエリ（327行）。公開APIは変更なし。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
 
 #### 修正
 
