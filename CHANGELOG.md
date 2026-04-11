@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 
+- **`batch_query` now surfaces subquery validation errors** — When a subquery fails validation (e.g. `search` without `query`), the error message is now included in the batch result instead of silently returning `null`. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
 - **`deps` false edges from same-name symbols and missing exclude-path** — The `deps` query now uses DISTINCT triples `(source_path, target_path, symbol_name)` to avoid inflated reference counts from same-name symbols across files (e.g. multiple `Run` or `Dispose` methods). Also wired `excludePathPatterns` into the SQL and parameter binding — previously accepted but silently ignored. Affected: `src/CodeIndex/Database/DbReader.cs`.
 
 #### Changed
@@ -378,6 +380,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 追加
 
 #### 修正
+
+- **`batch_query` サブクエリのバリデーションエラーを表面化** — サブクエリがバリデーション失敗した場合（例: `search` に `query` なし）、`null` の代わりにエラーメッセージをバッチ結果に含めるようにした。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **`deps` の同名シンボルによる誤エッジと exclude-path 未反映の修正** — `deps` クエリで `(source_path, target_path, symbol_name)` の DISTINCT トリプルを使い、同名シンボル（複数の `Run` や `Dispose` 等）による参照数膨張を防止。また `excludePathPatterns` を SQL とパラメータバインドに反映 — 従来は受け取るだけで無視されていた。対象: `src/CodeIndex/Database/DbReader.cs`.
 

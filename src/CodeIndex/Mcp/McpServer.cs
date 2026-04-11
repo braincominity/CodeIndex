@@ -1033,8 +1033,16 @@ public class McpServer
                     continue;
                 }
 
-                // Extract structured content from the tool response
-                // ツールレスポンスから構造化コンテンツを抽出
+                // Check for tool-level errors (validation failures return isError=true)
+                // ツールレベルのエラーを確認（バリデーション失敗は isError=true を返す）
+                var isError = response["result"]?["isError"]?.GetValue<bool>() ?? false;
+                if (isError)
+                {
+                    var errorText = response["result"]?["content"]?[0]?["text"]?.GetValue<string>() ?? "Unknown error";
+                    resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = errorText });
+                    continue;
+                }
+
                 var structured = response["result"]?["structuredContent"];
                 resultsArray.Add(new JsonObject
                 {
