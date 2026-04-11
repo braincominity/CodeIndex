@@ -659,7 +659,12 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No symbol hotspots found.");
+                    WriteZeroResultHints(options, reader);
+                    WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -692,7 +697,12 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (!options.Json)
+                {
                     Console.Error.WriteLine("No unused symbols found.");
+                    WriteZeroResultHints(options, reader);
+                    WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
+                }
                 return CommandExitCodes.NotFound;
             }
 
