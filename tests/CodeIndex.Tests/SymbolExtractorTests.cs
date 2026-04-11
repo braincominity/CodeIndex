@@ -40,7 +40,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__init__");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display_name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "display_name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__str__");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
     }
@@ -936,6 +936,17 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "org.springframework.boot");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "customTask");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsPropertyDecorator()
+    {
+        var content = "class User:\n    @property\n    def name(self):\n        return self._name\n\n    def greet(self):\n        print(self.name)";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
     }
 
     [Theory]

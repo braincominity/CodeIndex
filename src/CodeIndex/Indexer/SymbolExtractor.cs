@@ -447,10 +447,16 @@ public static class SymbolExtractor
                 var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, pattern.BodyStyle);
                 var startLine = i + 1;
 
+                // Python @property decorator: reclassify the def as property
+                // Python @property デコレータ: def を property に再分類
+                var kind = pattern.Kind;
+                if (kind == "function" && lang == "python" && i > 0 && lines[i - 1].TrimStart().StartsWith("@property"))
+                    kind = "property";
+
                 symbols.Add(new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = pattern.Kind,
+                    Kind = kind,
                     Name = name,
                     Line = startLine,
                     StartLine = startLine,
