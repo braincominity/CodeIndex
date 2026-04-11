@@ -442,6 +442,24 @@ public static class QueryCommandRunner
             var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath);
 
+            // Return not-found only when a narrowing filter is active and produces zero files.
+            // Unfiltered empty indexes return success (valid state for health probes).
+            // フィルタ指定時に該当0件なら未検出を返す。フィルタなしの空DBは正常（ヘルスチェック用途）。
+            var hasFilter = options.PathPattern != null || options.ExcludePaths.Count > 0
+                || options.ExcludeTests || options.Lang != null;
+            if (map.FileCount == 0 && hasFilter)
+            {
+                if (options.Json)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(map, jsonOptions));
+                }
+                else
+                {
+                    Console.Error.WriteLine("No files found matching the given filters.");
+                }
+                return CommandExitCodes.NotFound;
+            }
+
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(map, jsonOptions));

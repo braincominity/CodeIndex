@@ -211,6 +211,74 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_NonexistentPathReturnsNotFound()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_notfound");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--path", "nonexistent/"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No files found", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_NonexistentPathJsonReturnsNotFoundWithPayload()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_notfound_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--path", "nonexistent/", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(0, document.RootElement.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_EmptyDbWithoutFiltersReturnsSuccess()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_empty_ok");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            // No files inserted — empty but valid index / ファイル未挿入 — 空だが有効なインデックス
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Files      : 0", stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_HumanReadableIncludesGitMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status");

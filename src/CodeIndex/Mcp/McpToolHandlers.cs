@@ -420,7 +420,13 @@ public partial class McpServer
             structured["lang"] = lang;
             structured["path"] = pathPattern;
             structured["excludeTests"] = excludeTests;
-            return CreateToolResult(id, "Repo map returned.", structured);
+            var hasFilter = pathPattern != null || excludePaths.Count > 0 || excludeTests || lang != null;
+            if (map.FileCount == 0 && hasFilter)
+                AddFreshnessHint(structured, reader);
+            var summary = map.FileCount > 0
+                ? "Repo map returned."
+                : hasFilter ? "No files found matching the given filters." : "Repo map returned.";
+            return CreateToolResult(id, summary, structured);
         });
     }
 
