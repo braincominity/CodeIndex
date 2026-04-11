@@ -1,3 +1,5 @@
+using CodeIndex.Indexer;
+
 namespace CodeIndex.Cli;
 
 /// <summary>
@@ -300,7 +302,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]");
-        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]");
+        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]");
         Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
         Console.WriteLine("  cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
@@ -312,6 +314,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
         Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
+        Console.WriteLine("  cdidx languages [--json]");
         Console.WriteLine("  cdidx mcp [--db <path>]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
@@ -328,17 +331,22 @@ public static class ConsoleUi
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics");
+        Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings)");
+        Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
+        Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
+        Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
+        Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish)");
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
         Console.WriteLine("  Use --commits with a project path to update only files changed by specific commits.");
@@ -347,14 +355,17 @@ public static class ConsoleUi
         Console.WriteLine("Query options:");
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
         Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
-        Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
+        Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
         Console.WriteLine("  --path <pattern>           Restrict matches to paths containing this text");
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
+        Console.WriteLine("  --exact                    Case-sensitive exact substring match (no FTS5)");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
+        Console.WriteLine("  --count                    Return only the result count (for AI preflight)");
+        Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
@@ -372,8 +383,138 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
         Console.WriteLine("  cdidx outline src/app.cs --json                Symbol outline of a single file");
+        Console.WriteLine("  cdidx deps --path src/ --exclude-tests          Show file-level dependency edges");
+        Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
+        Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
+        Console.WriteLine("  cdidx languages                                Show supported languages");
+    }
+
+    // --- Shell Completions / シェル補完 ---
+
+    private static readonly string[] Commands =
+    [
+        "index", "search", "definition", "references", "callers", "callees",
+        "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
+        "languages", "mcp",
+    ];
+
+    /// <summary>
+    /// Print shell completion script for the specified shell.
+    /// 指定シェル向けの補完スクリプトを出力する。
+    /// </summary>
+    /// <summary>
+    /// Print shell completion script. Returns false for unknown shells.
+    /// シェル補完スクリプトを出力。不明なシェルの場合はfalseを返す。
+    /// </summary>
+    public static bool PrintCompletions(string shell)
+    {
+        switch (shell.ToLowerInvariant())
+        {
+            case "bash":
+                PrintBashCompletions();
+                return true;
+            case "zsh":
+                PrintZshCompletions();
+                return true;
+            case "fish":
+                PrintFishCompletions();
+                return true;
+            default:
+                Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish");
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Get sorted unique language names from FileIndexer for completion values.
+    /// 補完値用にFileIndexerからソート済みのユニークな言語名を取得する。
+    /// </summary>
+    private static string GetCompletionLangs() =>
+        string.Join(" ", FileIndexer.GetLanguageExtensions().Values.Distinct().OrderBy(l => l));
+
+    private static void PrintBashCompletions()
+    {
+        var cmds = string.Join(" ", Commands);
+        var langs = GetCompletionLangs();
+        Console.WriteLine($@"_cdidx() {{
+    local cur prev commands
+    cur=""${{COMP_WORDS[COMP_CWORD]}}""
+    prev=""${{COMP_WORDS[COMP_CWORD-1]}}""
+    commands=""{cmds}""
+
+    if [ $COMP_CWORD -eq 1 ]; then
+        COMPREPLY=($(compgen -W ""$commands --help --version"" -- ""$cur""))
+        return
+    fi
+
+    case ""$prev"" in
+        --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
+        --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
+        --kind) COMPREPLY=($(compgen -W ""function class namespace import"" -- ""$cur"")) ;;
+        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --help"" -- ""$cur"")) ;;
+    esac
+}}
+complete -F _cdidx cdidx");
+    }
+
+    private static void PrintZshCompletions()
+    {
+        var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
+        Console.WriteLine($@"#compdef cdidx
+_cdidx() {{
+    local -a commands
+    commands=(
+        {cmds}
+    )
+
+    _arguments -C \
+        '1:command:->cmds' \
+        '*::arg:->args'
+
+    case $state in
+        cmds) _describe 'command' commands ;;
+        args)
+            _arguments \
+                '--db[Database path]:file:_files' \
+                '--json[JSON output]' \
+                '--limit[Max results]:number' \
+                '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                '--kind[Filter by kind]:kind:(function class namespace import)' \
+                '--path[Path filter]:pattern' \
+                '--exclude-path[Exclude path]:pattern' \
+                '--exclude-tests[Exclude tests]' \
+                '--body[Include body]' \
+                '--count[Count only]' \
+                '--fts[Raw FTS5 syntax]' \
+                '--snippet-lines[Snippet length]:number' \
+                '*:query'
+            ;;
+    esac
+}}
+_cdidx");
+    }
+
+    private static void PrintFishCompletions()
+    {
+        Console.WriteLine("# cdidx fish completions");
+        foreach (var cmd in Commands)
+            Console.WriteLine($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
+        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
+        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
+
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files excerpt map inspect outline status' -l db -r -d 'Database path'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files excerpt map inspect outline status' -l json -d 'JSON output'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l limit -r -d 'Max results'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l lang -r -d 'Filter by language'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l count -d 'Count only'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l path -r -d 'Path filter'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l exclude-path -r -d 'Exclude path'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l exclude-tests -d 'Exclude tests'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
     }
 
     // --- Helpers / ヘルパー ---

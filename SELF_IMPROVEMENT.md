@@ -46,6 +46,7 @@ The loop is not just "suggest ideas". It is:
 - Respect language differences. Do not pretend every query type is meaningful for every language.
 - Respect platform differences. Do not assume Windows, macOS, and Linux behave the same for paths, file locking, process invocation, or cleanup.
 - Favor implementation over brainstorming when the next improvement is clear and non-breaking.
+- **Dogfooding-driven feature insertion** — During the loop, you may realize "if cdidx had feature X, this search/navigation would be much faster and more accurate." When that happens, insert the feature into your current plan and implement it immediately — as long as it is non-breaking. If the feature risks being a breaking change, note it down and propose it to the user after the current task is complete rather than implementing it silently.
 - Keep docs and tests in sync with behavior.
 - If test code, shared test helpers, test execution flow, or testing conventions change, update `TESTING_GUIDE.md` in the same commit.
 - Do not push tags or branches unless explicitly asked.
@@ -201,6 +202,15 @@ Do not use one search strategy for every language.
 - When proposing new language-specific features, state clearly which languages are in scope and why.
 - When a heuristic is language-specific, document the limitation in README and tests.
 
+## Cross-Language Feature Expansion
+
+When enhancing symbol extraction, reference extraction, or language-specific heuristics for one language, actively check whether the same improvement applies to structurally similar languages — especially C# and Java, which share many syntactic patterns (classes, interfaces, generics, annotations/attributes, access modifiers, method signatures).
+
+- After implementing or refining a C# pattern, review the corresponding Java patterns in `SymbolExtractor.cs` and `ReferenceExtractor.cs` and apply the same improvement where the syntax permits.
+- The same principle applies in reverse (Java → C#) and to other language pairs with strong overlap (TypeScript/JavaScript, Kotlin/Java, C/C++).
+- Do not force a pattern onto a language where it does not fit. If the syntax diverges enough to make the port unreliable, skip it and document why.
+- When the expansion is straightforward, include it in the same commit as the original enhancement so the languages stay in sync. When it requires non-trivial adaptation, make it a separate follow-up commit.
+
 ## Platform-Aware Guidance
 
 Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
@@ -228,6 +238,25 @@ Good improvements are often:
 - better trust/freshness signals
 - safer compatibility behavior
 - sharper product framing
+
+## Priority: C# First (Dogfooding)
+
+cdidx is written in C#. Every improvement to C# analysis directly improves how this loop explores, navigates, and verifies cdidx's own codebase. This is a genuine dogfooding advantage — no other language gives the same feedback density.
+
+When choosing what to improve next, **prioritize C# capabilities first**:
+
+- C# symbol extraction accuracy (properties, events, records, pattern matching, etc.)
+- C# reference/call-graph precision (generic methods, extension methods, LINQ, etc.)
+- C# ranking quality (namespace awareness, visibility-weighted results, etc.)
+- C#-specific MCP/CLI output improvements
+- Fixing false positives or negatives that surface while working on the cdidx codebase itself
+
+This does not mean other languages are unimportant. It means:
+1. When two improvements have roughly equal value, pick the C# one.
+2. When the loop surfaces a C#-specific defect during normal operation, treat it as a high-priority fix rather than a "nice to have."
+3. When adding a cross-language feature, ensure the C# path is the most polished.
+
+The reasoning is simple: a sharper C# experience makes the self-improvement loop itself more productive, which accelerates every subsequent improvement — including those for other languages.
 
 ## Suggested Prompt
 
@@ -291,6 +320,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 変更が破壊的、移行負荷が高い、危険、またはユーザーに手間を強いる可能性があるなら、**実装前に必ず承認を取る**。
 - 言語差分を無視しない。すべての言語で同じ検索が意味を持つと仮定しない。
 - 次の改善が明確で非破壊なら、議論だけで止まらず実装を優先する。
+- **ドッグフーディング駆動の機能挿入** — ループ中に「cdidx にこの機能があれば、もっと速く正確に検索できるのに」と気付くことがある。その場合、非破壊な変更であれば現在の計画に組み入れてそのまま実装して構わない。破壊的変更のリスクがある場合は、メモしておき、現在のタスク完了後にユーザーに実装可否を打診すること。
 - ドキュメントとテストを挙動と同期させる。
 - テストコード、共有テストヘルパー、テスト実行フロー、またはテスト規約を変更した場合は、同じコミットで `TESTING_GUIDE.md` も更新する。
 - `git push` や `git tag` は、明示的に依頼されたときだけ行う。
@@ -444,6 +474,15 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - 新しい言語依存機能を提案するときは、どの言語を対象にするのか、その理由を明記してください。
 - ヒューリスティックが言語依存なら、README とテストに制限事項を残してください。
 
+## 言語横展開の指針
+
+ある言語のシンボル抽出、参照抽出、言語固有ヒューリスティックを強化したとき、構文的に近い言語にも同じ改善が当てはまらないか能動的に確認してください。特に C# と Java は共通の構文パターンが多い（クラス、インターフェース、ジェネリクス、アノテーション/属性、アクセス修飾子、メソッドシグネチャ）ため、横展開しやすい組み合わせです。
+
+- C# 向けのパターンを実装・改良したら、`SymbolExtractor.cs` と `ReferenceExtractor.cs` の対応する Java パターンを確認し、構文が許す範囲で同じ改善を適用してください。
+- 逆方向（Java → C#）や、重なりの大きい他の言語ペア（TypeScript/JavaScript、Kotlin/Java、C/C++）にも同じ考え方が当てはまります。
+- 構文が十分に異なり、移植すると信頼性が下がる場合は無理をせず、見送った理由を残してください。
+- 横展開が素直にできるなら、元の強化と同じコミットに含めて言語間の同期を保ちます。非自明な適応が必要な場合は、別のフォローアップコミットにしてください。
+
 ## プラットフォーム差分を前提にする指針
 
 パス処理、プロセス後始末、ファイル削除がすべての OS で同じだと考えてはいけません。
@@ -471,6 +510,25 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - 信頼性や鮮度のシグナルが増える
 - 互換性面が安全になる
 - プロダクトの打ち出しが鋭くなる
+
+## 優先順位: C# を最優先にする（ドッグフーディング）
+
+cdidx は C# で書かれています。C# の解析を改善すれば、それがそのまま、このループが cdidx 自身のコードベースを探索・ナビゲート・検証する精度を高めます。これは本物のドッグフーディングの利点です。他のどの言語も同じ密度のフィードバックは返してくれません。
+
+次に何を改善するか選ぶとき、**C# 関連の機能強化を最優先にしてください**:
+
+- C# シンボル抽出の精度（プロパティ、イベント、record、パターンマッチングなど）
+- C# の参照・コールグラフ精度（ジェネリックメソッド、拡張メソッド、LINQ など）
+- C# のランキング品質（名前空間の考慮、可視性で重み付けした結果など）
+- C# 固有の MCP/CLI 出力改善
+- cdidx のコードベース自体を触っていて浮上した偽陽性・偽陰性の修正
+
+他の言語が重要でないという意味ではありません。意味するのは:
+1. ほぼ同等の価値を持つ改善が2つあるなら、C# 側を選ぶ。
+2. ループの通常操作中に C# 固有の不具合が見つかったら、「あると嬉しい」ではなく優先修正として扱う。
+3. 言語横断の機能を追加するときは、C# の経路を最も洗練させる。
+
+理由は単純です。C# の体験が鋭くなれば自己改善ループ自体の生産性が上がり、その結果すべての後続改善——他言語向けも含め——が加速します。
 
 ## 推奨プロンプト
 

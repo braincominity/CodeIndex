@@ -63,6 +63,59 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
+        if (options.DryRun)
+        {
+            var dryIndexer = new FileIndexer(options.ProjectPath);
+            IReadOnlyList<string> dryFiles;
+
+            if (options.UpdateFiles.Count > 0)
+            {
+                // --files: only the specified files / --files: 指定ファイルのみ
+                dryFiles = options.UpdateFiles
+                    .Select(f => Path.IsPathRooted(f) ? f : Path.Combine(options.ProjectPath, f))
+                    .Where(File.Exists)
+                    .ToList();
+            }
+            else if (options.Commits.Count > 0)
+            {
+                // --commits: files changed in the specified commits / --commits: 指定コミットの変更ファイル
+                var changedFiles = new List<string>();
+                foreach (var commit in options.Commits)
+                {
+                    try
+                    {
+                        var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
+                        changedFiles.AddRange(changed.Select(f => Path.Combine(options.ProjectPath, f)).Where(File.Exists));
+                    }
+                    catch { /* ignore git errors in dry-run */ }
+                }
+                dryFiles = changedFiles.Distinct().ToList();
+            }
+            else
+            {
+                dryFiles = dryIndexer.ScanFiles();
+            }
+
+            var langCounts = new Dictionary<string, int>();
+            foreach (var f in dryFiles)
+            {
+                var lang = FileIndexer.DetectLanguage(f) ?? "unknown";
+                langCounts[lang] = langCounts.GetValueOrDefault(lang) + 1;
+            }
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { status = "dry_run", files_total = dryFiles.Count, languages = langCounts }, jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"Dry run: {dryFiles.Count} files would be indexed");
+                foreach (var (lang, count) in langCounts.OrderByDescending(kv => kv.Value))
+                    Console.WriteLine($"  {lang,-12} {count,6}");
+            }
+            return CommandExitCodes.Success;
+        }
+
         var dbDir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dbDir))
             Directory.CreateDirectory(dbDir);
@@ -91,6 +144,7 @@ public static class IndexCommandRunner
         bool rebuild = false;
         bool verbose = false;
         bool json = false;
+        bool dryRun = false;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -112,6 +166,9 @@ public static class IndexCommandRunner
                     break;
                 case "--json":
                     json = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -166,6 +223,7 @@ public static class IndexCommandRunner
             Commits = commits,
             UpdateFiles = updateFiles,
             EasterEgg = easterEgg,
+            DryRun = dryRun,
         };
     }
 
@@ -286,6 +344,10 @@ public static class IndexCommandRunner
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
+                // Validate content for encoding issues / エンコーディング問題を検証
+                var rawBytes = File.ReadAllBytes(absPath);
+                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                writer.InsertIssues(fileId, issues);
                 txn.Commit();
 
                 updated++;
@@ -436,6 +498,10 @@ public static class IndexCommandRunner
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
+                // Validate content for encoding issues / エンコーディング問題を検証
+                var rawBytes = File.ReadAllBytes(filePath);
+                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                writer.InsertIssues(fileId, issues);
                 txn.Commit();
 
                 if (options.Verbose && !options.Json)
@@ -573,4 +639,5 @@ public sealed class IndexCommandOptions
     public List<string> Commits { get; init; } = [];
     public List<string> UpdateFiles { get; init; } = [];
     public string? EasterEgg { get; init; }
+    public bool DryRun { get; init; }
 }

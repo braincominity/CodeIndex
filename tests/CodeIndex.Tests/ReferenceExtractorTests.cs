@@ -44,6 +44,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpKeywords_NotExtractedAsReferences()
+    {
+        // LINQ and C# contextual keywords should be ignored
+        // LINQ や C# の文脈キーワードは参照として抽出されないこと
+        const string content = """
+            public class Query
+            {
+                public void Run()
+                {
+                    var x = from(items);
+                    if (x is string s) { }
+                    var y = default(int);
+                    base.ToString();
+                    value.GetType();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "from");
+        Assert.DoesNotContain(references, r => r.SymbolName == "is");
+        Assert.DoesNotContain(references, r => r.SymbolName == "default");
+        // ToString and GetType are real calls, should be extracted
+        Assert.Contains(references, r => r.SymbolName == "ToString");
+        Assert.Contains(references, r => r.SymbolName == "GetType");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
@@ -81,6 +111,116 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "println");
         Assert.Contains(references, r => r.SymbolName == "compute");
+    }
+
+    [Fact]
+    public void Extract_CsharpEventSubscription_DetectsAsSubscribe()
+    {
+        const string content = """
+            public class Form
+            {
+                public void Init()
+                {
+                    Click += OnClick;
+                    Loaded -= OnLoaded;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.Contains(references, r => r.SymbolName == "Loaded" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
+    public void Extract_CsharpArithmeticCompoundAssignment_NotExtractedAsSubscribe()
+    {
+        const string content = """
+            public class Counter
+            {
+                public void Increment()
+                {
+                    count += 1;
+                    flags -= mask;
+                    total += GetAmount();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // Arithmetic compound assignments should NOT produce subscribe references
+        Assert.DoesNotContain(references, r => r.SymbolName == "count" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "flags" && r.ReferenceKind == "subscribe");
+        // But total += GetAmount() has an identifier RHS, so total may match — that's acceptable
+        // (it's still preferable to the previous behavior of matching everything)
+    }
+
+    [Fact]
+    public void Extract_ElixirCall_DetectsReferences()
+    {
+        const string content = """
+            defmodule MyApp do
+              def run() do
+                IO.puts("hello")
+                GenServer.start_link(MyWorker, [])
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "puts");
+        Assert.Contains(references, r => r.SymbolName == "start_link");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingDeclaration_NotExtractedAsReference()
+    {
+        // 'using var x = ...' should not generate a reference for 'using'
+        // 'using var x = ...' で 'using' が参照として生成されないこと
+        const string content = """
+            public class Db
+            {
+                public void Query()
+                {
+                    using var cmd = CreateCommand();
+                    using (var reader = cmd.ExecuteReader()) { }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "using");
+        // Real calls should still be captured / 実際の呼び出しは抽出されるべき
+        Assert.Contains(references, r => r.SymbolName == "CreateCommand");
+        Assert.Contains(references, r => r.SymbolName == "ExecuteReader");
+    }
+
+    [Fact]
+    public void Extract_LuaCall_DetectsReferences()
+    {
+        const string content = """
+            function main()
+                io.write("world")
+                table.insert(items, value)
+                -- this is a comment with call()
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "lua", content);
+        var references = ReferenceExtractor.Extract(1, "lua", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "write");
+        Assert.Contains(references, r => r.SymbolName == "insert");
+        // Comments should not produce references / コメントは参照を生成しないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "call");
     }
 
     [Fact]

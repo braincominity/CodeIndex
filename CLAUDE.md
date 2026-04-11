@@ -20,18 +20,20 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # shorthand for 'index'
 
 # Query (default output: human-readable; use --json for AI consumption)
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--count] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
-cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
+cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx languages [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
 cdidx mcp [--db <path>]
@@ -52,14 +54,18 @@ src/CodeIndex/
   Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
-  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, outline, status)
+  Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, excerpt reconstruction, status, file-level deps)
+  Database/DbSearchReader.cs — Full-text search operations (FTS5 search, deduplication) (partial class)
+  Database/DbSymbolReader.cs — Symbol query operations (symbol search, definitions, outline, analyze bundle) (partial class)
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
-  Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
+  Indexer/SymbolExtractor.cs — Regex-based symbol extraction (29 languages)
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
-  Mcp/McpServer.cs          — MCP server (stdin/stdout JSON-RPC 2.0, tools for AI coding tools)
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord (plain DTOs)
+  Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
+  Mcp/McpToolDefinitions.cs — MCP tool schema definitions (partial class)
+  Mcp/McpToolHandlers.cs    — MCP tool execution logic (partial class)
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, QueryResults (plain DTOs)
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitter tests
   ReferenceExtractorTests.cs — ReferenceExtractor tests
@@ -73,6 +79,9 @@ tests/CodeIndex.Tests/
   DbPathResolverTests.cs    — DB path resolution tests
   IndexCommandRunnerTests.cs — Index command integration tests
   QueryCommandRunnerTests.cs — Query CLI integration tests
+  ConcurrencyTests.cs        — Concurrent access tests (WAL read/write)
+  PerformanceTests.cs        — Large-scale data performance tests
+  DbRecoveryTests.cs         — DB corruption recovery tests
   SearchSnippetFormatterTests.cs — Search snippet formatting tests
   WorkspaceMetadataEnricherTests.cs — Workspace metadata enrichment tests
   TestProjectHelper.cs      — Shared helper for creating temp indexed projects
@@ -140,9 +149,16 @@ tests/CodeIndex.Tests/
 
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
 - Documentation (README, CHANGELOG) is structured: English first, then Japanese.
+- **Never mix languages within a section.** English sections must contain only English text; Japanese sections must contain only Japanese text. Bilingual inline code comments (`// Enable WAL mode / WALモードを有効化`) are the only exception. When adding bilingual content (e.g. CLAUDE.md rules), write the English paragraph in the English section and the Japanese paragraph in the Japanese section — never both in the same section.
 - No unnecessary packages — `System.CommandLine` was removed in favor of manual arg parsing.
 
 ## Rules for changes (important)
+
+### Dependency rule
+The only production dependency is **Microsoft.Data.Sqlite** — keep it that way. Do not add NuGet packages without explicit user approval. If a package would enable a significant improvement aligned with SELF_IMPROVEMENT.md goals, propose it to the user with a clear rationale before adding it.
+
+### Absolute prohibition
+Code review uses the **locally built binary** from the current commit (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) to search and verify the codebase. This means the reviewer sees exactly what the code actually does — not what tests claim it does, not what documentation says it does, but what the running binary produces. **It is strictly forbidden to intentionally implement incomplete, hollow, or deceptive code that passes tests or review on paper but fails in practice.** Every feature must work correctly when exercised by the binary itself. Cutting corners to "pass review" defeats the purpose of the self-improvement loop and will be caught by dogfooding.
 
 ### Method signature changes
 When changing a method's return type or parameters (e.g. `BuildRecord` from `(FileRecord, string)` to `(FileRecord, string, string?)`), **update ALL callers** in the same commit:
@@ -163,16 +179,17 @@ Before every commit, check whether each of the following needs updating. Don't b
 3. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
 4. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
 5. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
-6. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
+6. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance? **If language patterns changed, update the language pattern reference table.**
 7. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
 8. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
 9. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+10. **Broken characters** — Scan changed files for U+FFFD replacement characters. These appear when Python scripts or other tools split multi-byte UTF-8 characters at the wrong boundary. Especially likely after file-splitting operations. Run: `python3 -c "import sys; [print(f'{f}:{i}') for f in sys.argv[1:] for i,l in enumerate(open(f),1) if '\ufffd' in l]" <files>`
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
 - **TESTING_GUIDE.md** — English section AND Japanese section (both must match); update when test helpers, structure, or conventions change
-- **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections.
+- **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections. **Update the language pattern reference table** when adding/changing language patterns in SymbolExtractor or ReferenceExtractor.
 - **CHANGELOG.md** — English section AND Japanese section
 - **SELF_IMPROVEMENT.md** — Dedicated operating contract for iterative AI-driven cdidx self-improvement
 - **CLAUDE.md** — This file; update architecture/design sections when code changes
@@ -230,18 +247,20 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # 'index'の省略形
 
 # クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--count] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx symbols [query] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
-cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]
+cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
+cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse] [--json]
+cdidx languages [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
 cdidx mcp [--db <path>]
@@ -262,14 +281,18 @@ src/CodeIndex/
   Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
-  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、アウトライン、ステータス）
+  Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、抜粋再構成、ステータス、ファイル間依存分析）
+  Database/DbSearchReader.cs — 全文検索操作（FTS5検索、重複排除）（partial class）
+  Database/DbSymbolReader.cs — シンボルクエリ操作（シンボル検索、定義、アウトライン、分析バンドル）（partial class）
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
-  Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
+  Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（29言語対応）
   Indexer/ReferenceExtractor.cs — 正規表現による参照抽出（言語差分を考慮）
-  Mcp/McpServer.cs          — MCPサーバー（stdin/stdout JSON-RPC 2.0、AIツール向けツール公開）
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord（プレーンDTO）
+  Mcp/McpServer.cs          — MCPサーバーコア（stdin/stdout JSON-RPC 2.0 プロトコル処理）（partial class）
+  Mcp/McpToolDefinitions.cs — MCPツールスキーマ定義（partial class）
+  Mcp/McpToolHandlers.cs    — MCPツール実行ロジック（partial class）
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, QueryResults（プレーンDTO）
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitterテスト
   ReferenceExtractorTests.cs — ReferenceExtractorテスト
@@ -283,6 +306,9 @@ tests/CodeIndex.Tests/
   DbPathResolverTests.cs    — DBパス解決テスト
   IndexCommandRunnerTests.cs — indexコマンド統合テスト
   QueryCommandRunnerTests.cs — クエリCLI統合テスト
+  ConcurrencyTests.cs        — 並行アクセステスト（WAL読み書き）
+  PerformanceTests.cs        — 大規模データパフォーマンステスト
+  DbRecoveryTests.cs         — DB破損復旧テスト
   SearchSnippetFormatterTests.cs — 検索スニペット整形テスト
   WorkspaceMetadataEnricherTests.cs — ワークスペースメタデータ付加テスト
   TestProjectHelper.cs      — 一時インデックスプロジェクト作成用の共有ヘルパー
@@ -350,9 +376,16 @@ tests/CodeIndex.Tests/
 
 - コメントは英日併記（例: `// Enable WAL mode / WALモードを有効化`）
 - ドキュメント（README, CHANGELOG）は前半英語、後半日本語の構成。
+- **セクション内で言語を混在させない。** 英語セクションには英語のみ、日本語セクションには日本語のみを記載する。バイリンガルのインラインコードコメント（`// Enable WAL mode / WALモードを有効化`）は唯一の例外。バイリンガルコンテンツ（CLAUDE.md のルール等）を追加するときは、英語パラグラフを英語セクションに、日本語パラグラフを日本語セクションに書く — 同一セクションに両方を入れない。
 - 不要なパッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。
 
 ## 変更時のルール（重要）
+
+### 依存関係ルール
+本番依存は **Microsoft.Data.Sqlite** の1個のみ — これを維持すること。ユーザーの明示的な承認なしに NuGet パッケージを追加しないこと。SELF_IMPROVEMENT.md の目的に沿った大きな改善を可能にするパッケージがある場合は、明確な理由を添えてユーザーに提案してから追加すること。
+
+### 絶対禁止事項
+コードレビューは現在のコミットから**ローカルビルドしたバイナリ**（`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`）を使ってコードベースを検索・検証します。つまりレビュアーは、テストが主張する動作でもドキュメントが述べる動作でもなく、実行中のバイナリが実際に出す結果を見ます。**テストやレビューを表面上パスするが実際には動作しない、不完全・中身のない・欺瞞的なコードを意図的に実装することは厳禁です。** すべての機能はバイナリ自身で実行したときに正しく動作しなければなりません。「レビューを通す」ための手抜きは自己改善ループの目的を損ない、ドッグフーディングで必ず発覚します。
 
 ### メソッドシグネチャの変更
 メソッドの戻り値やパラメータを変更した場合（例: `BuildRecord`を`(FileRecord, string)`から`(FileRecord, string, string?)`に変更）、**同じコミットで全ての呼び出し元を更新すること**:
@@ -373,10 +406,11 @@ tests/CodeIndex.Tests/
 3. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
 4. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
 5. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
-6. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
+6. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？**言語パターンを変更した場合は言語パターン参照表も更新する。**
 7. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
 8. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
 9. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
+10. **文字化けチェック** — 変更したファイルに U+FFFD 置換文字がないか確認。Pythonスクリプト等でマルチバイトUTF-8文字が途中で切れると発生する。特にファイル分割操作後に注意。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:

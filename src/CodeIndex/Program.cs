@@ -29,6 +29,13 @@ if (args[0] is "--version" or "-V")
     return CommandExitCodes.Success;
 }
 
+if (args[0] == "--completions" && args.Length >= 2)
+{
+    return ConsoleUi.PrintCompletions(args[1])
+        ? CommandExitCodes.Success
+        : CommandExitCodes.UsageError;
+}
+
 var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");
 if (easterEgg != null && !args.Any(a => !a.StartsWith('-')))
 {
@@ -52,7 +59,10 @@ return args[0] switch
     "map" => QueryCommandRunner.RunMap(args[1..], jsonOptions),
     "inspect" => QueryCommandRunner.RunInspect(args[1..], jsonOptions),
     "outline" => QueryCommandRunner.RunOutline(args[1..], jsonOptions),
-    "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions),
+    "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions, appVersion),
+    "validate" => QueryCommandRunner.RunValidate(args[1..], jsonOptions),
+    "languages" => QueryCommandRunner.RunLanguages(args[1..], jsonOptions),
+    "deps" => QueryCommandRunner.RunDeps(args[1..], jsonOptions),
     "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
     _ when IsProjectPathArg(args[0])
         => IndexCommandRunner.Run(args, jsonOptions),

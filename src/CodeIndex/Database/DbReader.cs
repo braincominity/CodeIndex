@@ -7,7 +7,7 @@ namespace CodeIndex.Database;
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
 /// </summary>
-public class DbReader
+public partial class DbReader
 {
     private readonly SqliteConnection _conn;
     private readonly HashSet<string> _fileColumns;
@@ -68,158 +68,16 @@ public class DbReader
         _symbolColumns = LoadColumns("symbols");
     }
 
-    /// <summary>
-    /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
-    /// FTS5 MATCH用にユーザー入力をサニタイズ（各トークンをフレーズとして引用）。
-    /// Prevents FTS5 syntax errors from special characters (*, ", AND, OR, NOT, NEAR, etc.).
-    /// 特殊文字（*, ", AND, OR, NOT, NEAR等）によるFTS5構文エラーを防止する。
-    /// </summary>
-    private static string SanitizeFtsQuery(string query)
-    {
-        // Escape double quotes inside the query, then wrap each whitespace-separated
-        // token in double quotes so FTS5 treats them as literal phrases.
-        // クエリ内のダブルクォートをエスケープし、各トークンをダブルクォートで囲む。
-        var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0)
-            return "\"\"";
-        return string.Join(" ", tokens.Select(t => "\"" + t.Replace("\"", "\"\"") + "\""));
-    }
-
-    /// <summary>
-    /// Full-text search across indexed chunks using FTS5.
-    /// FTS5を使ったチャンク全文検索。
-    /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
-    {
-        // Guard against empty/whitespace queries that would match everything
-        // 空白のみのクエリが全件マッチするのを防止
-        if (string.IsNullOrWhiteSpace(query))
-            return [];
-
-        var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(query);
-        using var cmd = _conn.CreateCommand();
-
-        var sql = @"
-            SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
-                   rank
-            FROM fts_chunks
-            JOIN chunks c ON fts_chunks.rowid = c.id
-            JOIN files f ON c.file_id = f.id";
-
-        sql += " WHERE fts_chunks MATCH @query";
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql()} LIMIT @limit";
-
-        cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", sanitizedQuery);
-        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
-        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
-        cmd.Parameters.AddWithValue("@limit", limit);
-        if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
-
-        var results = new List<SearchResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            results.Add(new SearchResult
-            {
-                Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
-                StartLine = reader.GetInt32(2),
-                EndLine = reader.GetInt32(3),
-                Content = reader.GetString(4),
-                Score = reader.GetDouble(5),
-            });
-        }
-        return results;
-    }
-
-    /// <summary>
-    /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
-    /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
-    /// </summary>
     internal static string EscapeLikeQuery(string input)
     {
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
     /// <summary>
-    /// Search symbols by name pattern, optionally filtered by kind and language.
-    /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
-    /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
-    {
-        using var cmd = _conn.CreateCommand();
-
-        var sql = $@"
-            SELECT f.path, f.lang, s.kind, s.name, s.line,
-                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
-                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
-                   {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE 1=1";
-
-        if (query != null)
-            sql += " AND s.name LIKE @query ESCAPE '\\'";
-        if (kind != null)
-            sql += " AND s.kind = @kind";
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, s.name, f.path, s.line LIMIT @limit";
-
-        cmd.CommandText = sql;
-        if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
-        if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
-        if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
-
-        var results = new List<SymbolResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            results.Add(new SymbolResult
-            {
-                Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
-                Kind = reader.GetString(2),
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = reader.IsDBNull(5) ? reader.GetInt32(4) : reader.GetInt32(5),
-                EndLine = reader.IsDBNull(6) ? reader.GetInt32(4) : reader.GetInt32(6),
-                BodyStartLine = reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                BodyEndLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                Signature = reader.IsDBNull(9) ? null : reader.GetString(9),
-                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
-                Visibility = reader.IsDBNull(12) ? null : reader.GetString(12),
-                ReturnType = reader.IsDBNull(13) ? null : reader.GetString(13),
-            });
-        }
-        return results;
-    }
-
-    /// <summary>
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
     /// </summary>
-    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -237,6 +95,8 @@ public class DbReader
             sql += " AND f.path LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.id ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
 
@@ -245,6 +105,8 @@ public class DbReader
             cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
@@ -521,51 +383,6 @@ public class DbReader
     }
 
     /// <summary>
-    /// Resolve symbol definitions with reconstructed excerpts.
-    /// シンボル定義を抜粋付きで解決する。
-    /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
-    {
-        var symbols = SearchSymbols(query, limit, kind, lang, pathPattern, excludePathPatterns, excludeTests);
-        var results = new List<DefinitionResult>();
-
-        foreach (var symbol in symbols)
-        {
-            var definitionExcerpt = GetExcerpt(symbol.Path, symbol.StartLine, symbol.EndLine);
-            if (definitionExcerpt == null)
-                continue;
-
-            string? bodyContent = null;
-            if (includeBody && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-            {
-                bodyContent = GetExcerpt(symbol.Path, symbol.BodyStartLine.Value, symbol.BodyEndLine.Value)?.Content;
-            }
-
-            results.Add(new DefinitionResult
-            {
-                Path = symbol.Path,
-                Lang = symbol.Lang,
-                Kind = symbol.Kind,
-                Name = symbol.Name,
-                Line = symbol.Line,
-                StartLine = symbol.StartLine,
-                EndLine = symbol.EndLine,
-                BodyStartLine = symbol.BodyStartLine,
-                BodyEndLine = symbol.BodyEndLine,
-                Signature = symbol.Signature,
-                ContainerKind = symbol.ContainerKind,
-                ContainerName = symbol.ContainerName,
-                Visibility = symbol.Visibility,
-                ReturnType = symbol.ReturnType,
-                Content = definitionExcerpt.Content,
-                BodyContent = bodyContent,
-            });
-        }
-
-        return results;
-    }
-
-    /// <summary>
     /// Get one indexed file by exact path.
     /// 完全一致パスでインデックス済みファイルを1件取得する。
     /// </summary>
@@ -598,175 +415,6 @@ public class DbReader
             Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
             Modified = GetNullableDateTime(reader, 6),
             IndexedAt = GetNullableDateTime(reader, 7),
-        };
-    }
-
-    /// <summary>
-    /// Get nearby symbols in the same file ordered by proximity to a focus line.
-    /// 同一ファイル内の近傍シンボルを、注目行からの近さ順で取得する。
-    /// </summary>
-    public List<SymbolResult> GetNearbySymbols(string path, int focusLine, int limit = 10, string? excludeName = null, int? excludeStartLine = null)
-    {
-        using var cmd = _conn.CreateCommand();
-
-        var sql = $@"
-            SELECT f.path, f.lang, s.kind, s.name, s.line,
-                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
-                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
-                   {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.path = @path";
-
-        if (excludeName != null && excludeStartLine != null)
-            sql += " AND NOT (s.name = @excludeName AND " + GetSymbolColumnSql("start_line", "s.line") + " = @excludeStartLine)";
-
-        sql += " ORDER BY CASE WHEN @focusLine BETWEEN " + GetSymbolColumnSql("start_line", "s.line") + " AND " + GetSymbolColumnSql("end_line", "s.line") + " THEN 0 ELSE abs(" + GetSymbolColumnSql("start_line", "s.line") + " - @focusLine) END, " + GetSymbolColumnSql("start_line", "s.line") + " LIMIT @limit";
-
-        cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@path", path);
-        cmd.Parameters.AddWithValue("@focusLine", focusLine);
-        cmd.Parameters.AddWithValue("@limit", limit);
-        if (excludeName != null && excludeStartLine != null)
-        {
-            cmd.Parameters.AddWithValue("@excludeName", excludeName);
-            cmd.Parameters.AddWithValue("@excludeStartLine", excludeStartLine.Value);
-        }
-
-        var results = new List<SymbolResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            results.Add(new SymbolResult
-            {
-                Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
-                Kind = reader.GetString(2),
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = reader.IsDBNull(5) ? reader.GetInt32(4) : reader.GetInt32(5),
-                EndLine = reader.IsDBNull(6) ? reader.GetInt32(4) : reader.GetInt32(6),
-                BodyStartLine = reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                BodyEndLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                Signature = reader.IsDBNull(9) ? null : reader.GetString(9),
-                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
-                Visibility = reader.IsDBNull(12) ? null : reader.GetString(12),
-                ReturnType = reader.IsDBNull(13) ? null : reader.GetString(13),
-            });
-        }
-
-        return results;
-    }
-
-    /// <summary>
-    /// Bundle definition, graph, and local file context for one symbol query.
-    /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
-    /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
-    {
-        var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPattern, excludePathPatterns, excludeTests);
-        var primaryDefinition = definitions.FirstOrDefault();
-        var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
-        var freshness = GetWorkspaceFreshness();
-        var graphLanguage = lang ?? file?.Lang;
-        bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
-        var nearbySymbols = primaryDefinition != null
-            ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
-            : [];
-
-        return new SymbolAnalysisResult
-        {
-            Query = query,
-            File = file,
-            WorkspaceIndexedAt = freshness.IndexedAt,
-            WorkspaceLatestModified = freshness.LatestModified,
-            GraphLanguage = graphLanguage,
-            GraphSupported = graphSupported,
-            GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
-            Definitions = definitions,
-            NearbySymbols = nearbySymbols,
-            References = SearchReferences(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
-            Callers = GetCallers(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
-            Callees = GetCallees(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
-        };
-    }
-
-    /// <summary>
-    /// Return a structured outline of symbols in a single file, ordered by line.
-    /// 1ファイルのシンボルを行順に構造化アウトラインとして返す。
-    /// </summary>
-    public OutlineResult? GetOutline(string filePath)
-    {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT id, path, lang, lines FROM files WHERE path = @path";
-        cmd.Parameters.AddWithValue("@path", filePath);
-
-        string? lang = null;
-        int totalLines = 0;
-        long fileId = 0;
-        using (var reader = cmd.ExecuteReader())
-        {
-            if (!reader.Read())
-                return null;
-            fileId = reader.GetInt64(0);
-            lang = reader.IsDBNull(2) ? null : reader.GetString(2);
-            totalLines = reader.GetInt32(3);
-        }
-
-        using var symCmd = _conn.CreateCommand();
-        symCmd.CommandText = $@"
-            SELECT s.kind, s.name, s.line,
-                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
-                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
-                   {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
-            FROM symbols s
-            WHERE s.file_id = @fileId
-            ORDER BY s.line";
-        symCmd.Parameters.AddWithValue("@fileId", fileId);
-
-        var symbols = new List<OutlineSymbol>();
-        using (var reader = symCmd.ExecuteReader())
-        {
-            while (reader.Read())
-            {
-                symbols.Add(new OutlineSymbol
-                {
-                    Kind = reader.GetString(0),
-                    Name = reader.GetString(1),
-                    Line = reader.GetInt32(2),
-                    StartLine = reader.GetInt32(3),
-                    EndLine = reader.GetInt32(4),
-                    BodyStartLine = reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                    BodyEndLine = reader.IsDBNull(6) ? null : reader.GetInt32(6),
-                    Signature = reader.IsDBNull(7) ? null : reader.GetString(7),
-                    ContainerKind = reader.IsDBNull(8) ? null : reader.GetString(8),
-                    ContainerName = reader.IsDBNull(9) ? null : reader.GetString(9),
-                    Visibility = reader.IsDBNull(10) ? null : reader.GetString(10),
-                    ReturnType = reader.IsDBNull(11) ? null : reader.GetString(11),
-                });
-            }
-        }
-
-        return new OutlineResult
-        {
-            Path = filePath,
-            Lang = lang,
-            TotalLines = totalLines,
-            SymbolCount = symbols.Count,
-            Symbols = symbols,
         };
     }
 
@@ -888,6 +536,72 @@ public class DbReader
         return fallbackSql ?? "NULL";
     }
 
+    /// <summary>
+    /// Compute file-level dependency edges: which files reference symbols defined in which other files.
+    /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
+    /// </summary>
+    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
+    {
+        using var cmd = _conn.CreateCommand();
+        // Use a subquery to find distinct (reference_file, definition_file, symbol) triples,
+        // avoiding inflated counts from same-name symbols across multiple files.
+        // サブクエリで (参照ファイル, 定義ファイル, シンボル) の重複を排除し、
+        // 同名シンボルによるカウント膨張を防ぐ。
+        var filterAlias = reverse ? "dst" : "src";
+        var innerSql = @"
+                SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
+                       r.symbol_name AS symbol_name
+                FROM symbol_references r
+                JOIN files src ON r.file_id = src.id
+                JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
+                JOIN files dst ON s.file_id = dst.id
+                WHERE src.path != dst.path";
+        if (lang != null)
+            innerSql += " AND src.lang = @lang";
+        if (pathPattern != null)
+            innerSql += $" AND {filterAlias}.path LIKE @pathPattern ESCAPE '\\'";
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                innerSql += $" AND {filterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
+        if (excludeTests)
+            innerSql += $" AND NOT {TestPathCondition.Replace("f.path", $"{filterAlias}.path")}";
+
+        var sql = $@"
+            SELECT source_path, target_path,
+                   COUNT(*) AS reference_count,
+                   GROUP_CONCAT(symbol_name) AS symbols
+            FROM ({innerSql}) edges
+            GROUP BY source_path, target_path ORDER BY reference_count DESC LIMIT @limit";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (pathPattern != null)
+            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@excludePath{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
+        }
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<FileDependencyResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new FileDependencyResult
+            {
+                SourcePath = reader.GetString(0),
+                TargetPath = reader.GetString(1),
+                ReferenceCount = reader.GetInt32(2),
+                Symbols = reader.GetString(3),
+            });
+        }
+        return results;
+    }
+
     internal static void AppendPathFilters(ref string sql, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (pathPattern != null)
@@ -901,11 +615,6 @@ public class DbReader
 
         if (excludeTests)
             sql += $" AND NOT {TestPathCondition}";
-    }
-
-    private static string GetSearchOrderSql()
-    {
-        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, rank, f.path";
     }
 
     internal static void AddPathFilterParameters(SqliteCommand cmd, string? pathPattern, IReadOnlyList<string>? excludePathPatterns)
@@ -937,233 +646,45 @@ public class DbReader
             _ => null,
         };
     }
+
+    /// <summary>
+    /// Get all file validation issues from the index.
+    /// インデックスから全ファイル検証問題を取得する。
+    /// </summary>
+    public List<Models.FileIssue> GetIssues(string? kind = null, string? pathPattern = null)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT f.path, i.kind, i.line, i.message
+            FROM file_issues i
+            JOIN files f ON i.file_id = f.id
+            WHERE 1=1";
+        if (kind != null)
+            sql += " AND i.kind = @kind";
+        if (pathPattern != null)
+            sql += " AND f.path LIKE @pathPattern ESCAPE '\\'";
+        sql += " ORDER BY f.path, i.line";
+
+        cmd.CommandText = sql;
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        if (pathPattern != null)
+            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+
+        var results = new List<Models.FileIssue>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new Models.FileIssue
+            {
+                Path = reader.GetString(0),
+                Kind = reader.GetString(1),
+                Line = reader.GetInt32(2),
+                Message = reader.GetString(3),
+            });
+        }
+        return results;
+    }
 }
 
-// Result DTOs for query operations / クエリ操作用の結果DTO
-
-public class SearchResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public int StartLine { get; set; }
-    public int EndLine { get; set; }
-    public string Content { get; set; } = string.Empty;
-    public double Score { get; set; }
-}
-
-public class SymbolResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public string Kind { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public int Line { get; set; }
-    public int StartLine { get; set; }
-    public int EndLine { get; set; }
-    public int? BodyStartLine { get; set; }
-    public int? BodyEndLine { get; set; }
-    public string? Signature { get; set; }
-    public string? ContainerKind { get; set; }
-    public string? ContainerName { get; set; }
-    public string? Visibility { get; set; }
-    public string? ReturnType { get; set; }
-}
-
-public class FileResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public long Size { get; set; }
-    public int Lines { get; set; }
-    public int SymbolCount { get; set; }
-    public string? Checksum { get; set; }
-    public DateTime? Modified { get; set; }
-    public DateTime? IndexedAt { get; set; }
-}
-
-public class FileExcerptResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public int StartLine { get; set; }
-    public int EndLine { get; set; }
-    public string Content { get; set; } = string.Empty;
-}
-
-public class DefinitionResult : SymbolResult
-{
-    public string Content { get; set; } = string.Empty;
-    public string? BodyContent { get; set; }
-}
-
-public class ReferenceResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public string SymbolName { get; set; } = string.Empty;
-    public string ReferenceKind { get; set; } = string.Empty;
-    public int Line { get; set; }
-    public int Column { get; set; }
-    public string Context { get; set; } = string.Empty;
-    public string? ContainerKind { get; set; }
-    public string? ContainerName { get; set; }
-}
-
-public class CallerResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public string? CallerKind { get; set; }
-    public string? CallerName { get; set; }
-    public string CalleeName { get; set; } = string.Empty;
-    public int FirstLine { get; set; }
-    public int ReferenceCount { get; set; }
-}
-
-public class CalleeResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public string? CallerKind { get; set; }
-    public string? CallerName { get; set; }
-    public string CalleeName { get; set; } = string.Empty;
-    public string ReferenceKind { get; set; } = string.Empty;
-    public int FirstLine { get; set; }
-    public int ReferenceCount { get; set; }
-}
-
-public class StatusResult
-{
-    public long Files { get; set; }
-    public long Chunks { get; set; }
-    public long Symbols { get; set; }
-    public long References { get; set; }
-    public DateTime? IndexedAt { get; set; }
-    public DateTime? LatestModified { get; set; }
-    public string? ProjectRoot { get; set; }
-    public string? GitHead { get; set; }
-    public bool? GitIsDirty { get; set; }
-    public Dictionary<string, long> Languages { get; set; } = new();
-}
-
-public class RepoMapResult
-{
-    public int FileCount { get; set; }
-    public long TotalLines { get; set; }
-    public long TotalSymbols { get; set; }
-    public long TotalReferences { get; set; }
-    public DateTime? IndexedAt { get; set; }
-    public DateTime? LatestModified { get; set; }
-    public DateTime? WorkspaceIndexedAt { get; set; }
-    public DateTime? WorkspaceLatestModified { get; set; }
-    public string? ProjectRoot { get; set; }
-    public string? GitHead { get; set; }
-    public bool? GitIsDirty { get; set; }
-    public List<RepoLanguageResult> Languages { get; set; } = [];
-    public List<RepoModuleResult> Modules { get; set; } = [];
-    public List<RepoFileSummaryResult> TopFiles { get; set; } = [];
-    public List<RepoFileSummaryResult> LargestFiles { get; set; } = [];
-    public List<RepoFileSummaryResult> SymbolRichFiles { get; set; } = [];
-    public List<RepoFileSummaryResult> ReferenceRichFiles { get; set; } = [];
-    public List<RepoEntrypointResult> Entrypoints { get; set; } = [];
-}
-
-public class RepoLanguageResult
-{
-    public string Lang { get; set; } = string.Empty;
-    public int Files { get; set; }
-    public long Lines { get; set; }
-    public long Symbols { get; set; }
-    public long References { get; set; }
-}
-
-public class RepoModuleResult
-{
-    public string Module { get; set; } = string.Empty;
-    public int Files { get; set; }
-    public long Lines { get; set; }
-    public long Symbols { get; set; }
-    public long References { get; set; }
-}
-
-public class RepoFileSummaryResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public int Lines { get; set; }
-    public long Size { get; set; }
-    public int SymbolCount { get; set; }
-    public int ReferenceCount { get; set; }
-    public long? Score { get; set; }
-}
-
-public class RepoEntrypointResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public string Kind { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public int Line { get; set; }
-    public int Score { get; set; }
-}
-
-public class SymbolAnalysisResult
-{
-    public string Query { get; set; } = string.Empty;
-    public FileResult? File { get; set; }
-    public DateTime? WorkspaceIndexedAt { get; set; }
-    public DateTime? WorkspaceLatestModified { get; set; }
-    public string? ProjectRoot { get; set; }
-    public string? GitHead { get; set; }
-    public bool? GitIsDirty { get; set; }
-    public string? GraphLanguage { get; set; }
-    public bool? GraphSupported { get; set; }
-    public string? GraphSupportReason { get; set; }
-    public List<DefinitionResult> Definitions { get; set; } = [];
-    public List<SymbolResult> NearbySymbols { get; set; } = [];
-    public List<ReferenceResult> References { get; set; } = [];
-    public List<CallerResult> Callers { get; set; } = [];
-    public List<CalleeResult> Callees { get; set; } = [];
-}
-
-/// <summary>
-/// Structured symbol outline for a single file.
-/// 1ファイルの構造化シンボルアウトライン。
-/// </summary>
-public class OutlineResult
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public int TotalLines { get; set; }
-    public int SymbolCount { get; set; }
-    public List<OutlineSymbol> Symbols { get; set; } = [];
-}
-
-public class OutlineSymbol
-{
-    public string Kind { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public int Line { get; set; }
-    public int StartLine { get; set; }
-    public int EndLine { get; set; }
-    public int? BodyStartLine { get; set; }
-    public int? BodyEndLine { get; set; }
-    public string? Signature { get; set; }
-    public string? ContainerKind { get; set; }
-    public string? ContainerName { get; set; }
-    public string? Visibility { get; set; }
-    public string? ReturnType { get; set; }
-}
-
-internal sealed class RepoFileStat
-{
-    public string Path { get; set; } = string.Empty;
-    public string? Lang { get; set; }
-    public long Size { get; set; }
-    public int Lines { get; set; }
-    public int SymbolCount { get; set; }
-    public int ReferenceCount { get; set; }
-    public string? Checksum { get; set; }
-    public DateTime? Modified { get; set; }
-    public DateTime? IndexedAt { get; set; }
-}
+// Result DTOs are in Models/QueryResults.cs / 結果DTOは Models/QueryResults.cs に分離

@@ -41,6 +41,12 @@ The test project mirrors the production areas closely.
   Git-specific behavior, including worktrees and commit-based updates.
 - `WorkspaceMetadataEnricherTests.cs`
   Workspace freshness and git metadata enrichment behavior.
+- `ConcurrencyTests.cs`
+  Concurrent read and read-during-write scenarios (WAL mode validation).
+- `PerformanceTests.cs`
+  Large-scale data benchmarks (10K+ files). Skip-by-default; run manually with `--filter`.
+- `DbRecoveryTests.cs`
+  Database corruption recovery and graceful degradation behavior.
 - `TestProjectHelper.cs`, `TestConsoleLock.cs`
   Shared test helpers.
 
@@ -171,6 +177,12 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   worktree や commit ベース更新を含む Git まわりのテスト。
 - `WorkspaceMetadataEnricherTests.cs`
   ワークスペース鮮度と git メタデータ付与のテスト。
+- `ConcurrencyTests.cs`
+  並行読み取りと書き込み中読み取りシナリオ（WALモード検証）。
+- `PerformanceTests.cs`
+  大規模データベンチマーク（10K+ファイル）。デフォルトSkip。`--filter` で手動実行。
+- `DbRecoveryTests.cs`
+  DB破損からの復旧とグレースフル劣化のテスト。
 - `TestProjectHelper.cs`、`TestConsoleLock.cs`
   共有テストヘルパー。
 

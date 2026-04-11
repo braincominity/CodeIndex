@@ -71,6 +71,30 @@ public class FileIndexer
         [".hs"]     = "haskell",
         [".lhs"]    = "haskell",
         [".zig"]    = "zig",
+        [".proto"]  = "protobuf",  // Protocol Buffers / Protocol Buffers 定義
+        [".graphql"]= "graphql",   // GraphQL schema/queries / GraphQL スキーマ・クエリ
+        [".gql"]    = "graphql",
+        [".gradle"] = "gradle",    // Gradle build scripts / Gradle ビルドスクリプト
+        [".cmake"]  = "cmake",     // CMake scripts / CMake スクリプト
+        [".ps1"]    = "powershell",// PowerShell scripts / PowerShell スクリプト
+        [".bat"]    = "batch",     // Windows batch files / Windows バッチファイル
+        [".cmd"]    = "batch",
+        [".bash"]   = "shell",
+        [".zsh"]    = "shell",
+        [".fish"]   = "shell",
+    };
+
+    // Exact file names (case-insensitive) mapped to language / 完全一致ファイル名→言語マッピング
+    private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Dockerfile"]    = "dockerfile",
+        ["Makefile"]      = "makefile",
+        ["Justfile"]      = "justfile",     // Just command runner / Just コマンドランナー
+        ["CMakeLists.txt"]= "cmake",
+        ["Vagrantfile"]   = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
+        [".editorconfig"] = "editorconfig",
+        [".gitignore"]    = "gitignore",
+        [".dockerignore"] = "dockerignore",
     };
 
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
@@ -112,13 +136,28 @@ public class FileIndexer
     }
 
     /// <summary>
-    /// Try to detect the language from a file extension.
-    /// ファイル拡張子から言語を検出する。
+    /// Return all file patterns (extensions and filenames) mapped to their language names.
+    /// 全ファイルパターン（拡張子とファイル名）と対応する言語名のマッピングを返す。
     /// </summary>
+    public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
+    {
+        // Merge extension map and filename map for a complete view
+        // 完全な一覧のため拡張子マップとファイル名マップを統合
+        var merged = new Dictionary<string, string>(LangMap, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, lang) in FileNameMap)
+            merged.TryAdd(name, lang);
+        return merged;
+    }
+
     public static string? DetectLanguage(string filePath)
     {
         var ext = Path.GetExtension(filePath);
-        return LangMap.TryGetValue(ext, out var lang) ? lang : null;
+        if (LangMap.TryGetValue(ext, out var lang))
+            return lang;
+
+        // Fall back to exact file name matching / ファイル名の完全一致で言語を検出
+        var fileName = Path.GetFileName(filePath);
+        return FileNameMap.TryGetValue(fileName, out var nameLang) ? nameLang : null;
     }
 
     /// <summary>
@@ -149,9 +188,10 @@ public class FileIndexer
                 if (SkipFiles.Contains(fileName))
                     continue;
 
-                // Only include files with a known extension / 既知の拡張子のみ含める
+                // Include files with a known extension or known filename
+                // 既知の拡張子または既知のファイル名のファイルを含める
                 var ext = Path.GetExtension(file);
-                if (LangMap.ContainsKey(ext))
+                if (LangMap.ContainsKey(ext) || FileNameMap.ContainsKey(fileName))
                     results.Add(file);
             }
 
@@ -222,6 +262,89 @@ public class FileIndexer
         };
 
         return (record, content, warning);
+    }
+
+    /// <summary>
+    /// Validate file content for encoding issues.
+    /// ファイル内容のエンコーディング問題を検証する。
+    /// </summary>
+    public static List<FileIssue> ValidateContent(string relativePath, byte[] rawBytes, string content)
+    {
+        var issues = new List<FileIssue>();
+
+        // U+FFFD replacement characters baked into the file / ファイルに焼き付いたU+FFFD置換文字
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\uFFFD')
+            {
+                // Find line number / 行番号を特定
+                var lineNum = content[..i].Count(c => c == '\n') + 1;
+                issues.Add(new FileIssue
+                {
+                    Path = relativePath,
+                    Kind = "replacement_char",
+                    Line = lineNum,
+                    Message = $"U+FFFD replacement character at line {lineNum}",
+                });
+                // Skip to next line to avoid reporting every char on the same line
+                // 同じ行の連続報告を避けるため次の行までスキップ
+                var nextNewline = content.IndexOf('\n', i);
+                if (nextNewline >= 0) i = nextNewline;
+            }
+        }
+
+        // BOM marker / BOMマーカー
+        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "bom",
+                Line = 1,
+                Message = "UTF-8 BOM marker detected",
+            });
+        }
+
+        // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
+        if (rawBytes.Any(b => b == 0))
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "null_byte",
+                Line = 0,
+                Message = "File contains NULL bytes (possible binary content)",
+            });
+        }
+
+        // Mixed line endings — check raw bytes before LF normalization
+        // 混在改行コード — LF正規化前のrawBytesで確認
+        var hasCrlf = false;
+        var hasLfOnly = false;
+        for (int i = 0; i < rawBytes.Length; i++)
+        {
+            if (rawBytes[i] == 0x0D && i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
+            {
+                hasCrlf = true;
+                i++; // skip the LF after CR
+            }
+            else if (rawBytes[i] == 0x0A)
+            {
+                hasLfOnly = true;
+            }
+        }
+        if (hasCrlf && hasLfOnly)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "mixed_line_endings",
+                Line = 0,
+                Message = "Mixed line endings (CRLF and LF)",
+            });
+        }
+
+        return issues;
     }
 
     /// <summary>

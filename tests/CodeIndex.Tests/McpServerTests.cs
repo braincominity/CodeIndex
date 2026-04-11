@@ -200,13 +200,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns13Tools()
+    public void ToolsList_Returns18Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(13, tools.Count);
+        Assert.Equal(18, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -221,6 +221,11 @@ public class McpServerTests : IDisposable
         Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
         Assert.Contains("outline", names);
+        Assert.Contains("batch_query", names);
+        Assert.Contains("validate", names);
+        Assert.Contains("ping", names);
+        Assert.Contains("deps", names);
+        Assert.Contains("languages", names);
         Assert.Contains("index", names);
     }
 
@@ -599,6 +604,79 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Ping_ReturnsVersionAndTimestamp()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("cdidx v", text);
+        Assert.Contains("is ready", text);
+        Assert.NotNull(response["result"]!["structuredContent"]!["version"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["timestamp"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["db_exists"]);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ExecutesMultipleQueries()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"status"},{"tool":"files","arguments":{}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Executed 2 queries", text);
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Equal(2, results.Count);
+        Assert.Equal("status", results[0]!["tool"]!.GetValue<string>());
+        Assert.Equal("files", results[1]!["tool"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_IncludesPing()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Single(results);
+        Assert.Equal("ping", results[0]!["tool"]!.GetValue<string>());
+        Assert.NotNull(results[0]!["result"]!["version"]);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_BlocksIndexInBatch()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"."}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Contains("not allowed", results[0]!["error"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_ReturnsCapabilities()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("languages supported", text);
+        var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
+        Assert.True(languages.Count > 20); // We support 30+ languages
+
+        // Verify a known language has the right capabilities / 既知の言語の機能を検証
+        var csharp = languages.First(l => l!["lang"]!.GetValue<string>() == "csharp")!;
+        Assert.True(csharp["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(csharp["graph_queries"]!.GetValue<bool>());
+        Assert.Contains(".cs", csharp["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+
+        // Verify a detection-only language / 検出のみの言語を検証
+        var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
+        Assert.False(markdown["symbol_extraction"]!.GetValue<bool>());
+        Assert.False(markdown["graph_queries"]!.GetValue<bool>());
     }
 
     [Fact]

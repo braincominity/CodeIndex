@@ -1,0 +1,243 @@
+namespace CodeIndex.Database;
+
+// Result DTOs for query operations / クエリ操作用の結果DTO
+// Extracted from DbReader.cs for file-size reduction.
+// ファイルサイズ削減のため DbReader.cs から分離。
+
+public class SearchResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public string Content { get; set; } = string.Empty;
+    public double Score { get; set; }
+}
+
+public class SymbolResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string Kind { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public int? BodyStartLine { get; set; }
+    public int? BodyEndLine { get; set; }
+    public string? Signature { get; set; }
+    public string? ContainerKind { get; set; }
+    public string? ContainerName { get; set; }
+    public string? Visibility { get; set; }
+    public string? ReturnType { get; set; }
+}
+
+public class FileResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public long Size { get; set; }
+    public int Lines { get; set; }
+    public int SymbolCount { get; set; }
+    public string? Checksum { get; set; }
+    public DateTime? Modified { get; set; }
+    public DateTime? IndexedAt { get; set; }
+}
+
+public class FileExcerptResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public string Content { get; set; } = string.Empty;
+}
+
+public class DefinitionResult : SymbolResult
+{
+    public string Content { get; set; } = string.Empty;
+    public string? BodyContent { get; set; }
+}
+
+public class ReferenceResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string SymbolName { get; set; } = string.Empty;
+    public string ReferenceKind { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public string Context { get; set; } = string.Empty;
+    public string? ContainerKind { get; set; }
+    public string? ContainerName { get; set; }
+}
+
+public class CallerResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string? CallerKind { get; set; }
+    public string? CallerName { get; set; }
+    public string CalleeName { get; set; } = string.Empty;
+    public int FirstLine { get; set; }
+    public int ReferenceCount { get; set; }
+}
+
+public class CalleeResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string? CallerKind { get; set; }
+    public string? CallerName { get; set; }
+    public string CalleeName { get; set; } = string.Empty;
+    public string ReferenceKind { get; set; } = string.Empty;
+    public int FirstLine { get; set; }
+    public int ReferenceCount { get; set; }
+}
+
+public class StatusResult
+{
+    public long Files { get; set; }
+    public long Chunks { get; set; }
+    public long Symbols { get; set; }
+    public long References { get; set; }
+    public DateTime? IndexedAt { get; set; }
+    public DateTime? LatestModified { get; set; }
+    public string? ProjectRoot { get; set; }
+    public string? GitHead { get; set; }
+    public bool? GitIsDirty { get; set; }
+    public Dictionary<string, long> Languages { get; set; } = new();
+    public Dictionary<string, long>? SymbolKinds { get; set; }
+    public List<string>? GraphSupportedLanguages { get; set; }
+    public string? Version { get; set; }
+}
+
+public class RepoMapResult
+{
+    public int FileCount { get; set; }
+    public long TotalLines { get; set; }
+    public long TotalSymbols { get; set; }
+    public long TotalReferences { get; set; }
+    public DateTime? IndexedAt { get; set; }
+    public DateTime? LatestModified { get; set; }
+    public DateTime? WorkspaceIndexedAt { get; set; }
+    public DateTime? WorkspaceLatestModified { get; set; }
+    public string? ProjectRoot { get; set; }
+    public string? GitHead { get; set; }
+    public bool? GitIsDirty { get; set; }
+    public List<RepoLanguageResult> Languages { get; set; } = [];
+    public List<RepoModuleResult> Modules { get; set; } = [];
+    public List<RepoFileSummaryResult> TopFiles { get; set; } = [];
+    public List<RepoFileSummaryResult> LargestFiles { get; set; } = [];
+    public List<RepoFileSummaryResult> SymbolRichFiles { get; set; } = [];
+    public List<RepoFileSummaryResult> ReferenceRichFiles { get; set; } = [];
+    public List<RepoEntrypointResult> Entrypoints { get; set; } = [];
+}
+
+public class RepoLanguageResult
+{
+    public string Lang { get; set; } = string.Empty;
+    public int Files { get; set; }
+    public long Lines { get; set; }
+    public long Symbols { get; set; }
+    public long References { get; set; }
+}
+
+public class RepoModuleResult
+{
+    public string Module { get; set; } = string.Empty;
+    public int Files { get; set; }
+    public long Lines { get; set; }
+    public long Symbols { get; set; }
+    public long References { get; set; }
+}
+
+public class RepoFileSummaryResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int Lines { get; set; }
+    public long Size { get; set; }
+    public int SymbolCount { get; set; }
+    public int ReferenceCount { get; set; }
+    public long? Score { get; set; }
+}
+
+public class RepoEntrypointResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string Kind { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int Score { get; set; }
+}
+
+public class SymbolAnalysisResult
+{
+    public string Query { get; set; } = string.Empty;
+    public FileResult? File { get; set; }
+    public DateTime? WorkspaceIndexedAt { get; set; }
+    public DateTime? WorkspaceLatestModified { get; set; }
+    public string? ProjectRoot { get; set; }
+    public string? GitHead { get; set; }
+    public bool? GitIsDirty { get; set; }
+    public string? GraphLanguage { get; set; }
+    public bool? GraphSupported { get; set; }
+    public string? GraphSupportReason { get; set; }
+    public List<DefinitionResult> Definitions { get; set; } = [];
+    public List<SymbolResult> NearbySymbols { get; set; } = [];
+    public List<ReferenceResult> References { get; set; } = [];
+    public List<CallerResult> Callers { get; set; } = [];
+    public List<CalleeResult> Callees { get; set; } = [];
+}
+
+/// <summary>
+/// Structured symbol outline for a single file.
+/// 1ファイルの構造化シンボルアウトライン。
+/// </summary>
+public class OutlineResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int TotalLines { get; set; }
+    public int SymbolCount { get; set; }
+    public List<OutlineSymbol> Symbols { get; set; } = [];
+}
+
+public class OutlineSymbol
+{
+    public string Kind { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public int? BodyStartLine { get; set; }
+    public int? BodyEndLine { get; set; }
+    public string? Signature { get; set; }
+    public string? ContainerKind { get; set; }
+    public string? ContainerName { get; set; }
+    public string? Visibility { get; set; }
+    public string? ReturnType { get; set; }
+}
+
+internal sealed class RepoFileStat
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public long Size { get; set; }
+    public int Lines { get; set; }
+    public int SymbolCount { get; set; }
+    public int ReferenceCount { get; set; }
+    public string? Checksum { get; set; }
+    public DateTime? Modified { get; set; }
+    public DateTime? IndexedAt { get; set; }
+}
+
+public class FileDependencyResult
+{
+    public string SourcePath { get; set; } = string.Empty;
+    public string TargetPath { get; set; } = string.Empty;
+    public int ReferenceCount { get; set; }
+    public string Symbols { get; set; } = string.Empty;
+}

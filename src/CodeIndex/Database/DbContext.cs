@@ -100,6 +100,16 @@ public class DbContext : IDisposable
                 container_name  TEXT
             )");
 
+        // File validation issues table / ファイル検証問題テーブル
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS file_issues (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT NOT NULL,
+                line            INTEGER NOT NULL DEFAULT 0,
+                message         TEXT NOT NULL
+            )");
+
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
         EnsureColumn("files", "checksum", "TEXT");
         EnsureColumn("files", "modified", "DATETIME");
@@ -126,6 +136,10 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
+        // Compound indexes for common query patterns / よくあるクエリパターン用の複合インデックス
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_kind      ON symbols(file_id, kind)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_files_lang_modified     ON files(lang, modified)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)");
 
         // Full-text search / 全文検索
         Execute(@"
@@ -164,6 +178,7 @@ public class DbContext : IDisposable
         Execute("DROP TRIGGER IF EXISTS fts_chunks_ad");
         Execute("DROP TRIGGER IF EXISTS fts_chunks_au");
         Execute("DROP TABLE IF EXISTS fts_chunks");
+        Execute("DROP TABLE IF EXISTS file_issues");
         Execute("DROP TABLE IF EXISTS symbol_references");
         Execute("DROP TABLE IF EXISTS symbols");
         Execute("DROP TABLE IF EXISTS chunks");
@@ -218,6 +233,16 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "container_name", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
+
+            // Ensure file_issues table for older DBs / 古いDBに file_issues テーブルが無い場合に作成
+            Execute(@"
+                CREATE TABLE IF NOT EXISTS file_issues (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    kind            TEXT NOT NULL,
+                    line            INTEGER NOT NULL DEFAULT 0,
+                    message         TEXT NOT NULL
+                )");
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 8 /* SQLITE_READONLY */)
         {

@@ -198,6 +198,56 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_RebuildFlag_DropsAndRebuildsIndex()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+
+            // First index / 初回インデックス
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+
+            // Add another file / ファイル追加
+            File.WriteAllText(Path.Combine(projectRoot, "extra.cs"), "public class Extra { }");
+
+            // Rebuild: should drop and re-scan all files / rebuild: 全削除して全ファイル再スキャン
+            var (exitCode2, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            // After rebuild, all files should be scanned (not skipped)
+            // rebuild 後、全ファイルがスキャンされるべき（スキップなし）
+            Assert.True(json.GetProperty("summary").GetProperty("files_total").GetInt32() >= 2);
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_RebuildWithCommits_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class A {}");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            // --rebuild + --commits should conflict / --rebuild + --commits は矛盾
+            var (exitCode, output) = RunAndCaptureOutput([projectRoot, "--rebuild", "--commits", "HEAD"]);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
     {
         lock (TestConsoleLock.Gate)

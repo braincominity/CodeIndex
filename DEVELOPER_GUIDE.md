@@ -29,15 +29,15 @@ src/CodeIndex/
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
-    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status
+    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status, file-level deps
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (21 languages)
+    SymbolExtractor.cs        — Regex-based symbol extraction (26 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
-    McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools)
+    McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
   Models/
     FileRecord.cs             — File metadata DTO
     ChunkRecord.cs            — Chunk DTO
@@ -194,6 +194,40 @@ On small projects, `grep` works fine. But as a codebase grows to tens of thousan
 | Finding all usages of a function by name | **cdidx** (`symbols` table) |
 | Searching binary files or non-code content | `grep` |
 
+## Why SQLite?
+
+Given that a database is the right approach, why SQLite specifically rather than PostgreSQL, DuckDB, LiteDB, or a dedicated search engine like Tantivy?
+
+**The short answer: SQLite is the only option that keeps cdidx a zero-dependency, zero-configuration, single-file CLI tool.**
+
+### Alternatives considered
+
+| Alternative | Strength | Why it doesn't fit cdidx |
+|---|---|---|
+| **PostgreSQL / MySQL** | Concurrency, scalability, advanced FTS | Requires a running server. Users would need to install and manage a database before using cdidx — this destroys the `dotnet tool install -g cdidx` experience. |
+| **DuckDB** | Fast analytical (OLAP) queries, columnar storage | No built-in full-text search. cdidx's workload is OLTP (insert + keyword search), not analytics. .NET bindings are less mature than `Microsoft.Data.Sqlite`. |
+| **LiteDB** | .NET-native embedded NoSQL, schema-free | No FTS. The relational structure of symbols → references → callers/callees is a natural fit for SQL joins, not document queries. |
+| **Tantivy / Lucene** | Purpose-built full-text search with superior ranking | Handles only the search side. Relational data (symbols, references, file metadata) would need a separate store, creating a two-storage sync problem. |
+| **Vector DBs** (Qdrant, Chroma) | Semantic / embedding-based search | Requires an embedding model (adds a large dependency or API calls). Keyword and structural queries are weak. Could complement SQLite in the future but cannot replace it. |
+
+### What makes SQLite the right fit
+
+1. **Zero configuration** — No server process, no connection strings, no ports. `cdidx index .` just works.
+2. **Single-file database** — The entire index lives in `.cdidx/codeindex.db`. Copy, delete, or move it like any file.
+3. **Cross-platform** — Identical behavior on Windows, macOS, and Linux without platform-specific setup.
+4. **One NuGet dependency** — `Microsoft.Data.Sqlite` is the only production dependency. This minimizes supply-chain risk and binary size.
+5. **FTS5 built-in** — Full-text search is a native SQLite extension with inverted indexes, phrase queries, and ranking — no external search engine required.
+6. **Relational + FTS in one engine** — Symbols, references, chunks, and file metadata live alongside the FTS index in the same database. Joins, triggers, and transactions keep everything consistent without cross-system synchronization.
+7. **WAL mode** — Write-Ahead Logging allows concurrent reads during indexing and supports the MCP server serving queries while a background index runs.
+8. **Incremental by nature** — SQLite transactions, `ON CONFLICT DO UPDATE`, and timestamp comparison make incremental indexing straightforward.
+
+### When SQLite would not be enough
+
+- **Massive monorepos (1M+ files):** SQLite's single-writer model could become a bottleneck. Sharding by project (cdidx already uses per-project databases) mitigates this, but true parallel writes would need a server database.
+- **Semantic search:** Embedding-based similarity search would benefit from a vector index. The `sqlite-vec` extension could add this without leaving SQLite, or a hybrid architecture (SQLite + external vector store) could be considered.
+
+For the current use case — a local CLI tool that indexes a single project for keyword search and symbol navigation — SQLite hits the sweet spot of simplicity, performance, and capability.
+
 ## FTS5 full-text search
 
 [FTS5](https://www.sqlite.org/fts5.html) (Full-Text Search 5) is a SQLite extension that provides an **inverted index** for full-text search: it maps each token (word) to a list of documents containing it, enabling O(1) lookups by keyword rather than scanning every row.
@@ -325,33 +359,41 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 
 Symbols are extracted with **compiled regex patterns**, matching one line at a time. Each language has patterns for functions, classes, and sometimes imports. Named capture group `(?<name>\w+)` extracts the identifier.
 
-Supported symbol kinds by language:
+Supported symbol kinds by language (29 languages with symbol extraction):
 
-| Language | function | class | import |
-|---|:---:|:---:|:---:|
-| Python | def, async def | class | -- |
-| JavaScript | function, const/let/var arrow | class | import...from |
-| TypeScript | function, arrow | class, interface, type, enum | import...from |
-| C# | methods, constructors | class, interface, enum, record, struct | -- |
-| Go | func, methods | type struct/interface | -- |
-| Rust | fn | struct, enum, trait, impl | -- |
-| Java | methods | class, interface, enum | -- |
-| Kotlin | fun | class, interface, enum class, object | -- |
-| Ruby | def | class, module | -- |
-| C | functions | struct, enum | -- |
-| C++ | functions | class, struct, namespace, enum | -- |
-| PHP | function | class, interface, trait, enum | -- |
-| Swift | func | class, struct, enum, protocol | -- |
-| Dart | functions | class, mixin, enum, extension | import |
-| Scala | def | class, object, trait, case class, enum | import |
-| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
-| Lua | function, local function | -- | require |
-| R | name <- function() | -- | library, require |
-| Haskell | type signatures (name ::) | data, newtype, type, class, instance | import |
-| F# | let, let rec | type, module | open |
-| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports |
+| Language | function | class / namespace | import | Graph |
+|---|---|---|---|:---:|
+| Python | def, async def | class | from/import | yes |
+| JavaScript | function, arrow, methods | class | import...from | yes |
+| TypeScript | function, arrow, methods | class, interface, type, enum, abstract class, namespace/module | import...from | yes |
+| C# | methods, constructors, operators, indexers, const, static readonly, properties, events, enum members, #region, static ctors, finalizers | class, interface, enum, record, struct, delegate, ref struct | using, using alias | yes |
+| Go | func, methods | struct, interface, type alias | import | yes |
+| Rust | fn, const fn, unsafe fn, macro_rules!, const, static | struct, enum, trait, union, impl, type alias, mod | use | yes |
+| Java | methods, static final constants, enum members | class, interface, enum, record, sealed, @interface | import | yes |
+| Kotlin | fun, extension fun, suspend/inline/infix, val/var | class, interface, enum class, object, companion object, data/sealed/value/inner/annotation class | import | yes |
+| Ruby | def, attr_accessor/reader/writer, Rails DSL (has_many, belongs_to, scope) | class, module | require | yes |
+| C | functions | struct, enum | #include | yes |
+| C++ | functions | class, struct, namespace, enum | #include | yes |
+| PHP | function, const | class (readonly/abstract/final), interface, trait, enum, namespace | use, require/include | yes |
+| Swift | func (mutating/nonisolated) | class, struct, enum, protocol, actor, distributed actor, typealias | import | yes |
+| Dart | functions | class, mixin, enum, extension | import | yes |
+| Scala | def | class, object, trait, case class, enum | import | yes |
+| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require | yes |
+| Shell | function declarations | -- | -- | -- |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- |
+| Terraform | variable, output, locals | resource, data, module | -- | -- |
+| Protobuf | rpc | message, enum, service | import | -- |
+| GraphQL | query, mutation, subscription | type, interface, union, enum, scalar, input | -- | -- |
+| Gradle | task, def | -- | apply plugin, id | -- |
+| Makefile | targets | -- | -- | -- |
+| Dockerfile | named stages (AS) | base images (FROM) | -- | -- |
+| Lua | function, local function | -- | require | yes |
+| R | name <- function() | -- | library, require | -- |
+| Haskell | type signatures (name ::) | data, newtype, type, class, instance | import | -- |
+| F# | let, let rec | type, module | open | -- |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | yes |
 
-Razor (`.cshtml`) and Blazor (`.razor`) are detected as csharp. XAML, MSBuild project files (`.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets`), and Zig are detected and indexed as raw text but have no symbol extraction patterns.
+Additionally, 17 languages are detected and indexed as raw text without symbol extraction: batch, cmake, css, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, powershell, svelte, toml, vue, xml, yaml, zig.
 
 Regex-based extraction is intentionally simple. Speed and portability are prioritized over AST-level accuracy.
 
@@ -436,7 +478,7 @@ See [Exit codes](README.md#exit-codes) in README.
 - **Freshness metadata for trust decisions** — `status` exposes whole-workspace freshness and git state. `map` keeps `indexed_at` / `latest_modified` scoped to the filtered result set and also exposes `workspace_indexed_at` / `workspace_latest_modified` for whole-workspace freshness. `inspect` mirrors those whole-workspace timestamps and git fields so symbol-oriented AI flows can make trust decisions without a separate `status` call. `files` exposes per-file checksum plus modified/indexed timestamps. File-column migrations are applied opportunistically for older DBs, and read paths are designed to avoid crashing if in-place migration is unavailable. MCP zero-result responses include `indexed_file_count` and `indexed_at` so AI clients can self-diagnose stale or empty indexes without a separate `status` call.
 - **Bundled symbol analysis** — `inspect` and MCP `analyze_symbol` return definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph-support metadata in one request so AI clients can answer common symbol questions with fewer round-trips.
 - **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages intentionally fall back to text search instead of returning low-confidence pseudo-graph data.
-- **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability, but stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when the language patterns can infer them.
+- **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability, but stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when the language patterns can infer them. **Pattern externalization**: Language patterns are currently defined inline in `SymbolExtractor.cs` using compiled `Regex` objects. This keeps the extraction pipeline self-contained and allows compile-time validation, but means adding a new language requires a code change and rebuild. A future iteration could externalize patterns to JSON/TOML files (loaded at startup), which would lower the barrier for community contributions and enable hot-reload during development. The trade-off is losing compile-time safety and slightly increasing startup cost. If externalized, patterns should include: language name, kind (function/class/import/namespace), regex string, body style (brace/indent/ruby-end/none), and optional capture group names for visibility and return type.
 - **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
 - **Structured MCP responses** — MCP tool calls return typed JSON in `structuredContent` and keep `content` concise for compatibility.
 - **MCP tool annotations** — All tools emit `annotations` with `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` per the MCP spec, so AI clients can auto-approve safe read-only queries.
@@ -676,6 +718,40 @@ files 1──N symbol_references
 | 関数名で全使用箇所を検索 | **cdidx**（`symbols`テーブル） |
 | バイナリファイルや非コードコンテンツの検索 | `grep` |
 
+## なぜSQLiteなのか？
+
+データベースが正しいアプローチだとして、なぜPostgreSQL、DuckDB、LiteDB、Tantivy等の専用検索エンジンではなくSQLiteなのか？
+
+**端的に言えば、cdidxを「依存ゼロ・設定ゼロ・単一ファイル」のCLIツールとして維持できるのはSQLiteだけだからです。**
+
+### 検討した代替案
+
+| 代替案 | 強み | cdidxに適さない理由 |
+|---|---|---|
+| **PostgreSQL / MySQL** | 並行性、スケーラビリティ、高度なFTS | サーバープロセスが必須。cdidxを使う前にDBのインストールと管理が必要になり、`dotnet tool install -g cdidx` で即使える体験が壊れる。 |
+| **DuckDB** | 高速な分析（OLAP）クエリ、カラムナストレージ | 全文検索が未搭載。cdidxのワークロードはOLTP（挿入＋キーワード検索）であり分析ではない。.NETバインディングも `Microsoft.Data.Sqlite` ほど成熟していない。 |
+| **LiteDB** | .NETネイティブの組み込みNoSQL、スキーマフリー | FTSなし。symbols → references → callers/callees のリレーショナル構造はSQLのJOINが自然であり、ドキュメントクエリでは扱いにくい。 |
+| **Tantivy / Lucene** | 全文検索専用で高精度なランキング | 検索のみを扱う。リレーショナルデータ（シンボル、参照、ファイルメタデータ）には別のストレージが必要になり、2ストレージの同期問題が発生する。 |
+| **ベクトルDB** (Qdrant, Chroma) | セマンティック/埋め込みベース検索 | 埋め込みモデルが必要（大きな依存やAPI呼び出しが増える）。キーワード検索や構造化クエリが弱い。将来SQLiteを補完する可能性はあるが、置き換えはできない。 |
+
+### SQLiteが最適な理由
+
+1. **設定不要** — サーバープロセス、接続文字列、ポート設定が一切不要。`cdidx index .` だけで動く。
+2. **単一ファイルDB** — インデックス全体が `.cdidx/codeindex.db` に収まる。コピー、削除、移動が通常のファイル操作で完結。
+3. **クロスプラットフォーム** — Windows、macOS、Linuxで同一の動作。プラットフォーム固有のセットアップ不要。
+4. **NuGet依存は1個だけ** — `Microsoft.Data.Sqlite` のみ。サプライチェーンリスクとバイナリサイズを最小限に抑える。
+5. **FTS5が組み込み** — 全文検索は転置インデックス、フレーズクエリ、ランキングを備えたSQLiteネイティブ拡張。外部検索エンジン不要。
+6. **リレーショナル＋FTSが1エンジンで完結** — シンボル、参照、チャンク、ファイルメタデータがFTSインデックスと同じDB内に共存。JOIN、トリガー、トランザクションでクロスシステム同期なしに整合性を維持。
+7. **WALモード** — Write-Ahead Loggingによりインデックス中も並行読み取りが可能。MCPサーバーがバックグラウンドインデックス中にクエリを返すケースを支える。
+8. **インクリメンタル更新に適した基盤** — SQLiteのトランザクション、`ON CONFLICT DO UPDATE`、タイムスタンプ比較でインクリメンタルインデックスを自然に実現。
+
+### SQLiteでは足りなくなるケース
+
+- **超大規模monorepo（100万ファイル超）:** SQLiteのsingle-writerモデルがボトルネックになりうる。プロジェクト単位のDB分割（cdidxは既にプロジェクト別DB）で緩和できるが、真の並列書き込みにはサーバーDBが必要。
+- **セマンティック検索:** 埋め込みベースの類似検索にはベクトルインデックスが有利。`sqlite-vec` 拡張でSQLiteを離れずに対応する方法か、ハイブリッド構成（SQLite＋外部ベクトルストア）を検討できる。
+
+現在のユースケース — 単一プロジェクトをキーワード検索とシンボルナビゲーション用にインデックスするローカルCLIツール — において、SQLiteはシンプルさ・パフォーマンス・機能のバランスが最適です。
+
 ## FTS5 全文検索
 
 [FTS5](https://www.sqlite.org/fts5.html)（Full-Text Search 5）はSQLiteの拡張で、全文検索用の**転置インデックス**を提供します。各トークン（単語）からそれを含むドキュメントのリストへのマッピングを構築し、全行スキャンではなくO(1)のキーワード検索を実現します。
@@ -807,33 +883,41 @@ LIMIT 20;
 
 シンボルは**コンパイル済み正規表現パターン**で1行ずつマッチングして抽出されます。各言語に関数、クラス、場合によってはインポート用のパターンがあります。名前付きキャプチャグループ `(?<name>\w+)` で識別子を取得します。
 
-言語別対応シンボル種別:
+言語別対応シンボル種別（シンボル抽出対応29言語）:
 
-| 言語 | function | class | import |
-|---|:---:|:---:|:---:|
-| Python | def, async def | class | -- |
-| JavaScript | function, const/let/var アロー | class | import...from |
-| TypeScript | function, アロー | class, interface, type, enum | import...from |
-| C# | メソッド, コンストラクタ | class, interface, enum, record, struct | -- |
-| Go | func, メソッド | type struct/interface | -- |
-| Rust | fn | struct, enum, trait, impl | -- |
-| Java | メソッド | class, interface, enum | -- |
-| Kotlin | fun | class, interface, enum class, object | -- |
-| Ruby | def | class, module | -- |
-| C | 関数 | struct, enum | -- |
-| C++ | 関数 | class, struct, namespace, enum | -- |
-| PHP | function | class, interface, trait, enum | -- |
-| Swift | func | class, struct, enum, protocol | -- |
-| Dart | 関数 | class, mixin, enum, extension | import |
-| Scala | def | class, object, trait, case class, enum | import |
-| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
-| Lua | function, local function | -- | require |
-| R | name <- function() | -- | library, require |
-| Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import |
-| F# | let, let rec | type, module | open |
-| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports |
+| 言語 | function | class / namespace | import | Graph |
+|---|---|---|---|:---:|
+| Python | def, async def | class | from/import | yes |
+| JavaScript | function, アロー, メソッド | class | import...from | yes |
+| TypeScript | function, アロー, メソッド | class, interface, type, enum, abstract class, namespace/module | import...from | yes |
+| C# | メソッド, コンストラクタ, 演算子, インデクサ, const, static readonly, プロパティ, イベント, enum メンバー, #region, 静的コンストラクタ, ファイナライザ | class, interface, enum, record, struct, delegate, ref struct | using, using alias | yes |
+| Go | func, メソッド | struct, interface, 型エイリアス | import | yes |
+| Rust | fn, const fn, unsafe fn, macro_rules!, const, static | struct, enum, trait, union, impl, type alias, mod | use | yes |
+| Java | メソッド, static final 定数, enum メンバー | class, interface, enum, record, sealed, @interface | import | yes |
+| Kotlin | fun, 拡張関数, suspend/inline/infix, val/var | class, interface, enum class, object, companion object, data/sealed/value/inner/annotation class | import | yes |
+| Ruby | def, attr_accessor/reader/writer, Rails DSL | class, module | require | yes |
+| C | 関数 | struct, enum | #include | yes |
+| C++ | 関数 | class, struct, namespace, enum | #include | yes |
+| PHP | function, const | class (readonly/abstract/final), interface, trait, enum, namespace | use, require/include | yes |
+| Swift | func (mutating/nonisolated) | class, struct, enum, protocol, actor, distributed actor, typealias | import | yes |
+| Dart | 関数 | class, mixin, enum, extension | import | yes |
+| Scala | def | class, object, trait, case class, enum | import | yes |
+| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require | yes |
+| Shell | 関数宣言 | -- | -- | -- |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- |
+| Terraform | variable, output, locals | resource, data, module | -- | -- |
+| Protobuf | rpc | message, enum, service | import | -- |
+| GraphQL | query, mutation, subscription | type, interface, union, enum, scalar, input | -- | -- |
+| Gradle | task, def | -- | apply plugin, id | -- |
+| Makefile | ターゲット | -- | -- | -- |
+| Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- |
+| Lua | function, local function | -- | require | yes |
+| R | name <- function() | -- | library, require | -- |
+| Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import | -- |
+| F# | let, let rec | type, module | open | -- |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | yes |
 
-Razor（`.cshtml`）と Blazor（`.razor`）は csharp として検出される。XAML、MSBuild プロジェクトファイル（`.csproj`、`.fsproj`、`.vbproj`、`.props`、`.targets`）、Zig は言語検出・テキストインデックスのみで、シンボル抽出パターンはまだない。
+他に17言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, css, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, powershell, svelte, toml, vue, xml, yaml, zig。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 
@@ -921,7 +1005,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **MCPツールアノテーション** — 全ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返し、AIクライアントが安全な読み取り専用クエリを自動承認できるようにする。
 - **MCPサーバー instructions** — `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列を含め、AIクライアントが初回接続時に適切なツールを選べるようにする。
 - **トリガー付きコンテンツ外部参照FTS5** — `chunks`テーブルを参照しコピーを保存しないことでストレージ倍増を回避。データベーストリガーでFTSインデックスを自動同期。
-- **正規表現シンボル抽出** — ASTパーサーも言語固有の依存関係も不要。精度より速度とポータビリティを優先しつつ、言語パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型も保存する。
+- **正規表現シンボル抽出** — ASTパーサーも言語固有の依存関係も不要。精度より速度とポータビリティを優先しつつ、言語パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型も保存する。**パターン外部化**: 言語パターンは現在 `SymbolExtractor.cs` 内にコンパイル済み `Regex` として定義。抽出パイプラインが自己完結し、コンパイル時検証が効くが、言語追加にはコード変更と再ビルドが必要。将来的にはJSON/TOMLファイルに外部化し（起動時読み込み）、コミュニティ貢献の敷居を下げ、開発時のホットリロードも可能にできる。トレードオフはコンパイル時安全性の喪失と起動コストの微増。外部化時のスキーマ: 言語名、種別（function/class/import/namespace）、正規表現文字列、本体スタイル（brace/indent/ruby-end/none）、可視性・戻り値型のキャプチャグループ名。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI/機械向け出力。
 - **手動引数解析** — `System.CommandLine`は依存削減のため削除。シンプルなswitch文での解析。
 - **後方互換なシンボルスキーマ** — 新しいバイナリで古いDBを開いたときは、可能なら不足するシンボル列を自動追加する。読み取り経路でその場移行ができない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。

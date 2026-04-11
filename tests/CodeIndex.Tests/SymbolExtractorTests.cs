@@ -33,6 +33,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_DetectsDecoratedAndDunderMethods()
+    {
+        var content = "@dataclass\nclass User:\n    name: str\n    age: int\n\n    def __init__(self, name: str, age: int) -> None:\n        self.name = name\n\n    @property\n    def display_name(self) -> str:\n        return self.name\n\n    def __str__(self) -> str:\n        return self.name\n\n    @staticmethod\n    def create(name: str) -> 'User':\n        return User(name, 0)";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__init__");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display_name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__str__");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsFunctionsAndClasses()
     {
         // Should detect exported and non-exported functions and classes
@@ -43,6 +56,19 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "login");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AuthService");
         Assert.Contains(symbols, s => s.Kind == "import");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
+    {
+        var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BaseService");
+        // Quoted ambient module declaration / 引用符付きアンビエントモジュール宣言
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "express");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "App.Models");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
     }
 
     [Fact]
@@ -95,6 +121,230 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsNoVisibilityMembers()
+    {
+        // Classes/methods without explicit visibility (internal by default)
+        // 明示的な visibility のないクラス/メソッド（デフォルト internal）
+        var content = "namespace MyApp;\n\nclass InternalClass\n{\n    static void Helper() { }\n}\n\nstatic class Utils\n{\n    static int Add(int a, int b) => a + b;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InternalClass");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Helper");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Utils");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Add");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsPrimaryConstructors()
+    {
+        // C# 12 primary constructors on class, struct, record
+        // C# 12 のクラス・構造体・record の primary constructor
+        var content = "public class Service(ILogger logger, IDb db)\n{\n}\n\npublic struct Point(double x, double y);";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        // Signature should contain the parameter list / シグネチャにパラメータリストが含まれるべき
+        var service = symbols.First(s => s.Name == "Service");
+        Assert.Contains("ILogger logger", service.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_AttributeDoesNotBlockNextLine()
+    {
+        // [Attribute] on the line before class/method should not prevent extraction
+        // [Attribute] がクラス/メソッドの前行にあっても抽出を妨げないこと
+        var content = "[Serializable]\npublic class Config\n{\n    [Obsolete(\"Use V2\")]\n    public void OldMethod() { }\n\n    [HttpGet(\"/api\")]\n    public async Task<IActionResult> GetItems() { return null; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OldMethod");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetItems");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRecordVariants()
+    {
+        // record, record class, record struct with various modifiers
+        var content = "public record UserDto(string Name, int Age);\npublic sealed record class Config(string Key, string Value);\ninternal readonly record struct Point(double X, double Y);";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserDto");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        // Signature should contain parameters / シグネチャにパラメータが含まれるべき
+        var userDto = symbols.First(s => s.Name == "UserDto");
+        Assert.Contains("string Name", userDto.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCompoundVisibility()
+    {
+        // protected internal and private protected / 複合アクセス修飾子
+        var content = "public class Base\n{\n    protected internal void Foo() { }\n    private protected int Bar { get; set; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = symbols.FirstOrDefault(s => s.Name == "Foo");
+        Assert.NotNull(foo);
+        Assert.Equal("protected internal", foo.Visibility);
+
+        var bar = symbols.FirstOrDefault(s => s.Name == "Bar");
+        Assert.NotNull(bar);
+        Assert.Equal("private protected", bar.Visibility);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsUsingAlias()
+    {
+        var content = "using System;\nusing Json = System.Text.Json;\nusing static System.Math;\nglobal using Logging = Microsoft.Extensions.Logging;";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Json");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Math");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Logging");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsConstAndStaticReadonly()
+    {
+        var content = "public class Config\n{\n    public const string Version = \"1.0\";\n    private const int MaxRetries = 3;\n    internal static readonly Dictionary<string, string> Map = new();\n    public string MutableField;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Version" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Map");
+        // Regular mutable fields should NOT be extracted / 通常のフィールドは抽出されないこと
+        Assert.DoesNotContain(symbols, s => s.Name == "MutableField");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsExpressionBodiedMembers()
+    {
+        var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "X" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pi" && s.ReturnType == "double");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfaceImpl()
+    {
+        var content = "public class MyClass : IDisposable, IComparable<MyClass>\n{\n    void IDisposable.Dispose()\n    {\n    }\n    int IComparable<MyClass>.CompareTo(MyClass other) => 0;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CompareTo" && s.ReturnType == "int");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsIndexer()
+    {
+        var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexer = symbols.FirstOrDefault(s => s.Name == "this");
+        Assert.NotNull(indexer);
+        Assert.Equal("function", indexer.Kind);
+        Assert.Equal("string", indexer.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsOperatorOverloads()
+    {
+        var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Money");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsPartialMethods()
+    {
+        // C# 9 extended partial methods / C# 9 拡張 partial メソッド
+        var content = "public partial class App\n{\n    partial void OnInit();\n    public partial string GetName();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "App");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnInit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetName");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsFileScopedType()
+    {
+        // C# 11 file-scoped type / C# 11 のファイルスコープ型
+        var content = "file class InternalHelper\n{\n    file static void DoWork() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InternalHelper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DoWork");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRefStruct()
+    {
+        var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Span2D");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "StackBuffer");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEnumMembers()
+    {
+        var content = "public enum Color\n{\n    Red,\n    Green = 1,\n    Blue = 2,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Green");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Blue");
+    }
+
+    [Fact]
+    public void Extract_CSharp_EnumMemberDoesNotMatchObjectInitializer()
+    {
+        // Object initializer lines should not be extracted as enum members
+        // オブジェクト初期化子行は enum メンバーとして抽出されないこと
+        var content = "var user = new User\n{\n    Name = \"Alice\",\n    Age = 30,\n    Email = GetEmail(),\n};";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "Email" && s.Kind == "function");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRegionDirectives()
+    {
+        var content = "#region Private Methods\nvoid Helper() { }\n#endregion\n\n#region Properties\npublic int X { get; set; }\n#endregion";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Private Methods");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Properties");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsStaticConstructorAndFinalizer()
+    {
+        var content = "public class Cache\n{\n    static Cache()\n    {\n        // init\n    }\n\n    ~Cache()\n    {\n        // cleanup\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Cache");
+        // Static constructor — extracted by the static ctor pattern
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Cache" && s.Line == 3);
+        // Finalizer
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Cache" && s.Line == 8);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNullableReturnTypeMethods()
     {
         var content = "public static class GitHelper\n{\n    public static string? ResolveGitCommonDir(string projectRoot)\n    {\n        return null;\n    }\n}";
@@ -135,6 +385,111 @@ public class SymbolExtractorTests
         Assert.Equal(2, symbols.Count);
         Assert.Contains(symbols, s => s.Name == "NewHandler");
         Assert.Contains(symbols, s => s.Name == "ServeHTTP");
+    }
+
+    [Fact]
+    public void Extract_Shell_DetectsFunctions()
+    {
+        var content = "function setup() {\n  echo 'setup'\n}\n\ncleanup() {\n  echo 'cleanup'\n}";
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "setup");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cleanup");
+    }
+
+    [Fact]
+    public void Extract_SQL_DetectsCreateStatements()
+    {
+        var content = "CREATE TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE VIEW active_users AS SELECT * FROM users;\n\nALTER TABLE users ADD COLUMN email TEXT;";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "get_user");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "active_users");
+    }
+
+    [Fact]
+    public void Extract_Terraform_DetectsResources()
+    {
+        var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
+        var symbols = SymbolExtractor.Extract(1, "terraform", content);
+
+        // resource captures logical name (second quoted token), not provider type
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my_bucket");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "region");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bucket_arn");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vpc");
+    }
+
+    [Fact]
+    public void Extract_PHP_DetectsExpandedFeatures()
+    {
+        var content = "<?php\nnamespace App\\Models;\n\nuse Illuminate\\Database\\Eloquent\\Model;\n\nreadonly class Config {\n    public const VERSION = '1.0';\n    public function getName(): string { return ''; }\n}\n\nenum Status: string {\n    case Active = 'active';\n}";
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name.Contains("App"));
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("Model"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getName");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+    }
+
+    [Fact]
+    public void Extract_Swift_DetectsActorAndTypealias()
+    {
+        var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ndistributed actor RemoteWorker { }";
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NetworkManager");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RemoteWorker");
+    }
+
+    [Fact]
+    public void Extract_Ruby_DetectsAttrAndRailsDSL()
+    {
+        var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n\n  def initialize(name)\n    @name = name\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "email");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "posts");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "company");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "active");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "initialize");
+    }
+
+    [Fact]
+    public void Extract_Rust_DetectsExpandedFeatures()
+    {
+        var content = "macro_rules! my_macro {\n    () => {};\n}\n\npub mod utils {\n}\n\nconst MAX_SIZE: usize = 1024;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\npub const fn default_value() -> i32 { 42 }\npub unsafe fn raw_ptr() { }\ntype Result<T> = std::result::Result<T, Error>;\npub union MyUnion { f: f32 }";
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_macro");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "utils");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_SIZE");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "COUNTER");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "default_value");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "raw_ptr");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Result");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyUnion");
+    }
+
+    [Fact]
+    public void Extract_Go_DetectsTypeAliasAndConst()
+    {
+        var content = "type Handler struct {\n}\ntype ID = string\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Logger");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DefaultTimeout");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GlobalConfig");
     }
 
     [Fact]
@@ -187,6 +542,74 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsRecordAndSealedClass()
+    {
+        // Java 16+ record, Java 17+ sealed class / Java 16 の record、Java 17 の sealed class
+        var content = "public record Point(int x, int y) { }\npublic sealed class Shape permits Circle, Rect { }";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsStaticFinalAndEnumMembers()
+    {
+        var content = "public class Config {\n    public static final String VERSION = \"1.0\";\n    private static final int MAX_RETRIES = 3;\n}\n\npublic enum Status {\n    ACTIVE,\n    INACTIVE,\n    PENDING;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_RETRIES");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ACTIVE");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "INACTIVE");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsAnnotationType()
+    {
+        var content = "public @interface MyAnnotation {\n    String value();\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyAnnotation");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "value");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsFlexibleConstantOrder()
+    {
+        // final static order (reversed) and generic types with spaces
+        var content = "public class Config {\n    private final static int MAX = 100;\n    public static final Map<String, Integer> COUNTS = Map.of();\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "COUNTS");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsEnumMembersWithTwoSpaceIndent()
+    {
+        // 2-space indent enum / 2スペースインデントの enum
+        var content = "public enum Color {\n  RED,\n  GREEN,\n  BLUE;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RED");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GREEN");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BLUE");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsDefaultAndSynchronizedMethods()
+    {
+        var content = "public interface Service {\n    default void init() { }\n    static Service create() { return null; }\n}\npublic class Worker {\n    synchronized void process() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsFunctionsAndClasses()
     {
         // Kotlin: class, fun / Kotlin: クラス、関数
@@ -195,6 +618,24 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+    }
+
+    [Fact]
+    public void Extract_Kotlin_DetectsExpandedFeatures()
+    {
+        var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Email");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        // Companion object (unnamed) / コンパニオンオブジェクト（無名）
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Signature != null && s.Signature.Contains("companion object"));
+        // Extension function / 拡張関数
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "truncate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetchData");
+        // const val / 定数プロパティ
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
     }
 
     [Fact]
@@ -444,5 +885,113 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Error");
         // main() should still be detected / main()は検出されるべき
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
+    }
+
+    [Fact]
+    public void Extract_GraphQL_DetectsSymbols()
+    {
+        var content = """
+            type User {
+              id: ID!
+              name: String!
+            }
+
+            input CreateUserInput {
+              name: String!
+              email: String!
+            }
+
+            enum Role {
+              ADMIN
+              USER
+            }
+
+            query GetUser($id: ID!) {
+              user(id: $id) { name }
+            }
+
+            mutation CreateUser($input: CreateUserInput!) {
+              createUser(input: $input) { id }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "graphql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Role");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
+    }
+
+    [Fact]
+    public void Extract_Gradle_DetectsSymbols()
+    {
+        // Both legacy apply plugin: and modern plugins { id '...' } forms
+        // レガシーの apply plugin: と新しい plugins { id '...' } の両形式
+        var content = "apply plugin: 'java'\n\nplugins {\n  id 'org.springframework.boot'\n}\n\ntask build {\n  doLast { println 'Building' }\n}\n\ndef customTask {\n  println 'custom'\n}\n";
+        var symbols = SymbolExtractor.Extract(1, "gradle", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "java");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "org.springframework.boot");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "customTask");
+    }
+
+    [Fact]
+    public void Extract_Makefile_DetectsTargets()
+    {
+        var content = "all: build test\n\nbuild:\n\tgcc -o main main.c\n\ntest:\n\t./run_tests\n\nclean:\n\trm -f main\n";
+        var symbols = SymbolExtractor.Extract(1, "makefile", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "all");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "test");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "clean");
+    }
+
+    [Fact]
+    public void Extract_Dockerfile_DetectsStages()
+    {
+        var content = "FROM node:18 AS builder\nWORKDIR /app\nCOPY . .\nRUN npm build\n\nFROM alpine:3.18\nCOPY --from=builder /app/dist /app\n";
+        var symbols = SymbolExtractor.Extract(1, "dockerfile", content);
+
+        // Named stages (AS builder) take priority over base image on the same line
+        // 同一行では名前付きステージ(AS builder)がベースイメージより優先
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "builder");
+        // Unnamed FROM lines produce base image class / 名前なしFROM行はベースイメージclassを生成
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpine:3.18");
+        Assert.Equal(2, symbols.Count);
+    }
+
+    [Fact]
+    public void Extract_Protobuf_DetectsSymbols()
+    {
+        var content = """
+            syntax = "proto3";
+            import "google/protobuf/timestamp.proto";
+
+            message User {
+              string name = 1;
+              int32 age = 2;
+            }
+
+            enum Status {
+              UNKNOWN = 0;
+              ACTIVE = 1;
+            }
+
+            service UserService {
+              rpc GetUser (GetUserRequest) returns (User);
+              rpc ListUsers (ListUsersRequest) returns (ListUsersResponse);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "protobuf", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "google/protobuf/timestamp.proto");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ListUsers");
     }
 }

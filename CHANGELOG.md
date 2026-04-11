@@ -9,6 +9,226 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+
+- **Final dogfooding verification** — Full rebuild and self-analysis: 61 files, 1254 symbols, 4798 references, 46 languages detected, 29 with symbol extraction, 18 with graph queries. 322 tests (320 pass + 2 skip). All documentation synchronized. Affected: `CHANGELOG.md`.
+
+- **CLAUDE.md architecture: SymbolExtractor count updated to 29 languages** — Affected: `CLAUDE.md`.
+
+- **README graph language list updated to 18 languages** — Added Lua and VB.NET to graph-supported language lists in both EN/JP sections. Affected: `README.md`.
+
+- **DEVELOPER_GUIDE: VB.NET graph=yes** — Updated VB.NET to graph=yes in both EN/JP language tables (now 18 graph-supported languages). Affected: `DEVELOPER_GUIDE.md`.
+
+- **VB.NET call-graph reference extraction** — VB.NET now supports `references`, `callers`, and `callees` queries. Added `'` comment stripping. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
+
+- **batch_query supports ping tool** — The `ping` tool can now be called within `batch_query`. Added test. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **DEVELOPER_GUIDE language table: Lua graph, Swift actor, PHP namespace** — Updated Lua to graph=yes, Swift to include actor/typealias, PHP to include readonly class/namespace/use/const. Both EN/JP sections. Affected: `DEVELOPER_GUIDE.md`.
+
+- **MCP instructions mention search exact mode** — AI clients are now guided to use `search` with `exact: true` for case-sensitive matching. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+
+- **PHP: readonly class, namespace, use, const, expanded modifiers** — PHP patterns now support `readonly class` (PHP 8.2+), `namespace`, `use` imports, `const` declarations, and enum types. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Swift: actor, distributed actor, typealias, expanded method modifiers** — Swift patterns now support `actor` (Swift 5.5+), `distributed actor`, `typealias`, and additional method modifiers (`nonisolated`, `mutating`, `nonmutating`). Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Lua call-graph reference extraction** — Lua now supports `references`, `callers`, and `callees` queries. Added `--` comment stripping for Lua. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **MCP `search` tool `exact` parameter** — The MCP `search` tool now accepts `exact` boolean for case-sensitive substring matching, matching the CLI `--exact` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
+- **`search --exact` flag for case-sensitive substring match** — New `--exact` option bypasses FTS5 tokenization and uses direct `instr()` for case-sensitive exact substring matching. Useful when FTS5's case-insensitive token matching returns too many results. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **README Code Search Rules updated with deps, --since, --dry-run, --count** — Query strategy sections (EN/JP) now cover `deps`, `--reverse`, `--since`, `--dry-run`, and `--count`. Updated symbol-aware language list to 29. Removed Shell/SQL/Terraform from "no symbol extraction" list. Affected: `README.md`.
+
+- **DEVELOPER_GUIDE language pattern reference table** — Replaced the old 21-language table with a comprehensive 29-language table including Graph support column. Added maintenance rule to CLAUDE.md per-commit checklist: update the table when language patterns change. Affected: `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **TESTING_GUIDE updated with new test files** — Added ConcurrencyTests, PerformanceTests, DbRecoveryTests to both English and Japanese test layout sections. Affected: `TESTING_GUIDE.md`.
+
+- **Cross-platform path separator test** — Verified Windows-style backslash paths are normalized to forward slashes in file records. Affected: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **C# attribute-decorated member test coverage** — Verified `[Serializable]`, `[Obsolete]`, `[HttpGet]` on lines before class/method do not block extraction. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **MCP `ping` tool** — Lightweight connection check that returns server version, timestamp, DB path, and whether the DB exists. No database required. AI agents can verify MCP connectivity before issuing queries. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **MCP `search` tool `noDedup` parameter** — The MCP `search` tool now accepts a `noDedup` boolean to disable overlapping-chunk deduplication, matching the CLI `--no-dedup` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
+- **`search --since` filter** — The `--since` option now works on `search` (CLI and MCP), not just `files`. AI agents can search only within recently modified files, reducing noise in large repositories. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
+- **`--dry-run` flag for index command** — New `--dry-run` option scans files without writing to the database. Shows file count and language breakdown, useful for verifying what would be indexed. Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **DB compound indexes for query performance** — Added `symbols(file_id, kind)`, `files(lang, modified)`, and `symbol_references(container_name, reference_kind)` compound indexes to accelerate common query patterns. Affected: `src/CodeIndex/Database/DbContext.cs`.
+
+- **Shell, SQL, Terraform symbol extraction** — Shell: bash/zsh function declarations. SQL: CREATE TABLE/VIEW/FUNCTION/PROCEDURE/TRIGGER/INDEX, ALTER TABLE. Terraform: resource, data, module, variable, output, locals. All three languages now support `symbols`, `definition`, and `outline` queries. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Ruby: attr_accessor/reader/writer and Rails DSL extraction** — Ruby patterns now extract `attr_accessor :name`, `attr_reader :email`, and Rails DSL (`has_many`, `has_one`, `belongs_to`, `scope`) as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Rust: macro_rules!, mod, const/static, const fn, unsafe fn, union, type alias** — Rust patterns now support `macro_rules!`, `mod` modules, `const`/`static` items, `const fn`, `unsafe fn`, `extern "C" fn`, `union`, and `type` aliases. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **TypeScript: abstract class, declare, namespace/module, readonly/override** — TypeScript patterns now support `abstract class`, `declare class/module/interface`, `namespace/module`, and `readonly`/`abstract`/`override` method modifiers. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Python: decorated and dunder method test coverage** — Added tests verifying `@dataclass`, `@property`, `@staticmethod` decorated classes/methods, dunder methods (`__init__`, `__str__`), and type hints in signatures are correctly extracted by existing patterns. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Go: type aliases, const block members, package-level var** — Go patterns now extract `type Name = OtherType` aliases, `const ( Name = value )` block members, and `var Name Type` package-level variables. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Kotlin: companion object, value/sealed/inner/annotation class, extension functions, val/var properties** — Expanded Kotlin patterns with companion object, value class, sealed interface, inner class, annotation class, extension functions (`fun Type.name()`), suspend/inline/infix/operator/tailrec modifiers, and const/lateinit val/var property extraction. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Java IgnoredCallNames expansion** — Added `instanceof`, `super`, `assert`, `throws`, `extends`, `implements`, `synchronized` to the reference extractor's ignore list to reduce false-positive call references in Java code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
+
+- **Java symbol extraction: record, sealed, @interface, static final, enum members, expanded modifiers** — Java patterns now support `record` (Java 16+), `sealed`/`non-sealed` classes (Java 17+), `@interface` annotation types, `static final` constants (C# const equivalent), enum members, and expanded method modifiers (`default`, `native`, `final`, `strictfp`). Cross-language parity with recent C# improvements. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Pattern externalization design note in DEVELOPER_GUIDE** — Documented the current inline-regex approach, trade-offs, and a future externalization path (JSON/TOML with schema: language, kind, regex, body style, capture groups). Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
+
+- **README TL;DR section and doc links** — Added collapsible TL;DR section at the top of README (EN/JP) with quick-start commands, feature counts, and links to DEVELOPER_GUIDE, SELF_IMPROVEMENT, and TESTING_GUIDE. Makes the GitHub/NuGet entry point more scannable without removing detailed content. Affected: `README.md`.
+
+- **CLAUDE.md Japanese section sync** — Added missing `--reverse` to deps, updated architecture sections for file split (DbSearchReader, DbSymbolReader, McpToolDefinitions, McpToolHandlers, QueryResults), added new test files. Both English and Japanese sections now match. Affected: `CLAUDE.md`.
+
+- **Unicode/CJK character tests** — Added tests verifying Japanese, Chinese, and Korean characters in file content, class names, and method names are correctly indexed and extracted. .NET `\w` regex matches Unicode letters. Affected: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **DB corruption recovery tests** — Added `DbRecoveryTests.cs` with tests for corrupted DB handling (no crash), rebuild-after-corruption, and proper exit code on missing DB. Affected: `tests/CodeIndex.Tests/DbRecoveryTests.cs`.
+
+- **`--rebuild` flag behavior tests** — Added tests verifying `--rebuild` drops and re-scans all files, and that `--rebuild` conflicts with `--commits`. Affected: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+
+- **Large-scale performance tests (10K+ files)** — Added `PerformanceTests.cs` with 10K file insert benchmark and 1K file FTS5 search latency test. Affected: `tests/CodeIndex.Tests/PerformanceTests.cs`.
+
+- **Concurrent access tests** — Added `ConcurrencyTests.cs` with tests for concurrent reads (WAL mode allows parallel readers) and concurrent read-during-write scenarios. Affected: `tests/CodeIndex.Tests/ConcurrencyTests.cs`.
+
+- **"Why SQLite?" section in developer guide** — Documents the rationale for choosing SQLite over alternatives (PostgreSQL, DuckDB, LiteDB, Tantivy, vector DBs), what makes it the right fit, and when it would not be enough. Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
+
+#### Changed
+
+- **Split DbReader.cs and McpServer.cs for maintainability** — Extracted 21 result DTOs from `DbReader.cs` into `Models/QueryResults.cs` (243 lines). Split `McpServer.cs` (1349 lines) into three partial-class files: core protocol handling (332 lines), tool definitions (299 lines), and tool execution handlers (749 lines). Further split `DbReader.cs` (1071 lines) into three partial-class files: core file/reference/metadata queries (651 lines), full-text search (116 lines), and symbol queries (327 lines). All public APIs unchanged. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+
+#### Fixed
+
+- **Event subscription regex restricted to PascalCase identifiers** — `+=`/`-=` event subscription detection now requires both LHS and RHS to be PascalCase identifiers (e.g. `Click += OnClick`), preventing false positives from arithmetic like `count += 1` or `flags -= mask`. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **Enum member pattern restricted to avoid object initializer false positives** — Tightened the C# enum member regex to only match when the optional `=` value is numeric, hex, or another PascalCase identifier (with optional `|` for flags). String and object assignments in initializers no longer produce false symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`batch_query` now surfaces subquery validation errors** — When a subquery fails validation (e.g. `search` without `query`), the error message is now included in the batch result instead of silently returning `null`. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **`deps` false edges from same-name symbols and missing exclude-path** — The `deps` query now uses DISTINCT triples `(source_path, target_path, symbol_name)` to avoid inflated reference counts from same-name symbols across files (e.g. multiple `Run` or `Dispose` methods). Also wired `excludePathPatterns` into the SQL and parameter binding — previously accepted but silently ignored. Affected: `src/CodeIndex/Database/DbReader.cs`.
+
+- **`validate` command for encoding issue detection** — New `cdidx validate [--json] [--kind <kind>] [--path <pattern>]` CLI command and MCP `validate` tool that report encoding issues found during indexing: U+FFFD replacement characters, UTF-8 BOM markers, null bytes, and mixed line endings. Issues are stored in a new `file_issues` table during indexing and queryable any time. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Models/FileIssue.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Database/DbWriter.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+#### Changed
+
+- **DEVELOPER_GUIDE symbol extraction count updated to 26** — Reflects all newly supported languages. Affected: `DEVELOPER_GUIDE.md`.
+
+- **C# `using` declaration reference exclusion test** — Verified that `using var x = ...;` does not generate false-positive references while real calls within the using scope are still captured. Affected: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **C# partial method test coverage** — Added test verifying C# 9 extended partial methods (`partial void OnInit();`, `public partial string GetName();`) are correctly extracted. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **DEVELOPER_GUIDE architecture updated for deps and batch_query** — DbReader description mentions file-level deps; McpServer mentions batch_query. Affected: `DEVELOPER_GUIDE.md`.
+
+- **C# `file` modifier in method patterns** — `file static void DoWork()` (C# 11 file-scoped members) is now extracted. Test added for file-scoped types. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **CLAUDE.md CLI commands updated with --since and deps** — CLAUDE.md now reflects `--since` in `files` and includes the `deps` command. Affected: `CLAUDE.md`.
+
+- **README option tables updated with --since, --no-dedup, --reverse, --top** — Both English and Japanese option tables now document all new query options. Affected: `README.md`.
+
+- **README MCP tool tables updated with deps and batch_query** — Both English and Japanese MCP tool tables now include `deps` and `batch_query`. Affected: `README.md`.
+
+- **Help text examples for deps, languages, --since, --reverse** — Added usage examples for `deps`, `deps --reverse`, `files --since`, and `languages` commands. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **C# `unsafe` modifier in class/struct patterns** — `unsafe struct` and `unsafe class` are now extracted. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`.
+
+- **C# `ref struct` and `readonly ref struct` extraction** — Added `ref` to the class modifier list so `ref struct` and `readonly ref struct` types are now correctly extracted. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **MCP instructions mention files `since` parameter** — The `initialize` instructions now guide AI clients to use `files` with `since` for finding recently modified files. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **MCP `deps` tool reverse parameter** — The MCP `deps` tool now accepts a `reverse` boolean parameter for reverse dependency lookup, matching the CLI `--reverse` flag. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **C# enum member extraction** — Enum members like `Red`, `Green = 1`, `Blue = 2` are now extracted as function symbols inside enum bodies. Enables `outline` and `symbols` to show enum values for navigation. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# record variant test coverage** — Added tests for `record`, `sealed record class`, `readonly record struct` with parameter lists to verify signatures are correctly captured. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`--lang` validation with available languages hint** — When `files` with `--lang` returns zero results due to no files in that language, shows available languages from the index. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **`--reverse` flag for `deps` command** — `deps --reverse --path <file>` shows which files depend on the specified file (reverse dependency lookup). Essential for refactoring impact analysis. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **Help text shows --top alias** — `--help` output now shows `--top <n>` as an alias alongside `--limit <n>`. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **MCP instructions updated for batch_query and deps** — The `initialize` response instructions now guide AI clients to use `batch_query` for multi-query round-trip reduction and `deps` for file-level dependency analysis. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **Container breadcrumb in `definition` output** — Human-readable `definition` results now show the containing symbol (e.g. "in DbReader") so users can see the class/namespace context. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **Symbol kind distribution in `status` output** — `status` now includes `symbol_kinds` with counts per kind (function, class, import, namespace) in both human-readable and JSON output. Helps AI agents understand the shape of the codebase. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **`--no-dedup` flag to disable search deduplication** — Opt out of overlapping-chunk deduplication with `--no-dedup` when debugging or when raw FTS5 results are needed. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **C# event subscription/unsubscription reference extraction** — `Click += Handler` and `Loaded -= Handler` patterns are now extracted as `subscribe` references. Enables `references` and `callers` to find event wiring in C# code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **`--top` alias for `--limit`** — More intuitive option name for limiting results. `cdidx symbols --top 5` is equivalent to `--limit 5`. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **MCP `batch_query` tool for multi-query execution** — New MCP tool that accepts an array of `{tool, arguments}` objects and executes them all in a single call, returning an array of results. Dramatically reduces round-trips for AI agents that need multiple pieces of information (e.g. status + symbols + definition in one call). Max 10 queries per batch. Write operations (index) are blocked. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **`deps` command for file-level dependency analysis** — New `cdidx deps` CLI command and MCP `deps` tool that computes file-level dependency edges from the indexed reference graph. Shows which files reference symbols defined in which other files, with reference counts and symbol lists. Helps AI agents understand project architecture in one call. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **C# `#region` extraction for outline navigation** — `#region Name` directives are now extracted as namespace symbols, appearing in `outline` and `symbols` output. Helps AI agents and developers quickly locate code sections in large C# files. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`--since` filter for time-based file queries** — New `--since <datetime>` option for the `files` CLI command and MCP `files` tool filters results to files modified after the given timestamp (ISO 8601). AI agents can ask "what changed in the last hour?" without scanning all files. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **`--kind` validation with available kinds hint** — When `symbols` or `definition` with `--kind` returns zero results due to an invalid kind value, the CLI now shows the valid kinds from the index (e.g. "Available: class, function, import, namespace"). New `DbReader.GetDistinctKinds()` method. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+#### Changed
+
+- **Search result deduplication across overlapping chunks** — When adjacent chunks (which share 10 lines of overlap) both match a query, the lower-ranked duplicate is now removed. This prevents the same code region from appearing twice in search results and reduces token waste for AI agents. Affected: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`.
+
+#### Fixed
+
+- **Outline duplicates visibility when signature already contains it** — `outline` human-readable output showed `public public static class Foo` because `visibility` was prepended to `signature` even though the signature (the raw source line) already included the keyword. Now checks for duplication before prepending. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+#### Added
+
+- **C# `using` alias extraction** — `using Json = System.Text.Json;` and `global using Logging = Microsoft.Extensions.Logging;` alias declarations are now extracted as import symbols with the alias name. Previously the `=` character caused the pattern to skip these lines. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# const and static readonly field extraction** — `const` fields and `static readonly` fields are now extracted as function symbols with their type. Regular mutable fields remain excluded. Important for navigating configuration constants like `MaxFileSize`, `SkipDirs`, etc. in the cdidx codebase itself. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# expression-bodied property extraction** — `public int X => 42;` expression-bodied properties and read-only members are now extracted as function symbols with return type. Previously only `{ get; set; }` style properties were matched. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# explicit interface implementation extraction** — `void IDisposable.Dispose()` and similar explicit interface implementations are now extracted as function symbols with their return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Expanded IgnoredCallNames for C# and other languages** — Added ~30 keywords to the reference extractor's ignore list: C# contextual keywords (`is`, `as`, `in`, `var`, `base`, `this`, `value`, `get`, `set`, `init`, `where`), LINQ keywords (`from`, `select`, `orderby`, `group`, etc.), type keywords (`struct`, `record`, `interface`, `delegate`, `event`), and utility keywords (`default`, `stackalloc`, `fixed`, `checked`). Reduces false-positive call references in C# code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **C# indexer extraction** — `this[int index]` indexer declarations are now extracted as function symbols with their return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# operator overload and conversion operator extraction** — `operator +`, `operator ==`, `implicit operator`, `explicit operator` are now extracted as function symbols. Patterns are ordered before the general method pattern to prevent false matches on the return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# static constructor and finalizer extraction** — `static ClassName()` and `~ClassName()` are now extracted as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# optional visibility and compound access modifiers** — Class, method, property, delegate, and event patterns no longer require an explicit visibility keyword, so `class Foo`, `static void Run()`, and other implicitly-internal members are now extracted. Compound modifiers `protected internal` and `private protected` are correctly captured as a single visibility value. Primary constructor signatures (C# 12) are verified in new tests. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`languages` CLI command and MCP tool** — New `cdidx languages [--json]` command and MCP `languages` tool that list all supported languages with their file extensions, symbol extraction support, and call-graph query support. Lets AI agents and new users discover cdidx capabilities at runtime without consulting documentation. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+#### Fixed
+
+- **Docs and help text catch-up for new features** — Added `--count` to README option tables (English and Japanese), help text usage line, and `ConsoleUiTests` assertion. Updated graph-supported language lists in README (English and Japanese) to include Dart, Scala, and Elixir. Added Protobuf, GraphQL, Gradle, Makefile, Dockerfile, PowerShell, Batch, CMake to README supported-language tables. Updated DEVELOPER_GUIDE language count from 21 to 26. Affected: `README.md`, `DEVELOPER_GUIDE.md`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **Shell completions: stale hardcoded language list and missing error exit** — `--completions` now generates the `--lang` value list dynamically from `FileIndexer.GetLanguageExtensions()` instead of a hardcoded 12-language subset. Unknown shell arguments now exit with code 1 (UsageError) instead of 0. Added test coverage for both valid and invalid shell names. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **Gradle `plugins { id }` DSL not matched** — The Gradle import regex only handled `apply plugin: 'name'` but not the modern `plugins { id 'name' }` block form. Fixed regex to accept both whitespace and `(:` after `id`. Added test coverage for the `id` form. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+#### Added
+
+- **GraphQL and Gradle symbol extraction** — GraphQL schemas now get `type`, `interface`, `union`, `enum`, `scalar`, `input`, `query`, `mutation`, `subscription`, and `extend type` symbol extraction. Gradle build scripts get `task`/`def` function extraction and `apply plugin`/`id` import extraction. Enables `symbols`, `definition`, and `outline` for these ecosystems. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Makefile and Dockerfile symbol extraction** — Makefile targets (`all:`, `build:`, `test:`) are extracted as function symbols. Dockerfile `FROM` stages with `AS` aliases are extracted as function symbols, and unnamed `FROM` images as class symbols. Enables `symbols`, `definition`, and `outline` for these common project files. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Elixir call-graph support and Protobuf symbol extraction** — Elixir now supports `references`, `callers`, and `callees` queries (parenthesized calls work with the existing regex engine). Protobuf (`.proto`) files now get `message`, `enum`, `service`, `rpc`, and `import` symbol extraction, enabling `definition`, `symbols`, and `outline` queries for gRPC/protobuf projects. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Actionable hints on zero-result queries** — When `search` or `definition` return no results, the CLI now prints hints: suggests removing filters if any are active, proposes `search` as an alternative to `definition`, and warns if the index may be stale (>24h old) or empty. Reduces user confusion and helps AI agents self-correct. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **Shell completion generation (bash/zsh/fish)** — New `cdidx --completions <shell>` generates tab-completion scripts for bash, zsh, and fish. Covers all commands, subcommand options, and value completions for `--lang` and `--kind`. Terminal-first users can add `eval "$(cdidx --completions bash)"` to their shell profile for instant command discovery. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **Graph-supported languages and version in `status` output** — `status` now includes `graph_supported_languages` (sorted list of languages with call-graph indexing) and `version` (cdidx binary version) in both human-readable and JSON output. AI agents can check upfront which languages support `callers`/`callees`/`references` without trial-and-error. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Program.cs`.
+
+- **`--count` flag for query commands** — New `--count` option for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` that returns only the result count without full data. With `--json`, returns `{"count": N, "files": M}`. Lets AI agents estimate result size before fetching full data, saving tokens. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
+
+- **File count in CLI result summaries** — Human-readable output for `search`, `definition`, `references`, `callers`, `callees`, and `symbols` now shows "(N results in M files)" instead of just "(N results)", giving terminal users a quick sense of how spread the results are. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **Protobuf, GraphQL, Dockerfile, Makefile, and more file types** — Added language detection for `.proto` (protobuf), `.graphql`/`.gql` (graphql), `.gradle`, `.cmake`/`CMakeLists.txt`, `.ps1` (powershell), `.bat`/`.cmd` (batch), `.bash`/`.zsh`/`.fish` (shell), and filename-based detection for `Dockerfile`, `Makefile`, `Justfile`, `Vagrantfile`, `.editorconfig`, `.gitignore`, `.dockerignore`. These common project files are now indexed for full-text search. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **Cross-language feature expansion guidelines** — `SELF_IMPROVEMENT.md` now instructs AI agents to actively check whether language-specific enhancements (especially C# ↔ Java) can be ported to structurally similar languages. Also covers TypeScript/JavaScript, Kotlin/Java, and C/C++ pairs. Affected: `SELF_IMPROVEMENT.md`.
+
 ### [1.3.0] - 2026-04-11
 
 #### Added
@@ -250,6 +470,226 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+- **最終ドッグフーディング検証** — 全再構築と自己分析: 61ファイル、1254シンボル、4798参照、46言語検出、29シンボル抽出対応、18グラフクエリ対応。322テスト（320パス+2スキップ）。全ドキュメント同期完了。対象: `CHANGELOG.md`.
+
+- **CLAUDE.md アーキテクチャ: SymbolExtractor を29言語に更新** — 対象: `CLAUDE.md`.
+
+- **README graph 言語リストを18言語に更新** — Lua と VB.NET を graph 対応言語リストに追加（英語・日本語両セクション）。対象: `README.md`.
+
+- **DEVELOPER_GUIDE: VB.NET graph=yes** — 言語表でVB.NETを graph=yes に更新（graph 対応は18言語に）。対象: `DEVELOPER_GUIDE.md`.
+
+- **VB.NET コールグラフ参照抽出** — VB.NET が `references`、`callers`、`callees` クエリに対応。`'` コメント除去も追加。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
+
+- **batch_query で ping ツールに対応** — `batch_query` 内で `ping` ツールを呼べるようになった。テスト追加。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **DEVELOPER_GUIDE 言語表: Lua graph, Swift actor, PHP namespace** — Lua を graph=yes に更新、Swift に actor/typealias を追加、PHP に readonly class/namespace/use/const を追加。英語・日本語両セクション。対象: `DEVELOPER_GUIDE.md`.
+
+- **MCP instructions に search exact モードの案内追加** — AI クライアントに `search` の `exact: true` で大文字小文字区別一致を案内。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+
+- **PHP: readonly class, namespace, use, const, 拡張修飾子** — PHP パターンに `readonly class`（PHP 8.2+）、`namespace`、`use` インポート、`const` 宣言、enum 型を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Swift: actor, distributed actor, typealias, 拡張メソッド修飾子** — Swift パターンに `actor`（Swift 5.5+）、`distributed actor`、`typealias`、追加メソッド修飾子（`nonisolated`、`mutating`、`nonmutating`）を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Lua コールグラフ参照抽出** — Lua が `references`、`callers`、`callees` クエリに対応。`--` コメント除去も追加。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **MCP `search` ツールに `exact` パラメータ** — MCP の `search` ツールに `exact` ブーリアンを追加し、CLI の `--exact` フラグと同等の大文字小文字区別一致に対応。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
+- **`search --exact` フラグで大文字小文字区別の部分一致検索** — FTS5 トークナイズをバイパスし、`instr()` による大文字小文字区別の完全部分一致検索を行う `--exact` オプション。FTS5 の大文字小文字無視マッチが多すぎる場合に有用。対象: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **README Code Search Rules を deps, --since, --dry-run, --count で更新** — クエリ戦略セクション（英語・日本語）に `deps`、`--reverse`、`--since`、`--dry-run`、`--count` を追加。シンボル対応言語リストを29に更新。Shell/SQL/Terraform を「シンボル抽出なし」リストから削除。対象: `README.md`.
+
+- **DEVELOPER_GUIDE 言語パターン参照表** — 旧21言語表を Graph 対応列を含む29言語の包括的な表に差し替え。CLAUDE.md のコミットごとチェックリストに言語パターン変更時の表更新ルールを追加。対象: `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
+
+- **TESTING_GUIDE に新テストファイルを追記** — ConcurrencyTests、PerformanceTests、DbRecoveryTests を英語・日本語のテストレイアウトセクションに追加。対象: `TESTING_GUIDE.md`.
+
+- **クロスプラットフォームパスセパレータテスト** — Windows 形式のバックスラッシュパスがファイルレコードでフォワードスラッシュに正規化されることを検証。対象: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **C# 属性付きメンバーのテストカバレッジ** — `[Serializable]`、`[Obsolete]`、`[HttpGet]` がクラス/メソッド前行にあっても抽出を妨げないことを検証。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **MCP `ping` ツール** — サーバーバージョン、タイムスタンプ、DBパス、DB存在有無を返す軽量接続チェック。DB不要。AI エージェントがクエリ発行前に MCP 接続を確認できる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **MCP `search` ツールに `noDedup` パラメータ** — MCP の `search` ツールに `noDedup` ブーリアンを追加し、CLI の `--no-dedup` フラグと同等のオーバーラップチャンク重複排除無効化に対応。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
+- **`search --since` フィルタ** — `--since` オプションが `files` だけでなく `search`（CLI・MCP 両方）でも使えるようになった。AI エージェントが最近変更されたファイル内のみを検索でき、大規模リポジトリでのノイズ削減に有効。対象: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
+- **index コマンドに `--dry-run` フラグ** — DBに書き込まずにファイルスキャンのみ行う `--dry-run` オプション。ファイル数と言語内訳を表示。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **DB 複合インデックスでクエリ高速化** — `symbols(file_id, kind)`、`files(lang, modified)`、`symbol_references(container_name, reference_kind)` の複合インデックスを追加。対象: `src/CodeIndex/Database/DbContext.cs`.
+
+- **Shell、SQL、Terraform シンボル抽出** — Shell: bash/zsh 関数宣言。SQL: CREATE TABLE/VIEW/FUNCTION/PROCEDURE/TRIGGER/INDEX、ALTER TABLE。Terraform: resource、data、module、variable、output、locals。3言語すべてで `symbols`、`definition`、`outline` が使えるようになった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Ruby: attr_accessor/reader/writer と Rails DSL 抽出** — Ruby パターンに `attr_accessor :name`、`attr_reader :email`、Rails DSL（`has_many`、`has_one`、`belongs_to`、`scope`）を function シンボルとして追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Rust: macro_rules!, mod, const/static, const fn, unsafe fn, union, type alias** — Rust パターンに `macro_rules!`、`mod` モジュール、`const`/`static` アイテム、`const fn`、`unsafe fn`、`extern "C" fn`、`union`、`type` エイリアスを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **TypeScript: abstract class, declare, namespace/module, readonly/override** — TypeScript パターンに `abstract class`、`declare class/module/interface`、`namespace/module`、`readonly`/`abstract`/`override` メソッド修飾子を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Python: デコレータ付き・dunder メソッドのテストカバレッジ** — `@dataclass`、`@property`、`@staticmethod` 付きクラス/メソッド、dunder メソッド（`__init__`、`__str__`）、型ヒント付きシグネチャが既存パターンで正しく抽出されることのテスト追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Go: 型エイリアス、const ブロックメンバー、パッケージレベル var** — Go パターンに `type Name = OtherType` エイリアス、`const ( Name = value )` ブロックメンバー、`var Name Type` パッケージレベル変数を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Kotlin: companion object, value/sealed/inner/annotation class, 拡張関数, val/var プロパティ** — Kotlin パターンに companion object、value class、sealed interface、inner class、annotation class、拡張関数（`fun Type.name()`）、suspend/inline/infix/operator/tailrec 修飾子、const/lateinit val/var プロパティ抽出を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Java IgnoredCallNames 拡張** — `instanceof`、`super`、`assert`、`throws`、`extends`、`implements`、`synchronized` を参照抽出器の無視リストに追加し、Java コードの偽陽性参照を削減。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
+
+- **Java シンボル抽出: record, sealed, @interface, static final, enum メンバー, 拡張修飾子** — Java パターンに `record`（Java 16+）、`sealed`/`non-sealed`（Java 17+）、`@interface` アノテーション型、`static final` 定数（C# const 相当）、enum メンバー、拡張メソッド修飾子（`default`、`native`、`final`、`strictfp`）を追加。C# 改善のクロス言語横展開。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **DEVELOPER_GUIDE にパターン外部化の設計メモ** — 現在のインライン正規表現アプローチ、トレードオフ、将来の外部化パス（JSON/TOML、スキーマ: 言語、種別、正規表現、本体スタイル、キャプチャグループ）を文書化。英語・日本語両セクション。対象: `DEVELOPER_GUIDE.md`.
+
+- **README に TL;DR セクションとドキュメントリンクを追加** — README 冒頭（英語・日本語）に折りたたみ式の TL;DR を追加。クイックスタートコマンド、機能数、DEVELOPER_GUIDE/SELF_IMPROVEMENT/TESTING_GUIDE へのリンクを含む。GitHub/NuGet の入口をスキャンしやすくしつつ、詳細コンテンツは維持。対象: `README.md`.
+
+- **CLAUDE.md 日本語セクション同期** — deps に `--reverse` 追加、ファイル分割後のアーキテクチャ更新（DbSearchReader, DbSymbolReader, McpToolDefinitions, McpToolHandlers, QueryResults）、新テストファイル追加。英語・日本語セクション一致。対象: `CLAUDE.md`.
+
+- **Unicode/CJK文字テスト** — 日本語・中国語・韓国語の文字がファイル内容・クラス名・メソッド名で正しくインデックス・抽出されることのテスト追加。.NET の `\w` は Unicode 文字にマッチ。対象: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **DB破損復旧テスト** — 破損DBのクラッシュ回避、破損後の再構築、欠損DBへの適切な終了コードのテストを `DbRecoveryTests.cs` に追加。対象: `tests/CodeIndex.Tests/DbRecoveryTests.cs`.
+
+- **`--rebuild` フラグ動作テスト** — `--rebuild` が全ファイル再スキャンすること、`--commits` と競合することのテスト追加。対象: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+
+- **大規模パフォーマンステスト（10K+ファイル）** — 10Kファイル挿入ベンチマークと1KファイルFTS5検索レイテンシテストを `PerformanceTests.cs` に追加。対象: `tests/CodeIndex.Tests/PerformanceTests.cs`.
+
+- **並行アクセステスト** — 並行読み取り（WALモードによる並列リーダー）と書き込み中読み取りシナリオのテストを `ConcurrencyTests.cs` に追加。対象: `tests/CodeIndex.Tests/ConcurrencyTests.cs`.
+
+- **開発者ガイドに「なぜSQLiteなのか？」セクションを追加** — PostgreSQL、DuckDB、LiteDB、Tantivy、ベクトルDB等の代替案との比較を含め、SQLiteを採用した理由、SQLiteが最適な根拠、SQLiteでは足りなくなるケースを文書化。英語・日本語の両セクション。対象: `DEVELOPER_GUIDE.md`。
+
+#### 変更
+
+- **DbReader.cs と McpServer.cs の保守性向上のための分割** — `DbReader.cs` から21個の結果DTOを `Models/QueryResults.cs`（243行）に抽出。`McpServer.cs`（1349行）をpartial classで3ファイルに分割: コアプロトコル処理（332行）、ツール定義（299行）、ツール実行ハンドラ（749行）。さらに `DbReader.cs`（1071行）を3ファイルに分割: コアクエリ（651行）、全文検索（116行）、シンボルクエリ（327行）。公開APIは変更なし。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+
+#### 修正
+
+- **イベント購読 regex を PascalCase 識別子に制限** — `+=`/`-=` イベント購読検出で LHS と RHS の両方を PascalCase 識別子に限定（例: `Click += OnClick`）。`count += 1` や `flags -= mask` の算術代入からの偽陽性を防止。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **enum メンバーパターンをオブジェクト初期化子の偽陽性回避で制限** — C# enum メンバーの正規表現を、`=` 後の値が数値・16進数・他の PascalCase 識別子（フラグ用 `|` 含む）の場合のみマッチするよう厳格化。初期化子の文字列・オブジェクト代入が偽シンボルを生まなくなった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`batch_query` サブクエリのバリデーションエラーを表面化** — サブクエリがバリデーション失敗した場合（例: `search` に `query` なし）、`null` の代わりにエラーメッセージをバッチ結果に含めるようにした。対象: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **`deps` の同名シンボルによる誤エッジと exclude-path 未反映の修正** — `deps` クエリで `(source_path, target_path, symbol_name)` の DISTINCT トリプルを使い、同名シンボル（複数の `Run` や `Dispose` 等）による参照数膨張を防止。また `excludePathPatterns` を SQL とパラメータバインドに反映 — 従来は受け取るだけで無視されていた。対象: `src/CodeIndex/Database/DbReader.cs`.
+
+- **`validate` コマンドでエンコーディング問題検出** — 新コマンド `cdidx validate [--json] [--kind <kind>] [--path <pattern>]` と MCP ツール `validate` を追加。インデックス時に検出した U+FFFD 置換文字、UTF-8 BOM マーカー、NULL バイト、混在改行コードを報告する。問題は新テーブル `file_issues` に保存し、いつでもクエリ可能。対象: 多数ファイル（FileIndexer, DbContext, DbWriter, DbReader, CLI, MCP）。
+
+#### 変更
+
+- **DEVELOPER_GUIDE シンボル抽出言語数を 26 に更新** — 新しく対応した全言語を反映。対象: `DEVELOPER_GUIDE.md`.
+
+- **C# `using` 宣言の参照除外テスト** — `using var x = ...;` が偽陽性参照を生成せず、using スコープ内の実呼び出しは正しく抽出されることを検証。対象: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **C# partial メソッドのテストカバレッジ** — C# 9 拡張 partial メソッド（`partial void OnInit();`、`public partial string GetName();`）が正しく抽出されることのテスト追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **DEVELOPER_GUIDE アーキテクチャに deps と batch_query を反映** — DbReader の説明にファイル間依存、McpServer に batch_query を追記。対象: `DEVELOPER_GUIDE.md`.
+
+- **C# `file` 修飾子のメソッドパターン対応** — `file static void DoWork()`（C# 11 のファイルスコープメンバー）を抽出可能に。ファイルスコープ型のテストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **CLAUDE.md CLI コマンドに --since と deps を反映** — CLAUDE.md の `files` に `--since` を追加し、`deps` コマンドを記載。対象: `CLAUDE.md`.
+
+- **README オプション表に --since, --no-dedup, --reverse, --top を追加** — 英語・日本語のオプション表を新しいクエリオプションで更新。対象: `README.md`.
+
+- **README MCP ツール表に deps と batch_query を追加** — 英語・日本語の MCP ツール表に `deps` と `batch_query` を追加。対象: `README.md`.
+
+- **ヘルプテキストに deps, languages, --since, --reverse の使用例追加** — 対象: `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **C# `unsafe` 修飾子のクラス/構造体パターン** — `unsafe struct` や `unsafe class` を正しく抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`.
+
+- **C# `ref struct` / `readonly ref struct` 抽出** — クラス修飾子リストに `ref` を追加し、`ref struct` と `readonly ref struct` を正しく抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **MCP instructions に files `since` パラメータの案内追加** — `initialize` の instructions で `files` の `since` パラメータの活用を AI クライアントに案内。対象: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **MCP `deps` ツールに reverse パラメータ** — MCP の `deps` ツールに `reverse` ブーリアンパラメータを追加し、CLI の `--reverse` フラグと同等の逆引き依存検索に対応。対象: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **C# enum メンバー抽出** — `Red`、`Green = 1`、`Blue = 2` のような enum メンバーを enum 本体内の function シンボルとして抽出。`outline` と `symbols` で enum 値をナビゲーション可能に。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# record バリアントのテストカバレッジ** — `record`、`sealed record class`、`readonly record struct` のパラメータリスト付き定義がシグネチャに正しく含まれることのテストを追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`--lang` バリデーションと利用可能言語ヒント** — `files` で `--lang` に該当ファイルがない場合、インデックス内の言語一覧を表示。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **`deps` コマンドに `--reverse` フラグ** — `deps --reverse --path <file>` で指定ファイルに依存しているファイルを表示（逆引き依存関係）。リファクタリング影響分析に不可欠。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **ヘルプテキストに --top エイリアスを表示** — `--help` 出力で `--limit <n>` の横に `--top <n>` エイリアスを表示。対象: `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **MCP instructions に batch_query と deps を追加** — `initialize` レスポンスの instructions に `batch_query`（往復回数削減）と `deps`（ファイル間依存分析）の案内を追加。対象: `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **`definition` 出力にコンテナパンくず表示** — 人間向け `definition` 出力で、包含するシンボル（例: "in DbReader"）を表示。クラス/名前空間のコンテキストが見えるようになった。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **`status` にシンボル種別分布を追加** — `status` の出力に `symbol_kinds`（function、class、import、namespace ごとのカウント）を追加。AI エージェントがコードベースの構成を把握するのに有用。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **`--no-dedup` フラグで検索重複排除をスキップ** — デバッグ時や生の FTS5 結果が必要なときに `--no-dedup` で重複排除を無効化。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **C# イベント購読・解除の参照抽出** — `Click += Handler` や `Loaded -= Handler` パターンを `subscribe` 参照として抽出。C# コードのイベント配線を `references` と `callers` で発見可能に。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **`--top` を `--limit` のエイリアスとして追加** — 結果数制限のより直感的なオプション名。`cdidx symbols --top 5` は `--limit 5` と同等。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **MCP `batch_query` ツールで複数クエリ一括実行** — `{tool, arguments}` の配列を受け取り、1回の呼び出しで全て実行して結果配列を返す新 MCP ツール。AI エージェントの往復回数を劇的に削減（例: status + symbols + definition を1回で取得）。1バッチ最大10クエリ。書き込み操作（index）はブロック。対象: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **`deps` コマンドでファイル間依存関係分析** — 新コマンド `cdidx deps` と MCP ツール `deps` を追加。インデックス済み参照グラフからファイル間の依存エッジを算出し、参照数とシンボルリスト付きで返す。AIエージェントが1回の呼び出しでプロジェクトアーキテクチャを把握できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **C# `#region` 抽出でアウトラインナビゲーション** — `#region Name` ディレクティブを namespace シンボルとして抽出し、`outline` と `symbols` に表示。大きな C# ファイルでのコードセクション特定をAIエージェントと開発者に提供。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`--since` フィルタで時間ベースのファイル問い合わせ** — `files` CLI コマンドと MCP `files` ツールに `--since <datetime>` オプションを追加。指定タイムスタンプ以降に変更されたファイルのみに結果を絞る。AI エージェントが「直近1時間の変更は？」と聞けるようになる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
+- **`--kind` バリデーションと有効値ヒント** — `symbols` や `definition` で `--kind` に無効な値を指定して 0 件になった場合、インデックス内の有効な kind 一覧を表示するようにした（例: "Available: class, function, import, namespace"）。`DbReader.GetDistinctKinds()` メソッドを追加。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+#### 変更
+
+- **検索結果のオーバーラップチャンク間重複排除** — 10行のオーバーラップを持つ隣接チャンクが両方同じクエリにマッチした場合、ランクの低い重複を除去するようにした。同じコード領域が検索結果に2回出ることを防ぎ、AIエージェントのトークン消費を削減。対象: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`.
+
+#### 修正
+
+- **outline の visibility 重複表示** — `outline` の人間向け出力で `public public static class Foo` のように visibility がシグネチャに既に含まれているのに重複して表示されていた問題を修正。表示前に重複チェックを追加。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+#### 追加
+
+- **C# `using` エイリアス抽出** — `using Json = System.Text.Json;` や `global using Logging = ...;` のエイリアス宣言をエイリアス名の import シンボルとして抽出。従来は `=` 文字によりスキップされていた。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# const・static readonly フィールド抽出** — `const` フィールドと `static readonly` フィールドを型付きの function シンボルとして抽出。通常の可変フィールドは引き続き除外。cdidx 自身のコードベースで `MaxFileSize`、`SkipDirs` 等の設定定数へのナビゲーションに有用。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# 式本体プロパティの抽出** — `public int X => 42;` の式本体プロパティ・読み取り専用メンバーを戻り値型付きの function シンボルとして抽出。従来は `{ get; set; }` スタイルのみ対応だった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# 明示的インターフェース実装の抽出** — `void IDisposable.Dispose()` 等の明示的インターフェース実装を戻り値型付きの function シンボルとして抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# 偽陽性参照の削減: IgnoredCallNames 拡張** — 参照抽出器の無視リストに約30のキーワードを追加: C# 文脈キーワード（`is`、`as`、`in`、`var`、`base`、`this`、`value`、`get`、`set`、`init`、`where`）、LINQ キーワード（`from`、`select`、`orderby`、`group` 等）、型キーワード（`struct`、`record`、`interface`、`delegate`、`event`）、ユーティリティキーワード（`default`、`stackalloc`、`fixed`、`checked`）。C# コードの偽陽性参照を低減。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **C# インデクサ抽出** — `this[int index]` のインデクサ宣言を戻り値型付きの function シンボルとして抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# 演算子オーバーロード・変換演算子抽出** — `operator +`、`operator ==`、`implicit operator`、`explicit operator` を function シンボルとして抽出。戻り値型との誤マッチを防ぐため、一般メソッドパターンより前に配置。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# 静的コンストラクタ・ファイナライザ抽出** — `static ClassName()` と `~ClassName()` を function シンボルとして抽出するパターンを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **C# visibility 省略可・複合アクセス修飾子対応** — クラス・メソッド・プロパティ・デリゲート・イベントの各パターンで visibility キーワードを省略可にし、`class Foo`、`static void Run()` 等の暗黙 internal メンバーを抽出できるようにした。`protected internal`・`private protected` の複合修飾子を単一の visibility 値として正しく取得。C# 12 の primary constructor シグネチャの検証テストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **`languages` CLI コマンドと MCP ツール** — 新コマンド `cdidx languages [--json]` と MCP ツール `languages` を追加。対応言語の一覧を拡張子・シンボル抽出対応・コールグラフ対応の情報付きで返す。AI エージェントや新規ユーザーがドキュメントを参照せずに cdidx の対応範囲を実行時に確認できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+#### 修正
+
+- **新機能に対するドキュメント・ヘルプテキストの追従** — README オプション表（英語・日本語）、ヘルプテキスト使用例、`ConsoleUiTests` に `--count` を追加。README のグラフ対応言語リスト（英語・日本語）に Dart、Scala、Elixir を追加。README の対応言語表に Protobuf、GraphQL、Gradle、Makefile、Dockerfile、PowerShell、Batch、CMake を追加。DEVELOPER_GUIDE の言語数を 21 から 26 に更新。対象: `README.md`, `DEVELOPER_GUIDE.md`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **シェル補完: 古いハードコード言語リストとエラー終了の欠落** — `--completions` の `--lang` 値リストを12言語のハードコードから `FileIndexer.GetLanguageExtensions()` による動的生成に変更。不明なシェル名で終了コード0ではなく1（UsageError）を返すよう修正。有効・無効シェル名のテストを追加。対象: `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **Gradle `plugins { id }` DSL が未対応だった問題** — Gradle の import 正規表現が `apply plugin: 'name'` のみ対応し、現代的な `plugins { id 'name' }` ブロック形式を取りこぼしていた。`id` の後にスペースも `(:` も受け付けるよう修正し、`id` 形式のテストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+#### 追加
+
+- **GraphQL・Gradle シンボル抽出** — GraphQL スキーマで `type`、`interface`、`union`、`enum`、`scalar`、`input`、`query`、`mutation`、`subscription`、`extend type` のシンボル抽出に対応。Gradle ビルドスクリプトで `task`/`def` の function 抽出と `apply plugin`/`id` の import 抽出に対応。`symbols`、`definition`、`outline` がこれらのエコシステムで使えるようになった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Makefile・Dockerfile シンボル抽出** — Makefile のターゲット（`all:`、`build:`、`test:`）を function シンボルとして抽出。Dockerfile の `FROM ... AS` ステージは function、名前なし `FROM` イメージは class として抽出。`symbols`、`definition`、`outline` がこれらのファイルで使えるようになった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+- **Elixir コールグラフ対応と Protobuf シンボル抽出** — Elixir が `references`、`callers`、`callees` クエリに対応（括弧付き呼び出しが既存の正規表現エンジンで動作）。Protobuf（`.proto`）ファイルで `message`、`enum`、`service`、`rpc`、`import` のシンボル抽出に対応し、gRPC/protobuf プロジェクトで `definition`、`symbols`、`outline` が使えるようになった。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/`.
+
+- **0件クエリ時のアクション可能なヒント** — `search` や `definition` が 0 件を返したとき、CLI がヒントを表示するようにした: フィルタが有効なら解除を提案、`definition` の代わりに `search` を提案、インデックスが古い（24時間超）か空なら警告。ユーザーの混乱を減らし、AI エージェントが自己修正しやすくなる。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **シェル補完スクリプト生成（bash/zsh/fish）** — `cdidx --completions <shell>` で bash、zsh、fish 向けのタブ補完スクリプトを生成。全コマンド、サブコマンドオプション、`--lang`/`--kind` の値補完に対応。`eval "$(cdidx --completions bash)"` をシェルプロファイルに追加すれば即座にコマンド補完が有効になる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **`status` に graph 対応言語とバージョンを追加** — `status` の出力に `graph_supported_languages`（コールグラフ対応言語のソート済みリスト）と `version`（cdidx バイナリのバージョン）を追加。人間向け・JSON 向け両方に対応。AI エージェントが試行錯誤なしで `callers`/`callees`/`references` を使える言語を事前に確認できる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Program.cs`.
+
+- **クエリコマンドに `--count` フラグ追加** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` に `--count` を追加。結果全体ではなくカウントだけを返す。`--json` 併用で `{"count": N, "files": M}` 形式。AI エージェントが全データ取得前に結果量を見積もれるため、トークン節約に効果的。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
+
+- **CLI 結果サマリにファイル数を追加** — `search`、`definition`、`references`、`callers`、`callees`、`symbols` の人間向け出力で「(N results)」の代わりに「(N results in M files)」を表示し、結果の散らばり具合を素早く把握できるようにした。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+- **Protobuf、GraphQL、Dockerfile、Makefile 等のファイル種別追加** — `.proto`（protobuf）、`.graphql`/`.gql`（graphql）、`.gradle`、`.cmake`/`CMakeLists.txt`、`.ps1`（powershell）、`.bat`/`.cmd`（batch）、`.bash`/`.zsh`/`.fish`（shell）の言語検出と、`Dockerfile`、`Makefile`、`Justfile`、`Vagrantfile`、`.editorconfig`、`.gitignore`、`.dockerignore` のファイル名ベース検出を追加。これらの一般的なプロジェクトファイルが全文検索の対象になる。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **言語横展開の指針** — `SELF_IMPROVEMENT.md` に、ある言語向けの強化（特に C# ↔ Java）を構文的に近い言語にも横展開するよう AI エージェントに指示するガイドラインを追加。TypeScript/JavaScript、Kotlin/Java、C/C++ のペアも対象。対象: `SELF_IMPROVEMENT.md`。
 
 ### [1.3.0] - 2026-04-11
 

@@ -30,7 +30,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>", output);
         Assert.Contains("cdidx callers <query>", output);
         Assert.Contains("cdidx callees <query>", output);
-        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]", output);
+        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]", output);
         Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
@@ -69,6 +69,51 @@ public class ConsoleUiTests
         Assert.False(string.IsNullOrWhiteSpace(version));
         Assert.NotEqual("0.0.0", version);
         Assert.Contains('.', version);
+    }
+
+    [Fact]
+    public void PrintCompletions_KnownShell_ReturnsTrue()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions("bash"));
+                var output = writer.ToString();
+                // Should contain dynamically generated languages, including newly added ones
+                // 動的生成の言語リストに新しく追加した言語が含まれているか検証
+                Assert.Contains("elixir", output);
+                Assert.Contains("graphql", output);
+                Assert.Contains("protobuf", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
+    public void PrintCompletions_UnknownShell_ReturnsFalse()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalErr = Console.Error;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetError(writer);
+                Assert.False(ConsoleUi.PrintCompletions("powershell"));
+                Assert.Contains("Unknown shell", writer.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
+        }
     }
 
     private static string CaptureUsageOutput(bool showBanner = true)

@@ -423,6 +423,38 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Insert file validation issues.
+    /// ファイル検証問題を挿入する。
+    /// </summary>
+    public void InsertIssues(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues)
+    {
+        // Always delete existing issues — if the file is now clean, old issues must be removed
+        // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない
+        using var delCmd = _conn.CreateCommand();
+        delCmd.CommandText = "DELETE FROM file_issues WHERE file_id = @fid";
+        delCmd.Parameters.AddWithValue("@fid", fileId);
+        delCmd.ExecuteNonQuery();
+
+        if (issues.Count == 0) return;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "INSERT INTO file_issues (file_id, kind, line, message) VALUES (@fid, @kind, @line, @message)";
+        var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
+        var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
+        var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
+        var pMessage = cmd.Parameters.Add("@message", SqliteType.Text);
+
+        foreach (var issue in issues)
+        {
+            pFid.Value = fileId;
+            pKind.Value = issue.Kind;
+            pLine.Value = issue.Line;
+            pMessage.Value = issue.Message;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
     /// Delete a file and its associated data by relative path. Returns true if found.
     /// CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
     /// 相対パスでファイルと関連データを削除する。見つかればtrueを返す。

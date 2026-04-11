@@ -13,14 +13,26 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala"
+        "dart", "scala", "elixir", "lua", "vb"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
     {
-        "if", "else", "for", "foreach", "while", "switch", "catch", "lock",
-        "sizeof", "typeof", "return", "throw", "nameof", "when", "do",
-        "await", "using", "new", "try", "class", "def", "function", "func",
+        // Control flow / 制御フロー
+        "if", "else", "for", "foreach", "while", "switch", "catch", "lock", "do", "try", "when",
+        // Keywords that look like calls / 呼び出しに見えるキーワード
+        "sizeof", "typeof", "return", "throw", "nameof", "await", "using", "new",
+        // Type/member keywords / 型・メンバーキーワード
+        "class", "struct", "record", "interface", "enum", "delegate", "event", "namespace",
+        "def", "function", "func",
+        // C# contextual keywords and common false positives / C# 文脈キーワードとよくある偽陽性
+        "is", "as", "in", "var", "base", "this", "value", "get", "set", "init", "where",
+        "from", "select", "orderby", "group", "into", "join", "let", "on", "equals",
+        "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
+        // Java contextual keywords / Java 文脈キーワード
+        "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
+        // Other languages / 他言語
+        "print", "require", "import", "include", "raise", "lambda",
     };
 
     private static readonly Regex StringLiteralRegex = new(
@@ -29,6 +41,9 @@ public static class ReferenceExtractor
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private static readonly Regex ConstructorCallRegex = new(@"\bnew\s+(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
+    // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
+    private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -95,6 +110,13 @@ public static class ReferenceExtractor
             foreach (Match match in ConstructorCallRegex.Matches(preparedLine))
             {
                 AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, container);
+            }
+
+            // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
+            if (language is "csharp")
+            {
+                foreach (Match match in EventSubscriptionRegex.Matches(preparedLine))
+                    AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, container);
             }
 
             foreach (Match match in CallRegex.Matches(preparedLine))
@@ -171,11 +193,27 @@ public static class ReferenceExtractor
                 result = result[..slashIndex];
         }
 
+        // Lua uses -- for line comments / Lua は -- を行コメントに使う
+        if (lang is "lua")
+        {
+            var luaCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
+            if (luaCommentIndex >= 0)
+                result = result[..luaCommentIndex];
+        }
+
+        // VB.NET uses ' for line comments / VB.NET は ' を行コメントに使う
+        if (lang is "vb")
+        {
+            var vbCommentIndex = result.IndexOf('\'');
+            if (vbCommentIndex >= 0)
+                result = result[..vbCommentIndex];
+        }
+
         return result;
     }
 
     private static bool UsesHashComments(string lang) =>
-        lang is "python" or "ruby" or "php";
+        lang is "python" or "ruby" or "php" or "elixir";
 
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby";

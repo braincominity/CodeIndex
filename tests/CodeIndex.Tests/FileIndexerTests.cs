@@ -39,6 +39,21 @@ public class FileIndexerTests
     [InlineData("MyApp.csproj", "xml")]
     [InlineData("Main.hs", "haskell")]
     [InlineData("main.zig", "zig")]
+    [InlineData("schema.proto", "protobuf")]
+    [InlineData("schema.graphql", "graphql")]
+    [InlineData("build.gradle", "gradle")]
+    [InlineData("build.cmake", "cmake")]
+    [InlineData("script.ps1", "powershell")]
+    [InlineData("run.bat", "batch")]
+    [InlineData("run.cmd", "batch")]
+    [InlineData("script.bash", "shell")]
+    [InlineData("script.zsh", "shell")]
+    [InlineData("script.fish", "shell")]
+    [InlineData("Dockerfile", "dockerfile")]
+    [InlineData("Makefile", "makefile")]
+    [InlineData("Justfile", "justfile")]
+    [InlineData("CMakeLists.txt", "cmake")]
+    [InlineData("Vagrantfile", "ruby")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
@@ -99,6 +114,100 @@ public class FileIndexerTests
             // app.jsのみ検出され、package-lock.jsonは除外される
             Assert.Single(files);
             Assert.Contains("app.js", files[0]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_HandlesUnicodeAndCjkContent()
+    {
+        // Files with Unicode/CJK characters in content should be indexed correctly
+        // Unicode/CJK文字を含むファイルが正しくインデックスされること
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var content = "// コメント: 日本語テスト\npublic class 日本語クラス\n{\n    public string 名前 { get; set; }\n    // 中文注释\n    // 한국어 주석\n}\n";
+            var filePath = Path.Combine(tempDir, "unicode.cs");
+            File.WriteAllText(filePath, content);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, fileContent, warning) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("unicode.cs", record.Path);
+            Assert.Equal("csharp", record.Lang);
+            Assert.Null(warning); // Valid UTF-8, no warning / 有効なUTF-8なので警告なし
+            Assert.Contains("日本語クラス", fileContent);
+            Assert.Contains("中文注释", fileContent);
+            Assert.Contains("한국어", fileContent);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_CjkSymbolsExtractedCorrectly()
+    {
+        var content = "// 日本語コメント\npublic class ユーザーサービス\n{\n    public string 名前を取得(int id) { return \"\"; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // CJK class and method names should be extracted / CJKのクラス名・メソッド名が抽出されること
+        // Note: \w in .NET regex matches Unicode letters, so CJK identifiers work
+        // 注: .NET の \w は Unicode 文字にマッチするため CJK 識別子も動作する
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ユーザーサービス");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "名前を取得");
+    }
+
+    [Fact]
+    public void BuildRecord_NormalizesPathSeparators()
+    {
+        // Ensure Windows-style backslashes are converted to forward slashes
+        // Windows形式のバックスラッシュがフォワードスラッシュに変換されることを確認
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var subDir = Path.Combine(tempDir, "src", "models");
+            Directory.CreateDirectory(subDir);
+            var filePath = Path.Combine(subDir, "user.py");
+            File.WriteAllText(filePath, "class User: pass\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            // Path should use forward slashes regardless of OS
+            // OSに関わらずフォワードスラッシュを使うべき
+            Assert.DoesNotContain("\\", record.Path);
+            Assert.Contains("/", record.Path);
+            Assert.Equal("src/models/user.py", record.Path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IncludesFileNameBasedLanguages()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "Dockerfile"), "FROM alpine");
+            File.WriteAllText(Path.Combine(tempDir, "Makefile"), "all: build");
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+            File.WriteAllText(Path.Combine(tempDir, "unknown.xyz"), "nothing");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            // Dockerfile, Makefile, and app.py should be found; unknown.xyz should not
+            Assert.Equal(3, files.Count);
         }
         finally
         {
