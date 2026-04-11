@@ -34,7 +34,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (26 languages)
+    SymbolExtractor.cs        — Regex-based symbol extraction (32 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
@@ -601,7 +601,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — 正規表現によるシンボル抽出（21言語対応）
+    SymbolExtractor.cs        — 正規表現によるシンボル抽出（32言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）

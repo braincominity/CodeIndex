@@ -65,7 +65,7 @@ src/CodeIndex/
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
-  Indexer/SymbolExtractor.cs — Regex-based symbol extraction (29 languages)
+  Indexer/SymbolExtractor.cs — Regex-based symbol extraction (32 languages)
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
   Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
   Mcp/McpToolDefinitions.cs — MCP tool schema definitions (partial class)
@@ -302,7 +302,7 @@ src/CodeIndex/
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
-  Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（29言語対応）
+  Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（32言語対応）
   Indexer/ReferenceExtractor.cs — 正規表現による参照抽出（言語差分を考慮）
   Mcp/McpServer.cs          — MCPサーバーコア（stdin/stdout JSON-RPC 2.0 プロトコル処理）（partial class）
   Mcp/McpToolDefinitions.cs — MCPツールスキーマ定義（partial class）
