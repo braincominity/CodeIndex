@@ -865,21 +865,27 @@ public partial class McpServer
 
         var isNew = store.TryAdd(record);
 
+        // 7. Attempt GitHub submission (best-effort, only if token is configured).
+        //    For NEW suggestions: try to submit after local storage.
+        //    For DUPLICATE suggestions: retry if the previous attempt failed
+        //    (SubmittedToGitHub is false), so transient GitHub failures
+        //    don't permanently lose submissions.
+        //    GitHub送信を試みる（ベストエフォート、トークンが設定されている場合のみ）。
+        //    新規提案: ローカル保存後に送信を試みる。
+        //    重複提案: 前回の送信が失敗していれば（SubmittedToGitHub が false）
+        //    再送を試みる。一時的な GitHub 障害で送信が恒久的に失われることを防ぐ。
+        string? issueUrl = null;
+        bool alreadySubmitted = false;
+
         if (!isNew)
         {
-            var dupPayload = new JsonObject
-            {
-                ["status"] = "duplicate",
-                ["hash"] = hash,
-                ["message"] = "This suggestion has already been recorded."
-            };
-            return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
+            // Check if the existing record was already submitted to GitHub.
+            // 既存レコードが GitHub に送信済みかを確認する。
+            var existing = store.LoadAll().FirstOrDefault(s => s.Hash == hash);
+            alreadySubmitted = existing?.SubmittedToGitHub ?? false;
         }
 
-        // 7. Attempt GitHub submission (best-effort, only if token is configured)
-        //    GitHub送信を試みる（ベストエフォート、トークンが設定されている場合のみ）
-        string? issueUrl = null;
-        if (GitHubIssueReporter.ResolveToken() != null)
+        if (GitHubIssueReporter.ResolveToken() != null && !alreadySubmitted)
         {
             try
             {
@@ -891,6 +897,24 @@ public partial class McpServer
             {
                 // Swallow — GitHub submission is best-effort / 握りつぶす — GitHub送信はベストエフォート
             }
+        }
+
+        if (!isNew)
+        {
+            var dupPayload = new JsonObject
+            {
+                ["status"] = "duplicate",
+                ["hash"] = hash,
+                ["message"] = alreadySubmitted
+                    ? "This suggestion has already been recorded and submitted."
+                    : issueUrl != null
+                        ? "This suggestion was already recorded. GitHub submission retried successfully."
+                        : "This suggestion has already been recorded.",
+                ["submitted_to_github"] = alreadySubmitted || issueUrl != null,
+            };
+            if (issueUrl != null)
+                dupPayload["github_issue_url"] = issueUrl;
+            return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
         // 8. Return success / 成功レスポンスを返す
