@@ -982,6 +982,10 @@ public class SymbolExtractorTests
     [InlineData("dart", "enum Status { active }", "enum")]
     [InlineData("graphql", "interface Node { }", "interface")]
     [InlineData("graphql", "enum Role { ADMIN }", "enum")]
+    [InlineData("haskell", "class Functor f where", "interface")]
+    [InlineData("elixir", "defprotocol Enumerable do\nend", "interface")]
+    [InlineData("ruby", "  attr_accessor :name", "property")]
+    [InlineData("python", "@property\ndef name(self):", "property")]
     public void Extract_CrossLanguage_GranularKindsAreConsistent(string lang, string content, string expectedKind)
     {
         var symbols = SymbolExtractor.Extract(1, lang, content);
