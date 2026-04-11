@@ -46,7 +46,9 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // namespace/module / 名前空間・モジュール
+            // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
+            // 名前空間・モジュール — 識別子形式と引用符付きアンビエント形式の両方に対応
+            new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:interface|type|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),

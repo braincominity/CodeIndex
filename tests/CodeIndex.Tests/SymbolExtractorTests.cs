@@ -65,6 +65,8 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BaseService");
+        // Quoted ambient module declaration / 引用符付きアンビエントモジュール宣言
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "express");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "App.Models");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
     }
