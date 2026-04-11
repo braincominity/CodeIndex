@@ -89,14 +89,15 @@ Install a specific version:
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.5.0
 ```
 
-Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64`. Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
+Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux only; Alpine/musl is not supported). Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
 
 <details>
 <summary><strong>Dockerfile example</strong></summary>
 
 ```dockerfile
-RUN curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash \
-    && echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+# Install cdidx into /usr/local/bin so it's on PATH immediately
+RUN CDIDX_INSTALL_DIR=/usr/local/bin \
+    curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 </details>
 
@@ -871,14 +872,15 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.5.0
 ```
 
-対応プラットフォーム: `linux-x64`, `linux-arm64`, `osx-arm64`。デフォルトで `~/.local/bin` にインストール（`CDIDX_INSTALL_DIR` で変更可）。
+対応プラットフォーム: `linux-x64`, `linux-arm64`, `osx-arm64`（glibc ベースの Linux のみ。Alpine/musl は非対応）。デフォルトで `~/.local/bin` にインストール（`CDIDX_INSTALL_DIR` で変更可）。
 
 <details>
 <summary><strong>Dockerfile の例</strong></summary>
 
 ```dockerfile
-RUN curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash \
-    && echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+# /usr/local/bin にインストールして PATH に即反映
+RUN CDIDX_INSTALL_DIR=/usr/local/bin \
+    curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 </details>
 

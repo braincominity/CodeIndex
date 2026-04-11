@@ -10,9 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Added
-- **One-liner install script** — `install.sh` enables installing cdidx in containers and CI environments without .NET SDK. Downloads self-contained binaries from GitHub Releases with SHA256 checksum verification. Supports `linux-x64`, `linux-arm64`, and `osx-arm64`. Affected: `install.sh`.
+- **One-liner install script** — `install.sh` enables installing cdidx in containers and CI environments without .NET SDK. Downloads self-contained binaries from GitHub Releases with SHA256 checksum verification. Supports `linux-x64`, `linux-arm64`, and `osx-arm64` (glibc only). Detects musl-based Linux (e.g. Alpine) and fails fast with a clear error. Affected: `install.sh`.
 - **linux-arm64 release builds** — Added `linux-arm64` to the release matrix for ARM container support (Apple Silicon Docker, ARM CI). Cross-compiled on x64 runners with test execution skipped for the cross-compiled target. Affected: `.github/workflows/release.yml`.
-- **README installation overhaul** — Reorganized Installation sections (English and Japanese) to lead with the `curl | bash` installer. Removed standalone Prerequisites section; .NET SDK requirement moved to NuGet/build-from-source options. Updated Code Search Rules templates and 30-second quick start sections. Affected: `README.md`.
+- **README installation overhaul** — Reorganized Installation sections (English and Japanese) to lead with the `curl | bash` installer. Removed standalone Prerequisites section; .NET SDK requirement moved to NuGet/build-from-source options. Updated Code Search Rules templates and 30-second quick start sections. Dockerfile examples use `CDIDX_INSTALL_DIR=/usr/local/bin` for correct PATH in container builds. Affected: `README.md`.
 
 ### [1.5.0] - 2026-04-12
 
@@ -497,9 +497,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
-- **ワンライナーインストールスクリプト** — `install.sh` により、.NET SDK なしでコンテナや CI 環境に cdidx をインストール可能。GitHub Releases から self-contained バイナリをダウンロードし、SHA256 チェックサムを検証する。`linux-x64`, `linux-arm64`, `osx-arm64` に対応。対象: `install.sh`。
+- **ワンライナーインストールスクリプト** — `install.sh` により、.NET SDK なしでコンテナや CI 環境に cdidx をインストール可能。GitHub Releases から self-contained バイナリをダウンロードし、SHA256 チェックサムを検証する。`linux-x64`, `linux-arm64`, `osx-arm64`（glibc のみ）に対応。musl ベースの Linux（Alpine 等）は検出して明確なエラーで拒否する。対象: `install.sh`。
 - **linux-arm64 リリースビルド** — ARM コンテナサポート（Apple Silicon Docker, ARM CI）のため、リリースマトリクスに `linux-arm64` を追加。x64 ランナー上でクロスコンパイルし、クロスコンパイル対象のテスト実行はスキップ。対象: `.github/workflows/release.yml`。
-- **README インストールセクション刷新** — Installation セクション（英語・日本語）を `curl | bash` インストーラーを先頭に再構成。独立した前提条件セクションを削除し、.NET SDK 要件を NuGet/ソースビルド方法に移動。Code Search Rules テンプレートと30秒クイックスタートも更新。対象: `README.md`。
+- **README インストールセクション刷新** — Installation セクション（英語・日本語）を `curl | bash` インストーラーを先頭に再構成。独立した前提条件セクションを削除し、.NET SDK 要件を NuGet/ソースビルド方法に移動。Code Search Rules テンプレートと30秒クイックスタートも更新。Dockerfile 例は `CDIDX_INSTALL_DIR=/usr/local/bin` を使いコンテナビルドで PATH を正しく設定。対象: `README.md`。
 
 ### [1.5.0] - 2026-04-12
 

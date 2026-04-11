@@ -54,6 +54,14 @@ detect_platform() {
     if [ "$RID" = "osx-x64" ]; then
         error "macOS x86_64 (Intel) binaries are not published. Use Rosetta 2 with osx-arm64 or install via 'dotnet tool install -g cdidx'."
     fi
+
+    # Reject musl-based Linux (e.g. Alpine) — published binaries require glibc
+    # musl系Linux（Alpine等）を拒否 — リリースバイナリはglibcが必要
+    if [ "$OS_NAME" = "linux" ]; then
+        if command -v ldd > /dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+            error "musl-based Linux (e.g. Alpine) is not supported. Published binaries require glibc. Use a glibc-based image (e.g. debian, ubuntu) or install via 'dotnet tool install -g cdidx'."
+        fi
+    fi
 }
 
 # --- Resolve version / バージョン解決 ---
