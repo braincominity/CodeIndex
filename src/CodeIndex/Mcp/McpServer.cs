@@ -504,7 +504,9 @@ public class McpServer
             + "Use 'outline' to see the full symbol structure of a single file (functions, classes, imports with line numbers) without reading the file content. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results. "
-            + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries.";
+            + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
+            + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
+            + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files.";
     }
 
     /// <summary>

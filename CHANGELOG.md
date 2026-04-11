@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **MCP instructions updated for batch_query and deps** — The `initialize` response instructions now guide AI clients to use `batch_query` for multi-query round-trip reduction and `deps` for file-level dependency analysis. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
 - **Container breadcrumb in `definition` output** — Human-readable `definition` results now show the containing symbol (e.g. "in DbReader") so users can see the class/namespace context. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **Symbol kind distribution in `status` output** — `status` now includes `symbol_kinds` with counts per kind (function, class, import, namespace) in both human-readable and JSON output. Helps AI agents understand the shape of the codebase. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -332,6 +334,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **MCP instructions に batch_query と deps を追加** — `initialize` レスポンスの instructions に `batch_query`（往復回数削減）と `deps`（ファイル間依存分析）の案内を追加。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **`definition` 出力にコンテナパンくず表示** — 人間向け `definition` 出力で、包含するシンボル（例: "in DbReader"）を表示。クラス/名前空間のコンテキストが見えるようになった。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
