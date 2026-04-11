@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Recently-modified tiebreaker in search ranking** — Among equally-ranked search results, recently modified files now appear first. Adds `f.modified DESC` before the final alphabetical tiebreaker. Affected: `DbSearchReader.cs`.
 - **Additional DB indexes for new query patterns** — Added `symbols(kind)` for standalone `--kind` filter, `symbols(visibility)` for visibility-weighted ranking, and `symbol_references(symbol_name, reference_kind)` for hotspot/unused analysis performance. Affected: `DbContext.cs`.
 - **Kind/lang validation hints for unused and hotspots** — `unused` and `hotspots` commands now show helpful hints when zero results are found (invalid kind, unknown language, stale index, filter suggestions). Affected: `QueryCommandRunner.cs`.
+- **F# reference extraction** — F# now supports call-graph queries (`references`, `callers`, `callees`). Parenthesized calls like `someFunc(x)` and constructor calls `new ClassName()` are detected. F#-specific keywords added to the ignore list. Note: space-separated F# calls (`List.map f xs`) are not captured — this is a known limitation of regex-based extraction. Affected: `ReferenceExtractor.cs`.
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
@@ -532,6 +533,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **検索ランキングの最終更新日タイブレーカー** — 同ランクの検索結果の中で、最近変更されたファイルが先に表示されるようになった。最終的なアルファベット順タイブレーカーの前に `f.modified DESC` を追加。対象: `DbSearchReader.cs`。
 - **新しいクエリパターン用の追加DBインデックス** — スタンドアロン `--kind` フィルタ用の `symbols(kind)`、可視性ランキング用の `symbols(visibility)`、ホットスポット/未使用分析用の `symbol_references(symbol_name, reference_kind)` を追加。対象: `DbContext.cs`。
 - **unused/hotspots の kind/lang 検証ヒント** — `unused` と `hotspots` で0件時に有用なヒント（不正な kind、不明な言語、古いインデックス、フィルタ提案）を表示。対象: `QueryCommandRunner.cs`。
+- **F# 参照抽出** — F# でコールグラフクエリ（`references`、`callers`、`callees`）が利用可能に。`someFunc(x)` のような括弧付き呼び出しと `new ClassName()` のコンストラクタ呼び出しを検出。F# 固有キーワードを除外リストに追加。注意: スペース区切りの F# 呼び出し（`List.map f xs`）は検出できない — 正規表現ベース抽出の既知の制限。対象: `ReferenceExtractor.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。

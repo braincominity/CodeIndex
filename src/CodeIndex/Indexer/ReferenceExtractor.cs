@@ -13,7 +13,7 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua", "vb"
+        "dart", "scala", "elixir", "lua", "vb", "fsharp"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -31,6 +31,9 @@ public static class ReferenceExtractor
         "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
         // Java contextual keywords / Java 文脈キーワード
         "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
+        // F# contextual keywords / F# 文脈キーワード
+        "match", "with", "member", "override", "abstract", "mutable", "rec", "fun", "open",
+        "module", "type", "of", "then", "elif", "done", "begin", "end", "do",
         // Other languages / 他言語
         "print", "require", "import", "include", "raise", "lambda",
     };
