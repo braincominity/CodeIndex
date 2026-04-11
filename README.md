@@ -691,6 +691,8 @@ Once configured, the AI can directly call these tools:
 | `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata |
 | `outline` | Show all symbols in a single file with line numbers, signatures, and nesting |
 | `status` | Database statistics |
+| `deps` | File-level dependency edges from the reference graph |
+| `batch_query` | Execute multiple queries in a single call (MCP only, max 10) |
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `index` | Index or re-index a project directory |
 
@@ -1405,6 +1407,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す |
 | `outline` | 1ファイルの全シンボルを行番号・シグネチャ・ネスト構造付きで表示 |
 | `status` | データベース統計情報 |
+| `deps` | 参照グラフからファイル間依存エッジを表示 |
+| `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件） |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `index` | プロジェクトのインデックス作成・更新 |
 

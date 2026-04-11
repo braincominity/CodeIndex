@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **README MCP tool tables updated with deps and batch_query** — Both English and Japanese MCP tool tables now include `deps` and `batch_query`. Affected: `README.md`.
+
 - **Help text examples for deps, languages, --since, --reverse** — Added usage examples for `deps`, `deps --reverse`, `files --since`, and `languages` commands. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`.
 
 - **C# `unsafe` modifier in class/struct patterns** — `unsafe struct` and `unsafe class` are now extracted. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`.
@@ -354,6 +356,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **README MCP ツール表に deps と batch_query を追加** — 英語・日本語の MCP ツール表に `deps` と `batch_query` を追加。対象: `README.md`.
 
 - **ヘルプテキストに deps, languages, --since, --reverse の使用例追加** — 対象: `src/CodeIndex/Cli/ConsoleUi.cs`.
 
