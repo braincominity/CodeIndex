@@ -432,7 +432,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getName");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
     }
 
     [Fact]
@@ -475,7 +475,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "default_value");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "raw_ptr");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Result");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyUnion");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "MyUnion");
     }
 
     [Fact]
@@ -484,9 +484,9 @@ public class SymbolExtractorTests
         var content = "type Handler struct {\n}\ntype ID = string\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Logger");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Logger");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DefaultTimeout");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GlobalConfig");
@@ -499,7 +499,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "rust", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handle_request");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
     }
 
     [Fact]
@@ -668,7 +668,7 @@ public class SymbolExtractorTests
         var content = "struct Config {\n    func validate() -> Bool {\n        return true\n    }\n}";
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
     }
 
@@ -679,7 +679,7 @@ public class SymbolExtractorTests
         var content = "typedef struct Config {\n    int value;\n};\nint main(int argc) {\n}";
         var symbols = SymbolExtractor.Extract(1, "c", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
     }
 
@@ -701,8 +701,8 @@ public class SymbolExtractorTests
         var content = "export interface IUser {\n    name: string;\n}\nexport enum Status {\n    Active,\n}";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IUser");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IUser");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
     }
 
     [Fact]
@@ -845,7 +845,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Main");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Message");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Message");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Ping");
     }
 
@@ -869,7 +869,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "dart", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("flutter"));
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
     }
 
     [Fact]
@@ -919,7 +919,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "CreateUserInput");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Role");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Role");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
     }
