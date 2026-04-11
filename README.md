@@ -24,7 +24,7 @@ cdidx deps --path src/           # File-level dependency graph
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-46 languages supported. 16 MCP tools. Incremental updates. Zero config.
+46 languages supported. 21 MCP tools. Incremental updates. Zero config.
 
 - **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, DB schema, FTS5 internals
 - **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
@@ -724,9 +724,14 @@ Once configured, the AI can directly call these tools:
 | `outline` | Show all symbols in a single file with line numbers, signatures, and nesting |
 | `status` | Database statistics |
 | `deps` | File-level dependency edges from the reference graph |
+| `unused_symbols` | Find symbols defined but never referenced (dead code detection) |
+| `symbol_hotspots` | Find most-referenced symbols (high-impact code) |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10) |
+| `validate` | Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings) |
 | `languages` | List all supported languages, file extensions, and capabilities |
+| `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
+| `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
 
@@ -795,7 +800,7 @@ cdidx deps --path src/           # ファイル間依存グラフ
 cdidx mcp                        # AIツール向けMCPサーバー起動
 ```
 
-46言語対応。16 MCPツール。インクリメンタル更新。設定不要。
+46言語対応。21 MCPツール。インクリメンタル更新。設定不要。
 
 - **ドキュメント**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) アーキテクチャ、DBスキーマ、FTS5の仕組み
 - **AI開発規約**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
@@ -1495,9 +1500,14 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `outline` | 1ファイルの全シンボルを行番号・シグネチャ・ネスト構造付きで表示 |
 | `status` | データベース統計情報 |
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
+| `unused_symbols` | 定義されているが参照されていないシンボルを検索（デッドコード検出） |
+| `symbol_hotspots` | 最も参照されるシンボルを検索（影響の大きいコード） |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件） |
+| `validate` | エンコーディング問題（U+FFFD、BOM、null バイト、改行混在）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
+| `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
+| `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
