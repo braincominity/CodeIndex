@@ -324,4 +324,64 @@ public partial class DbReader
         };
     }
 
+    /// <summary>
+    /// Find symbols that have no matching references in the reference table (potential dead code).
+    /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
+    /// </summary>
+    public List<SymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        var sql = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.kind NOT IN ('import', 'namespace')
+              AND NOT EXISTS (
+                  SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+              )";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += " ORDER BY f.path, s.line LIMIT @limit";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@limit", limit);
+        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+
+        var results = new List<SymbolResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new SymbolResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Kind = reader.GetString(2),
+                Name = reader.GetString(3),
+                Line = reader.GetInt32(4),
+                StartLine = reader.GetInt32(5),
+                EndLine = reader.GetInt32(6),
+                Signature = reader.IsDBNull(7) ? null : reader.GetString(7),
+                Visibility = reader.IsDBNull(8) ? null : reader.GetString(8),
+                ReturnType = reader.IsDBNull(9) ? null : reader.GetString(9),
+                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
+                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
+            });
+        }
+        return results;
+    }
+
 }

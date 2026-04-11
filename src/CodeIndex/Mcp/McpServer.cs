@@ -190,6 +190,7 @@ public partial class McpServer
                 "deps" => ExecuteDeps(id, args),
                 "languages" => ExecuteLanguages(id),
                 "validate" => ExecuteValidate(id, args),
+                "unused_symbols" => ExecuteUnusedSymbols(id, args),
                 "ping" => ExecutePing(id),
                 "index" => ExecuteIndex(id, args),
                 "suggest_improvement" => ExecuteSuggestImprovement(id, args),

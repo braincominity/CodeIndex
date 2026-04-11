@@ -38,6 +38,7 @@ public partial class McpServer
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
+            + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
@@ -561,6 +562,7 @@ public partial class McpServer
                     "deps" => ExecuteDeps(null, toolArgs),
                     "languages" => ExecuteLanguages(null),
                     "validate" => ExecuteValidate(null, toolArgs),
+                    "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
                     "ping" => ExecutePing(null),
                     _ => null,
                 };
@@ -644,6 +646,32 @@ public partial class McpServer
             var summary = issues.Count > 0
                 ? $"Found {issues.Count} encoding issue(s)."
                 : "No encoding issues found.";
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonNode ExecuteUnusedSymbols(JsonNode? id, JsonNode? args)
+    {
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetUnusedSymbols(limit, kind, lang, pathPattern, excludePaths, excludeTests);
+            var payload = new JsonObject
+            {
+                ["count"] = results.Count,
+                ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            var summary = results.Count > 0
+                ? $"Found {results.Count} potentially unused symbol(s)."
+                : "No unused symbols found.";
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
         });
     }

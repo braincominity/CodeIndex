@@ -649,6 +649,39 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            // Only meaningful for graph-supported languages / グラフ対応言語でのみ意味がある
+            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No unused symbols found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, symbols = results }, jsonOptions));
+            }
+            else
+            {
+                foreach (var s in results)
+                {
+                    var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
+                    var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
+                    Console.WriteLine($"{s.Kind,-12} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
+                }
+                Console.Error.WriteLine($"({results.Count} potentially unused symbols)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);

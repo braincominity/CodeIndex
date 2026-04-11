@@ -206,7 +206,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(19, tools.Count);
+        Assert.Equal(20, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
