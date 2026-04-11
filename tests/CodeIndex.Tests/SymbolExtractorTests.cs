@@ -226,6 +226,16 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsRefStruct()
+    {
+        var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Span2D");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "StackBuffer");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsEnumMembers()
     {
         var content = "public enum Color\n{\n    Red,\n    Green = 1,\n    Blue = 2,\n}";
