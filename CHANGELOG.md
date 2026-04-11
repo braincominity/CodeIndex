@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# `file` modifier in method patterns** — `file static void DoWork()` (C# 11 file-scoped members) is now extracted. Test added for file-scoped types. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **CLAUDE.md CLI commands updated with --since and deps** — CLAUDE.md now reflects `--since` in `files` and includes the `deps` command. Affected: `CLAUDE.md`.
 
 - **README option tables updated with --since, --no-dedup, --reverse, --top** — Both English and Japanese option tables now document all new query options. Affected: `README.md`.
@@ -360,6 +362,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# `file` 修飾子のメソッドパターン対応** — `file static void DoWork()`（C# 11 のファイルスコープメンバー）を抽出可能に。ファイルスコープ型のテストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **CLAUDE.md CLI コマンドに --since と deps を反映** — CLAUDE.md の `files` に `--since` を追加し、`deps` コマンドを記載。対象: `CLAUDE.md`.
 

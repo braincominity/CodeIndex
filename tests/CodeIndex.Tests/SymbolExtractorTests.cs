@@ -226,6 +226,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsFileScopedType()
+    {
+        // C# 11 file-scoped type / C# 11 のファイルスコープ型
+        var content = "file class InternalHelper\n{\n    file static void DoWork() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InternalHelper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DoWork");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRefStruct()
     {
         var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }";
