@@ -273,6 +273,25 @@ public static class SourceCodeDetector
         + @"|\b(?:var|let|const|int|string|bool|float|double)\s+\w+"
         // Access modifiers (start of line) / アクセス修飾子（行頭）
         + @"|^(?:public|private|protected|internal)\s"
+        // Function/method calls: identifier followed by parentheses
+        // e.g. print("hello"), result.append(item), foo.bar(x)
+        // This catches expression-only lines in Python, Ruby, etc.
+        // 関数/メソッド呼び出し: 識別子の後に括弧
+        // 例: print("hello"), result.append(item), foo.bar(x)
+        // Python, Ruby 等の expression-only 行を検出する。
+        + @"|\w+\s*\([^)]*\)\s*$"
+        // Dot-chained method access: foo.bar, self.x, this.field
+        // ドットチェーンのメソッドアクセス: foo.bar, self.x, this.field
+        + @"|\w+\.\w+"
+        // Python/Ruby keywords and patterns not covered above
+        // 上記でカバーされない Python/Ruby キーワードとパターン
+        + @"|\b(?:elif|else:|except|raise|yield|pass|break|continue|del|assert|puts|print)\b"
+        // Python-style for/if/while with colon (no parentheses)
+        // Python スタイルの for/if/while（括弧なし、コロン付き）
+        + @"|\b(?:for|if|while|elif)\s+.+:\s*$"
+        // Closing parenthesis/bracket only (continuation lines)
+        // 閉じ括弧のみの行（継続行）
+        + @"|^[)\]]\s*$"
         + @")",
         RegexOptions.Compiled);
 

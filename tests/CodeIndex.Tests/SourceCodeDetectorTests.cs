@@ -231,6 +231,44 @@ public class SourceCodeDetectorTests
         Assert.True(SourceCodeDetector.ContainsSourceCode(text));
     }
 
+    [Fact]
+    public void RejectsPythonExpressionOnlyBody()
+    {
+        // Python function with print() calls — no braces, no semicolons.
+        // The expression-only lines (print, append) must still be detected.
+        // print() 呼び出しを含む Python 関数 — 波括弧もセミコロンもない。
+        // expression-only 行（print, append）も検出されなければならない。
+        var text = "def greet(names):\n"
+                 + "    for name in names:\n"
+                 + "        print(name)\n"
+                 + "    print('done')";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void RejectsPythonMethodChainBody()
+    {
+        // Python with method calls like result.append() — no assignment operators.
+        // result.append() のようなメソッド呼び出しを含む Python — 代入演算子なし。
+        var text = "def process(items):\n"
+                 + "    result = []\n"
+                 + "    for item in items:\n"
+                 + "        result.append(item)\n"
+                 + "    result.sort()";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void RejectsRubyExpressionBody()
+    {
+        var text = "def hello\n"
+                 + "    puts 'hello'\n"
+                 + "    puts 'world'\n"
+                 + "    puts 'done'\n"
+                 + "end";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
     // ================================================================
     // Edge cases / エッジケース
     // ================================================================
