@@ -373,6 +373,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Ruby_DetectsAttrAndRailsDSL()
+    {
+        var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n\n  def initialize(name)\n    @name = name\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "email");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "posts");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "company");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "active");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "initialize");
+    }
+
+    [Fact]
     public void Extract_Rust_DetectsExpandedFeatures()
     {
         var content = "macro_rules! my_macro {\n    () => {};\n}\n\npub mod utils {\n}\n\nconst MAX_SIZE: usize = 1024;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\npub const fn default_value() -> i32 { 42 }\npub unsafe fn raw_ptr() { }\ntype Result<T> = std::result::Result<T, Error>;\npub union MyUnion { f: f32 }";

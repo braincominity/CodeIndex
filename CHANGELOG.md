@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Ruby: attr_accessor/reader/writer and Rails DSL extraction** — Ruby patterns now extract `attr_accessor :name`, `attr_reader :email`, and Rails DSL (`has_many`, `has_one`, `belongs_to`, `scope`) as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Rust: macro_rules!, mod, const/static, const fn, unsafe fn, union, type alias** — Rust patterns now support `macro_rules!`, `mod` modules, `const`/`static` items, `const fn`, `unsafe fn`, `extern "C" fn`, `union`, and `type` aliases. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **TypeScript: abstract class, declare, namespace/module, readonly/override** — TypeScript patterns now support `abstract class`, `declare class/module/interface`, `namespace/module`, and `readonly`/`abstract`/`override` method modifiers. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -420,6 +422,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Ruby: attr_accessor/reader/writer と Rails DSL 抽出** — Ruby パターンに `attr_accessor :name`、`attr_reader :email`、Rails DSL（`has_many`、`has_one`、`belongs_to`、`scope`）を function シンボルとして追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Rust: macro_rules!, mod, const/static, const fn, unsafe fn, union, type alias** — Rust パターンに `macro_rules!`、`mod` モジュール、`const`/`static` アイテム、`const fn`、`unsafe fn`、`extern "C" fn`、`union`、`type` エイリアスを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
