@@ -114,15 +114,26 @@ internal static class GitHubIssueReporter
     {
         var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues";
 
-        // Build the issue title — truncate description to 60 chars for readability.
-        // Issue タイトルを構築 — 可読性のため description を60文字に切り詰める。
-        var shortDesc = record.Description.Length > 60
-            ? record.Description[..60] + "..."
-            : record.Description;
+        // Build the issue title — scrub and truncate for readability.
+        // Issue タイトルを構築 — 除去・切り詰めて可読性を確保。
+        var scrubbedForTitle = ScrubInlineCode(record.Description);
+        var shortDesc = scrubbedForTitle.Length > 60
+            ? scrubbedForTitle[..60] + "..."
+            : scrubbedForTitle;
         var title = $"[AI Suggestion] {record.Category}: {shortDesc}";
 
-        // Build the issue body — ONLY structured fields, NEVER source code.
-        // Issue 本文を構築 — 構造化フィールドのみ、ソースコードは一切含まない。
+        // Scrub inline code from description and context before external submission.
+        // SourceCodeDetector intentionally allows short inline code examples for local
+        // storage, but we strip them before publishing to GitHub to prevent any
+        // code-like content from reaching an external repository.
+        // 外部送信前に description と context からインラインコードを除去する。
+        // SourceCodeDetector はローカル保存用に短いインラインコード例を意図的に許容するが、
+        // GitHub に公開する前に除去し、コード的な内容が外部リポジトリに到達することを防ぐ。
+        var scrubbedDescription = ScrubInlineCode(record.Description);
+        var scrubbedContext = record.Context != null ? ScrubInlineCode(record.Context) : null;
+
+        // Build the issue body — structured fields only, with code scrubbed.
+        // Issue 本文を構築 — 構造化フィールドのみ、コードは除去済み。
         var body = new StringBuilder();
         body.AppendLine("## Category");
         body.AppendLine(record.Category);
@@ -131,10 +142,10 @@ internal static class GitHubIssueReporter
         body.AppendLine(record.Language ?? "N/A");
         body.AppendLine();
         body.AppendLine("## Description");
-        body.AppendLine(record.Description);
+        body.AppendLine(scrubbedDescription);
         body.AppendLine();
         body.AppendLine("## Context");
-        body.AppendLine(record.Context ?? "N/A");
+        body.AppendLine(scrubbedContext ?? "N/A");
         body.AppendLine();
         body.AppendLine("---");
         body.AppendLine($"_Submitted by cdidx v{version}. Hash: `{record.Hash}`_");
@@ -173,5 +184,30 @@ internal static class GitHubIssueReporter
         var responseJson = await response.Content.ReadAsStringAsync();
         var responseNode = JsonNode.Parse(responseJson);
         return responseNode?["html_url"]?.GetValue<string>();
+    }
+
+    /// <summary>
+    /// Remove inline code spans (backtick-wrapped text) from a string before
+    /// external submission. Replaces `code` with [code example removed].
+    /// This is a stricter outbound policy than SourceCodeDetector's local policy:
+    /// locally, inline code is useful for gap descriptions; externally, we strip
+    /// it to prevent any code-like content from reaching GitHub.
+    /// 外部送信前にインラインコードスパン（バッククォートで囲まれたテキスト）を
+    /// 文字列から除去する。`code` を [code example removed] に置換する。
+    /// これは SourceCodeDetector のローカルポリシーより厳格な送信ポリシーである:
+    /// ローカルではインラインコードはギャップ記述に有用だが、外部には GitHub に
+    /// コード的内容が到達しないよう除去する。
+    /// </summary>
+    internal static string ScrubInlineCode(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        // Replace backtick-wrapped spans: `anything here` → [code example removed]
+        // バッククォートで囲まれたスパンを置換: `任意の内容` → [code example removed]
+        return System.Text.RegularExpressions.Regex.Replace(
+            text,
+            @"`[^`]+`",
+            "[code example removed]");
     }
 }

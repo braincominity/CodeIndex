@@ -83,6 +83,39 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
 
+    // --- ScrubInlineCode tests / ScrubInlineCode テスト ---
+
+    [Fact]
+    public void ScrubInlineCode_RemovesBacktickSpans()
+    {
+        var input = "Arrow functions like `const foo = () => {}` are not detected";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Arrow functions like [code example removed] are not detected", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_RemovesMultipleSpans()
+    {
+        var input = "Both `import React` and `require('foo')` are missed";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Both [code example removed] and [code example removed] are missed", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_PreservesPlainText()
+    {
+        var input = "Symbol extraction misses Kotlin data classes";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal(input, result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_HandlesEmptyAndNull()
+    {
+        Assert.Equal("", GitHubIssueReporter.ScrubInlineCode(""));
+        Assert.Null(GitHubIssueReporter.ScrubInlineCode(null!));
+    }
+
     public void Dispose()
     {
         // Restore original env vars / 元の環境変数をリストア
