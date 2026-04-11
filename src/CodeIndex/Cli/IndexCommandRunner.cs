@@ -63,6 +63,30 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
+        if (options.DryRun)
+        {
+            var dryIndexer = new FileIndexer(options.ProjectPath);
+            var dryFiles = dryIndexer.ScanFiles();
+            var langCounts = new Dictionary<string, int>();
+            foreach (var f in dryFiles)
+            {
+                var lang = FileIndexer.DetectLanguage(f) ?? "unknown";
+                langCounts[lang] = langCounts.GetValueOrDefault(lang) + 1;
+            }
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { status = "dry_run", files_total = dryFiles.Count, languages = langCounts }, jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"Dry run: {dryFiles.Count} files would be indexed");
+                foreach (var (lang, count) in langCounts.OrderByDescending(kv => kv.Value))
+                    Console.WriteLine($"  {lang,-12} {count,6}");
+            }
+            return CommandExitCodes.Success;
+        }
+
         var dbDir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dbDir))
             Directory.CreateDirectory(dbDir);
@@ -91,6 +115,7 @@ public static class IndexCommandRunner
         bool rebuild = false;
         bool verbose = false;
         bool json = false;
+        bool dryRun = false;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -112,6 +137,9 @@ public static class IndexCommandRunner
                     break;
                 case "--json":
                     json = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -166,6 +194,7 @@ public static class IndexCommandRunner
             Commits = commits,
             UpdateFiles = updateFiles,
             EasterEgg = easterEgg,
+            DryRun = dryRun,
         };
     }
 
@@ -573,4 +602,5 @@ public sealed class IndexCommandOptions
     public List<string> Commits { get; init; } = [];
     public List<string> UpdateFiles { get; init; } = [];
     public string? EasterEgg { get; init; }
+    public bool DryRun { get; init; }
 }

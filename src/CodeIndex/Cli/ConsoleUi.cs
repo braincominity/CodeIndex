@@ -339,6 +339,7 @@ public static class ConsoleUi
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
+        Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
