@@ -71,6 +71,30 @@ public class FileIndexer
         [".hs"]     = "haskell",
         [".lhs"]    = "haskell",
         [".zig"]    = "zig",
+        [".proto"]  = "protobuf",  // Protocol Buffers / Protocol Buffers 定義
+        [".graphql"]= "graphql",   // GraphQL schema/queries / GraphQL スキーマ・クエリ
+        [".gql"]    = "graphql",
+        [".gradle"] = "gradle",    // Gradle build scripts / Gradle ビルドスクリプト
+        [".cmake"]  = "cmake",     // CMake scripts / CMake スクリプト
+        [".ps1"]    = "powershell",// PowerShell scripts / PowerShell スクリプト
+        [".bat"]    = "batch",     // Windows batch files / Windows バッチファイル
+        [".cmd"]    = "batch",
+        [".bash"]   = "shell",
+        [".zsh"]    = "shell",
+        [".fish"]   = "shell",
+    };
+
+    // Exact file names (case-insensitive) mapped to language / 完全一致ファイル名→言語マッピング
+    private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Dockerfile"]    = "dockerfile",
+        ["Makefile"]      = "makefile",
+        ["Justfile"]      = "justfile",     // Just command runner / Just コマンドランナー
+        ["CMakeLists.txt"]= "cmake",
+        ["Vagrantfile"]   = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
+        [".editorconfig"] = "editorconfig",
+        [".gitignore"]    = "gitignore",
+        [".dockerignore"] = "dockerignore",
     };
 
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
@@ -112,19 +136,28 @@ public class FileIndexer
     }
 
     /// <summary>
-    /// Try to detect the language from a file extension.
-    /// ファイル拡張子から言語を検出する。
+    /// Return all file patterns (extensions and filenames) mapped to their language names.
+    /// 全ファイルパターン（拡張子とファイル名）と対応する言語名のマッピングを返す。
     /// </summary>
-    /// <summary>
-    /// Return all file extensions mapped to their language names.
-    /// 全拡張子と対応する言語名のマッピングを返す。
-    /// </summary>
-    public static IReadOnlyDictionary<string, string> GetLanguageExtensions() => LangMap;
+    public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
+    {
+        // Merge extension map and filename map for a complete view
+        // 完全な一覧のため拡張子マップとファイル名マップを統合
+        var merged = new Dictionary<string, string>(LangMap, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, lang) in FileNameMap)
+            merged.TryAdd(name, lang);
+        return merged;
+    }
 
     public static string? DetectLanguage(string filePath)
     {
         var ext = Path.GetExtension(filePath);
-        return LangMap.TryGetValue(ext, out var lang) ? lang : null;
+        if (LangMap.TryGetValue(ext, out var lang))
+            return lang;
+
+        // Fall back to exact file name matching / ファイル名の完全一致で言語を検出
+        var fileName = Path.GetFileName(filePath);
+        return FileNameMap.TryGetValue(fileName, out var nameLang) ? nameLang : null;
     }
 
     /// <summary>
@@ -155,9 +188,10 @@ public class FileIndexer
                 if (SkipFiles.Contains(fileName))
                     continue;
 
-                // Only include files with a known extension / 既知の拡張子のみ含める
+                // Include files with a known extension or known filename
+                // 既知の拡張子または既知のファイル名のファイルを含める
                 var ext = Path.GetExtension(file);
-                if (LangMap.ContainsKey(ext))
+                if (LangMap.ContainsKey(ext) || FileNameMap.ContainsKey(fileName))
                     results.Add(file);
             }
 

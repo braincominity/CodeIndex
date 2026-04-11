@@ -39,6 +39,21 @@ public class FileIndexerTests
     [InlineData("MyApp.csproj", "xml")]
     [InlineData("Main.hs", "haskell")]
     [InlineData("main.zig", "zig")]
+    [InlineData("schema.proto", "protobuf")]
+    [InlineData("schema.graphql", "graphql")]
+    [InlineData("build.gradle", "gradle")]
+    [InlineData("build.cmake", "cmake")]
+    [InlineData("script.ps1", "powershell")]
+    [InlineData("run.bat", "batch")]
+    [InlineData("run.cmd", "batch")]
+    [InlineData("script.bash", "shell")]
+    [InlineData("script.zsh", "shell")]
+    [InlineData("script.fish", "shell")]
+    [InlineData("Dockerfile", "dockerfile")]
+    [InlineData("Makefile", "makefile")]
+    [InlineData("Justfile", "justfile")]
+    [InlineData("CMakeLists.txt", "cmake")]
+    [InlineData("Vagrantfile", "ruby")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
@@ -99,6 +114,30 @@ public class FileIndexerTests
             // app.jsのみ検出され、package-lock.jsonは除外される
             Assert.Single(files);
             Assert.Contains("app.js", files[0]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IncludesFileNameBasedLanguages()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "Dockerfile"), "FROM alpine");
+            File.WriteAllText(Path.Combine(tempDir, "Makefile"), "all: build");
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+            File.WriteAllText(Path.Combine(tempDir, "unknown.xyz"), "nothing");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            // Dockerfile, Makefile, and app.py should be found; unknown.xyz should not
+            Assert.Equal(3, files.Count);
         }
         finally
         {
