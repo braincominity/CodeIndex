@@ -229,6 +229,25 @@ Good improvements are often:
 - safer compatibility behavior
 - sharper product framing
 
+## Priority: C# First (Dogfooding)
+
+cdidx is written in C#. Every improvement to C# analysis directly improves how this loop explores, navigates, and verifies cdidx's own codebase. This is a genuine dogfooding advantage — no other language gives the same feedback density.
+
+When choosing what to improve next, **prioritize C# capabilities first**:
+
+- C# symbol extraction accuracy (properties, events, records, pattern matching, etc.)
+- C# reference/call-graph precision (generic methods, extension methods, LINQ, etc.)
+- C# ranking quality (namespace awareness, visibility-weighted results, etc.)
+- C#-specific MCP/CLI output improvements
+- Fixing false positives or negatives that surface while working on the cdidx codebase itself
+
+This does not mean other languages are unimportant. It means:
+1. When two improvements have roughly equal value, pick the C# one.
+2. When the loop surfaces a C#-specific defect during normal operation, treat it as a high-priority fix rather than a "nice to have."
+3. When adding a cross-language feature, ensure the C# path is the most polished.
+
+The reasoning is simple: a sharper C# experience makes the self-improvement loop itself more productive, which accelerates every subsequent improvement — including those for other languages.
+
 ## Suggested Prompt
 
 If a user wants to start this loop, the minimal instruction can be:
@@ -471,6 +490,25 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - 信頼性や鮮度のシグナルが増える
 - 互換性面が安全になる
 - プロダクトの打ち出しが鋭くなる
+
+## 優先順位: C# を最優先にする（ドッグフーディング）
+
+cdidx は C# で書かれています。C# の解析を改善すれば、それがそのまま、このループが cdidx 自身のコードベースを探索・ナビゲート・検証する精度を高めます。これは本物のドッグフーディングの利点です。他のどの言語も同じ密度のフィードバックは返してくれません。
+
+次に何を改善するか選ぶとき、**C# 関連の機能強化を最優先にしてください**:
+
+- C# シンボル抽出の精度（プロパティ、イベント、record、パターンマッチングなど）
+- C# の参照・コールグラフ精度（ジェネリックメソッド、拡張メソッド、LINQ など）
+- C# のランキング品質（名前空間の考慮、可視性で重み付けした結果など）
+- C# 固有の MCP/CLI 出力改善
+- cdidx のコードベース自体を触っていて浮上した偽陽性・偽陰性の修正
+
+他の言語が重要でないという意味ではありません。意味するのは:
+1. ほぼ同等の価値を持つ改善が2つあるなら、C# 側を選ぶ。
+2. ループの通常操作中に C# 固有の不具合が見つかったら、「あると嬉しい」ではなく優先修正として扱う。
+3. 言語横断の機能を追加するときは、C# の経路を最も洗練させる。
+
+理由は単純です。C# の体験が鋭くなれば自己改善ループ自体の生産性が上がり、その結果すべての後続改善——他言語向けも含め——が加速します。
 
 ## 推奨プロンプト
 
