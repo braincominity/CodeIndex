@@ -485,10 +485,13 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_Gradle_DetectsSymbols()
     {
-        var content = "apply plugin: 'java'\n\ntask build {\n  doLast { println 'Building' }\n}\n\ndef customTask {\n  println 'custom'\n}\n";
+        // Both legacy apply plugin: and modern plugins { id '...' } forms
+        // レガシーの apply plugin: と新しい plugins { id '...' } の両形式
+        var content = "apply plugin: 'java'\n\nplugins {\n  id 'org.springframework.boot'\n}\n\ntask build {\n  doLast { println 'Building' }\n}\n\ndef customTask {\n  println 'custom'\n}\n";
         var symbols = SymbolExtractor.Extract(1, "gradle", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "java");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "org.springframework.boot");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "customTask");
     }

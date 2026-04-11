@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`languages` CLI command and MCP tool** — New `cdidx languages [--json]` command and MCP `languages` tool that list all supported languages with their file extensions, symbol extraction support, and call-graph query support. Lets AI agents and new users discover cdidx capabilities at runtime without consulting documentation. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
+#### Fixed
+
+- **Gradle `plugins { id }` DSL not matched** — The Gradle import regex only handled `apply plugin: 'name'` but not the modern `plugins { id 'name' }` block form. Fixed regex to accept both whitespace and `(:` after `id`. Added test coverage for the `id` form. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+#### Added
+
 - **GraphQL and Gradle symbol extraction** — GraphQL schemas now get `type`, `interface`, `union`, `enum`, `scalar`, `input`, `query`, `mutation`, `subscription`, and `extend type` symbol extraction. Gradle build scripts get `task`/`def` function extraction and `apply plugin`/`id` import extraction. Enables `symbols`, `definition`, and `outline` for these ecosystems. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Makefile and Dockerfile symbol extraction** — Makefile targets (`all:`, `build:`, `test:`) are extracted as function symbols. Dockerfile `FROM` stages with `AS` aliases are extracted as function symbols, and unnamed `FROM` images as class symbols. Enables `symbols`, `definition`, and `outline` for these common project files. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -276,6 +282,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 追加
 
 - **`languages` CLI コマンドと MCP ツール** — 新コマンド `cdidx languages [--json]` と MCP ツール `languages` を追加。対応言語の一覧を拡張子・シンボル抽出対応・コールグラフ対応の情報付きで返す。AI エージェントや新規ユーザーがドキュメントを参照せずに cdidx の対応範囲を実行時に確認できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+#### 修正
+
+- **Gradle `plugins { id }` DSL が未対応だった問題** — Gradle の import 正規表現が `apply plugin: 'name'` のみ対応し、現代的な `plugins { id 'name' }` ブロック形式を取りこぼしていた。`id` の後にスペースも `(:` も受け付けるよう修正し、`id` 形式のテストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
+#### 追加
 
 - **GraphQL・Gradle シンボル抽出** — GraphQL スキーマで `type`、`interface`、`union`、`enum`、`scalar`、`input`、`query`、`mutation`、`subscription`、`extend type` のシンボル抽出に対応。Gradle ビルドスクリプトで `task`/`def` の function 抽出と `apply plugin`/`id` の import 抽出に対応。`symbols`、`definition`、`outline` がこれらのエコシステムで使えるようになった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

@@ -180,7 +180,7 @@ public static class SymbolExtractor
         ["gradle"] =
         [
             new("function", new Regex(@"^\s*(?:task|def)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*(?:apply\s+plugin|id)\s*[:(]\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:apply\s+plugin\s*:\s*|id\s*[\s(]\s*)['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["makefile"] =
         [
