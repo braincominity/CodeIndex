@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Swift: actor, distributed actor, typealias, expanded method modifiers** — Swift patterns now support `actor` (Swift 5.5+), `distributed actor`, `typealias`, and additional method modifiers (`nonisolated`, `mutating`, `nonmutating`). Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Lua call-graph reference extraction** — Lua now supports `references`, `callers`, and `callees` queries. Added `--` comment stripping for Lua. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **MCP `search` tool `exact` parameter** — The MCP `search` tool now accepts `exact` boolean for case-sensitive substring matching, matching the CLI `--exact` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
@@ -450,6 +452,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Swift: actor, distributed actor, typealias, 拡張メソッド修飾子** — Swift パターンに `actor`（Swift 5.5+）、`distributed actor`、`typealias`、追加メソッド修飾子（`nonisolated`、`mutating`、`nonmutating`）を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Lua コールグラフ参照抽出** — Lua が `references`、`callers`、`callees` クエリに対応。`--` コメント除去も追加。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 

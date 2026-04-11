@@ -419,6 +419,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Swift_DetectsActorAndTypealias()
+    {
+        var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ndistributed actor RemoteWorker { }";
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NetworkManager");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RemoteWorker");
+    }
+
+    [Fact]
     public void Extract_Ruby_DetectsAttrAndRailsDSL()
     {
         var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n\n  def initialize(name)\n    @name = name\n  end\nend";
