@@ -374,8 +374,8 @@ Supported symbol kinds by language (29 languages with symbol extraction):
 | Ruby | def, attr_accessor/reader/writer, Rails DSL (has_many, belongs_to, scope) | class, module | require | yes |
 | C | functions | struct, enum | #include | yes |
 | C++ | functions | class, struct, namespace, enum | #include | yes |
-| PHP | function | class, interface, trait, enum | require/include | yes |
-| Swift | func | class, struct, enum, protocol | import | yes |
+| PHP | function, const | class (readonly/abstract/final), interface, trait, enum, namespace | use, require/include | yes |
+| Swift | func (mutating/nonisolated) | class, struct, enum, protocol, actor, distributed actor, typealias | import | yes |
 | Dart | functions | class, mixin, enum, extension | import | yes |
 | Scala | def | class, object, trait, case class, enum | import | yes |
 | Elixir | def, defp | defmodule, defprotocol | import, alias, use, require | yes |
@@ -387,7 +387,7 @@ Supported symbol kinds by language (29 languages with symbol extraction):
 | Gradle | task, def | -- | apply plugin, id | -- |
 | Makefile | targets | -- | -- | -- |
 | Dockerfile | named stages (AS) | base images (FROM) | -- | -- |
-| Lua | function, local function | -- | require | -- |
+| Lua | function, local function | -- | require | yes |
 | R | name <- function() | -- | library, require | -- |
 | Haskell | type signatures (name ::) | data, newtype, type, class, instance | import | -- |
 | F# | let, let rec | type, module | open | -- |
@@ -898,8 +898,8 @@ LIMIT 20;
 | Ruby | def, attr_accessor/reader/writer, Rails DSL | class, module | require | yes |
 | C | 関数 | struct, enum | #include | yes |
 | C++ | 関数 | class, struct, namespace, enum | #include | yes |
-| PHP | function | class, interface, trait, enum | require/include | yes |
-| Swift | func | class, struct, enum, protocol | import | yes |
+| PHP | function, const | class (readonly/abstract/final), interface, trait, enum, namespace | use, require/include | yes |
+| Swift | func (mutating/nonisolated) | class, struct, enum, protocol, actor, distributed actor, typealias | import | yes |
 | Dart | 関数 | class, mixin, enum, extension | import | yes |
 | Scala | def | class, object, trait, case class, enum | import | yes |
 | Elixir | def, defp | defmodule, defprotocol | import, alias, use, require | yes |
@@ -911,7 +911,7 @@ LIMIT 20;
 | Gradle | task, def | -- | apply plugin, id | -- |
 | Makefile | ターゲット | -- | -- | -- |
 | Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- |
-| Lua | function, local function | -- | require | -- |
+| Lua | function, local function | -- | require | yes |
 | R | name <- function() | -- | library, require | -- |
 | Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import | -- |
 | F# | let, let rec | type, module | open | -- |

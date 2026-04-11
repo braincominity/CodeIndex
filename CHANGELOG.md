@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **DEVELOPER_GUIDE language table: Lua graph, Swift actor, PHP namespace** — Updated Lua to graph=yes, Swift to include actor/typealias, PHP to include readonly class/namespace/use/const. Both EN/JP sections. Affected: `DEVELOPER_GUIDE.md`.
+
 - **MCP instructions mention search exact mode** — AI clients are now guided to use `search` with `exact: true` for case-sensitive matching. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`.
 
 - **PHP: readonly class, namespace, use, const, expanded modifiers** — PHP patterns now support `readonly class` (PHP 8.2+), `namespace`, `use` imports, `const` declarations, and enum types. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -456,6 +458,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **DEVELOPER_GUIDE 言語表: Lua graph, Swift actor, PHP namespace** — Lua を graph=yes に更新、Swift に actor/typealias を追加、PHP に readonly class/namespace/use/const を追加。英語・日本語両セクション。対象: `DEVELOPER_GUIDE.md`.
 
 - **MCP instructions に search exact モードの案内追加** — AI クライアントに `search` の `exact: true` で大文字小文字区別一致を案内。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`.
 
