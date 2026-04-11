@@ -29,9 +29,9 @@ public static class SearchSnippetFormatter
         return snippet;
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines)
+    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false)
     {
-        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines);
+        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive);
         return new CompactSearchResult
         {
             Path = result.Path,
@@ -49,7 +49,7 @@ public static class SearchSnippetFormatter
         };
     }
 
-    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines)
+    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false)
     {
         maxLines = ClampSnippetLines(maxLines);
 
@@ -72,7 +72,7 @@ public static class SearchSnippetFormatter
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var matchIndexes = FindMatchingLineIndexes(lines, normalizedQuery, tokens);
+        var matchIndexes = FindMatchingLineIndexes(lines, normalizedQuery, tokens, caseSensitive);
         var focusStart = matchIndexes.Count > 0 ? matchIndexes[0] : 0;
         var focusEnd = focusStart;
         foreach (var matchIndex in matchIndexes.Skip(1))
@@ -143,15 +143,16 @@ public static class SearchSnippetFormatter
     public static int ClampSnippetLines(int maxLines) =>
         Math.Clamp(maxLines, 1, MaxSnippetLines);
 
-    private static List<int> FindMatchingLineIndexes(string[] lines, string query, string[] tokens)
+    private static List<int> FindMatchingLineIndexes(string[] lines, string query, string[] tokens, bool caseSensitive = false)
     {
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var matches = new List<int>();
 
         if (!string.IsNullOrWhiteSpace(query))
         {
             for (int i = 0; i < lines.Length; i++)
             {
-                if (lines[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                if (lines[i].Contains(query, comparison))
                     matches.Add(i);
             }
         }
@@ -161,7 +162,7 @@ public static class SearchSnippetFormatter
 
         for (int i = 0; i < lines.Length; i++)
         {
-            if (tokens.Any(token => lines[i].Contains(token, StringComparison.OrdinalIgnoreCase)))
+            if (tokens.Any(token => lines[i].Contains(token, comparison)))
                 matches.Add(i);
         }
 

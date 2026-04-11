@@ -129,7 +129,7 @@ public partial class McpServer
                 ["path"] = pathPattern,
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines)), _jsonOptions)
+                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact)), _jsonOptions)
             };
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
