@@ -28,7 +28,10 @@ public static class QueryCommandRunner
                 if (options.CountOnly)
                     Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
                 else if (!options.Json)
+                {
                     Console.Error.WriteLine("No results found.");
+                    WriteZeroResultHints(options, reader);
+                }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
@@ -81,7 +84,10 @@ public static class QueryCommandRunner
                 if (options.CountOnly)
                     Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
                 else if (!options.Json)
+                {
                     Console.Error.WriteLine("No definitions found.");
+                    WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
+                }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
@@ -796,6 +802,29 @@ public static class QueryCommandRunner
         Console.WriteLine($"{title}:");
         foreach (var row in materialized)
             Console.WriteLine($"  {row}");
+    }
+
+    /// <summary>
+    /// Write actionable hints when a query returns zero results.
+    /// 0件時に実行可能なヒントを出力する。
+    /// </summary>
+    private static void WriteZeroResultHints(QueryCommandOptions options, DbReader reader, string? alternativeHint = null)
+    {
+        var (fileCount, indexedAt) = reader.GetFreshnessHint();
+        if (fileCount == 0)
+        {
+            Console.Error.WriteLine("Hint: the index is empty. Run 'cdidx index <projectPath>' first.");
+            return;
+        }
+
+        if (options.Lang != null || options.PathPattern != null || options.ExcludeTests || options.ExcludePaths.Count > 0)
+            Console.Error.WriteLine("Hint: try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search.");
+
+        if (alternativeHint != null)
+            Console.Error.WriteLine($"Hint: {alternativeHint}");
+
+        if (indexedAt.HasValue && (DateTime.UtcNow - indexedAt.Value).TotalHours > 24)
+            Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
     }
 
     private static void WriteGraphSupportHint(string? lang)
