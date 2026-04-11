@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **MCP `deps` tool reverse parameter** — The MCP `deps` tool now accepts a `reverse` boolean parameter for reverse dependency lookup, matching the CLI `--reverse` flag. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
 - **C# enum member extraction** — Enum members like `Red`, `Green = 1`, `Blue = 2` are now extracted as function symbols inside enum bodies. Enables `outline` and `symbols` to show enum values for navigation. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# record variant test coverage** — Added tests for `record`, `sealed record class`, `readonly record struct` with parameter lists to verify signatures are correctly captured. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -344,6 +346,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **MCP `deps` ツールに reverse パラメータ** — MCP の `deps` ツールに `reverse` ブーリアンパラメータを追加し、CLI の `--reverse` フラグと同等の逆引き依存検索に対応。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **C# enum メンバー抽出** — `Red`、`Green = 1`、`Blue = 2` のような enum メンバーを enum 本体内の function シンボルとして抽出。`outline` と `symbols` で enum 値をナビゲーション可能に。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

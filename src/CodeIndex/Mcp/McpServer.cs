@@ -382,7 +382,8 @@ public class McpServer
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Restrict source files to paths containing this text" },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude paths" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files", ["default"] = false },
+                        ["reverse"] = new JsonObject { ["type"] = "boolean", ["description"] = "Reverse lookup: show files that depend ON the matched path", ["default"] = false }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -1061,10 +1062,11 @@ public class McpServer
         var pathPattern = args?["path"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetFileDependencies(limit, lang, pathPattern, excludePaths, excludeTests);
+            var results = reader.GetFileDependencies(limit, lang, pathPattern, excludePaths, excludeTests, reverse);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
