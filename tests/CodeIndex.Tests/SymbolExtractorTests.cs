@@ -124,6 +124,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsRecordVariants()
+    {
+        // record, record class, record struct with various modifiers
+        var content = "public record UserDto(string Name, int Age);\npublic sealed record class Config(string Key, string Value);\ninternal readonly record struct Point(double X, double Y);";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserDto");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        // Signature should contain parameters / シグネチャにパラメータが含まれるべき
+        var userDto = symbols.First(s => s.Name == "UserDto");
+        Assert.Contains("string Name", userDto.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsCompoundVisibility()
     {
         // protected internal and private protected / 複合アクセス修飾子

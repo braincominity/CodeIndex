@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# record variant test coverage** — Added tests for `record`, `sealed record class`, `readonly record struct` with parameter lists to verify signatures are correctly captured. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **`--lang` validation with available languages hint** — When `files` with `--lang` returns zero results due to no files in that language, shows available languages from the index. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **`--reverse` flag for `deps` command** — `deps --reverse --path <file>` shows which files depend on the specified file (reverse dependency lookup). Essential for refactoring impact analysis. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -340,6 +342,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# record バリアントのテストカバレッジ** — `record`、`sealed record class`、`readonly record struct` のパラメータリスト付き定義がシグネチャに正しく含まれることのテストを追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`--lang` バリデーションと利用可能言語ヒント** — `files` で `--lang` に該当ファイルがない場合、インデックス内の言語一覧を表示。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
