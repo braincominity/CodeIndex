@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# expression-bodied property extraction** — `public int X => 42;` expression-bodied properties and read-only members are now extracted as function symbols with return type. Previously only `{ get; set; }` style properties were matched. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **C# explicit interface implementation extraction** — `void IDisposable.Dispose()` and similar explicit interface implementations are now extracted as function symbols with their return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Expanded IgnoredCallNames for C# and other languages** — Added ~30 keywords to the reference extractor's ignore list: C# contextual keywords (`is`, `as`, `in`, `var`, `base`, `this`, `value`, `get`, `set`, `init`, `where`), LINQ keywords (`from`, `select`, `orderby`, `group`, etc.), type keywords (`struct`, `record`, `interface`, `delegate`, `event`), and utility keywords (`default`, `stackalloc`, `fixed`, `checked`). Reduces false-positive call references in C# code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
@@ -296,6 +298,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# 式本体プロパティの抽出** — `public int X => 42;` の式本体プロパティ・読み取り専用メンバーを戻り値型付きの function シンボルとして抽出。従来は `{ get; set; }` スタイルのみ対応だった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# 明示的インターフェース実装の抽出** — `void IDisposable.Dispose()` 等の明示的インターフェース実装を戻り値型付きの function シンボルとして抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

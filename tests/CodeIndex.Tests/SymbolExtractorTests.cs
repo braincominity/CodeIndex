@@ -140,6 +140,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsExpressionBodiedMembers()
+    {
+        var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "X" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pi" && s.ReturnType == "double");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExplicitInterfaceImpl()
     {
         var content = "public class MyClass : IDisposable, IComparable<MyClass>\n{\n    void IDisposable.Dispose()\n    {\n    }\n    int IComparable<MyClass>.CompareTo(MyClass other) => 0;\n}";
