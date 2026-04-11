@@ -41,6 +41,10 @@ public class DbRecoveryTests : IDisposable
             db.InitializeSchema();
         }
 
+        // Release all pooled connections so Windows can overwrite the file
+        // プール済み接続をすべて解放し、Windowsでファイル上書きを可能にする
+        SqliteConnection.ClearAllPools();
+
         // Corrupt it by overwriting / 上書きして破損させる
         File.WriteAllBytes(_dbPath, new byte[] { 0x00, 0x01, 0x02, 0x03 });
 
