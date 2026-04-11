@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Concurrent access tests** — Added `ConcurrencyTests.cs` with tests for concurrent reads (WAL mode allows parallel readers) and concurrent read-during-write scenarios. Affected: `tests/CodeIndex.Tests/ConcurrencyTests.cs`.
+
 - **"Why SQLite?" section in developer guide** — Documents the rationale for choosing SQLite over alternatives (PostgreSQL, DuckDB, LiteDB, Tantivy, vector DBs), what makes it the right fit, and when it would not be enough. Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
 
 #### Changed
@@ -390,6 +392,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **並行アクセステスト** — 並行読み取り（WALモードによる並列リーダー）と書き込み中読み取りシナリオのテストを `ConcurrencyTests.cs` に追加。対象: `tests/CodeIndex.Tests/ConcurrencyTests.cs`.
 
 - **開発者ガイドに「なぜSQLiteなのか？」セクションを追加** — PostgreSQL、DuckDB、LiteDB、Tantivy、ベクトルDB等の代替案との比較を含め、SQLiteを採用した理由、SQLiteが最適な根拠、SQLiteでは足りなくなるケースを文書化。英語・日本語の両セクション。対象: `DEVELOPER_GUIDE.md`。
 
