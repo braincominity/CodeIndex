@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--dry-run` flag for index command** — New `--dry-run` option scans files without writing to the database. Shows file count and language breakdown, useful for verifying what would be indexed. Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **DB compound indexes for query performance** — Added `symbols(file_id, kind)`, `files(lang, modified)`, and `symbol_references(container_name, reference_kind)` compound indexes to accelerate common query patterns. Affected: `src/CodeIndex/Database/DbContext.cs`.
+
 - **Shell, SQL, Terraform symbol extraction** — Shell: bash/zsh function declarations. SQL: CREATE TABLE/VIEW/FUNCTION/PROCEDURE/TRIGGER/INDEX, ALTER TABLE. Terraform: resource, data, module, variable, output, locals. All three languages now support `symbols`, `definition`, and `outline` queries. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Ruby: attr_accessor/reader/writer and Rails DSL extraction** — Ruby patterns now extract `attr_accessor :name`, `attr_reader :email`, and Rails DSL (`has_many`, `has_one`, `belongs_to`, `scope`) as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -424,6 +428,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **index コマンドに `--dry-run` フラグ** — DBに書き込まずにファイルスキャンのみ行う `--dry-run` オプション。ファイル数と言語内訳を表示。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
+- **DB 複合インデックスでクエリ高速化** — `symbols(file_id, kind)`、`files(lang, modified)`、`symbol_references(container_name, reference_kind)` の複合インデックスを追加。対象: `src/CodeIndex/Database/DbContext.cs`.
 
 - **Shell、SQL、Terraform シンボル抽出** — Shell: bash/zsh 関数宣言。SQL: CREATE TABLE/VIEW/FUNCTION/PROCEDURE/TRIGGER/INDEX、ALTER TABLE。Terraform: resource、data、module、variable、output、locals。3言語すべてで `symbols`、`definition`、`outline` が使えるようになった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

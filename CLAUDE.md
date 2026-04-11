@@ -149,6 +149,7 @@ tests/CodeIndex.Tests/
 
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
 - Documentation (README, CHANGELOG) is structured: English first, then Japanese.
+- **Never mix languages within a section.** English sections must contain only English text; Japanese sections must contain only Japanese text. Bilingual inline code comments (`// Enable WAL mode / WALモードを有効化`) are the only exception. When adding bilingual content (e.g. CLAUDE.md rules), write the English paragraph in the English section and the Japanese paragraph in the Japanese section — never both in the same section.
 - No unnecessary packages — `System.CommandLine` was removed in favor of manual arg parsing.
 
 ## Rules for changes (important)
@@ -374,6 +375,7 @@ tests/CodeIndex.Tests/
 
 - コメントは英日併記（例: `// Enable WAL mode / WALモードを有効化`）
 - ドキュメント（README, CHANGELOG）は前半英語、後半日本語の構成。
+- **セクション内で言語を混在させない。** 英語セクションには英語のみ、日本語セクションには日本語のみを記載する。バイリンガルのインラインコードコメント（`// Enable WAL mode / WALモードを有効化`）は唯一の例外。バイリンガルコンテンツ（CLAUDE.md のルール等）を追加するときは、英語パラグラフを英語セクションに、日本語パラグラフを日本語セクションに書く — 同一セクションに両方を入れない。
 - 不要なパッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。
 
 ## 変更時のルール（重要）
