@@ -140,6 +140,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsUsingAlias()
+    {
+        var content = "using System;\nusing Json = System.Text.Json;\nusing static System.Math;\nglobal using Logging = Microsoft.Extensions.Logging;";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Json");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Math");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Logging");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsConstAndStaticReadonly()
     {
         var content = "public class Config\n{\n    public const string Version = \"1.0\";\n    private const int MaxRetries = 3;\n    internal static readonly Dictionary<string, string> Map = new();\n    public string MutableField;\n}";

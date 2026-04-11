@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# `using` alias extraction** — `using Json = System.Text.Json;` and `global using Logging = Microsoft.Extensions.Logging;` alias declarations are now extracted as import symbols with the alias name. Previously the `=` character caused the pattern to skip these lines. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **C# const and static readonly field extraction** — `const` fields and `static readonly` fields are now extracted as function symbols with their type. Regular mutable fields remain excluded. Important for navigating configuration constants like `MaxFileSize`, `SkipDirs`, etc. in the cdidx codebase itself. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# expression-bodied property extraction** — `public int X => 42;` expression-bodied properties and read-only members are now extracted as function symbols with return type. Previously only `{ get; set; }` style properties were matched. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -300,6 +302,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# `using` エイリアス抽出** — `using Json = System.Text.Json;` や `global using Logging = ...;` のエイリアス宣言をエイリアス名の import シンボルとして抽出。従来は `=` 文字によりスキップされていた。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# const・static readonly フィールド抽出** — `const` フィールドと `static readonly` フィールドを型付きの function シンボルとして抽出。通常の可変フィールドは引き続き除外。cdidx 自身のコードベースで `MaxFileSize`、`SkipDirs` 等の設定定数へのナビゲーションに有用。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
