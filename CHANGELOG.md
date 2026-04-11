@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **"Why SQLite?" section in developer guide** — Documents the rationale for choosing SQLite over alternatives (PostgreSQL, DuckDB, LiteDB, Tantivy, vector DBs), what makes it the right fit, and when it would not be enough. Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
+
 #### Fixed
 
 - **Event subscription regex restricted to PascalCase identifiers** — `+=`/`-=` event subscription detection now requires both LHS and RHS to be PascalCase identifiers (e.g. `Click += OnClick`), preventing false positives from arithmetic like `count += 1` or `flags -= mask`. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
@@ -138,6 +140,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **File count in CLI result summaries** — Human-readable output for `search`, `definition`, `references`, `callers`, `callees`, and `symbols` now shows "(N results in M files)" instead of just "(N results)", giving terminal users a quick sense of how spread the results are. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **Protobuf, GraphQL, Dockerfile, Makefile, and more file types** — Added language detection for `.proto` (protobuf), `.graphql`/`.gql` (graphql), `.gradle`, `.cmake`/`CMakeLists.txt`, `.ps1` (powershell), `.bat`/`.cmd` (batch), `.bash`/`.zsh`/`.fish` (shell), and filename-based detection for `Dockerfile`, `Makefile`, `Justfile`, `Vagrantfile`, `.editorconfig`, `.gitignore`, `.dockerignore`. These common project files are now indexed for full-text search. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
 
 ### [1.3.0] - 2026-04-11
 
@@ -382,6 +385,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **開発者ガイドに「なぜSQLiteなのか？」セクションを追加** — PostgreSQL、DuckDB、LiteDB、Tantivy、ベクトルDB等の代替案との比較を含め、SQLiteを採用した理由、SQLiteが最適な根拠、SQLiteでは足りなくなるケースを文書化。英語・日本語の両セクション。対象: `DEVELOPER_GUIDE.md`。
 
 #### 修正
 
