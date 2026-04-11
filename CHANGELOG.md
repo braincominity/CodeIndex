@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### Fixed
+- Fix broken code blocks in `README.md`.
+
 ### [1.4.0] - 2026-04-12
 
 #### Added
@@ -472,6 +475,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+### 修正
+- `README.md` のコードブロック崩れを修正。
 
 ### [1.4.0] - 2026-04-12
 
