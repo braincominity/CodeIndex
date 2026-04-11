@@ -96,6 +96,8 @@ public static class SymbolExtractor
             new("function",  new Regex(@"^\s*static\s+(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
             new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
+            // #region for navigation / ナビゲーション用 #region
+            new("namespace", new Regex(@"^\s*#region\s+(?<name>.+)$", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["go"] =
         [

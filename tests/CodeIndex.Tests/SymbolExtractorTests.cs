@@ -211,6 +211,16 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsRegionDirectives()
+    {
+        var content = "#region Private Methods\nvoid Helper() { }\n#endregion\n\n#region Properties\npublic int X { get; set; }\n#endregion";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Private Methods");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Properties");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsStaticConstructorAndFinalizer()
     {
         var content = "public class Cache\n{\n    static Cache()\n    {\n        // init\n    }\n\n    ~Cache()\n    {\n        // cleanup\n    }\n}";

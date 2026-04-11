@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# `#region` extraction for outline navigation** — `#region Name` directives are now extracted as namespace symbols, appearing in `outline` and `symbols` output. Helps AI agents and developers quickly locate code sections in large C# files. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **`--since` filter for time-based file queries** — New `--since <datetime>` option for the `files` CLI command and MCP `files` tool filters results to files modified after the given timestamp (ISO 8601). AI agents can ask "what changed in the last hour?" without scanning all files. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **`--kind` validation with available kinds hint** — When `symbols` or `definition` with `--kind` returns zero results due to an invalid kind value, the CLI now shows the valid kinds from the index (e.g. "Available: class, function, import, namespace"). New `DbReader.GetDistinctKinds()` method. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -316,6 +318,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# `#region` 抽出でアウトラインナビゲーション** — `#region Name` ディレクティブを namespace シンボルとして抽出し、`outline` と `symbols` に表示。���きな C# ファイルでのコードセクション特定をAIエージェントと開発者に提供。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`--since` フィルタで時間ベースのファイル問い合わせ** — `files` CLI コマンドと MCP `files` ツールに `--since <datetime>` オプションを追加。指定タイムスタンプ以降に変更されたファイルのみに結果を絞る。AI エージェントが「直近1時間の変更は？」と聞けるようになる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
 
