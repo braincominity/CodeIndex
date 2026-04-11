@@ -179,7 +179,7 @@ Before every commit, check whether each of the following needs updating. Don't b
 3. **CHANGELOG.md** — Does this change deserve an entry? Update both English and Japanese sections.
 4. **README.md** — Does this change affect user-facing behavior, CLI options, defaults, or examples? Update both English and Japanese sections.
 5. **README.md Code Search Rules** — Is the `# Code Search Rules` / `# コードベース検索ルール` template strong enough for AI use after this change? Update both instances if AI behavior should change.
-6. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance?
+6. **DEVELOPER_GUIDE.md** — Does this change affect architecture, design decisions, or AI integration guidance? **If language patterns changed, update the language pattern reference table.**
 7. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
 8. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
 9. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
@@ -188,7 +188,7 @@ Before every commit, check whether each of the following needs updating. Don't b
 The following files contain overlapping content that must be updated together:
 - **README.md** — English section AND Japanese section (both must match)
 - **TESTING_GUIDE.md** — English section AND Japanese section (both must match); update when test helpers, structure, or conventions change
-- **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections.
+- **DEVELOPER_GUIDE.md** — References README for the CLAUDE.md template and exit codes. Has its own design decisions and architecture sections. **Update the language pattern reference table** when adding/changing language patterns in SymbolExtractor or ReferenceExtractor.
 - **CHANGELOG.md** — English section AND Japanese section
 - **SELF_IMPROVEMENT.md** — Dedicated operating contract for iterative AI-driven cdidx self-improvement
 - **CLAUDE.md** — This file; update architecture/design sections when code changes
@@ -405,7 +405,7 @@ tests/CodeIndex.Tests/
 3. **CHANGELOG.md** — この変更はエントリに値するか？英語・日本語の両セクションを更新。
 4. **README.md** — ユーザー向けの動作、CLIオプション、デフォルト値、使用例に影響するか？英語・日本語の両セクションを更新。
 5. **README.md のコードベース検索ルール** — `# Code Search Rules` / `# コードベース検索ルール` が今回の変更後もAIに十分か？AIの検索行動を変えるべきなら両方更新する。
-6. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？
+6. **DEVELOPER_GUIDE.md** — アーキテクチャ、設計判断、AI連携ガイドに影響するか？**言語パターンを変更した場合は言語パターン参照表も更新する。**
 7. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
 8. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
 9. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
