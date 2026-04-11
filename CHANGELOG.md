@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **TypeScript: abstract class, declare, namespace/module, readonly/override** — TypeScript patterns now support `abstract class`, `declare class/module/interface`, `namespace/module`, and `readonly`/`abstract`/`override` method modifiers. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Python: decorated and dunder method test coverage** — Added tests verifying `@dataclass`, `@property`, `@staticmethod` decorated classes/methods, dunder methods (`__init__`, `__str__`), and type hints in signatures are correctly extracted by existing patterns. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Go: type aliases, const block members, package-level var** — Go patterns now extract `type Name = OtherType` aliases, `const ( Name = value )` block members, and `var Name Type` package-level variables. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -416,6 +418,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **TypeScript: abstract class, declare, namespace/module, readonly/override** — TypeScript パターンに `abstract class`、`declare class/module/interface`、`namespace/module`、`readonly`/`abstract`/`override` メソッド修飾子を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Python: デコレータ付き・dunder メソッドのテストカバレッジ** — `@dataclass`、`@property`、`@staticmethod` 付きクラス/メソッド、dunder メソッド（`__init__`、`__str__`）、型ヒント付きシグネチャが既存パターンで正しく抽出されることのテスト追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

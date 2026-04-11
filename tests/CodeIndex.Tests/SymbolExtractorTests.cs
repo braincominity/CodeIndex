@@ -59,6 +59,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
+    {
+        var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "BaseService");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "App.Models");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsClassesAndMethods()
     {
         var content = "public class UserService\n{\n    public async Task<User> GetUser(int id)\n    {\n    }\n}";
