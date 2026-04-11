@@ -149,6 +149,7 @@ public partial class DbReader
                 ReturnType = symbol.ReturnType,
                 Content = definitionExcerpt.Content,
                 BodyContent = bodyContent,
+                Complexity = bodyContent != null ? SymbolExtractor.EstimateComplexity(bodyContent) : null,
             });
         }
 

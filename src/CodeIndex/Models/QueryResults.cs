@@ -57,6 +57,7 @@ public class DefinitionResult : SymbolResult
 {
     public string Content { get; set; } = string.Empty;
     public string? BodyContent { get; set; }
+    public int? Complexity { get; set; }
 }
 
 public class ReferenceResult

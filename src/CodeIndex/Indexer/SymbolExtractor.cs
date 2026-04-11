@@ -679,4 +679,22 @@ public static class SymbolExtractor
 
         return value.Trim();
     }
+
+    private static readonly Regex ComplexityRegex = new(
+        @"\b(?:if|else\s+if|elif|elsif|elseif|case|catch|except|when|while|for|foreach|guard)\b|(?:\?\?|&&|\|\||[?:](?!=))",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Estimate cyclomatic complexity of a code body using keyword counting.
+    /// This is a heuristic — not a true control-flow-graph analysis.
+    /// Baseline is 1 (a straight-line function has complexity 1).
+    /// コードボディのサイクロマティック複雑度をキーワードカウントで推定する。
+    /// 真の制御フローグラフ解析ではなくヒューリスティック。基準値は1（直線的関数の複雑度）。
+    /// </summary>
+    public static int EstimateComplexity(string bodyContent)
+    {
+        if (string.IsNullOrWhiteSpace(bodyContent))
+            return 1;
+        return 1 + ComplexityRegex.Matches(bodyContent).Count;
+    }
 }

@@ -978,6 +978,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void EstimateComplexity_StraightLineFunction_ReturnsOne()
+    {
+        var body = "var x = 1;\nreturn x + 2;";
+        Assert.Equal(1, SymbolExtractor.EstimateComplexity(body));
+    }
+
+    [Fact]
+    public void EstimateComplexity_BranchingFunction_CountsBranches()
+    {
+        var body = "if (x > 0)\n    return x;\nelse if (x < 0)\n    return -x;\nfor (int i = 0; i < n; i++)\n    sum += i;\nwhile (retry)\n    attempt();\nvar result = a ?? b;\nvar flag = x && y || z;";
+        // 1 (baseline) + if + else if + for + while + ?? + && + || = 8
+        Assert.Equal(8, SymbolExtractor.EstimateComplexity(body));
+    }
+
+    [Fact]
+    public void EstimateComplexity_EmptyBody_ReturnsOne()
+    {
+        Assert.Equal(1, SymbolExtractor.EstimateComplexity(""));
+        Assert.Equal(1, SymbolExtractor.EstimateComplexity("   "));
+    }
+
+    [Fact]
     public void Extract_CSS_DetectsSymbols()
     {
         var content = "@import 'reset.css';\n\n$primary-color: #333;\n\n@mixin flex-center {\n  display: flex;\n  align-items: center;\n}\n\n@keyframes fade-in {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n\n.container {\n  max-width: 1200px;\n}\n\n#header {\n  background: $primary-color;\n}";
