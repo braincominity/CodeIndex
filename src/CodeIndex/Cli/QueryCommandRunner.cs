@@ -540,9 +540,13 @@ public static class QueryCommandRunner
                 {
                     // Indent nested symbols under their container / コンテナ内のシンボルをインデント
                     var indent = sym.ContainerName != null ? "    " : "";
-                    var vis = sym.Visibility != null ? $"{sym.Visibility} " : "";
                     var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
                     var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
+                    // Avoid duplicating visibility when signature already contains it
+                    // シグネチャに既に visibility が含まれている場合は重複を避ける
+                    var vis = sym.Visibility != null && !sig.TrimStart().StartsWith(sym.Visibility, StringComparison.Ordinal)
+                        ? $"{sym.Visibility} "
+                        : "";
                     Console.WriteLine($"  {sym.Line,5}  {indent}{vis}{sig} {ret}");
                 }
             }

@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+#### Fixed
+
+- **Outline duplicates visibility when signature already contains it** — `outline` human-readable output showed `public public static class Foo` because `visibility` was prepended to `signature` even though the signature (the raw source line) already included the keyword. Now checks for duplication before prepending. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
+#### Added
+
 - **C# `using` alias extraction** — `using Json = System.Text.Json;` and `global using Logging = Microsoft.Extensions.Logging;` alias declarations are now extracted as import symbols with the alias name. Previously the `=` character caused the pattern to skip these lines. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# const and static readonly field extraction** — `const` fields and `static readonly` fields are now extracted as function symbols with their type. Regular mutable fields remain excluded. Important for navigating configuration constants like `MaxFileSize`, `SkipDirs`, etc. in the cdidx codebase itself. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -300,6 +306,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+#### 修正
+
+- **outline の visibility 重複表示** — `outline` の人間向け出力で `public public static class Foo` のように visibility がシグネチャに既に含まれているのに重複して表示されていた問題を修正。表示前に重複チェックを追加。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 #### 追加
 
