@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# `unsafe` modifier in class/struct patterns** — `unsafe struct` and `unsafe class` are now extracted. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`.
+
 - **C# `ref struct` and `readonly ref struct` extraction** — Added `ref` to the class modifier list so `ref struct` and `readonly ref struct` types are now correctly extracted. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **MCP instructions mention files `since` parameter** — The `initialize` instructions now guide AI clients to use `files` with `since` for finding recently modified files. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
@@ -350,6 +352,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# `unsafe` 修飾子のクラス/構造体パターン** — `unsafe struct` や `unsafe class` を正しく抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`.
 
 - **C# `ref struct` / `readonly ref struct` 抽出** — クラス修飾子リストに `ref` を追加し、`ref struct` と `readonly ref struct` を正しく抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
