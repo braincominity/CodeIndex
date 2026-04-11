@@ -302,7 +302,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]");
-        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]");
+        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]");
         Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
         Console.WriteLine("  cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
