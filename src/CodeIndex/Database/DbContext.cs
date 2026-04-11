@@ -178,6 +178,7 @@ public class DbContext : IDisposable
         Execute("DROP TRIGGER IF EXISTS fts_chunks_ad");
         Execute("DROP TRIGGER IF EXISTS fts_chunks_au");
         Execute("DROP TABLE IF EXISTS fts_chunks");
+        Execute("DROP TABLE IF EXISTS file_issues");
         Execute("DROP TABLE IF EXISTS symbol_references");
         Execute("DROP TABLE IF EXISTS symbols");
         Execute("DROP TABLE IF EXISTS chunks");
@@ -232,6 +233,16 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "container_name", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
+
+            // Ensure file_issues table for older DBs / 古いDBに file_issues テーブルが無い場合に作成
+            Execute(@"
+                CREATE TABLE IF NOT EXISTS file_issues (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    kind            TEXT NOT NULL,
+                    line            INTEGER NOT NULL DEFAULT 0,
+                    message         TEXT NOT NULL
+                )");
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 8 /* SQLITE_READONLY */)
         {

@@ -317,18 +317,30 @@ public class FileIndexer
             });
         }
 
-        // Mixed line endings / 混在改行コード
-        var hasCrlf = content.Contains("\r\n");
-        var contentWithoutCrlf = content.Replace("\r\n", "\n");
-        var hasCr = contentWithoutCrlf.Contains('\r');
-        if (hasCrlf && hasCr)
+        // Mixed line endings — check raw bytes before LF normalization
+        // 混在改行コード — LF正規化前のrawBytesで確認
+        var hasCrlf = false;
+        var hasLfOnly = false;
+        for (int i = 0; i < rawBytes.Length; i++)
+        {
+            if (rawBytes[i] == 0x0D && i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
+            {
+                hasCrlf = true;
+                i++; // skip the LF after CR
+            }
+            else if (rawBytes[i] == 0x0A)
+            {
+                hasLfOnly = true;
+            }
+        }
+        if (hasCrlf && hasLfOnly)
         {
             issues.Add(new FileIssue
             {
                 Path = relativePath,
                 Kind = "mixed_line_endings",
                 Line = 0,
-                Message = "Mixed line endings (CRLF and CR)",
+                Message = "Mixed line endings (CRLF and LF)",
             });
         }
 
