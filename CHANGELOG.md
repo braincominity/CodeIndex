@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **CLAUDE.md architecture: SymbolExtractor count updated to 29 languages** — Affected: `CLAUDE.md`.
+
 - **README graph language list updated to 18 languages** — Added Lua and VB.NET to graph-supported language lists in both EN/JP sections. Affected: `README.md`.
 
 - **DEVELOPER_GUIDE: VB.NET graph=yes** — Updated VB.NET to graph=yes in both EN/JP language tables (now 18 graph-supported languages). Affected: `DEVELOPER_GUIDE.md`.
@@ -466,6 +468,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **CLAUDE.md アーキテクチャ: SymbolExtractor を29言語に更新** — 対象: `CLAUDE.md`.
 
 - **README graph 言語リストを18言語に更新** — Lua と VB.NET を graph 対応言語リストに追加（英語・日本語両セクション）。対象: `README.md`.
 
