@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **`suggest_improvement` MCP tool** — AI agents can report structured improvement suggestions or error reports (crash reports, unexpected errors, feature gaps). Suggestions are saved locally to `.cdidx/suggestions.json` with SHA256 dedup. When a GitHub token is configured (`CDIDX_GITHUB_TOKEN` or `GITHUB_TOKEN`), suggestions are also filed as GitHub Issues. Source code content is never transmitted — descriptions are validated by `SourceCodeDetector` to reject pasted code. The tool only activates when explicitly called by an AI agent. Affected: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
+
 ### [1.4.1] - 2026-04-12
 
 ### Fixed
@@ -477,6 +480,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **`suggest_improvement` MCPツール** — AIエージェントが構造化された改善提案やエラー報告（クラッシュ報告、予期せぬエラー、機能ギャップ）を送信できる。提案は `.cdidx/suggestions.json` にSHA256重複排除付きでローカル保存される。GitHubトークン（`CDIDX_GITHUB_TOKEN` または `GITHUB_TOKEN`）が設定されている場合、GitHub Issueとしても報告される。ソースコード内容は一切送信されない — 説明は `SourceCodeDetector` によりコピペされたコードを拒否するよう検証される。このツールはAIエージェントが明示的に呼んだときのみ動作する。対象: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`。
 
 ### [1.4.1] - 2026-04-12
 
