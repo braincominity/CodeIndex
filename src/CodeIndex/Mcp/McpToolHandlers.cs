@@ -33,6 +33,7 @@ public partial class McpServer
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results. "
             + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
+            + "Use 'search' with 'exact: true' for case-sensitive substring matching when FTS5 returns too many results. "
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files.";
