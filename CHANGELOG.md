@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`search --exact` flag for case-sensitive substring match** — New `--exact` option bypasses FTS5 tokenization and uses direct `instr()` for case-sensitive exact substring matching. Useful when FTS5's case-insensitive token matching returns too many results. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
+
 - **README Code Search Rules updated with deps, --since, --dry-run, --count** — Query strategy sections (EN/JP) now cover `deps`, `--reverse`, `--since`, `--dry-run`, and `--count`. Updated symbol-aware language list to 29. Removed Shell/SQL/Terraform from "no symbol extraction" list. Affected: `README.md`.
 
 - **DEVELOPER_GUIDE language pattern reference table** — Replaced the old 21-language table with a comprehensive 29-language table including Graph support column. Added maintenance rule to CLAUDE.md per-commit checklist: update the table when language patterns change. Affected: `DEVELOPER_GUIDE.md`, `CLAUDE.md`.
@@ -444,6 +446,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`search --exact` フラグで大文字小文字区別の部分一致検索** — FTS5 トークナイズをバイパスし、`instr()` による大文字小文字区別の完全部分一致検索を行う `--exact` オプション。FTS5 の大文字小文字無視マッチが多すぎる場合に有用。対象: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
 
 - **README Code Search Rules を deps, --since, --dry-run, --count で更新** — クエリ戦略セクション（英語・日本語）に `deps`、`--reverse`、`--since`、`--dry-run`、`--count` を追加。シンボル対応言語リストを29に更新。Shell/SQL/Terraform を「シンボル抽出なし」リストから削除。対象: `README.md`.
 

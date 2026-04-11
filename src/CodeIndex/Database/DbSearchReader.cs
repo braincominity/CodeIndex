@@ -29,24 +29,39 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
         if (string.IsNullOrWhiteSpace(query))
             return [];
 
-        var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(query);
         using var cmd = _conn.CreateCommand();
+        string sql;
 
-        var sql = @"
-            SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
-                   rank
-            FROM fts_chunks
-            JOIN chunks c ON fts_chunks.rowid = c.id
-            JOIN files f ON c.file_id = f.id";
-
-        sql += " WHERE fts_chunks MATCH @query";
+        if (exact)
+        {
+            // Exact substring match using instr() — case-sensitive, no FTS5 tokenization
+            // instr() による完全部分一致検索 — 大文字小文字区別、FTS5トークナイズなし
+            sql = @"
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
+                       0.0 AS rank
+                FROM chunks c
+                JOIN files f ON c.file_id = f.id
+                WHERE instr(c.content, @exactQuery) > 0";
+        }
+        else
+        {
+            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(query);
+            sql = @"
+                SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
+                       rank
+                FROM fts_chunks
+                JOIN chunks c ON fts_chunks.rowid = c.id
+                JOIN files f ON c.file_id = f.id";
+            sql += " WHERE fts_chunks MATCH @query";
+            cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+        }
         if (lang != null)
             sql += " AND f.lang = @lang";
         if (since != null && _fileColumns.Contains("modified"))
@@ -56,7 +71,8 @@ public partial class DbReader
         sql += $" ORDER BY {GetSearchOrderSql()} LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+        if (exact)
+            cmd.Parameters.AddWithValue("@exactQuery", query);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
         cmd.Parameters.AddWithValue("@limit", limit);
