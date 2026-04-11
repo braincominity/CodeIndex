@@ -153,6 +153,11 @@ tests/CodeIndex.Tests/
 
 ## Rules for changes (important)
 
+### Dependency rule / 依存関係ルール
+The only production dependency is **Microsoft.Data.Sqlite** — keep it that way. Do not add NuGet packages without explicit user approval. If a package would enable a significant improvement aligned with SELF_IMPROVEMENT.md goals, propose it to the user with a clear rationale before adding it.
+
+本番依存は **Microsoft.Data.Sqlite** の1個のみ — これを維持すること。ユーザーの明示的な承認なしに NuGet パッケージを追加しないこと。SELF_IMPROVEMENT.md の目的に沿った大きな改善を可能にするパッケージがある場合は、明確な理由を添えてユーザーに提案してから追加すること。
+
 ### Absolute prohibition
 Code review uses the **locally built binary** from the current commit (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) to search and verify the codebase. This means the reviewer sees exactly what the code actually does — not what tests claim it does, not what documentation says it does, but what the running binary produces. **It is strictly forbidden to intentionally implement incomplete, hollow, or deceptive code that passes tests or review on paper but fails in practice.** Every feature must work correctly when exercised by the binary itself. Cutting corners to "pass review" defeats the purpose of the self-improvement loop and will be caught by dogfooding.
 
@@ -374,6 +379,9 @@ tests/CodeIndex.Tests/
 - 不要なパッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。
 
 ## 変更時のルール（重要）
+
+### 依存関係ルール
+本番依存は **Microsoft.Data.Sqlite** の1個のみ — これを維持すること。ユーザーの明示的な承認なしに NuGet パッケージを追加しないこと。SELF_IMPROVEMENT.md の目的に沿った大きな改善を可能にするパッケージがある場合は、明確な理由を添えてユーザーに提案してから追加すること。
 
 ### 絶対禁止事項
 コードレビューは現在のコミットから**ローカルビルドしたバイナリ**（`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`）を使ってコードベースを検索・検証します。つまりレビュアーは、テストが主張する動作でもドキュメントが述べる動作でもなく、実行中のバイナリが実際に出す結果を見ます。**テストやレビューを表面上パスするが実際には動作しない、不完全・中身のない・欺瞞的なコードを意図的に実装することは厳禁です。** すべての機能はバイナリ自身で実行したときに正しく動作しなければなりません。「レビューを通す」ための手抜きは自己改善ループの目的を損ない、ドッグフーディングで必ず発覚します。
