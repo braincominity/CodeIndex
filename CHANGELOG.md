@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# operator overload and conversion operator extraction** — `operator +`, `operator ==`, `implicit operator`, `explicit operator` are now extracted as function symbols. Patterns are ordered before the general method pattern to prevent false matches on the return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **C# static constructor and finalizer extraction** — `static ClassName()` and `~ClassName()` are now extracted as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# optional visibility and compound access modifiers** — Class, method, property, delegate, and event patterns no longer require an explicit visibility keyword, so `class Foo`, `static void Run()`, and other implicitly-internal members are now extracted. Compound modifiers `protected internal` and `private protected` are correctly captured as a single visibility value. Primary constructor signatures (C# 12) are verified in new tests. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -288,6 +290,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# 演算子オーバーロード・変換演算子抽出** — `operator +`、`operator ==`、`implicit operator`、`explicit operator` を function シンボルとして抽出。戻り値型との誤マッチを防ぐため、一般メソッドパターンより前に配置。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# 静的コンストラクタ・ファイナライザ抽出** — `static ClassName()` と `~ClassName()` を function シンボルとして抽出するパターンを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

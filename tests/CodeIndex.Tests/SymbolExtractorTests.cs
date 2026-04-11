@@ -140,6 +140,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsOperatorOverloads()
+    {
+        var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Money");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsStaticConstructorAndFinalizer()
     {
         var content = "public class Cache\n{\n    static Cache()\n    {\n        // init\n    }\n\n    ~Cache()\n    {\n        // cleanup\n    }\n}";

@@ -57,6 +57,12 @@ public static class SymbolExtractor
             // Class/struct/record/interface/enum — visibility is optional (defaults to internal for top-level)
             // クラス/構造体/record/インターフェース/enum — visibility は省略可能（トップレベルでは internal がデフォルト）
             new("class",     new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new)\s+)*(?:class|interface|enum|record\s+struct|record\s+class|record|struct)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Implicit/explicit conversion operator — must come before general operator pattern
+            // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?<name>implicit|explicit)\s+operator\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Operator overload (+ - * / == != < > etc.) — must come before method pattern
+            // 演算子オーバーロード — メソッドパターンより前に配置
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+\S+\s+operator\s+(?<name>\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members
             // 戻り値型付きメソッド — 明示的インターフェース実装やネストメンバー向けに visibility 省略可
             new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
