@@ -44,16 +44,20 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
-    public void ResolveToken_GithubTokenSet_ReturnsGithubToken()
+    public void ResolveToken_GenericGithubToken_IsIgnored()
     {
+        // Generic GITHUB_TOKEN must NOT be used — prevents ambient CI tokens
+        // from silently publishing to an external repository.
+        // 汎用 GITHUB_TOKEN は使わない — CI の環境トークンが意図せず
+        // 外部リポジトリに公開されることを防ぐ。
         Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", null);
         Environment.SetEnvironmentVariable("GITHUB_TOKEN", "ghp_github_test_token");
 
-        Assert.Equal("ghp_github_test_token", GitHubIssueReporter.ResolveToken());
+        Assert.Null(GitHubIssueReporter.ResolveToken());
     }
 
     [Fact]
-    public void ResolveToken_BothSet_PrefersCdidxToken()
+    public void ResolveToken_CdidxTokenSet_IgnoresGenericToken()
     {
         Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_cdidx_preferred");
         Environment.SetEnvironmentVariable("GITHUB_TOKEN", "ghp_github_fallback");

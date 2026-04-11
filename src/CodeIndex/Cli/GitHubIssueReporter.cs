@@ -27,11 +27,17 @@ namespace CodeIndex.Cli;
 ///   - cdidx バージョンと提案ハッシュ
 ///
 /// GitHub Issues are only created when the user has explicitly configured
-/// a GitHub token via CDIDX_GITHUB_TOKEN or GITHUB_TOKEN environment variable.
-/// If no token is set, this class does nothing.
-/// GitHub Issue は、ユーザーが CDIDX_GITHUB_TOKEN または GITHUB_TOKEN 環境変数で
+/// a GitHub token via the CDIDX_GITHUB_TOKEN environment variable.
+/// The generic GITHUB_TOKEN is NOT used — this prevents ambient tokens
+/// (e.g. from CI environments) from silently publishing to an external repo.
+/// If CDIDX_GITHUB_TOKEN is not set, this class does nothing.
+/// The destination repository is hardcoded to widthdom/CodeIndex.
+/// GitHub Issue は、ユーザーが CDIDX_GITHUB_TOKEN 環境変数で
 /// GitHub トークンを明示的に設定した場合にのみ作成される。
-/// トークンが未設定の場合、このクラスは何もしない。
+/// 汎用の GITHUB_TOKEN は使用しない — CI 等の環境トークンが意図せず
+/// 外部リポジトリに公開されることを防ぐ。
+/// CDIDX_GITHUB_TOKEN が未設定の場合、このクラスは何もしない。
+/// 送信先リポジトリは widthdom/CodeIndex に固定されている。
 /// </summary>
 internal static class GitHubIssueReporter
 {
@@ -80,22 +86,22 @@ internal static class GitHubIssueReporter
     }
 
     /// <summary>
-    /// Resolve the GitHub token from environment variables.
-    /// CDIDX_GITHUB_TOKEN takes precedence over GITHUB_TOKEN.
-    /// Returns null if neither is set.
-    /// 環境変数からGitHubトークンを解決する。
-    /// CDIDX_GITHUB_TOKEN が GITHUB_TOKEN より優先される。
-    /// いずれも未設定の場合は null を返す。
+    /// Resolve the GitHub token from the CDIDX_GITHUB_TOKEN environment variable.
+    /// Only CDIDX_GITHUB_TOKEN is accepted — generic GITHUB_TOKEN is NOT used.
+    /// This prevents ambient tokens (e.g. from CI) from silently publishing
+    /// suggestions to an external repository without explicit user intent.
+    /// Returns null if the variable is not set.
+    /// 環境変数 CDIDX_GITHUB_TOKEN からGitHubトークンを解決する。
+    /// CDIDX_GITHUB_TOKEN のみを受け付ける — 汎用の GITHUB_TOKEN は使用しない。
+    /// CI等で設定された環境トークンが、ユーザーの明示的な意図なしに
+    /// 外部リポジトリに提案を公開してしまうことを防ぐ。
+    /// 未設定の場合は null を返す。
     /// </summary>
     internal static string? ResolveToken()
     {
         var cdidxToken = Environment.GetEnvironmentVariable("CDIDX_GITHUB_TOKEN");
         if (!string.IsNullOrWhiteSpace(cdidxToken))
             return cdidxToken;
-
-        var ghToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        if (!string.IsNullOrWhiteSpace(ghToken))
-            return ghToken;
 
         return null;
     }
