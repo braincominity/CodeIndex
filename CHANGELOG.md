@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+#### Changed
+
+- **DEVELOPER_GUIDE symbol extraction count updated to 26** — Reflects all newly supported languages. Affected: `DEVELOPER_GUIDE.md`.
+
 - **C# `using` declaration reference exclusion test** — Verified that `using var x = ...;` does not generate false-positive references while real calls within the using scope are still captured. Affected: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **C# partial method test coverage** — Added test verifying C# 9 extended partial methods (`partial void OnInit();`, `public partial string GetName();`) are correctly extracted. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -368,6 +372,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+#### 変更
+
+- **DEVELOPER_GUIDE シンボル抽出言語数を 26 に更新** — 新しく対応した全言語を反映。対象: `DEVELOPER_GUIDE.md`.
 
 - **C# `using` 宣言の参照除外テスト** — `using var x = ...;` が偽陽性参照を生成せず、using スコープ内の実呼び出しは正しく抽出されることを検証。対象: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
