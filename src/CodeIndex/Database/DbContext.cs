@@ -140,6 +140,11 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_kind      ON symbols(file_id, kind)");
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang_modified     ON files(lang, modified)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)");
+        // Indexes for new query patterns: --kind filter, visibility ranking, hotspot/unused analysis
+        // 新しいクエリパターン用: --kind フィルタ、可視性ランキング、ホットスポット/未使用分析
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_kind            ON symbols(kind)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_kind   ON symbol_references(symbol_name, reference_kind)");
 
         // Full-text search / 全文検索
         Execute(@"
