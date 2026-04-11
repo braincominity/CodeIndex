@@ -110,7 +110,8 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{r.StartLine}-{r.EndLine}");
+                    var container = r.ContainerName != null ? $" in {r.ContainerName}" : "";
+                    Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{r.StartLine}-{r.EndLine}{container}");
                     WriteNumberedExcerpt(r.StartLine, r.Content);
                     if (options.IncludeBody)
                     {

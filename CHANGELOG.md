@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Container breadcrumb in `definition` output** — Human-readable `definition` results now show the containing symbol (e.g. "in DbReader") so users can see the class/namespace context. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 - **Symbol kind distribution in `status` output** — `status` now includes `symbol_kinds` with counts per kind (function, class, import, namespace) in both human-readable and JSON output. Helps AI agents understand the shape of the codebase. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **`--no-dedup` flag to disable search deduplication** — Opt out of overlapping-chunk deduplication with `--no-dedup` when debugging or when raw FTS5 results are needed. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -330,6 +332,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`definition` 出力にコンテナパンくず表示** — 人間向け `definition` 出力で、包含するシンボル（例: "in DbReader"）を表示。クラス/名前空間のコンテキストが見えるようになった。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **`status` にシンボル種別分布を追加** — `status` の出力に `symbol_kinds`（function、class、import、namespace ごとのカウント）を追加。AI エージェントがコードベースの構成を把握するのに有用。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
