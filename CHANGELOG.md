@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **MCP `ping` tool** — Lightweight connection check that returns server version, timestamp, DB path, and whether the DB exists. No database required. AI agents can verify MCP connectivity before issuing queries. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
 - **MCP `search` tool `noDedup` parameter** — The MCP `search` tool now accepts a `noDedup` boolean to disable overlapping-chunk deduplication, matching the CLI `--no-dedup` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 
 - **`search --since` filter** — The `--since` option now works on `search` (CLI and MCP), not just `files`. AI agents can search only within recently modified files, reducing noise in large repositories. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
@@ -432,6 +434,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **MCP `ping` ツール** — サーバーバージョン、タイムスタンプ、DBパス、DB存在有無を返す軽量接続チェック。DB不要。AI エージェントがクエリ発行前に MCP 接続を確認できる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **MCP `search` ツールに `noDedup` パラメータ** — MCP の `search` ツールに `noDedup` ブーリアンを追加し、CLI の `--no-dedup` フラグと同等のオーバーラップチャンク重複排除無効化に対応。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 

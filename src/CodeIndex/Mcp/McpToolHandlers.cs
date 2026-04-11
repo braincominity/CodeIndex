@@ -622,6 +622,18 @@ public partial class McpServer
         });
     }
 
+    private JsonNode ExecutePing(JsonNode? id)
+    {
+        var payload = new JsonObject
+        {
+            ["version"] = _version,
+            ["timestamp"] = DateTime.UtcNow.ToString("O"),
+            ["db_path"] = _dbPath,
+            ["db_exists"] = File.Exists(_dbPath),
+        };
+        return CreateToolResult(id, $"cdidx v{_version} is ready.", payload);
+    }
+
     private JsonNode ExecuteLanguages(JsonNode? id)
     {
         var langExtensions = FileIndexer.GetLanguageExtensions();

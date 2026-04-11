@@ -253,6 +253,15 @@ public partial class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "ping",
+                "Lightweight connection check. Returns server version and timestamp. No database required. / 軽量接続チェック。サーバーバージョンとタイムスタンプを返す。DB不要。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject()
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "batch_query",
                 "Execute multiple read-only queries in a single call and return all results. Dramatically reduces round-trips for AI agents. / 複数の読み取り専用クエリを1回の呼び出しで実行し、全結果を返す。AIエージェントの往復回数を劇的に削減。",
                 new JsonObject

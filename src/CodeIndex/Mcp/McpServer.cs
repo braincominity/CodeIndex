@@ -189,6 +189,7 @@ public partial class McpServer
                 "batch_query" => ExecuteBatchQuery(id, args),
                 "deps" => ExecuteDeps(id, args),
                 "languages" => ExecuteLanguages(id),
+                "ping" => ExecutePing(id),
                 "index" => ExecuteIndex(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
             };
