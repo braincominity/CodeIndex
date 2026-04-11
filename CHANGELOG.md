@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# attribute-decorated member test coverage** — Verified `[Serializable]`, `[Obsolete]`, `[HttpGet]` on lines before class/method do not block extraction. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **MCP `ping` tool** — Lightweight connection check that returns server version, timestamp, DB path, and whether the DB exists. No database required. AI agents can verify MCP connectivity before issuing queries. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **MCP `search` tool `noDedup` parameter** — The MCP `search` tool now accepts a `noDedup` boolean to disable overlapping-chunk deduplication, matching the CLI `--no-dedup` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
@@ -434,6 +436,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# 属性付きメンバーのテストカバレッジ** — `[Serializable]`、`[Obsolete]`、`[HttpGet]` がクラス/メソッド前行にあっても抽出を妨げないことを検証。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **MCP `ping` ツール** — サーバーバージョン、タイムスタンプ、DBパス、DB存在有無を返す軽量接続チェック。DB不要。AI エージェントがクエリ発行前に MCP 接続を確認できる。対象: `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 

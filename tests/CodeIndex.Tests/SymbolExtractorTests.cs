@@ -148,6 +148,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_AttributeDoesNotBlockNextLine()
+    {
+        // [Attribute] on the line before class/method should not prevent extraction
+        // [Attribute] がクラス/メソッドの前行にあっても抽出を妨げないこと
+        var content = "[Serializable]\npublic class Config\n{\n    [Obsolete(\"Use V2\")]\n    public void OldMethod() { }\n\n    [HttpGet(\"/api\")]\n    public async Task<IActionResult> GetItems() { return null; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OldMethod");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetItems");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
