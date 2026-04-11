@@ -4,7 +4,7 @@
 #
 # Usage / 使い方:
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.5.0
+#   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.sh | bash -s -- v1.5.0
 #   export CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
 
 set -euo pipefail
