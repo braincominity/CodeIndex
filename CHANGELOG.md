@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Zig symbol extraction** — Added symbol extraction patterns for Zig: `pub fn`/`fn` (function), `const struct` (struct), `const enum` (enum), `const union`/`error` (class), `test` blocks, and `@import`. Zig was previously mapped as a language but had zero extraction patterns. Affected: `SymbolExtractor.cs`.
 - **PowerShell symbol extraction** — Added symbol extraction patterns for PowerShell (.ps1): `function`/`filter` (function), `class` (class), `enum` (enum), `Import-Module`/`using module` (import). Affected: `SymbolExtractor.cs`.
 - **`unused` CLI command and `unused_symbols` MCP tool** — Find symbols defined but never referenced in the indexed codebase (potential dead code). Only meaningful for languages with reference extraction support. Available as `cdidx unused` CLI command and `unused_symbols` MCP tool. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `Program.cs`, `ConsoleUi.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
+- **CSS/SCSS symbol extraction** — Added symbol extraction for CSS/SCSS: `.class` selectors (class), `#id` selectors (function), `@mixin` (function), `@keyframes` (function), `@import`/`@use` (import), `$variable` (property). Affected: `SymbolExtractor.cs`.
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
@@ -516,6 +517,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Zigシンボル抽出** — Zig向けシンボル抽出パターンを追加: `pub fn`/`fn`（関数）、`const struct`（構造体）、`const enum`（列挙型）、`const union`/`error`（クラス）、`test`ブロック、`@import`。従来はZigは言語として登録されていたが抽出パターンがゼロだった。対象: `SymbolExtractor.cs`。
 - **PowerShellシンボル抽出** — PowerShell (.ps1) 向けシンボル抽出パターンを追加: `function`/`filter`（関数）、`class`（クラス）、`enum`（列挙型）、`Import-Module`/`using module`（インポート）。対象: `SymbolExtractor.cs`。
 - **`unused` CLIコマンドと `unused_symbols` MCPツール** — インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する（潜在的なデッドコード）。参照抽出対応言語でのみ意味がある。`cdidx unused` CLIコマンドと `unused_symbols` MCPツールとして利用可能。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`Program.cs`、`ConsoleUi.cs`、`McpToolDefinitions.cs`、`McpToolHandlers.cs`、`McpServer.cs`。
+- **CSS/SCSSシンボル抽出** — CSS/SCSS向けシンボル抽出を追加: `.class`セレクタ（class）、`#id`セレクタ（function）、`@mixin`（function）、`@keyframes`（function）、`@import`/`@use`（import）、`$variable`（property）。対象: `SymbolExtractor.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。

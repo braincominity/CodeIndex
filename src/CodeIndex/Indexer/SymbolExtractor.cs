@@ -357,6 +357,21 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*output\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*locals\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
         ],
+        ["css"] =
+        [
+            // @import / @use (SCSS) / インポート
+            new("import",   new Regex(@"^\s*@(?:import|use)\s+(?<name>.+?)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            // @mixin (SCSS) / ミックスイン
+            new("function", new Regex(@"^\s*@mixin\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // @keyframes / キーフレーム
+            new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
+            new("class",    new Regex(@"^\.(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // CSS ID selector at top level / トップレベルのIDセレクタ
+            new("function", new Regex(@"^#(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // SCSS $variable declaration / SCSS 変数宣言
+            new("property", new Regex(@"^\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
+        ],
         ["powershell"] =
         [
             // Function/filter declarations / 関数・フィルタ宣言

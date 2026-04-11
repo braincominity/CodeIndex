@@ -939,6 +939,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSS_DetectsSymbols()
+    {
+        var content = "@import 'reset.css';\n\n$primary-color: #333;\n\n@mixin flex-center {\n  display: flex;\n  align-items: center;\n}\n\n@keyframes fade-in {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n\n.container {\n  max-width: 1200px;\n}\n\n#header {\n  background: $primary-color;\n}";
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("reset.css"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary-color");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "container");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "header");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsSymbols()
     {
         var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";
