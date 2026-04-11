@@ -54,14 +54,18 @@ src/CodeIndex/
   Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
-  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, outline, status)
+  Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, excerpt reconstruction, status, file-level deps)
+  Database/DbSearchReader.cs — Full-text search operations (FTS5 search, deduplication) (partial class)
+  Database/DbSymbolReader.cs — Symbol query operations (symbol search, definitions, outline, analyze bundle) (partial class)
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (multi-language)
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
-  Mcp/McpServer.cs          — MCP server (stdin/stdout JSON-RPC 2.0, tools for AI coding tools)
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord (plain DTOs)
+  Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
+  Mcp/McpToolDefinitions.cs — MCP tool schema definitions (partial class)
+  Mcp/McpToolHandlers.cs    — MCP tool execution logic (partial class)
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, QueryResults (plain DTOs)
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitter tests
   ReferenceExtractorTests.cs — ReferenceExtractor tests
@@ -75,6 +79,9 @@ tests/CodeIndex.Tests/
   DbPathResolverTests.cs    — DB path resolution tests
   IndexCommandRunnerTests.cs — Index command integration tests
   QueryCommandRunnerTests.cs — Query CLI integration tests
+  ConcurrencyTests.cs        — Concurrent access tests (WAL read/write)
+  PerformanceTests.cs        — Large-scale data performance tests
+  DbRecoveryTests.cs         — DB corruption recovery tests
   SearchSnippetFormatterTests.cs — Search snippet formatting tests
   WorkspaceMetadataEnricherTests.cs — Workspace metadata enrichment tests
   TestProjectHelper.cs      — Shared helper for creating temp indexed projects
@@ -244,7 +251,7 @@ cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--excl
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
-cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse] [--json]
 cdidx languages [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
@@ -266,14 +273,18 @@ src/CodeIndex/
   Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
-  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、アウトライン、ステータス）
+  Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、抜粋再構成、ステータス、ファイル間依存分析）
+  Database/DbSearchReader.cs — 全文検索操作（FTS5検索、重複排除）（partial class）
+  Database/DbSymbolReader.cs — シンボルクエリ操作（シンボル検索、定義、アウトライン、分析バンドル）（partial class）
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
   Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（多言語対応）
   Indexer/ReferenceExtractor.cs — 正規表現による参照抽出（言語差分を考慮）
-  Mcp/McpServer.cs          — MCPサーバー（stdin/stdout JSON-RPC 2.0、AIツール向けツール公開）
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord（プレーンDTO）
+  Mcp/McpServer.cs          — MCPサーバーコア（stdin/stdout JSON-RPC 2.0 プロトコル処理）（partial class）
+  Mcp/McpToolDefinitions.cs — MCPツールスキーマ定義（partial class）
+  Mcp/McpToolHandlers.cs    — MCPツール実行ロジック（partial class）
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, QueryResults（プレーンDTO）
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitterテスト
   ReferenceExtractorTests.cs — ReferenceExtractorテスト
@@ -287,6 +298,9 @@ tests/CodeIndex.Tests/
   DbPathResolverTests.cs    — DBパス解決テスト
   IndexCommandRunnerTests.cs — indexコマンド統合テスト
   QueryCommandRunnerTests.cs — クエリCLI統合テスト
+  ConcurrencyTests.cs        — 並行アクセステスト（WAL読み書き）
+  PerformanceTests.cs        — 大規模データパフォーマンステスト
+  DbRecoveryTests.cs         — DB破損復旧テスト
   SearchSnippetFormatterTests.cs — 検索スニペット整形テスト
   WorkspaceMetadataEnricherTests.cs — ワークスペースメタデータ付加テスト
   TestProjectHelper.cs      — 一時インデックスプロジェクト作成用の共有ヘルパー
