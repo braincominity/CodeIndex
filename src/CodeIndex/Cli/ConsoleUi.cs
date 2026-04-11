@@ -353,7 +353,7 @@ public static class ConsoleUi
         Console.WriteLine("Query options:");
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
         Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
-        Console.WriteLine("  --limit <n>                Max results to return (default: 20)");
+        Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
         Console.WriteLine("  --path <pattern>           Restrict matches to paths containing this text");
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");

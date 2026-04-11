@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Help text shows --top alias** — `--help` output now shows `--top <n>` as an alias alongside `--limit <n>`. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`.
+
 - **MCP instructions updated for batch_query and deps** — The `initialize` response instructions now guide AI clients to use `batch_query` for multi-query round-trip reduction and `deps` for file-level dependency analysis. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **Container breadcrumb in `definition` output** — Human-readable `definition` results now show the containing symbol (e.g. "in DbReader") so users can see the class/namespace context. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -334,6 +336,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **ヘルプテキストに --top エイリアスを表示** — `--help` 出力で `--limit <n>` の横に `--top <n>` エイリアスを表示。対象: `src/CodeIndex/Cli/ConsoleUi.cs`.
 
 - **MCP instructions に batch_query と deps を追加** — `initialize` レスポンスの instructions に `batch_query`（往復回数削減）と `deps`（ファイル間依存分析）の案内を追加。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
