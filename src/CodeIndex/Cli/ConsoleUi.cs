@@ -361,6 +361,7 @@ public static class ConsoleUi
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine("  --count                    Return only the result count (for AI preflight)");
+        Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");

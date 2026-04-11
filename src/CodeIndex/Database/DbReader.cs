@@ -234,7 +234,7 @@ public class DbReader
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
     /// </summary>
-    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -252,6 +252,8 @@ public class DbReader
             sql += " AND f.path LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.id ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
 
@@ -260,6 +262,8 @@ public class DbReader
             cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 

@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--since` filter for time-based file queries** — New `--since <datetime>` option for the `files` CLI command and MCP `files` tool filters results to files modified after the given timestamp (ISO 8601). AI agents can ask "what changed in the last hour?" without scanning all files. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
+
 - **`--kind` validation with available kinds hint** — When `symbols` or `definition` with `--kind` returns zero results due to an invalid kind value, the CLI now shows the valid kinds from the index (e.g. "Available: class, function, import, namespace"). New `DbReader.GetDistinctKinds()` method. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 #### Changed
@@ -314,6 +316,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`--since` フィルタで時間ベースのファイル問い合わせ** — `files` CLI コマンドと MCP `files` ツールに `--since <datetime>` オプションを追加。指定タイムスタンプ以降に変更されたファイルのみに結果を絞る。AI エージェントが「直近1時間の変更は？」と聞けるようになる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **`--kind` バリデーションと有効値ヒント** — `symbols` や `definition` で `--kind` に無効な値を指定して 0 件になった場合、インデックス内の有効な kind 一覧を表示するようにした（例: "Available: class, function, import, namespace"）。`DbReader.GetDistinctKinds()` メソッドを追加。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 

@@ -291,7 +291,8 @@ public class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Additional path filter text" },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -768,10 +769,14 @@ public class McpServer
         var pathPattern = args?["path"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var sinceStr = args?["since"]?.GetValue<string>();
+        DateTime? since = null;
+        if (sinceStr != null && DateTime.TryParse(sinceStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
+            since = parsedSince.ToUniversalTime();
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.ListFiles(query, limit, lang, pathPattern, excludePaths, excludeTests);
+            var results = reader.ListFiles(query, limit, lang, pathPattern, excludePaths, excludeTests, since);
             if (results.Count == 0)
             {
                 var payload = new JsonObject

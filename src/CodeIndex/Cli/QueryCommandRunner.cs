@@ -344,7 +344,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests, options.Since);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -676,6 +676,7 @@ public static class QueryCommandRunner
         string? pathPattern = null;
         var excludePaths = new List<string>();
         bool excludeTests = false;
+        DateTime? since = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -720,6 +721,12 @@ public static class QueryCommandRunner
                     break;
                 case "--exclude-tests":
                     excludeTests = true;
+                    break;
+                case "--since" when i + 1 < args.Length:
+                    if (DateTime.TryParse(args[++i], null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
+                        since = parsedSince.ToUniversalTime();
+                    else
+                        Console.Error.WriteLine($"Warning: could not parse --since value '{args[i]}' as a date/time");
                     break;
                 case "--start" when i + 1 < args.Length:
                     startLine = ParsePositiveInt(args[++i], "--start");
@@ -768,6 +775,7 @@ public static class QueryCommandRunner
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
             CountOnly = countOnly,
+            Since = since,
         };
     }
 
@@ -896,4 +904,5 @@ public sealed class QueryCommandOptions
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
     public bool CountOnly { get; init; }
+    public DateTime? Since { get; init; }
 }
