@@ -106,7 +106,7 @@ public class SuggestionStoreTests : IDisposable
     [Fact]
     public void TryAdd_CreatesFile()
     {
-        var filePath = Path.Combine(_tempDir, "suggestions.json");
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
         Assert.False(File.Exists(filePath));
 
         _store.TryAdd(MakeRecord("other", null, "Test suggestion"));
@@ -126,7 +126,7 @@ public class SuggestionStoreTests : IDisposable
     [Fact]
     public void LoadAll_EmptyFile_ReturnsEmptyList()
     {
-        File.WriteAllText(Path.Combine(_tempDir, "suggestions.json"), "");
+        File.WriteAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"), "");
         var all = _store.LoadAll();
         Assert.Empty(all);
     }
@@ -134,7 +134,7 @@ public class SuggestionStoreTests : IDisposable
     [Fact]
     public void LoadAll_CorruptJson_ReturnsEmptyList()
     {
-        File.WriteAllText(Path.Combine(_tempDir, "suggestions.json"), "{not valid json[[[");
+        File.WriteAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"), "{not valid json[[[");
         var all = _store.LoadAll();
         Assert.Empty(all);
     }
@@ -204,7 +204,7 @@ public class SuggestionStoreTests : IDisposable
     {
         // Write a corrupt file, then load — should rename to .bak
         // 破損ファイルを書き込み、ロード — .bak にリネームされるべき
-        var filePath = Path.Combine(_tempDir, "suggestions.json");
+        var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
         var backupPath = filePath + ".bak";
         File.WriteAllText(filePath, "{corrupt json[[[");
 
@@ -219,7 +219,7 @@ public class SuggestionStoreTests : IDisposable
     {
         // After corruption recovery, new suggestions should work normally
         // 破損復旧後、新しい提案が正常に動作するべき
-        File.WriteAllText(Path.Combine(_tempDir, "suggestions.json"), "not json");
+        File.WriteAllText(Path.Combine(_tempDir, "suggestions-codeindex.json"), "not json");
 
         _store.LoadAll(); // triggers backup
         var record = MakeRecord("other", null, "Post-corruption suggestion");

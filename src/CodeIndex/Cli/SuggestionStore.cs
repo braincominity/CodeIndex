@@ -34,14 +34,27 @@ public class SuggestionStore
     };
 
     /// <summary>
-    /// Create a new SuggestionStore for the given .cdidx directory.
-    /// 指定した .cdidx ディレクトリ用の SuggestionStore を作成する。
+    /// Create a new SuggestionStore for the given directory and database name.
+    /// When dbName is provided, the store is scoped to that database identity
+    /// (e.g. "suggestions-codeindex.json") so that multiple databases in the
+    /// same directory do not share a dedup namespace.
+    /// 指定したディレクトリとデータベース名用の SuggestionStore を作成する。
+    /// dbName が指定された場合、ストアはそのデータベース固有のスコープになり
+    /// （例: "suggestions-codeindex.json"）、同一ディレクトリ内の複数DBが
+    /// 重複排除の名前空間を共有しないようにする。
     /// </summary>
-    /// <param name="cdidxDir">Path to the .cdidx directory / .cdidxディレクトリのパス</param>
-    public SuggestionStore(string cdidxDir)
+    /// <param name="cdidxDir">Path to the directory / ディレクトリのパス</param>
+    /// <param name="dbName">
+    /// Database filename without extension (optional, defaults to "codeindex").
+    /// 拡張子なしのデータベースファイル名（任意、デフォルトは "codeindex"）。
+    /// </param>
+    public SuggestionStore(string cdidxDir, string? dbName = null)
     {
-        _filePath = Path.Combine(cdidxDir, "suggestions.json");
-        _lockPath = Path.Combine(cdidxDir, "suggestions.lock");
+        // Derive a safe store filename from the DB identity.
+        // DB固有の安全なストアファイル名を導出する。
+        var safeName = string.IsNullOrWhiteSpace(dbName) ? "codeindex" : dbName;
+        _filePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.json");
+        _lockPath = Path.Combine(cdidxDir, $"suggestions-{safeName}.lock");
     }
 
     /// <summary>

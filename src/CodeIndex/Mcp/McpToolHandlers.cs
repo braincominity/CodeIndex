@@ -859,7 +859,10 @@ public partial class McpServer
         //    TryAddAndSubmit は全シーケンスを1つのファイルロック内で実行:
         //    読み込み → 重複チェック → 書き込み → GitHub 送信 → 送信済みマーク。
         //    並行呼び出しで重複 GitHub Issue が作られることを防ぐ。
-        var store = new SuggestionStore(cdidxDir);
+        // Derive DB identity for scoped suggestion storage.
+        // スコープ付き提案蓄積のため DB identity を導出。
+        var dbName = Path.GetFileNameWithoutExtension(_dbPath);
+        var store = new SuggestionStore(cdidxDir, dbName);
         var record = new SuggestionRecord
         {
             Category = category,
