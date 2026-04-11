@@ -10,7 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Added
-- **`suggest_improvement` MCP tool** — AI agents can report structured improvement suggestions or error reports (crash reports, unexpected errors, feature gaps). Suggestions are saved locally to `.cdidx/suggestions.json` with SHA256 dedup. When a GitHub token is configured (`CDIDX_GITHUB_TOKEN` or `GITHUB_TOKEN`), suggestions are also filed as GitHub Issues. Source code content is never transmitted — descriptions are validated by `SourceCodeDetector` to reject pasted code. The tool only activates when explicitly called by an AI agent. Affected: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
+- **`suggest_improvement` MCP tool** — AI agents can report structured improvement suggestions or error reports (crash reports, unexpected errors, feature gaps). Suggestions are saved locally to `.cdidx/suggestions.json` with SHA256 dedup. When `CDIDX_GITHUB_TOKEN` is explicitly set, suggestions are also filed as GitHub Issues on widthdom/CodeIndex. Source code content is never transmitted — descriptions are validated by `SourceCodeDetector` to reject pasted code including fenced code blocks. The tool only activates when explicitly called by an AI agent. Affected: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
+
+#### Fixed
+- **GitHub token safety** — Only `CDIDX_GITHUB_TOKEN` is accepted for suggestion submission. Generic `GITHUB_TOKEN` is no longer used, preventing ambient CI tokens from silently publishing to an external repository. Affected: `GitHubIssueReporter.cs`.
+- **SourceCodeDetector fenced block bypass** — Added detection for markdown fenced code blocks (`` ``` ``), closing a bypass where short unindented code inside fences would pass all other heuristics. Affected: `SourceCodeDetector.cs`.
+- **Atomic suggestion storage** — `SuggestionStore` now uses write-to-temp-and-rename for crash-safe writes. Corrupt files are preserved as `.bak` instead of silently discarded. Affected: `SuggestionStore.cs`.
 
 ### [1.4.1] - 2026-04-12
 
@@ -482,7 +487,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
-- **`suggest_improvement` MCPツール** — AIエージェントが構造化された改善提案やエラー報告（クラッシュ報告、予期せぬエラー、機能ギャップ）を送信できる。提案は `.cdidx/suggestions.json` にSHA256重複排除付きでローカル保存される。GitHubトークン（`CDIDX_GITHUB_TOKEN` または `GITHUB_TOKEN`）が設定されている場合、GitHub Issueとしても報告される。ソースコード内容は一切送信されない — 説明は `SourceCodeDetector` によりコピペされたコードを拒否するよう検証される。このツールはAIエージェントが明示的に呼んだときのみ動作する。対象: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`。
+- **`suggest_improvement` MCPツール** — AIエージェントが構造化された改善提案やエラー報告（クラッシュ報告、予期せぬエラー、機能ギャップ）を送信できる。提案は `.cdidx/suggestions.json` にSHA256重複排除付きでローカル保存される。`CDIDX_GITHUB_TOKEN` が明示的に設定されている場合、widthdom/CodeIndex に GitHub Issue としても報告される。ソースコード内容は一切送信されない — 説明は `SourceCodeDetector` によりフェンスドコードブロックを含むコピペされたコードを拒否するよう検証される。このツールはAIエージェントが明示的に呼んだときのみ動作する。対象: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`。
+
+#### 修正
+- **GitHubトークン安全性** — 提案送信には `CDIDX_GITHUB_TOKEN` のみを受け付ける。汎用の `GITHUB_TOKEN` は使用しなくなり、CIの環境トークンが意図せず外部リポジトリに公開されることを防ぐ。対象: `GitHubIssueReporter.cs`。
+- **SourceCodeDetector フェンスドブロック回避対策** — マークダウンフェンスドコードブロック（`` ``` ``）の検出を追加。フェンス内の短い非インデントコードが全ヒューリスティックを通過する問題を修正。対象: `SourceCodeDetector.cs`。
+- **アトミックな提案蓄積** — `SuggestionStore` が一時ファイル→リネームによるクラッシュセーフな書き込みを使用するようになった。破損ファイルはサイレントに破棄されず `.bak` として保存される。対象: `SuggestionStore.cs`。
 
 ### [1.4.1] - 2026-04-12
 
