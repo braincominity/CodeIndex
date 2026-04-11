@@ -452,7 +452,7 @@ public static class ConsoleUi
     case ""$prev"" in
         --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
         --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
-        --kind) COMPREPLY=($(compgen -W ""function class namespace import"" -- ""$cur"")) ;;
+        --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
         *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --help"" -- ""$cur"")) ;;
     esac
 }}
@@ -481,7 +481,7 @@ _cdidx() {{
                 '--json[JSON output]' \
                 '--limit[Max results]:number' \
                 '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                '--kind[Filter by kind]:kind:(function class namespace import)' \
+                '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
                 '--path[Path filter]:pattern' \
                 '--exclude-path[Exclude path]:pattern' \
                 '--exclude-tests[Exclude tests]' \

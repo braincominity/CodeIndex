@@ -90,7 +90,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("System.Text"));
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Models");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
     }
 
@@ -101,10 +101,10 @@ public class SymbolExtractorTests
         var content = "public delegate void EventHandler(object sender, EventArgs e);\n\npublic class Button\n{\n    public event EventHandler Click;\n    public static event Action<string> OnLog;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "EventHandler");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "EventHandler");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Button");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Click");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnLog");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Click");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnLog");
     }
 
     [Fact]
@@ -115,9 +115,9 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Email");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Age");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Email");
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Point");
         // Signature should contain the parameter list / シグネチャにパラメータリストが含まれるべき
         var service = symbols.First(s => s.Name == "Service");
         Assert.Contains("ILogger logger", service.Signature);
@@ -171,7 +171,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserDto");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Point");
         // Signature should contain parameters / シグネチャにパラメータが含まれるべき
         var userDto = symbols.First(s => s.Name == "UserDto");
         Assert.Contains("string Name", userDto.Signature);
@@ -224,9 +224,9 @@ public class SymbolExtractorTests
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "X" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "string");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pi" && s.ReturnType == "double");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Pi" && s.ReturnType == "double");
     }
 
     [Fact]
@@ -257,7 +257,7 @@ public class SymbolExtractorTests
         var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Money");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
@@ -293,8 +293,8 @@ public class SymbolExtractorTests
         var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Span2D");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "StackBuffer");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Span2D");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "StackBuffer");
     }
 
     [Fact]
@@ -303,7 +303,7 @@ public class SymbolExtractorTests
         var content = "public enum Color\n{\n    Red,\n    Green = 1,\n    Blue = 2,\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Red");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Green");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Blue");

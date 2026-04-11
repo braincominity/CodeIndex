@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **Granular C# symbol kinds** — C# symbols now use semantically precise kinds: `property` (get/set and expression-bodied), `interface`, `enum`, `struct` (including `record struct`, `ref struct`, `readonly struct`), `event`, and `delegate`. Previously all mapped to generic `class` or `function`. AI agents can now filter by `--kind property`, `--kind interface`, etc. Shell completions updated for bash/zsh/fish. Affected: `SymbolExtractor.cs`, `ConsoleUi.cs`.
+
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
 
@@ -500,6 +503,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **C#シンボル種別の細分化** — C#シンボルに意味的に正確な種別を導入: `property`（get/set・式本体）、`interface`、`enum`、`struct`（`record struct`・`ref struct`・`readonly struct`含む）、`event`、`delegate`。従来は汎用的な `class` や `function` に分類されていた。AIエージェントが `--kind property`、`--kind interface` 等でフィルタ可能に。bash/zsh/fishのシェル補完も更新。対象: `SymbolExtractor.cs`、`ConsoleUi.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
