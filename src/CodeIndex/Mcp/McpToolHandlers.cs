@@ -698,17 +698,24 @@ public partial class McpServer
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
+        // Add graph-support metadata for AI trust decisions
+        // AI の信頼判断のためにグラフ対応メタデータを追加
+        bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPattern, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
+                ["graph_supported"] = graphSupported,
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             var summary = results.Count > 0
-                ? $"Found {results.Count} potentially unused symbol(s)."
+                ? $"Found {results.Count} potentially unused symbol(s). Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
+            if (graphSupported == false)
+                summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);

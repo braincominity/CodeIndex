@@ -692,7 +692,10 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            // Only meaningful for graph-supported languages / グラフ対応言語でのみ意味がある
+            // Warn if user specified an unsupported language / 未対応言語の場合は警告
+            if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
+                Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Results may contain false positives.");
+
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {

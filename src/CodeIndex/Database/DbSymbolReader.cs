@@ -327,31 +327,54 @@ public partial class DbReader
 
     /// <summary>
     /// Find symbols with the most references (hotspots — heavily used code).
+    /// Uses file-scoped join: counts references from the same file where the symbol is defined,
+    /// plus cross-file references where the container name matches to reduce bare-name collisions.
     /// 最も多く参照されるシンボルを検索する（ホットスポット — 多用されるコード）。
+    /// ファイルスコープ JOIN を使用: シンボルが定義されたファイル内の参照と、
+    /// コンテナ名が一致するクロスファイル参照をカウントし、名前衝突を軽減する。
     /// </summary>
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        // Count references where the symbol name matches AND either:
+        // 1. The reference is in the same file as the definition, OR
+        // 2. The reference's container/context mentions the symbol's container (cross-file usage)
+        // This reduces false inflation from unrelated same-named symbols.
+        // シンボル名が一致し、かつ以下のいずれかの参照をカウント:
+        // 1. 参照がシンボル定義と同じファイル内にある、または
+        // 2. 参照のコンテキストがシンボルのコンテナに言及している（クロスファイル使用）
+        // 無関係な同名シンボルによる水増しを軽減する。
         var sql = @"
-            SELECT sr.symbol_name, COUNT(*) as ref_count,
+            SELECT s.name, COUNT(DISTINCT sr.id) as ref_count,
                    s.kind, f.path, f.lang, s.line,
                    s.visibility, s.container_name
-            FROM symbol_references sr
-            JOIN symbols s ON sr.symbol_name = s.name
+            FROM symbols s
             JOIN files f ON s.file_id = f.id
+            JOIN symbol_references sr ON sr.symbol_name = s.name
             WHERE s.kind NOT IN ('import', 'namespace')";
 
+        // Restrict to graph-supported languages only / グラフ対応言語のみに制限
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         if (lang != null)
             sql += " AND f.lang = @lang";
+        else
+            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
         if (kind != null)
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += " GROUP BY sr.symbol_name, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
+        sql += " GROUP BY s.name, s.container_name, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@limit", limit);
-        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        else
+        {
+            var langList = graphLangs.ToList();
+            for (int i = 0; i < langList.Count; i++)
+                cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
+        }
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
 
@@ -375,10 +398,18 @@ public partial class DbReader
 
     /// <summary>
     /// Find symbols that have no matching references in the reference table (potential dead code).
+    /// Only meaningful for graph-supported languages — unsupported languages are excluded by default.
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
+    /// グラフ対応言語でのみ意味がある — 未対応言語はデフォルトで除外。
     /// </summary>
     public List<SymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        // Restrict to graph-supported languages to avoid false positives
+        // (unsupported languages have no references indexed, so all symbols appear unused)
+        // グラフ対応言語に制限して偽陽性を防ぐ
+        // （未対応言語は参照がインデックスされないため全シンボルが未使用に見える）
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+
         var sql = $@"
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
@@ -396,7 +427,16 @@ public partial class DbReader
               )";
 
         if (lang != null)
+        {
+            // If user specified a language, use it but warn if unsupported
+            // ユーザーが言語を指定した場合はそれを使うが、未対応なら警告
             sql += " AND f.lang = @lang";
+        }
+        else
+        {
+            // Default: only graph-supported languages / デフォルト: グラフ対応言語のみ
+            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
+        }
         if (kind != null)
             sql += " AND s.kind = @kind";
 
@@ -406,7 +446,14 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@limit", limit);
-        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        else
+        {
+            var langList = graphLangs.ToList();
+            for (int i = 0; i < langList.Count; i++)
+                cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
+        }
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
 

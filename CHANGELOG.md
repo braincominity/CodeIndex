@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
+- **unused/hotspots bare-name collision and unsupported-language false positives** — `unused` now defaults to graph-supported languages only, preventing unsupported languages (CSS, Zig, PowerShell, etc.) from producing false "all symbols unused" results. `hotspots` GROUP BY now includes container_name to distinguish same-named symbols in different classes. Both commands warn when querying unsupported languages. MCP `unused_symbols` includes `graph_supported` metadata. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
 
 ### [1.6.0] - 2026-04-12
 
@@ -551,6 +552,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
+- **unused/hotspots の名前衝突と未対応言語の偽陽性を修正** — `unused` がデフォルトでグラフ対応言語のみに制限されるようになり、未対応言語（CSS、Zig、PowerShell等）の「全シンボル未使用」偽陽性を防止。`hotspots` の GROUP BY に container_name を追加し、異なるクラスの同名シンボルを区別。未対応言語クエリ時に警告を表示。MCP `unused_symbols` に `graph_supported` メタデータを追加。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`McpToolHandlers.cs`。
 
 ### [1.6.0] - 2026-04-12
 
