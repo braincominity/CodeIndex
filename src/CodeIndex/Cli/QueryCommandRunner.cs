@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -13,6 +14,11 @@ public static class QueryCommandRunner
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: search requires a query argument");
@@ -342,6 +348,11 @@ public static class QueryCommandRunner
     public static int RunFiles(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -835,6 +846,7 @@ public static class QueryCommandRunner
         DateTime? since = null;
         bool noDedup = false;
         bool exact = false;
+        string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -890,10 +902,13 @@ public static class QueryCommandRunner
                     excludeTests = true;
                     break;
                 case "--since" when i + 1 < args.Length:
-                    if (DateTime.TryParse(args[++i], null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
-                        since = parsedSince.ToUniversalTime();
+                    if (TryParseIso8601Since(args[++i], out var parsedSince))
+                        since = parsedSince;
                     else
-                        Console.Error.WriteLine($"Warning: could not parse --since value '{args[i]}' as a date/time");
+                        parseError = $"Error: could not parse --since value '{args[i]}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+                    break;
+                case "--since":
+                    parseError = "Error: --since requires a value. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
                     break;
                 case "--start" when i + 1 < args.Length:
                     startLine = ParsePositiveInt(args[++i], "--start");
@@ -945,6 +960,7 @@ public static class QueryCommandRunner
             Since = since,
             NoDedup = noDedup,
             Exact = exact,
+            ParseError = parseError,
         };
     }
 
@@ -1064,6 +1080,45 @@ public static class QueryCommandRunner
 
         return value;
     }
+
+    // Accepted ISO 8601 formats for --since / --sinceフィルタで受け付けるISO 8601書式
+    private static readonly string[] Iso8601Formats =
+    [
+        // date only / 日付のみ
+        "yyyy-MM-dd",
+        // minute precision / 分精度
+        "yyyy-MM-ddTHH:mm",
+        "yyyy-MM-ddTHH:mmZ",
+        "yyyy-MM-ddTHH:mmzzz",
+        // second precision / 秒精度
+        "yyyy-MM-ddTHH:mm:ss",
+        "yyyy-MM-ddTHH:mm:ssZ",
+        "yyyy-MM-ddTHH:mm:sszzz",
+        // fractional seconds (1-7 digits via 'F') / 小数秒（1-7桁、'F'で可変長）
+        "yyyy-MM-ddTHH:mm:ss.FFFFFFFZ",
+        "yyyy-MM-ddTHH:mm:ss.FFFFFFFzzz",
+        "yyyy-MM-ddTHH:mm:ss.FFFFFFF",
+        // round-trip format / ラウンドトリップ書式
+        "o",
+    ];
+
+    /// <summary>
+    /// Parse a --since value using invariant ISO 8601 formats only.
+    /// Rejects ambiguous locale-dependent formats like MM/dd/yyyy.
+    /// Offsetless inputs are treated as local time (matching prior behavior).
+    /// ISO 8601形式のみで--since値をパースする。MM/dd/yyyyなどロケール依存の曖昧な形式は拒否する。
+    /// オフセットなしの入力はローカル時刻として扱う（従来の動作を維持）。
+    /// </summary>
+    internal static bool TryParseIso8601Since(string value, out DateTime result)
+    {
+        if (DateTimeOffset.TryParseExact(value, Iso8601Formats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var dto))
+        {
+            result = dto.UtcDateTime;
+            return true;
+        }
+        result = default;
+        return false;
+    }
 }
 
 public sealed class QueryCommandOptions
@@ -1088,4 +1143,5 @@ public sealed class QueryCommandOptions
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
     public bool Exact { get; init; }
+    public string? ParseError { get; init; }
 }

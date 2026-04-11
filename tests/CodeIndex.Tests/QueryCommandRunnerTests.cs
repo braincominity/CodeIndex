@@ -284,6 +284,105 @@ public class QueryCommandRunnerTests
         }
     }
 
+    // --- TryParseIso8601Since tests / TryParseIso8601Sinceテスト ---
+
+    [Theory]
+    [InlineData("2024-01-15")]
+    [InlineData("2024-01-15T10:30")]              // minute precision / 分精度
+    [InlineData("2024-01-15T10:30Z")]
+    [InlineData("2024-01-15T10:30+09:00")]
+    [InlineData("2024-01-15T10:30:00")]
+    [InlineData("2024-01-15T10:30:00Z")]
+    [InlineData("2024-01-15T10:30:00+09:00")]
+    [InlineData("2024-01-15T10:30:00.000Z")]
+    [InlineData("2024-01-15T10:30:00.123")]       // offsetless fractional / オフセットなし小数秒
+    [InlineData("2024-01-15T10:30:00.1234567Z")]
+    [InlineData("2024-01-15T10:30:00.1Z")]        // 1-digit fraction / 1桁小数
+    public void TryParseIso8601Since_AcceptsValidIsoFormats(string input)
+    {
+        var ok = QueryCommandRunner.TryParseIso8601Since(input, out var result);
+        Assert.True(ok, $"Expected '{input}' to be accepted as ISO 8601");
+        Assert.Equal(DateTimeKind.Utc, result.Kind);
+    }
+
+    [Theory]
+    [InlineData("01/02/2024")]        // ambiguous locale-dependent / ロケール依存の曖昧な形式
+    [InlineData("1/2/2024")]
+    [InlineData("02-Jan-2024")]
+    [InlineData("Jan 15, 2024")]
+    [InlineData("not-a-date")]
+    [InlineData("yesterday")]
+    [InlineData("")]
+    public void TryParseIso8601Since_RejectsNonIsoFormats(string input)
+    {
+        var ok = QueryCommandRunner.TryParseIso8601Since(input, out _);
+        Assert.False(ok, $"Expected '{input}' to be rejected as non-ISO 8601");
+    }
+
+    [Fact]
+    public void TryParseIso8601Since_DateOnlyTreatedAsLocalTime()
+    {
+        // Offsetless dates are treated as local time, matching prior DateTime.TryParse behavior /
+        // オフセットなしの日付はローカル時刻として扱う（従来のDateTime.TryParseの動作と一致）
+        QueryCommandRunner.TryParseIso8601Since("2024-06-15", out var result);
+        var expected = new DateTimeOffset(2024, 6, 15, 0, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2024, 6, 15))).UtcDateTime;
+        Assert.Equal(expected, result);
+        Assert.Equal(DateTimeKind.Utc, result.Kind);
+    }
+
+    [Fact]
+    public void TryParseIso8601Since_ExplicitUtcTimestamp()
+    {
+        QueryCommandRunner.TryParseIso8601Since("2024-06-15T12:00:00Z", out var result);
+        Assert.Equal(new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc), result);
+    }
+
+    [Fact]
+    public void TryParseIso8601Since_ConvertsTimezoneOffsetToUtc()
+    {
+        QueryCommandRunner.TryParseIso8601Since("2024-06-15T12:00:00+09:00", out var result);
+        Assert.Equal(new DateTime(2024, 6, 15, 3, 0, 0, DateTimeKind.Utc), result);
+    }
+
+    [Fact]
+    public void ParseArgs_RejectsSinceWithAmbiguousDate()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["search", "foo", "--since", "01/02/2024"], jsonDefault: false);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("could not parse", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_AcceptsSinceWithIsoDate()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["search", "foo", "--since", "2024-01-02"], jsonDefault: false);
+        Assert.Null(options.ParseError);
+        Assert.NotNull(options.Since);
+        // Offsetless date → local midnight → UTC / オフセットなし → ローカル深夜 → UTC
+        var expected = new DateTimeOffset(2024, 1, 2, 0, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2024, 1, 2))).UtcDateTime;
+        Assert.Equal(expected, options.Since.Value);
+    }
+
+    [Fact]
+    public void ParseArgs_RejectsBareSinceWithNoValue()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["search", "foo", "--since"], jsonDefault: false);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--since requires a value", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_RejectsBareSinceForFiles()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["files", "--since"], jsonDefault: false);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--since requires a value", options.ParseError);
+    }
+
     private static JsonDocument ParseJsonOutput(string stdout)
     {
         var jsonLine = stdout

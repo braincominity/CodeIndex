@@ -102,8 +102,13 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
         DateTime? since = null;
-        if (sinceStr != null && DateTime.TryParse(sinceStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
-            since = parsedSince.ToUniversalTime();
+        if (sinceStr != null)
+        {
+            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
+                since = parsedSince;
+            else
+                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
+        }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
@@ -359,8 +364,13 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
         DateTime? since = null;
-        if (sinceStr != null && DateTime.TryParse(sinceStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
-            since = parsedSince.ToUniversalTime();
+        if (sinceStr != null)
+        {
+            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
+                since = parsedSince;
+            else
+                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
+        }
 
         return WithDbReader(id, reader =>
         {
