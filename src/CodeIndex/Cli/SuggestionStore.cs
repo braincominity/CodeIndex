@@ -94,7 +94,11 @@ public class SuggestionStore
         }
         catch (JsonException)
         {
-            // Corrupt file — treat as empty / 壊れたファイル — 空として扱う
+            // Corrupt file — preserve as .bak so history is not lost,
+            // then treat as empty for the current operation.
+            // 壊れたファイル — 履歴を失わないよう .bak として保存し、
+            // 今回の操作では空として扱う。
+            PreserveCorruptFile();
             return new List<SuggestionRecord>();
         }
         catch (IOException)
@@ -121,8 +125,12 @@ public class SuggestionStore
     }
 
     /// <summary>
-    /// Write the full suggestion list to disk, creating the directory if needed.
-    /// 提案リスト全体をディスクに書き込む。必要に応じてディレクトリを作成する。
+    /// Write the full suggestion list to disk atomically.
+    /// Uses write-to-temp-and-rename to prevent partial writes from
+    /// corrupting the main file. Creates the directory if needed.
+    /// 提案リスト全体をアトミックにディスクへ書き込む。
+    /// 部分書き込みでメインファイルを壊さないよう、一時ファイルに書いてから
+    /// リネームする。必要に応じてディレクトリを作成する。
     /// </summary>
     private void Save(List<SuggestionRecord> records)
     {
@@ -130,7 +138,35 @@ public class SuggestionStore
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
+        // Write to a temp file first, then atomically replace the target.
+        // This ensures the main file is never left in a partial/corrupt state.
+        // まず一時ファイルに書き、その後アトミックにターゲットを置換する。
+        // メインファイルが部分書き込み/破損状態にならないことを保証する。
+        var tempPath = _filePath + ".tmp";
         var json = JsonSerializer.Serialize(records, s_jsonOptions);
-        File.WriteAllText(_filePath, json);
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, _filePath, overwrite: true);
+    }
+
+    /// <summary>
+    /// Preserve a corrupt suggestions file by renaming it to .bak.
+    /// This prevents silent data loss — the corrupt file can be inspected
+    /// or recovered manually.
+    /// 破損した suggestions ファイルを .bak にリネームして保存する。
+    /// サイレントなデータ消失を防ぐ — 破損ファイルは手動で検査・復旧できる。
+    /// </summary>
+    private void PreserveCorruptFile()
+    {
+        try
+        {
+            var backupPath = _filePath + ".bak";
+            if (File.Exists(_filePath))
+                File.Move(_filePath, backupPath, overwrite: true);
+        }
+        catch
+        {
+            // Best-effort — if we can't rename, continue with empty list.
+            // ベストエフォート — リネームできなければ空リストで続行。
+        }
     }
 }

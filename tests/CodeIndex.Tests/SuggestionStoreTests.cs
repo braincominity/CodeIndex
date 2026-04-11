@@ -197,6 +197,39 @@ public class SuggestionStoreTests : IDisposable
         Assert.False(all[0].SubmittedToGitHub);
     }
 
+    // --- Atomic write and corruption recovery tests / アトミック書き込みと破損復旧テスト ---
+
+    [Fact]
+    public void CorruptFile_IsPreservedAsBackup()
+    {
+        // Write a corrupt file, then load — should rename to .bak
+        // 破損ファイルを書き込み、ロード — .bak にリネームされるべき
+        var filePath = Path.Combine(_tempDir, "suggestions.json");
+        var backupPath = filePath + ".bak";
+        File.WriteAllText(filePath, "{corrupt json[[[");
+
+        var all = _store.LoadAll();
+        Assert.Empty(all);
+        Assert.True(File.Exists(backupPath), "Corrupt file should be preserved as .bak");
+        Assert.False(File.Exists(filePath), "Original corrupt file should be removed");
+    }
+
+    [Fact]
+    public void AtomicWrite_SurvivesAddAfterCorruption()
+    {
+        // After corruption recovery, new suggestions should work normally
+        // 破損復旧後、新しい提案が正常に動作するべき
+        File.WriteAllText(Path.Combine(_tempDir, "suggestions.json"), "not json");
+
+        _store.LoadAll(); // triggers backup
+        var record = MakeRecord("other", null, "Post-corruption suggestion");
+        Assert.True(_store.TryAdd(record));
+
+        var all = _store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal("Post-corruption suggestion", all[0].Description);
+    }
+
     // --- Helpers / ヘルパー ---
 
     private static SuggestionRecord MakeRecord(string category, string? language, string description)
