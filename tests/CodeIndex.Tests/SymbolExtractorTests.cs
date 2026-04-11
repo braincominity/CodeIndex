@@ -477,6 +477,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DetectsExpandedFeatures()
+    {
+        var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Email");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        // Companion object (unnamed) / コンパニオンオブジェクト（無名）
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Signature != null && s.Signature.Contains("companion object"));
+        // Extension function / 拡張関数
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "truncate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetchData");
+        // const val / 定数プロパティ
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+    }
+
+    [Fact]
     public void Extract_Ruby_DetectsDefAndClass()
     {
         // Ruby: def, class, module / Ruby: メソッド、クラス、モジュール

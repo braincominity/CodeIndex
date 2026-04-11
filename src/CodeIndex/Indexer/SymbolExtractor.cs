@@ -139,8 +139,15 @@ public static class SymbolExtractor
         ],
         ["kotlin"] =
         [
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:abstract\s+|data\s+|sealed\s+|open\s+)*(?:class|interface|enum\s+class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:suspend\s+)?fun\s+(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Companion object / コンパニオンオブジェクト
+            new("class",    new Regex(@"^\s*companion\s+object\s*(?<name>\w*)", RegexOptions.Compiled), BodyStyle.Brace),
+            // Class with expanded modifiers: data, sealed, value, inner, annotation, expect, actual
+            // 拡張修飾子対応: data, sealed, value, inner, annotation, expect, actual
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|interface|enum\s+class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Extension function (fun Type.name) / 拡張関数
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Top-level val/var property / トップレベルプロパティ
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>\w+)\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["ruby"] =
