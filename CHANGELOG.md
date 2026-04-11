@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **DEVELOPER_GUIDE: VB.NET graph=yes** — Updated VB.NET to graph=yes in both EN/JP language tables (now 18 graph-supported languages). Affected: `DEVELOPER_GUIDE.md`.
+
 - **VB.NET call-graph reference extraction** — VB.NET now supports `references`, `callers`, and `callees` queries. Added `'` comment stripping. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
 
 - **batch_query supports ping tool** — The `ping` tool can now be called within `batch_query`. Added test. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
@@ -462,6 +464,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **DEVELOPER_GUIDE: VB.NET graph=yes** — 言語表でVB.NETを graph=yes に更新（graph 対応は18言語に）。対象: `DEVELOPER_GUIDE.md`.
 
 - **VB.NET コールグラフ参照抽出** — VB.NET が `references`、`callers`、`callees` クエリに対応。`'` コメント除去も追加。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
 

@@ -391,7 +391,7 @@ Supported symbol kinds by language (29 languages with symbol extraction):
 | R | name <- function() | -- | library, require | -- |
 | Haskell | type signatures (name ::) | data, newtype, type, class, instance | import | -- |
 | F# | let, let rec | type, module | open | -- |
-| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | -- |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | yes |
 
 Additionally, 17 languages are detected and indexed as raw text without symbol extraction: batch, cmake, css, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, powershell, svelte, toml, vue, xml, yaml, zig.
 
@@ -915,7 +915,7 @@ LIMIT 20;
 | R | name <- function() | -- | library, require | -- |
 | Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import | -- |
 | F# | let, let rec | type, module | open | -- |
-| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | -- |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | yes |
 
 他に17言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, css, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, powershell, svelte, toml, vue, xml, yaml, zig。
 
