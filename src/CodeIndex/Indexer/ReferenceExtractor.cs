@@ -13,7 +13,7 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua"
+        "dart", "scala", "elixir", "lua", "vb"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -199,6 +199,14 @@ public static class ReferenceExtractor
             var luaCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
             if (luaCommentIndex >= 0)
                 result = result[..luaCommentIndex];
+        }
+
+        // VB.NET uses ' for line comments / VB.NET は ' を行コメントに使う
+        if (lang is "vb")
+        {
+            var vbCommentIndex = result.IndexOf('\'');
+            if (vbCommentIndex >= 0)
+                result = result[..vbCommentIndex];
         }
 
         return result;

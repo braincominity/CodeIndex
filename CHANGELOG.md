@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **VB.NET call-graph reference extraction** — VB.NET now supports `references`, `callers`, and `callees` queries. Added `'` comment stripping. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
+
 - **batch_query supports ping tool** — The `ping` tool can now be called within `batch_query`. Added test. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **DEVELOPER_GUIDE language table: Lua graph, Swift actor, PHP namespace** — Updated Lua to graph=yes, Swift to include actor/typealias, PHP to include readonly class/namespace/use/const. Both EN/JP sections. Affected: `DEVELOPER_GUIDE.md`.
@@ -460,6 +462,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **VB.NET コールグラフ参照抽出** — VB.NET が `references`、`callers`、`callees` クエリに対応。`'` コメント除去も追加。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
 
 - **batch_query で ping ツールに対応** — `batch_query` 内で `ping` ツールを呼べるようになった。テスト追加。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
