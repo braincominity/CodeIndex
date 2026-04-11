@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **"Why SQLite?" section in developer guide** — Documents the rationale for choosing SQLite over alternatives (PostgreSQL, DuckDB, LiteDB, Tantivy, vector DBs), what makes it the right fit, and when it would not be enough. Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
 
+#### Changed
+
+- **Split DbReader.cs and McpServer.cs for maintainability** — Extracted 21 result DTOs from `DbReader.cs` into `Models/QueryResults.cs` (243 lines). Split `McpServer.cs` (1349 lines) into three partial-class files: core protocol handling (332 lines), tool definitions (299 lines), and tool execution handlers (749 lines). All public APIs unchanged. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+
 #### Fixed
 
 - **Event subscription regex restricted to PascalCase identifiers** — `+=`/`-=` event subscription detection now requires both LHS and RHS to be PascalCase identifiers (e.g. `Click += OnClick`), preventing false positives from arithmetic like `count += 1` or `flags -= mask`. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
@@ -389,6 +393,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **開発者ガイドに「なぜSQLiteなのか？」セクションを追加** — PostgreSQL、DuckDB、LiteDB、Tantivy、ベクトルDB等の代替案との比較を含め、SQLiteを採用した理由、SQLiteが最適な根拠、SQLiteでは足りなくなるケースを文書化。英語・日本語の両セクション。対象: `DEVELOPER_GUIDE.md`。
 
+#### 変更
+
+- **DbReader.cs と McpServer.cs の保守性向上のための分割** — `DbReader.cs` から21個の結果DTOを `Models/QueryResults.cs`（243行）に抽出。`McpServer.cs`（1349行）をpartial classで3ファイルに分割: コアプロトコル処理（332行）、ツール定義（299行）、ツール実行ハンドラ（749行）。公開APIは変更なし。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Models/QueryResults.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`.
+
 #### 修正
 
 - **イベント購読 regex を PascalCase 識別子に制限** — `+=`/`-=` イベント購読検出で LHS と RHS の両方を PascalCase 識別子に限定（例: `Click += OnClick`）。`count += 1` や `flags -= mask` の算術代入からの偽陽性を防止。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
@@ -453,7 +461,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`deps` コマンドでファイル間依存関係分析** — 新コマンド `cdidx deps` と MCP ツール `deps` を追加。インデックス済み参照グラフからファイル間の依存エッジを算出し、参照数とシンボルリスト付きで返す。AIエージェントが1回の呼び出しでプロジェクトアーキテクチャを把握できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
-- **C# `#region` 抽出でアウトラインナビゲーション** — `#region Name` ディレクティブを namespace シンボルとして抽出し、`outline` と `symbols` に表示。���きな C# ファイルでのコードセクション特定をAIエージェントと開発者に提供。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+- **C# `#region` 抽出でアウトラインナビゲーション** — `#region Name` ディレクティブを namespace シンボルとして抽出し、`outline` と `symbols` に表示。大きな C# ファイルでのコードセクション特定をAIエージェントと開発者に提供。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`--since` フィルタで時間ベースのファイル問い合わせ** — `files` CLI コマンドと MCP `files` ツールに `--since <datetime>` オプションを追加。指定タイムスタンプ以降に変更されたファイルのみに結果を絞る。AI エージェントが「直近1時間の変更は？」と聞けるようになる。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
 

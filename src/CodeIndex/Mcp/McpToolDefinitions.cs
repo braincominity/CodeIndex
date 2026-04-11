@@ -1,0 +1,299 @@
+using System.Text.Json.Nodes;
+using CodeIndex.Cli;
+
+namespace CodeIndex.Mcp;
+
+/// <summary>
+/// MCP tool definitions (partial class split from McpServer.cs).
+/// MCPツール定義（McpServer.csからのpartial class分割）。
+/// </summary>
+public partial class McpServer
+{
+    /// <summary>
+    /// Return the list of available tools.
+    /// 利用可能なツール一覧を返す。
+    /// </summary>
+    private JsonNode HandleToolsList(JsonNode? id)
+    {
+        var tools = new JsonArray
+        {
+            CreateToolDefinition(
+                "search",
+                "Full-text search across indexed code chunks using FTS5. Returns compact match-centered snippets with line metadata. / FTS5を使ったコードチャンクの全文検索。一致中心の軽量スニペットと行メタデータを返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
+                        ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Max snippet lines per result (default: 8, max: 20)", ["default"] = 8, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
+                        ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting", ["default"] = false },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "definition",
+                "Resolve symbol definitions with definition ranges, signatures, and optional body content. / 定義範囲、シグネチャ、必要に応じて本体内容付きでシンボル定義を解決。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name pattern to resolve" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content when body ranges are available", ["default"] = false },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "references",
+                "Search indexed symbol references such as call sites. / 呼び出し箇所などのインデックス済みシンボル参照を検索。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Referenced symbol name pattern to search for" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "callers",
+                "Find caller symbols that reference a callee. / 指定シンボルを参照している呼び出し元シンボルを探す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Callee symbol name pattern to search for" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "callees",
+                "Find callees used by a caller/container symbol. / 呼び出し元シンボルが使っている呼び出し先を探す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Caller/container symbol name pattern to search for" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "symbols",
+                "Search for code symbols (functions, classes, interfaces, imports) by name pattern. / シンボル（関数、クラス、インターフェース、import）を名前パターンで検索。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name pattern to search for" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind (function, class, interface, import, etc.)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "files",
+                "List indexed files, optionally filtered by name pattern and language. / インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "File path pattern to filter by" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Additional path filter text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "excerpt",
+                "Reconstruct a file excerpt from indexed chunks for a given line range. / 指定行範囲について、インデックス済みチャンクからファイル抜粋を再構成。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Indexed file path" },
+                        ["startLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Start line (1-based)" },
+                        ["endLine"] = new JsonObject { ["type"] = "integer", ["description"] = "End line (default: startLine)" },
+                        ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines before the range", ["default"] = 0 },
+                        ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines after the range", ["default"] = 0 }
+                    },
+                    ["required"] = new JsonArray { "path", "startLine" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "map",
+                "Return a repo-level overview with languages, modules, top files, and likely entrypoints. / 言語、モジュール、主要ファイル、推定エントリポイントを含むリポジトリ俯瞰情報を返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max items per section (default: 10)", ["default"] = 10 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "analyze_symbol",
+                "Bundle definition, nearby symbols, references, callers, callees, file metadata, and graph-support metadata for one symbol query. / 1つのシンボルクエリに対して、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、グラフ対応メタデータをまとめて返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name to inspect" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max items per section (default: 10)", ["default"] = 10 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content in definitions when available", ["default"] = false },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "status",
+                "Get database statistics: file count, chunk count, symbol count, reference count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、参照数、言語別内訳。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject()
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "outline",
+                "Return the symbol outline of a single indexed file: all functions, classes, imports with line numbers, signatures, and nesting. / 1ファイルのシンボルアウトラインを返す: 関数、クラス、importの行番号、シグネチャ、ネスト構造。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Indexed file path (e.g. src/app.cs)" },
+                    },
+                    ["required"] = new JsonArray { "path" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "deps",
+                "Show file-level dependency edges from the indexed reference graph. / インデックス済み参照グラフか��ファイル間の依存エッジを返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max edges (default: 50)", ["default"] = 50 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Restrict source files to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude paths" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files", ["default"] = false },
+                        ["reverse"] = new JsonObject { ["type"] = "boolean", ["description"] = "Reverse lookup: show files that depend ON the matched path", ["default"] = false }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "languages",
+                "List all supported languages with their file extensions and capabilities (symbol extraction, call-graph queries). No database required. / 対応言語一覧を拡張子・機能（シンボル抽出、コールグラフ対応）付きで返す。DB不要。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject()
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "batch_query",
+                "Execute multiple read-only queries in a single call and return all results. Dramatically reduces round-trips for AI agents. / 複数の読み取り専用クエリを1回の呼び出しで実行し、全結果を返す。AIエージェントの往復回数を劇的に削減。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["queries"] = new JsonObject
+                        {
+                            ["type"] = "array",
+                            ["description"] = "Array of {tool, arguments} objects. Only read-only tools are allowed (not index).",
+                            ["items"] = new JsonObject
+                            {
+                                ["type"] = "object",
+                                ["properties"] = new JsonObject
+                                {
+                                    ["tool"] = new JsonObject { ["type"] = "string", ["description"] = "Tool name (e.g. search, definition, symbols)" },
+                                    ["arguments"] = new JsonObject { ["type"] = "object", ["description"] = "Tool arguments" }
+                                },
+                                ["required"] = new JsonArray { "tool" }
+                            }
+                        }
+                    },
+                    ["required"] = new JsonArray { "queries" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "index",
+                "Index or re-index a project directory. Scans source files, extracts symbols, and builds FTS5 search index. / プロジェクトディレクトリをインデックス（再インデックス）。ソースファイルをスキャンし、シンボルを抽出してFTS5検索インデックスを構築。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Project directory path to index" },
+                        ["rebuild"] = new JsonObject { ["type"] = "boolean", ["description"] = "Delete existing index and rebuild from scratch (default: false)", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "path" }
+                },
+                IndexAnnotations())
+        };
+
+        var result = new JsonObject { ["tools"] = tools };
+        return CreateSuccessResponse(id, result);
+    }
+}
