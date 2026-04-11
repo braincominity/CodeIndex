@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.6.0] - 2026-04-12
+
 #### Added
 - **One-liner install script** — `install.sh` enables installing cdidx in containers and CI environments without .NET SDK. Downloads self-contained binaries from GitHub Releases with SHA256 checksum verification. Supports `linux-x64`, `linux-arm64`, and `osx-arm64` (glibc only). Detects musl-based Linux (e.g. Alpine) and fails fast with a clear error. Affected: `install.sh`.
 - **linux-arm64 release builds** — Added `linux-arm64` to the release matrix for ARM container support (Apple Silicon Docker, ARM CI). Cross-compiled on x64 runners with test execution skipped for the cross-compiled target. Affected: `.github/workflows/release.yml`.
@@ -496,6 +498,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.6.0] - 2026-04-12
+
 #### 追加
 - **ワンライナーインストールスクリプト** — `install.sh` により、.NET SDK なしでコンテナや CI 環境に cdidx をインストール可能。GitHub Releases から self-contained バイナリをダウンロードし、SHA256 チェックサムを検証する。`linux-x64`, `linux-arm64`, `osx-arm64`（glibc のみ）に対応。musl ベースの Linux（Alpine 等）は検出して明確なエラーで拒否する。対象: `install.sh`。
 - **linux-arm64 リリースビルド** — ARM コンテナサポート（Apple Silicon Docker, ARM CI）のため、リリースマトリクスに `linux-arm64` を追加。x64 ランナー上でクロスコンパイルし、クロスコンパイル対象のテスト実行はスキップ。対象: `.github/workflows/release.yml`。
@@ -977,7 +981,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/Widthdom/CodeIndex/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Widthdom/CodeIndex/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/Widthdom/CodeIndex/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/Widthdom/CodeIndex/compare/v1.3.0...v1.4.0
