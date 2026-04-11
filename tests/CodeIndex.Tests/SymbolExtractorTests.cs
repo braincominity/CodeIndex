@@ -33,6 +33,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_DetectsDecoratedAndDunderMethods()
+    {
+        var content = "@dataclass\nclass User:\n    name: str\n    age: int\n\n    def __init__(self, name: str, age: int) -> None:\n        self.name = name\n\n    @property\n    def display_name(self) -> str:\n        return self.name\n\n    def __str__(self) -> str:\n        return self.name\n\n    @staticmethod\n    def create(name: str) -> 'User':\n        return User(name, 0)";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__init__");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display_name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__str__");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsFunctionsAndClasses()
     {
         // Should detect exported and non-exported functions and classes
