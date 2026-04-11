@@ -25,9 +25,20 @@ public static class QueryCommandRunner
             var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                     Console.Error.WriteLine("No results found.");
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -67,9 +78,20 @@ public static class QueryCommandRunner
             var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                     Console.Error.WriteLine("No definitions found.");
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -120,12 +142,23 @@ public static class QueryCommandRunner
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
                     WriteGraphSupportHint(options.Lang);
                 }
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -163,12 +196,23 @@ public static class QueryCommandRunner
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
                     WriteGraphSupportHint(options.Lang);
                 }
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -202,12 +246,23 @@ public static class QueryCommandRunner
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
                     WriteGraphSupportHint(options.Lang);
                 }
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -235,9 +290,20 @@ public static class QueryCommandRunner
             var results = reader.SearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                     Console.Error.WriteLine("No symbols found.");
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -270,9 +336,19 @@ public static class QueryCommandRunner
             var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                     Console.Error.WriteLine("No files found.");
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -568,6 +644,7 @@ public static class QueryCommandRunner
         string? query = null;
         bool rawFts = false;
         bool includeBody = false;
+        bool countOnly = false;
         int? startLine = null;
         int? endLine = null;
         int contextBefore = 0;
@@ -608,6 +685,9 @@ public static class QueryCommandRunner
                     break;
                 case "--body":
                     includeBody = true;
+                    break;
+                case "--count":
+                    countOnly = true;
                     break;
                 case "--path" when i + 1 < args.Length:
                     pathPattern = args[++i];
@@ -664,6 +744,7 @@ public static class QueryCommandRunner
             PathPattern = pathPattern,
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
+            CountOnly = countOnly,
         };
     }
 
@@ -756,4 +837,5 @@ public sealed class QueryCommandOptions
     public string? PathPattern { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
+    public bool CountOnly { get; init; }
 }

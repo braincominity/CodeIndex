@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`languages` CLI command and MCP tool** — New `cdidx languages [--json]` command and MCP `languages` tool that list all supported languages with their file extensions, symbol extraction support, and call-graph query support. Lets AI agents and new users discover cdidx capabilities at runtime without consulting documentation. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
+- **`--count` flag for query commands** — New `--count` option for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` that returns only the result count without full data. With `--json`, returns `{"count": N, "files": M}`. Lets AI agents estimate result size before fetching full data, saving tokens. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
+
 - **File count in CLI result summaries** — Human-readable output for `search`, `definition`, `references`, `callers`, `callees`, and `symbols` now shows "(N results in M files)" instead of just "(N results)", giving terminal users a quick sense of how spread the results are. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **Protobuf, GraphQL, Dockerfile, Makefile, and more file types** — Added language detection for `.proto` (protobuf), `.graphql`/`.gql` (graphql), `.gradle`, `.cmake`/`CMakeLists.txt`, `.ps1` (powershell), `.bat`/`.cmd` (batch), `.bash`/`.zsh`/`.fish` (shell), and filename-based detection for `Dockerfile`, `Makefile`, `Justfile`, `Vagrantfile`, `.editorconfig`, `.gitignore`, `.dockerignore`. These common project files are now indexed for full-text search. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
@@ -262,6 +264,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 追加
 
 - **`languages` CLI コマンドと MCP ツール** — 新コマンド `cdidx languages [--json]` と MCP ツール `languages` を追加。対応言語の一覧を拡張子・シンボル抽出対応・コールグラフ対応の情報付きで返す。AI エージェントや新規ユーザーがドキュメントを参照せずに cdidx の対応範囲を実行時に確認できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **クエリコマンドに `--count` フラグ追加** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` に `--count` を追加。結果全体ではなくカウントだけを返す。`--json` 併用で `{"count": N, "files": M}` 形式。AI エージェントが全データ取得前に結果量を見積もれるため、トークン節約に効果的。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
 
 - **CLI 結果サマリにファイル数を追加** — `search`、`definition`、`references`、`callers`、`callees`、`symbols` の人間向け出力で「(N results)」の代わりに「(N results in M files)」を表示し、結果の散らばり具合を素早く把握できるようにした。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 

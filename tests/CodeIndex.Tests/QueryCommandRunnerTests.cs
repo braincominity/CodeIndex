@@ -57,6 +57,14 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_CountFlagParsed()
+    {
+        var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
+        Assert.True(options.CountOnly);
+        Assert.Equal("myquery", options.Query);
+    }
+
+    [Fact]
     public void ParseArgs_InvalidNumbersAndUnknownOptionsFallbackAndReportErrors()
     {
         var (options, _, stderr) = CaptureConsole(() => QueryCommandRunner.ParseArgs(

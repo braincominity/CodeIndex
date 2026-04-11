@@ -20,7 +20,7 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # shorthand for 'index'
 
 # Query (default output: human-readable; use --json for AI consumption)
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--count] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
@@ -231,7 +231,7 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # 'index'の省略形
 
 # クエリ（デフォルト出力: 人間向け; --jsonでAI向け出力）
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--json]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--count] [--json]
 cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]

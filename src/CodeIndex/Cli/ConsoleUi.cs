@@ -357,6 +357,7 @@ public static class ConsoleUi
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
+        Console.WriteLine("  --count                    Return only the result count (for AI preflight)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
