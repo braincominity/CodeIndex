@@ -16,6 +16,24 @@
 
 `cdidx` turns a repository into a reusable local search engine: full-text search over SQLite FTS5, symbol lookup, incremental refresh, human-readable CLI output, JSON for agents, and native MCP integration.
 
+<details>
+<summary><strong>TL;DR</strong></summary>
+
+```bash
+cdidx .                          # Index current directory
+cdidx search "authenticate"      # Full-text search
+cdidx definition UserService     # Find symbol definitions
+cdidx deps --path src/           # File-level dependency graph
+cdidx mcp                        # Start MCP server for AI tools
+```
+
+46 languages supported. 16 MCP tools. Incremental updates. Zero config.
+
+- **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, DB schema, FTS5 internals
+- **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
+- **Testing**: [TESTING_GUIDE.md](TESTING_GUIDE.md)
+</details>
+
 ## Why cdidx
 
 Most code search tools optimize for either desktop UI workflows or one-off text scanning in a shell. `cdidx` is built for a different loop: local repositories that need to be searched repeatedly by both humans and AI agents.
@@ -735,6 +753,24 @@ All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempot
 **ターミナルとMCPワークフローのための、AIネイティブなローカルコードインデックス。**
 
 `cdidx` は、リポジトリを再利用可能なローカル検索エンジンに変えます。SQLite FTS5 による全文検索、シンボル検索、インクリメンタル更新、人間向けCLI出力、AI向けJSON出力、MCP連携をひとつにまとめています。
+
+<details>
+<summary><strong>概要</strong></summary>
+
+```bash
+cdidx .                          # カレントディレクトリをインデックス
+cdidx search "authenticate"      # 全文検索
+cdidx definition UserService     # シンボル定義を検索
+cdidx deps --path src/           # ファイル間依存グラフ
+cdidx mcp                        # AIツール向けMCPサーバー起動
+```
+
+46言語対応。16 MCPツール。インクリメンタル更新。設定不要。
+
+- **ドキュメント**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) アーキテクチャ、DBスキーマ、FTS5の仕組み
+- **AI開発規約**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
+- **テストガイド**: [TESTING_GUIDE.md](TESTING_GUIDE.md)
+</details>
 
 ## なぜ cdidx なのか
 

@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **README TL;DR section and doc links** — Added collapsible TL;DR section at the top of README (EN/JP) with quick-start commands, feature counts, and links to DEVELOPER_GUIDE, SELF_IMPROVEMENT, and TESTING_GUIDE. Makes the GitHub/NuGet entry point more scannable without removing detailed content. Affected: `README.md`.
+
 - **CLAUDE.md Japanese section sync** — Added missing `--reverse` to deps, updated architecture sections for file split (DbSearchReader, DbSymbolReader, McpToolDefinitions, McpToolHandlers, QueryResults), added new test files. Both English and Japanese sections now match. Affected: `CLAUDE.md`.
 
 - **Unicode/CJK character tests** — Added tests verifying Japanese, Chinese, and Korean characters in file content, class names, and method names are correctly indexed and extracted. .NET `\w` regex matches Unicode letters. Affected: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
@@ -402,6 +404,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **README に TL;DR セクションとドキュメントリンクを追加** — README 冒頭（英語・日本語）に折りたたみ式の TL;DR を追加。クイックスタートコマンド、機能数、DEVELOPER_GUIDE/SELF_IMPROVEMENT/TESTING_GUIDE へのリンクを含む。GitHub/NuGet の入口をスキャンしやすくしつつ、詳細コンテンツは維持。対象: `README.md`.
 
 - **CLAUDE.md 日本語セクション同期** — deps に `--reverse` 追加、ファイル分割後のアーキテクチャ更新（DbSearchReader, DbSymbolReader, McpToolDefinitions, McpToolHandlers, QueryResults）、新テストファイル追加。英語・日本語セクション一致。対象: `CLAUDE.md`.
 
