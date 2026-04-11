@@ -876,7 +876,24 @@ public partial class McpServer
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
-        // 7. Return success / 成功レスポンスを返す
+        // 7. Attempt GitHub submission (best-effort, only if token is configured)
+        //    GitHub送信を試みる（ベストエフォート、トークンが設定されている場合のみ）
+        string? issueUrl = null;
+        if (GitHubIssueReporter.ResolveToken() != null)
+        {
+            try
+            {
+                issueUrl = GitHubIssueReporter.TryCreateIssueAsync(record, _version).GetAwaiter().GetResult();
+                if (issueUrl != null)
+                    store.MarkSubmitted(hash, issueUrl);
+            }
+            catch
+            {
+                // Swallow — GitHub submission is best-effort / 握りつぶす — GitHub送信はベストエフォート
+            }
+        }
+
+        // 8. Return success / 成功レスポンスを返す
         var payload = new JsonObject
         {
             ["status"] = "recorded",
@@ -884,7 +901,10 @@ public partial class McpServer
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,
+            ["submitted_to_github"] = issueUrl != null,
         };
+        if (issueUrl != null)
+            payload["github_issue_url"] = issueUrl;
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
     }
 
