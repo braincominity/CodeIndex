@@ -170,6 +170,18 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*extension\s+(?<name>\w+)\s+on\s+", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*import\s+'(?<name>[^']+)'", RegexOptions.Compiled), BodyStyle.None),
         ],
+        ["graphql"] =
+        [
+            new("class",    new Regex(@"^\s*(?:type|interface|union|enum|scalar|input)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:query|mutation|subscription)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?:extend\s+type)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*schema\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+        ],
+        ["gradle"] =
+        [
+            new("function", new Regex(@"^\s*(?:task|def)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("import",   new Regex(@"^\s*(?:apply\s+plugin|id)\s*[:(]\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+        ],
         ["makefile"] =
         [
             new("function", new Regex(@"^(?<name>[\w.-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),  // Makefile targets / Makefileターゲット

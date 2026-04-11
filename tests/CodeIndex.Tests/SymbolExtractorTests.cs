@@ -447,6 +447,53 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_GraphQL_DetectsSymbols()
+    {
+        var content = """
+            type User {
+              id: ID!
+              name: String!
+            }
+
+            input CreateUserInput {
+              name: String!
+              email: String!
+            }
+
+            enum Role {
+              ADMIN
+              USER
+            }
+
+            query GetUser($id: ID!) {
+              user(id: $id) { name }
+            }
+
+            mutation CreateUser($input: CreateUserInput!) {
+              createUser(input: $input) { id }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "graphql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Role");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
+    }
+
+    [Fact]
+    public void Extract_Gradle_DetectsSymbols()
+    {
+        var content = "apply plugin: 'java'\n\ntask build {\n  doLast { println 'Building' }\n}\n\ndef customTask {\n  println 'custom'\n}\n";
+        var symbols = SymbolExtractor.Extract(1, "gradle", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "java");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "customTask");
+    }
+
+    [Fact]
     public void Extract_Makefile_DetectsTargets()
     {
         var content = "all: build test\n\nbuild:\n\tgcc -o main main.c\n\ntest:\n\t./run_tests\n\nclean:\n\trm -f main\n";
