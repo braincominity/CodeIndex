@@ -69,7 +69,7 @@ public static class QueryCommandRunner
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: definition requires a symbol query argument");
             Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]");
@@ -138,7 +138,7 @@ public static class QueryCommandRunner
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: references requires a symbol query argument");
             Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
@@ -192,7 +192,7 @@ public static class QueryCommandRunner
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callers requires a symbol query argument");
             Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
@@ -242,7 +242,7 @@ public static class QueryCommandRunner
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callees requires a caller query argument");
             Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");

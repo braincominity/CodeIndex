@@ -38,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **unused/hotspots bare-name collision and unsupported-language false positives** — `unused` now defaults to graph-supported languages only, preventing unsupported languages (CSS, Zig, PowerShell, etc.) from producing false "all symbols unused" results. `hotspots` GROUP BY now includes container_name to distinguish same-named symbols in different classes. Both commands warn when querying unsupported languages. MCP `unused_symbols` includes `graph_supported` metadata. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
 - **C# call sites misidentified as definitions (#40)** — Fixed C# method pattern and explicit interface implementation pattern matching call-site lines like `await FuncName(...)`, `return service.GetResult()`, `throw factory.Create(...)` as method definitions. Added negative lookahead for statement keywords (await, return, throw, yield, var, etc.) to both patterns. Affected: `SymbolExtractor.cs`.
 - **C# generic method overloads not extracted (#41)** — Fixed C# method pattern not matching generic methods like `TryRaise<T>(...)` or `GetItems<TKey, TValue>(...)`. The pattern now allows optional type parameters `<...>` between the method name and the opening parenthesis. Also applied to explicit interface implementation pattern. Affected: `SymbolExtractor.cs`.
+- **Empty query accepted by definition/references/callers/callees (#43)** — These commands now reject empty or whitespace-only queries with a clear error message (exit code 1), matching the existing behavior of `inspect`. Affected: `QueryCommandRunner.cs`.
 
 ### [1.6.0] - 2026-04-12
 
@@ -557,6 +558,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **unused/hotspots の名前衝突と未対応言語の偽陽性を修正** — `unused` がデフォルトでグラフ対応言語のみに制限されるようになり、未対応言語（CSS、Zig、PowerShell等）の「全シンボル未使用」偽陽性を防止。`hotspots` の GROUP BY に container_name を追加し、異なるクラスの同名シンボルを区別。未対応言語クエリ時に警告を表示。MCP `unused_symbols` に `graph_supported` メタデータを追加。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`McpToolHandlers.cs`。
 - **C# 呼び出し箇所が定義として誤検出される問題を修正 (#40)** — `await FuncName(...)`、`return service.GetResult()`、`throw factory.Create(...)` のような呼び出し行がメソッド定義や明示的インターフェース実装としてマッチしていた問題を修正。メソッドパターンと明示的インターフェース実装パターンの両方にステートメントキーワード（await, return, throw, yield, var 等）の negative lookahead を追加。対象: `SymbolExtractor.cs`。
 - **C# ジェネリックメソッドオーバーロードが抽出されない問題を修正 (#41)** — `TryRaise<T>(...)` や `GetItems<TKey, TValue>(...)` のようなジェネリックメソッドがメソッドパターンにマッチしなかった問題を修正。メソッド名と開き括弧の間にオプションの型パラメータ `<...>` を許容するようパターンを更新。明示的インターフェース実装パターンにも適用。対象: `SymbolExtractor.cs`。
+- **definition/references/callers/callees が空クエリを受け入れる問題を修正 (#43)** — これらのコマンドが空文字列・空白のみのクエリを明確なエラーメッセージ（終了コード1）で拒否するようになった。`inspect` の既存動作と一致。対象: `QueryCommandRunner.cs`。
 
 ### [1.6.0] - 2026-04-12
 
