@@ -1,3 +1,5 @@
+using CodeIndex.Indexer;
+
 namespace CodeIndex.Cli;
 
 /// <summary>
@@ -393,28 +395,40 @@ public static class ConsoleUi
     /// Print shell completion script for the specified shell.
     /// 指定シェル向けの補完スクリプトを出力する。
     /// </summary>
-    public static void PrintCompletions(string shell)
+    /// <summary>
+    /// Print shell completion script. Returns false for unknown shells.
+    /// シェル補完スクリプトを出力。不明なシェルの場合はfalseを返す。
+    /// </summary>
+    public static bool PrintCompletions(string shell)
     {
         switch (shell.ToLowerInvariant())
         {
             case "bash":
                 PrintBashCompletions();
-                break;
+                return true;
             case "zsh":
                 PrintZshCompletions();
-                break;
+                return true;
             case "fish":
                 PrintFishCompletions();
-                break;
+                return true;
             default:
                 Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish");
-                break;
+                return false;
         }
     }
+
+    /// <summary>
+    /// Get sorted unique language names from FileIndexer for completion values.
+    /// 補完値用にFileIndexerからソート済みのユニークな言語名を取得する。
+    /// </summary>
+    private static string GetCompletionLangs() =>
+        string.Join(" ", FileIndexer.GetLanguageExtensions().Values.Distinct().OrderBy(l => l));
 
     private static void PrintBashCompletions()
     {
         var cmds = string.Join(" ", Commands);
+        var langs = GetCompletionLangs();
         Console.WriteLine($@"_cdidx() {{
     local cur prev commands
     cur=""${{COMP_WORDS[COMP_CWORD]}}""
@@ -428,7 +442,7 @@ public static class ConsoleUi
 
     case ""$prev"" in
         --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
-        --lang) COMPREPLY=($(compgen -W ""python javascript typescript csharp go rust java kotlin ruby c cpp php swift"" -- ""$cur"")) ;;
+        --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
         --kind) COMPREPLY=($(compgen -W ""function class namespace import"" -- ""$cur"")) ;;
         *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --help"" -- ""$cur"")) ;;
     esac
@@ -457,7 +471,7 @@ _cdidx() {{
                 '--db[Database path]:file:_files' \
                 '--json[JSON output]' \
                 '--limit[Max results]:number' \
-                '--lang[Filter by language]:language:(python javascript typescript csharp go rust java kotlin ruby c cpp php swift)' \
+                '--lang[Filter by language]:language:({GetCompletionLangs()})' \
                 '--kind[Filter by kind]:kind:(function class namespace import)' \
                 '--path[Path filter]:pattern' \
                 '--exclude-path[Exclude path]:pattern' \

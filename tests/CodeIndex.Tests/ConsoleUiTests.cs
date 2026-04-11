@@ -71,6 +71,51 @@ public class ConsoleUiTests
         Assert.Contains('.', version);
     }
 
+    [Fact]
+    public void PrintCompletions_KnownShell_ReturnsTrue()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions("bash"));
+                var output = writer.ToString();
+                // Should contain dynamically generated languages, including newly added ones
+                // 動的生成の言語リストに新しく追加した言語が含まれているか検証
+                Assert.Contains("elixir", output);
+                Assert.Contains("graphql", output);
+                Assert.Contains("protobuf", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
+    public void PrintCompletions_UnknownShell_ReturnsFalse()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalErr = Console.Error;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetError(writer);
+                Assert.False(ConsoleUi.PrintCompletions("powershell"));
+                Assert.Contains("Unknown shell", writer.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
     private static string CaptureUsageOutput(bool showBanner = true)
     {
         lock (TestConsoleLock.Gate)

@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 
+- **Shell completions: stale hardcoded language list and missing error exit** — `--completions` now generates the `--lang` value list dynamically from `FileIndexer.GetLanguageExtensions()` instead of a hardcoded 12-language subset. Unknown shell arguments now exit with code 1 (UsageError) instead of 0. Added test coverage for both valid and invalid shell names. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
 - **Gradle `plugins { id }` DSL not matched** — The Gradle import regex only handled `apply plugin: 'name'` but not the modern `plugins { id 'name' }` block form. Fixed regex to accept both whitespace and `(:` after `id`. Added test coverage for the `id` form. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 #### Added
@@ -284,6 +286,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`languages` CLI コマンドと MCP ツール** — 新コマンド `cdidx languages [--json]` と MCP ツール `languages` を追加。対応言語の一覧を拡張子・シンボル抽出対応・コールグラフ対応の情報付きで返す。AI エージェントや新規ユーザーがドキュメントを参照せずに cdidx の対応範囲を実行時に確認できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 #### 修正
+
+- **シェル補完: 古いハードコード言語リストとエラー終了の欠落** — `--completions` の `--lang` 値リストを12言語のハードコードから `FileIndexer.GetLanguageExtensions()` による動的生成に変更。不明なシェル名で終了コード0ではなく1（UsageError）を返すよう修正。有効・無効シェル名のテストを追加。対象: `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 
 - **Gradle `plugins { id }` DSL が未対応だった問題** — Gradle の import 正規表現が `apply plugin: 'name'` のみ対応し、現代的な `plugins { id 'name' }` ブロック形式を取りこぼしていた。`id` の後にスペースも `(:` も受け付けるよう修正し、`id` 形式のテストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
