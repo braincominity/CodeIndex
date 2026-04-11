@@ -908,6 +908,53 @@ public class DbReader
     }
 
     /// <summary>
+    /// Compute file-level dependency edges: which files reference symbols defined in which other files.
+    /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
+    /// </summary>
+    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT src.path AS source_path, dst.path AS target_path,
+                   COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.symbol_name) AS symbols
+            FROM symbol_references r
+            JOIN files src ON r.file_id = src.id
+            JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
+            JOIN files dst ON s.file_id = dst.id
+            WHERE src.path != dst.path";
+        if (lang != null)
+            sql += " AND src.lang = @lang";
+        // Apply path filters to source file / ソースファイルにパスフィルタを適用
+        if (pathPattern != null)
+            sql += " AND src.path LIKE @pathPattern ESCAPE '\\'";
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
+        sql += " GROUP BY src.path, dst.path ORDER BY reference_count DESC LIMIT @limit";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (pathPattern != null)
+            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<FileDependencyResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new FileDependencyResult
+            {
+                SourcePath = reader.GetString(0),
+                TargetPath = reader.GetString(1),
+                ReferenceCount = reader.GetInt32(2),
+                Symbols = reader.GetString(3),
+            });
+        }
+        return results;
+    }
+
+    /// <summary>
     /// Remove search results that overlap with a higher-ranked result in the same file.
     /// Chunks use 10-line overlap, so adjacent chunks can produce duplicate matches.
     /// 同じファイル内で上位の結果と行範囲が重なる結果を除去する。
@@ -1216,4 +1263,12 @@ internal sealed class RepoFileStat
     public string? Checksum { get; set; }
     public DateTime? Modified { get; set; }
     public DateTime? IndexedAt { get; set; }
+}
+
+public class FileDependencyResult
+{
+    public string SourcePath { get; set; } = string.Empty;
+    public string TargetPath { get; set; } = string.Empty;
+    public int ReferenceCount { get; set; }
+    public string Symbols { get; set; } = string.Empty;
 }

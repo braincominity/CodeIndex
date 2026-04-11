@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`deps` command for file-level dependency analysis** — New `cdidx deps` CLI command and MCP `deps` tool that computes file-level dependency edges from the indexed reference graph. Shows which files reference symbols defined in which other files, with reference counts and symbol lists. Helps AI agents understand project architecture in one call. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
 - **C# `#region` extraction for outline navigation** — `#region Name` directives are now extracted as namespace symbols, appearing in `outline` and `symbols` output. Helps AI agents and developers quickly locate code sections in large C# files. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`--since` filter for time-based file queries** — New `--since <datetime>` option for the `files` CLI command and MCP `files` tool filters results to files modified after the given timestamp (ISO 8601). AI agents can ask "what changed in the last hour?" without scanning all files. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`.
@@ -318,6 +320,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`deps` コマンドでファイル間依存関係分析** — 新コマンド `cdidx deps` と MCP ツール `deps` を追加。インデックス済み参照グラフからファイル間の依存エッジを算出し、参照数とシンボルリスト付きで返す。AIエージェントが1回の呼び出しでプロジェクトアーキテクチャを把握できる。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
 
 - **C# `#region` 抽出でアウトラインナビゲーション** — `#region Name` ディレクティブを namespace シンボルとして抽出し、`outline` と `symbols` に表示。���きな C# ファイルでのコードセクション特定をAIエージェントと開発者に提供。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

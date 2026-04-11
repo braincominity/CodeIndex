@@ -200,13 +200,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns14Tools()
+    public void ToolsList_Returns15Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(14, tools.Count);
+        Assert.Equal(15, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -221,6 +221,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
         Assert.Contains("outline", names);
+        Assert.Contains("deps", names);
         Assert.Contains("languages", names);
         Assert.Contains("index", names);
     }

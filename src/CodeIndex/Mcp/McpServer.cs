@@ -371,6 +371,22 @@ public class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "deps",
+                "Show file-level dependency edges from the indexed reference graph. / インデックス済み参照グラフか��ファイル間の依存エッジを返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max edges (default: 50)", ["default"] = 50 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Restrict source files to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude paths" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files", ["default"] = false }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "languages",
                 "List all supported languages with their file extensions and capabilities (symbol extraction, call-graph queries). No database required. / 対応言語一覧を拡張子・機能（シンボル抽出、コールグラフ対応）付きで返す。DB不要。",
                 new JsonObject
@@ -427,6 +443,7 @@ public class McpServer
                 "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
                 "status" => ExecuteStatus(id),
                 "outline" => ExecuteOutline(id, args),
+                "deps" => ExecuteDeps(id, args),
                 "languages" => ExecuteLanguages(id),
                 "index" => ExecuteIndex(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
@@ -924,6 +941,31 @@ public class McpServer
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
             return CreateToolResult(id, "Excerpt returned.", payload);
+        });
+    }
+
+    private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
+    {
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
+        var lang = args?["lang"]?.GetValue<string>();
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetFileDependencies(limit, lang, pathPattern, excludePaths, excludeTests);
+            var payload = new JsonObject
+            {
+                ["count"] = results.Count,
+                ["edges"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            var summary = results.Count > 0
+                ? $"Found {results.Count} dependency edge(s)."
+                : "No file dependencies found.";
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
+            return CreateToolResult(id, summary, payload);
         });
     }
 

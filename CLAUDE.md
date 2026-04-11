@@ -32,6 +32,7 @@ cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--excl
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
+cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx languages [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -243,6 +244,7 @@ cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--excl
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
+cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx languages [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）

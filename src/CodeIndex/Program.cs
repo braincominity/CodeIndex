@@ -61,6 +61,7 @@ return args[0] switch
     "outline" => QueryCommandRunner.RunOutline(args[1..], jsonOptions),
     "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions, appVersion),
     "languages" => QueryCommandRunner.RunLanguages(args[1..], jsonOptions),
+    "deps" => QueryCommandRunner.RunDeps(args[1..], jsonOptions),
     "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
     _ when IsProjectPathArg(args[0])
         => IndexCommandRunner.Run(args, jsonOptions),

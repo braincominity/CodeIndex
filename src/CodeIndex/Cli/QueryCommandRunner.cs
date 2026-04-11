@@ -605,6 +605,37 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No file dependencies found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, edges = results }, jsonOptions));
+            }
+            else
+            {
+                foreach (var r in results)
+                {
+                    var syms = r.Symbols.Length > 60 ? r.Symbols[..57] + "..." : r.Symbols;
+                    Console.WriteLine($"{r.SourcePath,-45} -> {r.TargetPath,-45} ({r.ReferenceCount} refs: {syms})");
+                }
+                Console.Error.WriteLine($"({results.Count} dependency edges)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var json = cmdArgs.Any(a => a == "--json");
