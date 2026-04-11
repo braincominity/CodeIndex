@@ -49,6 +49,7 @@ src/CodeIndex/
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
   Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
+  Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
   Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, outline, status)
@@ -65,9 +66,17 @@ tests/CodeIndex.Tests/
   SymbolExtractorTests.cs   — SymbolExtractor tests (multi-language)
   FileIndexerTests.cs       — FileIndexer tests (scan, detect, build)
   DatabaseTests.cs          — DbContext/DbWriter integration tests
-  DbReaderTests.cs          — DbReader query tests (FTS, symbols, files, status)
+  DbReaderTests.cs          — DbReader query tests (FTS, symbols, files, outline, status)
   McpServerTests.cs         — MCP server JSON-RPC protocol and tool tests
   GitHelperTests.cs         — Git helper tests (normal repo, worktree, fallback cases)
+  ConsoleUiTests.cs         — Console output, help text, spinner, version tests
+  DbPathResolverTests.cs    — DB path resolution tests
+  IndexCommandRunnerTests.cs — Index command integration tests
+  QueryCommandRunnerTests.cs — Query CLI integration tests
+  SearchSnippetFormatterTests.cs — Search snippet formatting tests
+  WorkspaceMetadataEnricherTests.cs — Workspace metadata enrichment tests
+  TestProjectHelper.cs      — Shared helper for creating temp indexed projects
+  TestConsoleLock.cs         — Shared lock for console-redirecting tests
 ```
 
 ## Key design decisions
@@ -248,8 +257,9 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/statusコマンド実行とクエリ引数解析
+  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/statusコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
+  Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
   Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、アウトライン、ステータス）
@@ -266,9 +276,17 @@ tests/CodeIndex.Tests/
   SymbolExtractorTests.cs   — SymbolExtractorテスト（多言語対応）
   FileIndexerTests.cs       — FileIndexerテスト（走査、検出、構築）
   DatabaseTests.cs          — DbContext/DbWriter統合テスト
-  DbReaderTests.cs          — DbReaderクエリテスト（FTS、シンボル、ファイル、ステータス）
+  DbReaderTests.cs          — DbReaderクエリテスト（FTS、シンボル、ファイル、アウトライン、ステータス）
   McpServerTests.cs         — MCPサーバーJSON-RPCプロトコル・ツールテスト
   GitHelperTests.cs         — Gitヘルパーテスト（通常repo、worktree、フォールバック）
+  ConsoleUiTests.cs         — コンソール出力、ヘルプテキスト、スピナー、バージョンテスト
+  DbPathResolverTests.cs    — DBパス解決テスト
+  IndexCommandRunnerTests.cs — indexコマンド統合テスト
+  QueryCommandRunnerTests.cs — クエリCLI統合テスト
+  SearchSnippetFormatterTests.cs — 検索スニペット整形テスト
+  WorkspaceMetadataEnricherTests.cs — ワークスペースメタデータ付加テスト
+  TestProjectHelper.cs      — 一時インデックスプロジェクト作成用の共有ヘルパー
+  TestConsoleLock.cs         — コンソールリダイレクトテスト用の共有ロック
 ```
 
 ## 主要な設計判断

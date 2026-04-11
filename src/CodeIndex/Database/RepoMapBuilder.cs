@@ -30,6 +30,12 @@ internal sealed class RepoMapBuilder
         ["scala"] = ["main", "App"],
         ["fsharp"] = ["main", "Program", "App"],
         ["vb"] = ["Main", "Program", "App"],
+        ["c"] = ["main"],
+        ["cpp"] = ["main"],
+        ["haskell"] = ["main"],
+        ["r"] = ["main"],
+        ["lua"] = ["main"],
+        ["elixir"] = ["start", "main", "Application"],
     };
     private static readonly Dictionary<string, string[]> EntrypointPathHints = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -48,6 +54,12 @@ internal sealed class RepoMapBuilder
         ["scala"] = ["Main.scala", "App.scala", "Application.scala"],
         ["fsharp"] = ["Program.fs", "App.fs"],
         ["vb"] = ["Program.vb", "Module1.vb", "App.vb"],
+        ["c"] = ["main.c"],
+        ["cpp"] = ["main.cpp", "main.cc"],
+        ["haskell"] = ["Main.hs"],
+        ["r"] = ["main.R", "app.R"],
+        ["lua"] = ["main.lua", "init.lua"],
+        ["elixir"] = ["application.ex", "app.ex"],
     };
 
     public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns)

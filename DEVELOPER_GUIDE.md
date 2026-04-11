@@ -25,6 +25,7 @@ src/CodeIndex/
     IndexCommandRunner.cs     — Index command execution and update/full-scan flows
     QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
+    WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
@@ -51,6 +52,14 @@ tests/CodeIndex.Tests/
   DbReaderTests.cs            — DbReader query tests
   McpServerTests.cs           — MCP server tests
   GitHelperTests.cs           — Git helper tests
+  ConsoleUiTests.cs           — Console output and help text tests
+  DbPathResolverTests.cs      — DB path resolution tests
+  IndexCommandRunnerTests.cs  — Index command integration tests
+  QueryCommandRunnerTests.cs  — Query CLI integration tests
+  SearchSnippetFormatterTests.cs — Search snippet formatting tests
+  WorkspaceMetadataEnricherTests.cs — Workspace metadata tests
+  TestProjectHelper.cs        — Shared helper for temp indexed projects
+  TestConsoleLock.cs           — Shared lock for console-redirecting tests
 ```
 
 ### Indexing pipeline
@@ -498,6 +507,7 @@ src/CodeIndex/
     IndexCommandRunner.cs     — indexコマンド実行と更新/フルスキャンフロー
     QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status実行とクエリ引数解析
     SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペット整形
+    WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ、参照書き込み
@@ -506,7 +516,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — 正規表現によるシンボル抽出（17言語対応）
+    SymbolExtractor.cs        — 正規表現によるシンボル抽出（21言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -524,6 +534,14 @@ tests/CodeIndex.Tests/
   DbReaderTests.cs            — DbReaderクエリテスト
   McpServerTests.cs           — MCPサーバーテスト
   GitHelperTests.cs           — Gitヘルパーテスト
+  ConsoleUiTests.cs           — コンソール出力・ヘルプテキストテスト
+  DbPathResolverTests.cs      — DBパス解決テスト
+  IndexCommandRunnerTests.cs  — indexコマンド統合テスト
+  QueryCommandRunnerTests.cs  — クエリCLI統合テスト
+  SearchSnippetFormatterTests.cs — 検索スニペット整形テスト
+  WorkspaceMetadataEnricherTests.cs — ワークスペースメタデータテスト
+  TestProjectHelper.cs        — 一時インデックスプロジェクト作成用共有ヘルパー
+  TestConsoleLock.cs           — コンソールリダイレクトテスト用共有ロック
 ```
 
 ### インデックスパイプライン
