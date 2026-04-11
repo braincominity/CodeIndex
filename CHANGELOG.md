@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.5.0] - 2026-04-12
+
 #### Added
 - **`suggest_improvement` MCP tool** — AI agents can report structured improvement suggestions or error reports (crash reports, unexpected errors, feature gaps). Suggestions are saved locally to `.cdidx/suggestions.json` with SHA256 dedup and file-level locking for concurrent access safety. When `CDIDX_GITHUB_TOKEN` is explicitly set, suggestions are also filed as GitHub Issues on widthdom/CodeIndex. Descriptions are validated by `SourceCodeDetector` (heuristic, not a security boundary) to reject common pasted code patterns. The tool only activates when explicitly called by an AI agent. Affected: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
 
@@ -489,6 +491,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.5.0] - 2026-04-12
+
 #### 追加
 - **`suggest_improvement` MCPツール** — AIエージェントが構造化された改善提案やエラー報告（クラッシュ報告、予期せぬエラー、機能ギャップ）を送信できる。提案は `.cdidx/suggestions.json` にSHA256重複排除とファイルレベルロック付きでローカル保存される。`CDIDX_GITHUB_TOKEN` が明示的に設定されている場合、widthdom/CodeIndex に GitHub Issue としても報告される。説明は `SourceCodeDetector`（ヒューリスティック、セキュリティ境界ではない）により一般的なコードコピペパターンを拒否するよう検証される。このツールはAIエージェントが明示的に呼んだときのみ動作する。対象: `SuggestionRecord.cs`, `SuggestionStore.cs`, `SourceCodeDetector.cs`, `GitHubIssueReporter.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`。
 
@@ -963,7 +967,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Widthdom/CodeIndex/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/Widthdom/CodeIndex/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/Widthdom/CodeIndex/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...v1.3.0
