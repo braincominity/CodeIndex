@@ -39,6 +39,7 @@ public partial class McpServer
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
             + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
+            + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
@@ -563,6 +564,7 @@ public partial class McpServer
                     "languages" => ExecuteLanguages(null),
                     "validate" => ExecuteValidate(null, toolArgs),
                     "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
+                    "symbol_hotspots" => ExecuteSymbolHotspots(null, toolArgs),
                     "ping" => ExecutePing(null),
                     _ => null,
                 };
@@ -646,6 +648,42 @@ public partial class McpServer
             var summary = issues.Count > 0
                 ? $"Found {issues.Count} encoding issue(s)."
                 : "No encoding issues found.";
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)
+    {
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetSymbolHotspots(limit, kind, lang, pathPattern, excludePaths, excludeTests);
+            var items = results.Select(r => new
+            {
+                name = r.Symbol.Name,
+                kind = r.Symbol.Kind,
+                path = r.Symbol.Path,
+                line = r.Symbol.Line,
+                reference_count = r.ReferenceCount,
+                visibility = r.Symbol.Visibility,
+                container = r.Symbol.ContainerName,
+            });
+            var payload = new JsonObject
+            {
+                ["count"] = results.Count,
+                ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
+            };
+            var summary = results.Count > 0
+                ? $"Found {results.Count} symbol hotspot(s)."
+                : "No symbol hotspots found.";
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
         });
     }

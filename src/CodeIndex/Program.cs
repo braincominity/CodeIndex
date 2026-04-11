@@ -64,6 +64,7 @@ return args[0] switch
     "languages" => QueryCommandRunner.RunLanguages(args[1..], jsonOptions),
     "deps" => QueryCommandRunner.RunDeps(args[1..], jsonOptions),
     "unused" => QueryCommandRunner.RunUnused(args[1..], jsonOptions),
+    "hotspots" => QueryCommandRunner.RunHotspots(args[1..], jsonOptions),
     "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
     _ when IsProjectPathArg(args[0])
         => IndexCommandRunner.Run(args, jsonOptions),

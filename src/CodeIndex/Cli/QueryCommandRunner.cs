@@ -649,6 +649,38 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine("No symbol hotspots found.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                var items = results.Select(r => new { name = r.Symbol.Name, kind = r.Symbol.Kind, path = r.Symbol.Path, line = r.Symbol.Line, reference_count = r.ReferenceCount, visibility = r.Symbol.Visibility, container = r.Symbol.ContainerName });
+                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, hotspots = items }, jsonOptions));
+            }
+            else
+            {
+                foreach (var (s, refCount) in results)
+                {
+                    var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
+                    Console.WriteLine($"{refCount,5} refs  {s.Kind,-12} {s.Name,-40} {s.Path}:{s.Line}{vis}");
+                }
+                Console.Error.WriteLine($"({results.Count} symbol hotspots)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);

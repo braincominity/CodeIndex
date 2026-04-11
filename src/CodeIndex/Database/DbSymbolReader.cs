@@ -325,6 +325,54 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Find symbols with the most references (hotspots — heavily used code).
+    /// 最も多く参照されるシンボルを検索する（ホットスポット — 多用されるコード）。
+    /// </summary>
+    public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        var sql = @"
+            SELECT sr.symbol_name, COUNT(*) as ref_count,
+                   s.kind, f.path, f.lang, s.line,
+                   s.visibility, s.container_name
+            FROM symbol_references sr
+            JOIN symbols s ON sr.symbol_name = s.name
+            JOIN files f ON s.file_id = f.id
+            WHERE s.kind NOT IN ('import', 'namespace')";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += " GROUP BY sr.symbol_name, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@limit", limit);
+        if (lang != null) cmd.Parameters.AddWithValue("@lang", lang);
+        if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+
+        var results = new List<(SymbolResult, int)>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add((new SymbolResult
+            {
+                Name = reader.GetString(0),
+                Kind = reader.GetString(2),
+                Path = reader.GetString(3),
+                Lang = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Line = reader.GetInt32(5),
+                Visibility = reader.IsDBNull(6) ? null : reader.GetString(6),
+                ContainerName = reader.IsDBNull(7) ? null : reader.GetString(7),
+            }, reader.GetInt32(1)));
+        }
+        return results;
+    }
+
+    /// <summary>
     /// Find symbols that have no matching references in the reference table (potential dead code).
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
     /// </summary>
