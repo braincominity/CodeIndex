@@ -127,6 +127,9 @@ public static class SourceCodeDetector
         if (HasMultiLineFunctionDefinition(lines))
             return true;
 
+        if (HasFencedCodeBlock(lines))
+            return true;
+
         return false;
     }
 
@@ -462,5 +465,71 @@ public static class SourceCodeDetector
     private static bool IsFunctionDefinitionLine(string trimmedLine)
     {
         return s_functionDefPattern.IsMatch(trimmedLine);
+    }
+
+    // ---------------------------------------------------------------
+    // Heuristic 6: Fenced Code Blocks
+    // ヒューリスティック 6: フェンスドコードブロック
+    // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Detects markdown-style fenced code blocks: lines starting with
+    /// ``` (triple backtick) that enclose content.
+    ///
+    /// WHY this indicates source code:
+    ///   Fenced code blocks are the standard way to embed source code in
+    ///   markdown. When someone pastes ``` followed by code lines and
+    ///   a closing ```, the content between the fences is almost certainly
+    ///   source code. This pattern bypasses the other heuristics because
+    ///   the code inside may not be indented or may be too short to
+    ///   trigger line-count thresholds.
+    ///
+    /// マークダウン形式のフェンスドコードブロックを検出する。
+    /// ``` （トリプルバッククォート）で始まる行が内容を囲む構造。
+    ///
+    /// なぜこれがソースコードの兆候か:
+    ///   フェンスドコードブロックはマークダウンでソースコードを埋め込む
+    ///   標準的な方法である。``` に続けてコード行を貼り、閉じ ``` で
+    ///   終わっている場合、フェンス間の内容はほぼ確実にソースコードである。
+    ///   このパターンはインデントがない場合や行数が少ない場合にも
+    ///   他のヒューリスティックを回避して検出できる。
+    /// </summary>
+    private static bool HasFencedCodeBlock(string[] lines)
+    {
+        bool inFence = false;
+        int contentLines = 0;
+
+        foreach (var rawLine in lines)
+        {
+            var trimmed = rawLine.Trim();
+
+            // Check for fence delimiter (``` with optional language tag)
+            // フェンス区切り（```＋任意の言語タグ）を検査
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                if (!inFence)
+                {
+                    // Opening fence / 開始フェンス
+                    inFence = true;
+                    contentLines = 0;
+                }
+                else
+                {
+                    // Closing fence — if there was at least 1 content line,
+                    // this is a fenced code block.
+                    // 閉じフェンス — 内容行が1行以上あれば、
+                    // フェンスドコードブロックである。
+                    if (contentLines >= 1)
+                        return true;
+                    inFence = false;
+                }
+                continue;
+            }
+
+            if (inFence && trimmed.Length > 0)
+                contentLines++;
+        }
+
+        return false;
     }
 }

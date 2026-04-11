@@ -270,4 +270,63 @@ public class SourceCodeDetectorTests
                  + "Also `import { useState } from 'react'` is missed.";
         Assert.False(SourceCodeDetector.ContainsSourceCode(text));
     }
+
+    // ================================================================
+    // Fenced code block tests / フェンスドコードブロックテスト
+    // ================================================================
+
+    [Fact]
+    public void RejectsFencedCodeBlock()
+    {
+        // A markdown fenced code block should be detected.
+        // マークダウンのフェンスドコードブロックは検出されるべき。
+        var text = "Here is the issue:\n"
+                 + "```ts\n"
+                 + "const token = issueToken(user);\n"
+                 + "return token;\n"
+                 + "```";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void RejectsFencedCodeBlockNoLanguageTag()
+    {
+        var text = "```\n"
+                 + "var x = 1;\n"
+                 + "```";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void RejectsFencedCodeBlockMultipleLines()
+    {
+        var text = "The problem:\n"
+                 + "```python\n"
+                 + "def foo():\n"
+                 + "    return 42\n"
+                 + "```\n"
+                 + "This function is not detected.";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void AllowsEmptyFencedBlock()
+    {
+        // An empty fenced block (no content lines) should be allowed.
+        // 空のフェンスドブロック（内容行なし）は許容されるべき。
+        var text = "See:\n"
+                 + "```\n"
+                 + "```\n"
+                 + "Nothing there.";
+        Assert.False(SourceCodeDetector.ContainsSourceCode(text));
+    }
+
+    [Fact]
+    public void RejectsShortUnindentedCodeInFence()
+    {
+        // Even short snippets inside fences should be caught.
+        // フェンス内の短いスニペットも検出されるべき。
+        var text = "```\nreturn x;\n```";
+        Assert.True(SourceCodeDetector.ContainsSourceCode(text));
+    }
 }
