@@ -851,7 +851,14 @@ public partial class McpServer
             cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
         Directory.CreateDirectory(cdidxDir);
 
-        // 6. Store locally / ローカルに保存
+        // 6. Store locally and attempt GitHub submission atomically.
+        //    TryAddAndSubmit runs the entire sequence under a single file lock:
+        //    read → dedup check → write → GitHub submit → mark submitted.
+        //    This prevents concurrent callers from both creating duplicate GitHub issues.
+        //    ローカル保存と GitHub 送信をアトミックに実行する。
+        //    TryAddAndSubmit は全シーケンスを1つのファイルロック内で実行:
+        //    読み込み → 重複チェック → 書き込み → GitHub 送信 → 送信済みマーク。
+        //    並行呼び出しで重複 GitHub Issue が作られることを防ぐ。
         var store = new SuggestionStore(cdidxDir);
         var record = new SuggestionRecord
         {
@@ -863,61 +870,36 @@ public partial class McpServer
             CreatedAt = DateTime.UtcNow,
         };
 
-        var isNew = store.TryAdd(record);
-
-        // 7. Attempt GitHub submission (best-effort, only if token is configured).
-        //    For NEW suggestions: try to submit after local storage.
-        //    For DUPLICATE suggestions: retry if the previous attempt failed
-        //    (SubmittedToGitHub is false), so transient GitHub failures
-        //    don't permanently lose submissions.
-        //    GitHub送信を試みる（ベストエフォート、トークンが設定されている場合のみ）。
-        //    新規提案: ローカル保存後に送信を試みる。
-        //    重複提案: 前回の送信が失敗していれば（SubmittedToGitHub が false）
-        //    再送を試みる。一時的な GitHub 障害で送信が恒久的に失われることを防ぐ。
-        string? issueUrl = null;
-        bool alreadySubmitted = false;
-
-        if (!isNew)
+        // Build GitHub submission callback (null if no token configured).
+        // GitHub 送信コールバックを構築（トークン未設定なら null）。
+        Func<SuggestionRecord, string?>? githubCallback = null;
+        if (GitHubIssueReporter.ResolveToken() != null)
         {
-            // Check if the existing record was already submitted to GitHub.
-            // 既存レコードが GitHub に送信済みかを確認する。
-            var existing = store.LoadAll().FirstOrDefault(s => s.Hash == hash);
-            alreadySubmitted = existing?.SubmittedToGitHub ?? false;
+            var version = _version;
+            githubCallback = r => GitHubIssueReporter.TryCreateIssueAsync(r, version).GetAwaiter().GetResult();
         }
 
-        if (GitHubIssueReporter.ResolveToken() != null && !alreadySubmitted)
-        {
-            try
-            {
-                issueUrl = GitHubIssueReporter.TryCreateIssueAsync(record, _version).GetAwaiter().GetResult();
-                if (issueUrl != null)
-                    store.MarkSubmitted(hash, issueUrl);
-            }
-            catch
-            {
-                // Swallow — GitHub submission is best-effort / 握りつぶす — GitHub送信はベストエフォート
-            }
-        }
+        var result = store.TryAddAndSubmit(record, githubCallback);
 
-        if (!isNew)
+        if (!result.IsNew)
         {
             var dupPayload = new JsonObject
             {
                 ["status"] = "duplicate",
                 ["hash"] = hash,
-                ["message"] = alreadySubmitted
+                ["message"] = result.AlreadySubmitted
                     ? "This suggestion has already been recorded and submitted."
-                    : issueUrl != null
+                    : result.GitHubIssueUrl != null
                         ? "This suggestion was already recorded. GitHub submission retried successfully."
                         : "This suggestion has already been recorded.",
-                ["submitted_to_github"] = alreadySubmitted || issueUrl != null,
+                ["submitted_to_github"] = result.AlreadySubmitted || result.GitHubIssueUrl != null,
             };
-            if (issueUrl != null)
-                dupPayload["github_issue_url"] = issueUrl;
+            if (result.GitHubIssueUrl != null)
+                dupPayload["github_issue_url"] = result.GitHubIssueUrl;
             return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
         }
 
-        // 8. Return success / 成功レスポンスを返す
+        // 7. Return success / 成功レスポンスを返す
         var payload = new JsonObject
         {
             ["status"] = "recorded",
@@ -925,10 +907,10 @@ public partial class McpServer
             ["category"] = category,
             ["language"] = language,
             ["stored_locally"] = true,
-            ["submitted_to_github"] = issueUrl != null,
+            ["submitted_to_github"] = result.GitHubIssueUrl != null,
         };
-        if (issueUrl != null)
-            payload["github_issue_url"] = issueUrl;
+        if (result.GitHubIssueUrl != null)
+            payload["github_issue_url"] = result.GitHubIssueUrl;
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
     }
 

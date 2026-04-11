@@ -82,6 +82,71 @@ public class SuggestionStore
     }
 
     /// <summary>
+    /// Result of TryAddAndSubmit: whether the record was new or duplicate,
+    /// whether it was already submitted, and the GitHub issue URL if submitted.
+    /// TryAddAndSubmit の結果: 新規か重複か、既に送信済みか、送信された場合のGitHub Issue URL。
+    /// </summary>
+    public record AddAndSubmitResult(bool IsNew, bool AlreadySubmitted, string? GitHubIssueUrl);
+
+    /// <summary>
+    /// Atomically add a suggestion and attempt GitHub submission, all under one lock.
+    /// This prevents concurrent callers from both observing SubmittedToGitHub=false
+    /// and creating duplicate GitHub issues.
+    /// 提案の追加と GitHub 送信を1つのロック内でアトミックに実行する。
+    /// 並行呼び出し者が両方とも SubmittedToGitHub=false を観察して
+    /// 重複 GitHub Issue を作成することを防ぐ。
+    /// </summary>
+    /// <param name="record">The suggestion to add / 追加する提案</param>
+    /// <param name="submitToGitHub">
+    /// Optional callback to submit to GitHub. Called under lock only when submission
+    /// is needed (new record or unsubmitted duplicate). Returns the issue URL on success.
+    /// GitHub 送信用のオプションコールバック。送信が必要な場合（新規レコードまたは
+    /// 未送信の重複）にのみロック内で呼ばれる。成功時は Issue URL を返す。
+    /// </param>
+    public AddAndSubmitResult TryAddAndSubmit(SuggestionRecord record, Func<SuggestionRecord, string?>? submitToGitHub)
+    {
+        return WithFileLock(() =>
+        {
+            var existing = ReadUnlocked();
+            var found = existing.FirstOrDefault(s => s.Hash == record.Hash);
+
+            bool isNew = found == null;
+            bool alreadySubmitted = found?.SubmittedToGitHub ?? false;
+
+            if (isNew)
+            {
+                existing.Add(record);
+                SaveUnlocked(existing);
+                found = record;
+            }
+
+            // Attempt GitHub submission if needed and callback is provided.
+            // 必要かつコールバックが提供されている場合、GitHub 送信を試みる。
+            string? issueUrl = null;
+            if (!alreadySubmitted && submitToGitHub != null)
+            {
+                try
+                {
+                    issueUrl = submitToGitHub(found!);
+                    if (issueUrl != null)
+                    {
+                        found!.SubmittedToGitHub = true;
+                        found.GitHubIssueUrl = issueUrl;
+                        SaveUnlocked(existing);
+                    }
+                }
+                catch
+                {
+                    // Best-effort — GitHub submission failure does not fail the local operation.
+                    // ベストエフォート — GitHub 送信失敗はローカル操作を失敗させない。
+                }
+            }
+
+            return new AddAndSubmitResult(isNew, alreadySubmitted, issueUrl);
+        });
+    }
+
+    /// <summary>
     /// Load all suggestions from disk. Returns an empty list if the file
     /// does not exist or is empty. Corrupt files are preserved as .bak.
     /// Throws IOException on transient file access errors (fail-closed).
@@ -97,8 +162,11 @@ public class SuggestionStore
     /// <summary>
     /// Mark a suggestion as submitted to GitHub by updating its URL and flag.
     /// The entire read-modify-write is protected by a file lock.
+    /// NOTE: Prefer TryAddAndSubmit for new submissions — this method exists
+    /// for backward compatibility only.
     /// 提案を GitHub 送信済みとしてマークし、URL とフラグを更新する。
     /// read-modify-write 全体がファイルロックで保護される。
+    /// 注: 新規送信には TryAddAndSubmit を推奨 — このメソッドは後方互換のみ。
     /// </summary>
     public void MarkSubmitted(string hash, string issueUrl)
     {
