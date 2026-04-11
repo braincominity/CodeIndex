@@ -370,6 +370,15 @@ public class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "languages",
+                "List all supported languages with their file extensions and capabilities (symbol extraction, call-graph queries). No database required. / 対応言語一覧を拡張子・機能（シンボル抽出、コールグラフ対応）付きで返す。DB不要。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject()
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "index",
                 "Index or re-index a project directory. Scans source files, extracts symbols, and builds FTS5 search index. / プロジェクトディレクトリをインデックス（再インデックス）。ソースファイルをスキャンし、シンボルを抽出してFTS5検索インデックスを構築。",
                 new JsonObject
@@ -417,6 +426,7 @@ public class McpServer
                 "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
                 "status" => ExecuteStatus(id),
                 "outline" => ExecuteOutline(id, args),
+                "languages" => ExecuteLanguages(id),
                 "index" => ExecuteIndex(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
             };
@@ -447,7 +457,8 @@ public class McpServer
             + "for other languages, use 'search' instead. "
             + "Use 'outline' to see the full symbol structure of a single file (functions, classes, imports with line numbers) without reading the file content. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
-            + "Check 'status' to verify index freshness before trusting results.";
+            + "Check 'status' to verify index freshness before trusting results. "
+            + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries.";
     }
 
     /// <summary>
@@ -907,6 +918,46 @@ public class McpServer
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
+    }
+
+    private JsonNode ExecuteLanguages(JsonNode? id)
+    {
+        var langExtensions = FileIndexer.GetLanguageExtensions();
+        var symbolLangs = SymbolExtractor.GetSupportedLanguages();
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+
+        // Build consolidated language info / 統合言語情報を構築
+        var allLangs = new Dictionary<string, (List<string> Extensions, bool Symbols, bool Graph)>(StringComparer.Ordinal);
+        foreach (var (ext, lang) in langExtensions)
+        {
+            if (!allLangs.TryGetValue(lang, out var info))
+            {
+                info = (new List<string>(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                allLangs[lang] = info;
+            }
+            info.Extensions.Add(ext);
+        }
+
+        var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
+        var languagesArray = new JsonArray();
+        foreach (var (lang, info) in sorted)
+        {
+            var extArray = new JsonArray();
+            foreach (var ext in info.Extensions.OrderBy(e => e))
+                extArray.Add(ext);
+
+            languagesArray.Add(new JsonObject
+            {
+                ["lang"] = lang,
+                ["extensions"] = extArray,
+                ["symbol_extraction"] = info.Symbols,
+                ["graph_queries"] = info.Graph,
+            });
+        }
+
+        var payload = new JsonObject { ["languages"] = languagesArray };
+        var summary = $"{sorted.Count} languages supported. {symbolLangs.Count} with symbol extraction, {graphLangs.Count} with call-graph queries.";
+        return CreateToolResult(id, summary, payload);
     }
 
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args)

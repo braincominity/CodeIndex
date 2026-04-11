@@ -312,6 +312,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
         Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
+        Console.WriteLine("  cdidx languages [--json]");
         Console.WriteLine("  cdidx mcp [--db <path>]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
@@ -328,6 +329,7 @@ public static class ConsoleUi
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics");
+        Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
         Console.WriteLine("Index and update options:");

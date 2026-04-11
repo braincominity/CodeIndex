@@ -172,6 +172,12 @@ public static class SymbolExtractor
         ],
     };
 
+    /// <summary>
+    /// Return the set of languages that have symbol-extraction patterns.
+    /// シンボル抽出パターンを持つ言語のセットを返す。
+    /// </summary>
+    public static IReadOnlyCollection<string> GetSupportedLanguages() => PatternCache.Keys;
+
     private static readonly HashSet<string> ContainerKinds =
     [
         "class", "namespace"

@@ -200,13 +200,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns13Tools()
+    public void ToolsList_Returns14Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(13, tools.Count);
+        Assert.Equal(14, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -221,6 +221,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
         Assert.Contains("outline", names);
+        Assert.Contains("languages", names);
         Assert.Contains("index", names);
     }
 
@@ -599,6 +600,29 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_ReturnsCapabilities()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("languages supported", text);
+        var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
+        Assert.True(languages.Count > 20); // We support 30+ languages
+
+        // Verify a known language has the right capabilities / 既知の言語の機能を検証
+        var csharp = languages.First(l => l!["lang"]!.GetValue<string>() == "csharp")!;
+        Assert.True(csharp["symbol_extraction"]!.GetValue<bool>());
+        Assert.True(csharp["graph_queries"]!.GetValue<bool>());
+        Assert.Contains(".cs", csharp["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+
+        // Verify a detection-only language / 検出のみの言語を検証
+        var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
+        Assert.False(markdown["symbol_extraction"]!.GetValue<bool>());
+        Assert.False(markdown["graph_queries"]!.GetValue<bool>());
     }
 
     [Fact]

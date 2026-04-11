@@ -500,6 +500,58 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var json = cmdArgs.Any(a => a == "--json");
+
+        var langExtensions = FileIndexer.GetLanguageExtensions();
+        var symbolLangs = SymbolExtractor.GetSupportedLanguages();
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+
+        // Build a consolidated view: language -> (extensions, hasSymbols, hasGraph)
+        // 統合ビュー: 言語 -> (拡張子, シンボル対応, グラフ対応)
+        var allLangs = new Dictionary<string, (List<string> Extensions, bool Symbols, bool Graph)>(StringComparer.Ordinal);
+
+        foreach (var (ext, lang) in langExtensions)
+        {
+            if (!allLangs.TryGetValue(lang, out var info))
+            {
+                info = (new List<string>(), symbolLangs.Contains(lang), graphLangs.Contains(lang));
+                allLangs[lang] = info;
+            }
+            info.Extensions.Add(ext);
+        }
+
+        // Sort by language name / 言語名でソート
+        var sorted = allLangs.OrderBy(kv => kv.Key).ToList();
+
+        if (json)
+        {
+            var entries = sorted.Select(kv => new
+            {
+                lang = kv.Key,
+                extensions = kv.Value.Extensions.OrderBy(e => e).ToList(),
+                symbol_extraction = kv.Value.Symbols,
+                graph_queries = kv.Value.Graph,
+            });
+            Console.WriteLine(JsonSerializer.Serialize(new { languages = entries }, jsonOptions));
+        }
+        else
+        {
+            Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Symbols",-9} {"Graph",-7}");
+            Console.WriteLine(new string('-', 66));
+            foreach (var (lang, info) in sorted)
+            {
+                var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
+                var sym = info.Symbols ? "yes" : "-";
+                var graph = info.Graph ? "yes" : "-";
+                Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+            }
+            Console.Error.WriteLine($"\n({sorted.Count} languages)");
+        }
+        return CommandExitCodes.Success;
+    }
+
     public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault)
     {
         string dbPath = Path.Combine(".cdidx", "codeindex.db");

@@ -682,6 +682,7 @@ Once configured, the AI can directly call these tools:
 | `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata |
 | `outline` | Show all symbols in a single file with line numbers, signatures, and nesting |
 | `status` | Database statistics |
+| `languages` | List all supported languages, file extensions, and capabilities |
 | `index` | Index or re-index a project directory |
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
@@ -1386,6 +1387,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す |
 | `outline` | 1ファイルの全シンボルを行番号・シグネチャ・ネスト構造付きで表示 |
 | `status` | データベース統計情報 |
+| `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `index` | プロジェクトのインデックス作成・更新 |
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。

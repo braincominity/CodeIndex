@@ -115,6 +115,12 @@ public class FileIndexer
     /// Try to detect the language from a file extension.
     /// ファイル拡張子から言語を検出する。
     /// </summary>
+    /// <summary>
+    /// Return all file extensions mapped to their language names.
+    /// 全拡張子と対応する言語名のマッピングを返す。
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> GetLanguageExtensions() => LangMap;
+
     public static string? DetectLanguage(string filePath)
     {
         var ext = Path.GetExtension(filePath);
