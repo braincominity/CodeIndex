@@ -312,9 +312,10 @@ public static class SymbolExtractor
         ],
         ["terraform"] =
         [
-            // Terraform resource, data, module, variable, output / Terraform リソース定義
-            new("class",    new Regex(@"^\s*resource\s+""(?<name>[^""]+)""\s+""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*data\s+""(?<name>[^""]+)""\s+""", RegexOptions.Compiled), BodyStyle.Brace),
+            // Terraform resource/data: capture the logical name (second quoted token), not the type
+            // Terraform resource/data: 型ではなく論理名（第2引用トークン）をキャプチャ
+            new("class",    new Regex(@"^\s*resource\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*data\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*module\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*variable\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*output\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),

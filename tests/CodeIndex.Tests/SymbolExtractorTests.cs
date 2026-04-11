@@ -412,7 +412,8 @@ public class SymbolExtractorTests
         var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
         var symbols = SymbolExtractor.Extract(1, "terraform", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "aws_s3_bucket");
+        // resource captures logical name (second quoted token), not provider type
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my_bucket");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "region");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bucket_arn");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vpc");
