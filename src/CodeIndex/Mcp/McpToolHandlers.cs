@@ -558,6 +558,7 @@ public partial class McpServer
                     "outline" => ExecuteOutline(null, toolArgs),
                     "deps" => ExecuteDeps(null, toolArgs),
                     "languages" => ExecuteLanguages(null),
+                    "ping" => ExecutePing(null),
                     _ => null,
                 };
 

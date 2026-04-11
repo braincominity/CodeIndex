@@ -634,6 +634,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_IncludesPing()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Single(results);
+        Assert.Equal("ping", results[0]!["tool"]!.GetValue<string>());
+        Assert.NotNull(results[0]!["result"]!["version"]);
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_BlocksIndexInBatch()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"."}}]}}}""")!;
