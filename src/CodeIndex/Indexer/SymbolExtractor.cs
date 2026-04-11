@@ -196,9 +196,17 @@ public static class SymbolExtractor
         ],
         ["php"] =
         [
+            // Const declaration / 定数宣言
+            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?(?:(?:static|abstract|final)\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?:abstract\s+|final\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // Class with expanded modifiers: abstract, final, readonly (PHP 8.2+)
+            // 拡張修飾子対応: abstract, final, readonly (PHP 8.2+)
+            new("class",    new Regex(@"^\s*(?:(?:abstract|final|readonly)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("class",    new Regex(@"^\s*(?:interface|trait|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // Namespace / 名前空間
+            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // use (import) / use（インポート）
+            new("import",   new Regex(@"^\s*use\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:require|include)(?:_once)?\s*\(?\s*(?<name>.+?)\s*\)?;", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["swift"] =

@@ -419,6 +419,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PHP_DetectsExpandedFeatures()
+    {
+        var content = "<?php\nnamespace App\\Models;\n\nuse Illuminate\\Database\\Eloquent\\Model;\n\nreadonly class Config {\n    public const VERSION = '1.0';\n    public function getName(): string { return ''; }\n}\n\nenum Status: string {\n    case Active = 'active';\n}";
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name.Contains("App"));
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("Model"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getName");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+    }
+
+    [Fact]
     public void Extract_Swift_DetectsActorAndTypealias()
     {
         var content = "public actor NetworkManager {\n    func fetch() { }\n}\n\npublic typealias Handler = (Data) -> Void\n\ndistributed actor RemoteWorker { }";

@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **PHP: readonly class, namespace, use, const, expanded modifiers** — PHP patterns now support `readonly class` (PHP 8.2+), `namespace`, `use` imports, `const` declarations, and enum types. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Swift: actor, distributed actor, typealias, expanded method modifiers** — Swift patterns now support `actor` (Swift 5.5+), `distributed actor`, `typealias`, and additional method modifiers (`nonisolated`, `mutating`, `nonmutating`). Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Lua call-graph reference extraction** — Lua now supports `references`, `callers`, and `callees` queries. Added `--` comment stripping for Lua. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
@@ -452,6 +454,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **PHP: readonly class, namespace, use, const, 拡張修飾子** — PHP パターンに `readonly class`（PHP 8.2+）、`namespace`、`use` インポート、`const` 宣言、enum 型を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Swift: actor, distributed actor, typealias, 拡張メソッド修飾子** — Swift パターンに `actor`（Swift 5.5+）、`distributed actor`、`typealias`、追加メソッド修飾子（`nonisolated`、`mutating`、`nonmutating`）を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
