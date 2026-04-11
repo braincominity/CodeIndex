@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# event subscription/unsubscription reference extraction** — `Click += Handler` and `Loaded -= Handler` patterns are now extracted as `subscribe` references. Enables `references` and `callers` to find event wiring in C# code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
 - **`--top` alias for `--limit`** — More intuitive option name for limiting results. `cdidx symbols --top 5` is equivalent to `--limit 5`. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **MCP `batch_query` tool for multi-query execution** — New MCP tool that accepts an array of `{tool, arguments}` objects and executes them all in a single call, returning an array of results. Dramatically reduces round-trips for AI agents that need multiple pieces of information (e.g. status + symbols + definition in one call). Max 10 queries per batch. Write operations (index) are blocked. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
@@ -324,6 +326,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# イベント購読・解除の参照抽出** — `Click += Handler` や `Loaded -= Handler` パターンを `subscribe` 参照として抽出。C# コードのイベント配線を `references` と `callers` で発見可能に。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **`--top` を `--limit` のエイリアスとして追加** — 結果数制限のより直感的なオプション名。`cdidx symbols --top 5` は `--limit 5` と同等。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 

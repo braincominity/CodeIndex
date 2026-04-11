@@ -39,6 +39,8 @@ public static class ReferenceExtractor
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private static readonly Regex ConstructorCallRegex = new(@"\bnew\s+(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // C# event subscription/unsubscription: Click += Handler / C# イベント購読・解除: Click += Handler
+    private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Za-z_]\w*)\s*[+-]=\s*", RegexOptions.Compiled);
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -105,6 +107,13 @@ public static class ReferenceExtractor
             foreach (Match match in ConstructorCallRegex.Matches(preparedLine))
             {
                 AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, container);
+            }
+
+            // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
+            if (language is "csharp")
+            {
+                foreach (Match match in EventSubscriptionRegex.Matches(preparedLine))
+                    AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, container);
             }
 
             foreach (Match match in CallRegex.Matches(preparedLine))

@@ -114,6 +114,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpEventSubscription_DetectsAsSubscribe()
+    {
+        const string content = """
+            public class Form
+            {
+                public void Init()
+                {
+                    Click += OnClick;
+                    Loaded -= OnLoaded;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
+        Assert.Contains(references, r => r.SymbolName == "Loaded" && r.ReferenceKind == "subscribe");
+    }
+
+    [Fact]
     public void Extract_ElixirCall_DetectsReferences()
     {
         const string content = """
