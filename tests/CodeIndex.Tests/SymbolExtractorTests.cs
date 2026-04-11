@@ -939,6 +939,55 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotMatchCallSitesAsDefinitions()
+    {
+        // Issue #40: await/return/throw calls should not be extracted as method definitions
+        // Issue #40: await/return/throw の呼び出しがメソッド定義として抽出されないこと
+        var content = "public class Service\n{\n    public async Task InitAsync()\n    {\n        await TryNotifyAsync(true);\n        return GetResult();\n        throw CreateException(\"err\");\n        var x = ComputeValue(42);\n        yield return GenerateItem();\n    }\n\n    private async Task TryNotifyAsync(bool force)\n    {\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Real definitions should be extracted / 実際の定義は抽出されるべき
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "InitAsync");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TryNotifyAsync");
+        // Call sites should NOT be extracted as definitions / 呼び出し箇所は定義として抽出されないこと
+        Assert.DoesNotContain(symbols, s => s.Name == "TryNotifyAsync" && s.Line == 5);
+        Assert.DoesNotContain(symbols, s => s.Name == "GetResult");
+        Assert.DoesNotContain(symbols, s => s.Name == "CreateException");
+        Assert.DoesNotContain(symbols, s => s.Name == "ComputeValue");
+        Assert.DoesNotContain(symbols, s => s.Name == "GenerateItem");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotMatchQualifiedCallSitesAsDefinitions()
+    {
+        // Qualified call sites (obj.Method()) should not match the explicit interface pattern
+        // 修飾付き呼び出し (obj.Method()) は明示的インターフェース実装パターンにマッチしないこと
+        var content = "public class Service\n{\n    public async Task Run()\n    {\n        return service.GetResult();\n        await client.SendAsync();\n        throw factory.CreateException(\"err\");\n    }\n\n    void IDisposable.Dispose()\n    {\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Explicit interface impl should be extracted / 明示的インターフェース実装は抽出されるべき
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        // Qualified call sites should NOT be extracted / 修飾付き呼び出しは抽出されないこと
+        Assert.DoesNotContain(symbols, s => s.Name == "GetResult");
+        Assert.DoesNotContain(symbols, s => s.Name == "SendAsync");
+        Assert.DoesNotContain(symbols, s => s.Name == "CreateException");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsNewModifierMethods()
+    {
+        // C# `new` modifier for member hiding should still be extracted as definitions
+        // C# のメンバー隠蔽用 `new` 修飾子は定義として抽出されるべき
+        var content = "public class Derived : Base\n{\n    new void Reset() { }\n    new int Compare(object obj) { return 0; }\n    public new string ToString() { return \"\"; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Reset");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compare");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+    }
+
+    [Fact]
     public void Extract_Python_DetectsPropertyDecorator()
     {
         var content = "class User:\n    @property\n    def name(self):\n        return self._name\n\n    def greet(self):\n        print(self.name)";
