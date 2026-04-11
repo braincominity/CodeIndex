@@ -649,6 +649,40 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var issues = reader.GetIssues(options.Kind, options.PathPattern);
+            if (issues.Count == 0)
+            {
+                if (options.Json)
+                    Console.WriteLine(JsonSerializer.Serialize(new { count = 0, issues = Array.Empty<object>() }, jsonOptions));
+                else
+                    Console.Error.WriteLine("No encoding issues found.");
+                return CommandExitCodes.Success;
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { count = issues.Count, issues }, jsonOptions));
+            }
+            else
+            {
+                foreach (var issue in issues)
+                {
+                    var location = issue.Line > 0 ? $":{issue.Line}" : "";
+                    Console.WriteLine($"  {issue.Kind,-20} {issue.Path}{location}  {issue.Message}");
+                }
+                var kindCounts = issues.GroupBy(i => i.Kind).Select(g => $"{g.Key}: {g.Count()}");
+                Console.Error.WriteLine($"\n({issues.Count} issues: {string.Join(", ", kindCounts)})");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var json = cmdArgs.Any(a => a == "--json");

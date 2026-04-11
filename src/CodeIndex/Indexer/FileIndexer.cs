@@ -265,6 +265,77 @@ public class FileIndexer
     }
 
     /// <summary>
+    /// Validate file content for encoding issues.
+    /// ファイル内容のエンコーディング問題を検証する。
+    /// </summary>
+    public static List<FileIssue> ValidateContent(string relativePath, byte[] rawBytes, string content)
+    {
+        var issues = new List<FileIssue>();
+
+        // U+FFFD replacement characters baked into the file / ファイルに焼き付いたU+FFFD置換文字
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\uFFFD')
+            {
+                // Find line number / 行番号を特定
+                var lineNum = content[..i].Count(c => c == '\n') + 1;
+                issues.Add(new FileIssue
+                {
+                    Path = relativePath,
+                    Kind = "replacement_char",
+                    Line = lineNum,
+                    Message = $"U+FFFD replacement character at line {lineNum}",
+                });
+                // Skip to next line to avoid reporting every char on the same line
+                // 同じ行の連続報告を避けるため次の行までスキップ
+                var nextNewline = content.IndexOf('\n', i);
+                if (nextNewline >= 0) i = nextNewline;
+            }
+        }
+
+        // BOM marker / BOMマーカー
+        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "bom",
+                Line = 1,
+                Message = "UTF-8 BOM marker detected",
+            });
+        }
+
+        // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
+        if (rawBytes.Any(b => b == 0))
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "null_byte",
+                Line = 0,
+                Message = "File contains NULL bytes (possible binary content)",
+            });
+        }
+
+        // Mixed line endings / 混在改行コード
+        var hasCrlf = content.Contains("\r\n");
+        var contentWithoutCrlf = content.Replace("\r\n", "\n");
+        var hasCr = contentWithoutCrlf.Contains('\r');
+        if (hasCrlf && hasCr)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "mixed_line_endings",
+                Line = 0,
+                Message = "Mixed line endings (CRLF and CR)",
+            });
+        }
+
+        return issues;
+    }
+
+    /// <summary>
     /// Compute SHA256 checksum from raw file bytes.
     /// ファイルのraw bytesからSHA256チェックサムを算出する。
     /// </summary>

@@ -100,6 +100,16 @@ public class DbContext : IDisposable
                 container_name  TEXT
             )");
 
+        // File validation issues table / ファイル検証問題テーブル
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS file_issues (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT NOT NULL,
+                line            INTEGER NOT NULL DEFAULT 0,
+                message         TEXT NOT NULL
+            )");
+
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
         EnsureColumn("files", "checksum", "TEXT");
         EnsureColumn("files", "modified", "DATETIME");

@@ -107,6 +107,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`deps` false edges from same-name symbols and missing exclude-path** — The `deps` query now uses DISTINCT triples `(source_path, target_path, symbol_name)` to avoid inflated reference counts from same-name symbols across files (e.g. multiple `Run` or `Dispose` methods). Also wired `excludePathPatterns` into the SQL and parameter binding — previously accepted but silently ignored. Affected: `src/CodeIndex/Database/DbReader.cs`.
 
+- **`validate` command for encoding issue detection** — New `cdidx validate [--json] [--kind <kind>] [--path <pattern>]` CLI command and MCP `validate` tool that report encoding issues found during indexing: U+FFFD replacement characters, UTF-8 BOM markers, null bytes, and mixed line endings. Issues are stored in a new `file_issues` table during indexing and queryable any time. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Models/FileIssue.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Database/DbWriter.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
 #### Changed
 
 - **DEVELOPER_GUIDE symbol extraction count updated to 26** — Reflects all newly supported languages. Affected: `DEVELOPER_GUIDE.md`.
@@ -566,6 +568,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`batch_query` サブクエリのバリデーションエラーを表面化** — サブクエリがバリデーション失敗した場合（例: `search` に `query` なし）、`null` の代わりにエラーメッセージをバッチ結果に含めるようにした。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **`deps` の同名シンボルによる誤エッジと exclude-path 未反映の修正** — `deps` クエリで `(source_path, target_path, symbol_name)` の DISTINCT トリプルを使い、同名シンボル（複数の `Run` や `Dispose` 等）による参照数膨張を防止。また `excludePathPatterns` を SQL とパラメータバインドに反映 — 従来は受け取るだけで無視されていた。対象: `src/CodeIndex/Database/DbReader.cs`.
+
+- **`validate` コマンドでエンコーディング問題検出** — 新コマンド `cdidx validate [--json] [--kind <kind>] [--path <pattern>]` と MCP ツール `validate` を追加。インデックス時に検出した U+FFFD 置換文字、UTF-8 BOM マーカー、NULL バイト、混在改行コードを報告する。問題は新テーブル `file_issues` に保存し、いつでもクエリ可能。対象: 多数ファイル（FileIndexer, DbContext, DbWriter, DbReader, CLI, MCP）。
 
 #### 変更
 

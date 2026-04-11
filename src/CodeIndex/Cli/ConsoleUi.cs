@@ -331,6 +331,7 @@ public static class ConsoleUi
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics");
+        Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings)");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");

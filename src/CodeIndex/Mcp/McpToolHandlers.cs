@@ -558,6 +558,7 @@ public partial class McpServer
                     "outline" => ExecuteOutline(null, toolArgs),
                     "deps" => ExecuteDeps(null, toolArgs),
                     "languages" => ExecuteLanguages(null),
+                    "validate" => ExecuteValidate(null, toolArgs),
                     "ping" => ExecutePing(null),
                     _ => null,
                 };
@@ -621,6 +622,26 @@ public partial class McpServer
                 : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
+    {
+        var kind = args?["kind"]?.GetValue<string>();
+        var pathPattern = args?["path"]?.GetValue<string>();
+
+        return WithDbReader(id, reader =>
+        {
+            var issues = reader.GetIssues(kind, pathPattern);
+            var payload = new JsonObject
+            {
+                ["count"] = issues.Count,
+                ["issues"] = JsonSerializer.SerializeToNode(issues, _jsonOptions)
+            };
+            var summary = issues.Count > 0
+                ? $"Found {issues.Count} encoding issue(s)."
+                : "No encoding issues found.";
             return CreateToolResult(id, summary, payload);
         });
     }

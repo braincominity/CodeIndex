@@ -344,6 +344,10 @@ public static class IndexCommandRunner
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
+                // Validate content for encoding issues / エンコーディング問題を検証
+                var rawBytes = File.ReadAllBytes(absPath);
+                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                writer.InsertIssues(fileId, issues);
                 txn.Commit();
 
                 updated++;
@@ -494,6 +498,10 @@ public static class IndexCommandRunner
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
+                // Validate content for encoding issues / エンコーディング問題を検証
+                var rawBytes = File.ReadAllBytes(filePath);
+                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                writer.InsertIssues(fileId, issues);
                 txn.Commit();
 
                 if (options.Verbose && !options.Json)

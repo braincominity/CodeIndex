@@ -254,6 +254,19 @@ public partial class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "validate",
+                "Report encoding issues found during indexing: U+FFFD replacement chars, BOM markers, null bytes, mixed line endings. / インデックス時に検出したエンコーディング問題を報告。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by issue kind (replacement_char, bom, null_byte, mixed_line_endings)" },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to paths containing this text" }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "ping",
                 "Lightweight connection check. Returns server version and timestamp. No database required. / 軽量接続チェック。サーバーバージョンとタイムスタンプを返す。DB不要。",
                 new JsonObject

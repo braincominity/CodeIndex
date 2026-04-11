@@ -646,6 +646,45 @@ public partial class DbReader
             _ => null,
         };
     }
+
+    /// <summary>
+    /// Get all file validation issues from the index.
+    /// インデックスから全ファイル検証問題を取得する。
+    /// </summary>
+    public List<Models.FileIssue> GetIssues(string? kind = null, string? pathPattern = null)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT f.path, i.kind, i.line, i.message
+            FROM file_issues i
+            JOIN files f ON i.file_id = f.id
+            WHERE 1=1";
+        if (kind != null)
+            sql += " AND i.kind = @kind";
+        if (pathPattern != null)
+            sql += " AND f.path LIKE @pathPattern ESCAPE '\\'";
+        sql += " ORDER BY f.path, i.line";
+
+        cmd.CommandText = sql;
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        if (pathPattern != null)
+            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+
+        var results = new List<Models.FileIssue>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new Models.FileIssue
+            {
+                Path = reader.GetString(0),
+                Kind = reader.GetString(1),
+                Line = reader.GetInt32(2),
+                Message = reader.GetString(3),
+            });
+        }
+        return results;
+    }
 }
 
 // Result DTOs are in Models/QueryResults.cs / 結果DTOは Models/QueryResults.cs に分離
