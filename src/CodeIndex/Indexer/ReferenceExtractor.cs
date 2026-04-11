@@ -29,6 +29,8 @@ public static class ReferenceExtractor
         "is", "as", "in", "var", "base", "this", "value", "get", "set", "init", "where",
         "from", "select", "orderby", "group", "into", "join", "let", "on", "equals",
         "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
+        // Java contextual keywords / Java 文脈キーワード
+        "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
         // Other languages / 他言語
         "print", "require", "import", "include", "raise", "lambda",
     };

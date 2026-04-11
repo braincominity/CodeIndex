@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Java IgnoredCallNames expansion** — Added `instanceof`, `super`, `assert`, `throws`, `extends`, `implements`, `synchronized` to the reference extractor's ignore list to reduce false-positive call references in Java code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
+
 - **Java symbol extraction: record, sealed, @interface, static final, enum members, expanded modifiers** — Java patterns now support `record` (Java 16+), `sealed`/`non-sealed` classes (Java 17+), `@interface` annotation types, `static final` constants (C# const equivalent), enum members, and expanded method modifiers (`default`, `native`, `final`, `strictfp`). Cross-language parity with recent C# improvements. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Pattern externalization design note in DEVELOPER_GUIDE** — Documented the current inline-regex approach, trade-offs, and a future externalization path (JSON/TOML with schema: language, kind, regex, body style, capture groups). Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
@@ -408,6 +410,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Java IgnoredCallNames 拡張** — `instanceof`、`super`、`assert`、`throws`、`extends`、`implements`、`synchronized` を参照抽出器の無視リストに追加し、Java コードの偽陽性参照を削減。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
 
 - **Java シンボル抽出: record, sealed, @interface, static final, enum メンバー, 拡張修飾子** — Java パターンに `record`（Java 16+）、`sealed`/`non-sealed`（Java 17+）、`@interface` アノテーション型、`static final` 定数（C# const 相当）、enum メンバー、拡張メソッド修飾子（`default`、`native`、`final`、`strictfp`）を追加。C# 改善のクロス言語横展開。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
