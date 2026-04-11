@@ -618,6 +618,7 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 ```
 
 These options make it practical to keep the index up-to-date in real time, even on large codebases.
+````
 
 ### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
 
@@ -1360,6 +1361,7 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 ```
 
 これらのオプションにより、大規模コードベースでもリアルタイムにインデックスを最新に保つことが実用的になります。
+````
 
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
 
