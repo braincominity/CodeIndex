@@ -30,7 +30,8 @@ public partial class McpServer
             + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
             + $"Graph tools (references, callers, callees) only work for supported languages ({langs}); "
             + "for other languages, use 'search' instead. "
-            + "Use 'outline' to see the full symbol structure of a single file (functions, classes, imports with line numbers) without reading the file content. "
+            + "Use 'outline' to see the full symbol structure of a single file (functions, classes, properties, interfaces, enums with line numbers) without reading the file content. "
+            + "Filter symbols by kind using the 'kind' parameter: function, class, struct, interface, enum, property, event, delegate, namespace, import. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results. "
             + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
@@ -38,6 +39,8 @@ public partial class McpServer
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
+            + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
+            + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
@@ -99,8 +102,13 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
         DateTime? since = null;
-        if (sinceStr != null && DateTime.TryParse(sinceStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
-            since = parsedSince.ToUniversalTime();
+        if (sinceStr != null)
+        {
+            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
+                since = parsedSince;
+            else
+                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
+        }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
@@ -356,8 +364,13 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
         DateTime? since = null;
-        if (sinceStr != null && DateTime.TryParse(sinceStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
-            since = parsedSince.ToUniversalTime();
+        if (sinceStr != null)
+        {
+            if (QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
+                since = parsedSince;
+            else
+                return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
+        }
 
         return WithDbReader(id, reader =>
         {
@@ -407,7 +420,13 @@ public partial class McpServer
             structured["lang"] = lang;
             structured["path"] = pathPattern;
             structured["excludeTests"] = excludeTests;
-            return CreateToolResult(id, "Repo map returned.", structured);
+            var hasFilter = pathPattern != null || excludePaths.Count > 0 || excludeTests || lang != null;
+            if (map.FileCount == 0 && hasFilter)
+                AddFreshnessHint(structured, reader);
+            var summary = map.FileCount > 0
+                ? "Repo map returned."
+                : hasFilter ? "No files found matching the given filters." : "Repo map returned.";
+            return CreateToolResult(id, summary, structured);
         });
     }
 
@@ -561,6 +580,8 @@ public partial class McpServer
                     "deps" => ExecuteDeps(null, toolArgs),
                     "languages" => ExecuteLanguages(null),
                     "validate" => ExecuteValidate(null, toolArgs),
+                    "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
+                    "symbol_hotspots" => ExecuteSymbolHotspots(null, toolArgs),
                     "ping" => ExecutePing(null),
                     _ => null,
                 };
@@ -644,6 +665,75 @@ public partial class McpServer
             var summary = issues.Count > 0
                 ? $"Found {issues.Count} encoding issue(s)."
                 : "No encoding issues found.";
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)
+    {
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetSymbolHotspots(limit, kind, lang, pathPattern, excludePaths, excludeTests);
+            var items = results.Select(r => new
+            {
+                name = r.Symbol.Name,
+                kind = r.Symbol.Kind,
+                path = r.Symbol.Path,
+                line = r.Symbol.Line,
+                reference_count = r.ReferenceCount,
+                visibility = r.Symbol.Visibility,
+                container = r.Symbol.ContainerName,
+            });
+            var payload = new JsonObject
+            {
+                ["count"] = results.Count,
+                ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
+            };
+            var summary = results.Count > 0
+                ? $"Found {results.Count} symbol hotspot(s)."
+                : "No symbol hotspots found.";
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonNode ExecuteUnusedSymbols(JsonNode? id, JsonNode? args)
+    {
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
+        var kind = args?["kind"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>();
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        // Add graph-support metadata for AI trust decisions
+        // AI の信頼判断のためにグラフ対応メタデータを追加
+        bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.GetUnusedSymbols(limit, kind, lang, pathPattern, excludePaths, excludeTests);
+            var payload = new JsonObject
+            {
+                ["count"] = results.Count,
+                ["graph_supported"] = graphSupported,
+                ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            var summary = results.Count > 0
+                ? $"Found {results.Count} potentially unused symbol(s). Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                : "No unused symbols found.";
+            if (graphSupported == false)
+                summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";
+            if (results.Count == 0)
+                AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
         });
     }

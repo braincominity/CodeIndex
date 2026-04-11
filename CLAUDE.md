@@ -33,6 +33,8 @@ cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <patte
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
 cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx languages [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -49,7 +51,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/unused/hotspots command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Cli/SuggestionStore.cs    — Local JSON storage for AI suggestions with SHA256 dedup
@@ -63,7 +65,7 @@ src/CodeIndex/
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
-  Indexer/SymbolExtractor.cs — Regex-based symbol extraction (29 languages)
+  Indexer/SymbolExtractor.cs — Regex-based symbol extraction (32 languages)
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
   Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
   Mcp/McpToolDefinitions.cs — MCP tool schema definitions (partial class)
@@ -110,6 +112,8 @@ tests/CodeIndex.Tests/
 - **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results.
 - **Explicit graph-support hints** — `inspect`, MCP `analyze_symbol`, and direct MCP graph tools annotate unsupported language filters with graph-support metadata so AI clients can distinguish "unsupported language" from "supported but zero hits."
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
+- **Granular symbol kinds** — Symbols use semantically precise kinds: `function`, `class`, `struct`, `interface`, `enum`, `property`, `event`, `delegate`, `namespace`, `import`. Languages map their constructs to the closest kind (e.g. Rust `trait` → `interface`, Swift `protocol` → `interface`, PHP `trait` → `interface`). Symbol search and definition results are ranked by visibility (public first).
+- **DB index optimization** — SQLite indexes are actively maintained to match query patterns. When adding new query features (new commands, new ORDER BY clauses, new JOIN patterns), always evaluate whether a dedicated index would improve performance. Use `CREATE INDEX IF NOT EXISTS` for safe additive changes.
 - **Human-readable default** — All commands default to human-readable output. Use `--json` for machine-readable JSON lines (AI-friendly).
 - **Structured MCP responses** — MCP tools return typed JSON in `structuredContent` plus a short summary in `content`, so AI tools don't need to scrape large text blobs.
 - **MCP tool annotations** — All tools emit `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) per the MCP spec so AI clients can auto-approve safe read-only queries.
@@ -266,6 +270,8 @@ cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <patte
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
 cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse] [--json]
+cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx languages [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
@@ -282,7 +288,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/statusコマンド実行とクエリ引数解析
+  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/unused/hotspotsコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
   Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Cli/SuggestionStore.cs    — AI提案のSHA256重複排除付きローカルJSON蓄積
@@ -296,7 +302,7 @@ src/CodeIndex/
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
-  Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（29言語対応）
+  Indexer/SymbolExtractor.cs — 正規表現によるシンボル抽出（32言語対応）
   Indexer/ReferenceExtractor.cs — 正規表現による参照抽出（言語差分を考慮）
   Mcp/McpServer.cs          — MCPサーバーコア（stdin/stdout JSON-RPC 2.0 プロトコル処理）（partial class）
   Mcp/McpToolDefinitions.cs — MCPツールスキーマ定義（partial class）
@@ -343,6 +349,8 @@ tests/CodeIndex.Tests/
 - **言語差分を考慮した参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対して構築する参照テーブルに支えられる。未対応言語には低信頼な疑似グラフ結果を返さず、`search` を使う前提にする。
 - **graph 対応ヒントの明示** — `inspect`、MCP の `analyze_symbol`、直接の MCP graph ツールは、未対応言語フィルタに graph 対応メタデータを付けて返し、AI クライアントが「未対応言語」と「対応言語だが 0 件」を区別できるようにする。
 - **正規表現シンボル抽出** — 意図的にシンプル。速度とポータビリティを精度より優先しつつ、パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、可視性、戻り値型もインデックスに保持する。
+- **詳細なシンボル種別** — シンボルは意味的に正確な種別を使用: `function`、`class`、`struct`、`interface`、`enum`、`property`、`event`、`delegate`、`namespace`、`import`。各言語は最も近い種別にマッピングする（例: Rust の `trait` → `interface`、Swift の `protocol` → `interface`、PHP の `trait` → `interface`）。シンボル検索と定義の結果は可視性でランキングされる（public が最優先）。
+- **DBインデックス最適化** — SQLite インデックスはクエリパターンに合わせて積極的に維持管理する。新しいクエリ機能（新コマンド、新 ORDER BY、新 JOIN パターン）を追加するときは、専用インデックスで性能改善できるかを常に評価する。安全な追加のため `CREATE INDEX IF NOT EXISTS` を使用する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI向けJSONライン出力に切り替え。
 - **構造化MCPレスポンス** — MCPツールは `structuredContent` に型付きJSON、`content` に短い要約を返し、AIツールが巨大なテキスト塊をパースせずに済むようにする。
 - **MCPツールアノテーション** — 全ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返し、AIクライアントが安全な読み取り専用クエリを自動承認できるようにする。

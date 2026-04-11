@@ -31,6 +31,25 @@ public partial class DbReader
                 THEN 2
             ELSE 0
         END";
+
+    /// <summary>
+    /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
+    /// 可視性ランキング: public を最優先、次に protected、internal、private、不明は最後。
+    /// </summary>
+    internal const string VisibilityOrder = @"
+        CASE lower(s.visibility)
+            WHEN 'public' THEN 0
+            WHEN 'open' THEN 0
+            WHEN 'pub' THEN 0
+            WHEN 'export' THEN 0
+            WHEN 'protected' THEN 1
+            WHEN 'protected internal' THEN 1
+            WHEN 'internal' THEN 2
+            WHEN 'private protected' THEN 2
+            WHEN 'private' THEN 3
+            WHEN 'fileprivate' THEN 3
+            ELSE 4
+        END";
     private const string ExactSymbolMatchOrder = @"
         CASE
             WHEN EXISTS (

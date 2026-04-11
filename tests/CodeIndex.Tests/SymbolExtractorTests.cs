@@ -40,7 +40,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__init__");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "display_name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "display_name");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "__str__");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
     }
@@ -90,7 +90,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("System.Text"));
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Models");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
     }
 
@@ -101,10 +101,10 @@ public class SymbolExtractorTests
         var content = "public delegate void EventHandler(object sender, EventArgs e);\n\npublic class Button\n{\n    public event EventHandler Click;\n    public static event Action<string> OnLog;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "EventHandler");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "EventHandler");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Button");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Click");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnLog");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Click");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnLog");
     }
 
     [Fact]
@@ -115,9 +115,9 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Email");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Age");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Email");
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Point");
         // Signature should contain the parameter list / シグネチャにパラメータリストが含まれるべき
         var service = symbols.First(s => s.Name == "Service");
         Assert.Contains("ILogger logger", service.Signature);
@@ -171,7 +171,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserDto");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Point");
         // Signature should contain parameters / シグネチャにパラメータが含まれるべき
         var userDto = symbols.First(s => s.Name == "UserDto");
         Assert.Contains("string Name", userDto.Signature);
@@ -224,9 +224,9 @@ public class SymbolExtractorTests
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "X" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "string");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pi" && s.ReturnType == "double");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Pi" && s.ReturnType == "double");
     }
 
     [Fact]
@@ -257,7 +257,7 @@ public class SymbolExtractorTests
         var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Money");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
@@ -277,6 +277,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsGenericMethodOverloads()
+    {
+        // Issue #41: generic method overloads should both be extracted as definitions
+        // Issue #41: ジェネリックメソッドのオーバーロードは両方とも定義として抽出されるべき
+        var content = "public class App\n{\n    private static void TryRaise(Action? handler, string context) { }\n    private static void TryRaise<T>(Action<T>? handler, T argument, string context) { }\n    public Task<List<T>> GetItems<T>(int page) { return null; }\n    public void Process<TKey, TValue>(Dictionary<TKey, TValue> map) { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TryRaise" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TryRaise" && s.Line == 4);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetItems");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Process");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedType()
     {
         // C# 11 file-scoped type / C# 11 のファイルスコープ型
@@ -293,8 +307,8 @@ public class SymbolExtractorTests
         var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Span2D");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "StackBuffer");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Span2D");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "StackBuffer");
     }
 
     [Fact]
@@ -303,7 +317,7 @@ public class SymbolExtractorTests
         var content = "public enum Color\n{\n    Red,\n    Green = 1,\n    Blue = 2,\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Color");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Red");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Green");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Blue");
@@ -432,7 +446,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "getName");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
     }
 
     [Fact]
@@ -454,8 +468,8 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "ruby", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "name");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "email");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "posts");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "company");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "active");
@@ -475,7 +489,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "default_value");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "raw_ptr");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Result");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyUnion");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "MyUnion");
     }
 
     [Fact]
@@ -484,9 +498,9 @@ public class SymbolExtractorTests
         var content = "type Handler struct {\n}\ntype ID = string\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Logger");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Logger");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DefaultTimeout");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GlobalConfig");
@@ -499,7 +513,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "rust", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handle_request");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
     }
 
     [Fact]
@@ -560,7 +574,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_RETRIES");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ACTIVE");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "INACTIVE");
     }
@@ -604,6 +618,7 @@ public class SymbolExtractorTests
         var content = "public interface Service {\n    default void init() { }\n    static Service create() { return null; }\n}\npublic class Worker {\n    synchronized void process() { }\n}";
         var symbols = SymbolExtractor.Extract(1, "java", content);
 
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
@@ -626,7 +641,7 @@ public class SymbolExtractorTests
         var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Shape");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Email");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
         // Companion object (unnamed) / コンパニオンオブジェクト（無名）
@@ -635,7 +650,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "truncate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetchData");
         // const val / 定数プロパティ
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MAX");
     }
 
     [Fact]
@@ -667,7 +682,7 @@ public class SymbolExtractorTests
         var content = "struct Config {\n    func validate() -> Bool {\n        return true\n    }\n}";
         var symbols = SymbolExtractor.Extract(1, "swift", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
     }
 
@@ -678,7 +693,7 @@ public class SymbolExtractorTests
         var content = "typedef struct Config {\n    int value;\n};\nint main(int argc) {\n}";
         var symbols = SymbolExtractor.Extract(1, "c", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
     }
 
@@ -700,8 +715,8 @@ public class SymbolExtractorTests
         var content = "export interface IUser {\n    name: string;\n}\nexport enum Status {\n    Active,\n}";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IUser");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IUser");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
     }
 
     [Fact]
@@ -844,7 +859,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Main");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Message");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Message");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Ping");
     }
 
@@ -868,7 +883,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "dart", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("flutter"));
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
     }
 
     [Fact]
@@ -918,7 +933,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "CreateUserInput");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Role");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Role");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
     }
@@ -935,6 +950,173 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "org.springframework.boot");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "customTask");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotMatchCallSitesAsDefinitions()
+    {
+        // Issue #40: await/return/throw calls should not be extracted as method definitions
+        // Issue #40: await/return/throw の呼び出しがメソッド定義として抽出されないこと
+        var content = "public class Service\n{\n    public async Task InitAsync()\n    {\n        await TryNotifyAsync(true);\n        return GetResult();\n        throw CreateException(\"err\");\n        var x = ComputeValue(42);\n        yield return GenerateItem();\n    }\n\n    private async Task TryNotifyAsync(bool force)\n    {\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Real definitions should be extracted / 実際の定義は抽出されるべき
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "InitAsync");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TryNotifyAsync");
+        // Call sites should NOT be extracted as definitions / 呼び出し箇所は定義として抽出されないこと
+        Assert.DoesNotContain(symbols, s => s.Name == "TryNotifyAsync" && s.Line == 5);
+        Assert.DoesNotContain(symbols, s => s.Name == "GetResult");
+        Assert.DoesNotContain(symbols, s => s.Name == "CreateException");
+        Assert.DoesNotContain(symbols, s => s.Name == "ComputeValue");
+        Assert.DoesNotContain(symbols, s => s.Name == "GenerateItem");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotMatchQualifiedCallSitesAsDefinitions()
+    {
+        // Qualified call sites (obj.Method()) should not match the explicit interface pattern
+        // 修飾付き呼び出し (obj.Method()) は明示的インターフェース実装パターンにマッチしないこと
+        var content = "public class Service\n{\n    public async Task Run()\n    {\n        return service.GetResult();\n        await client.SendAsync();\n        throw factory.CreateException(\"err\");\n    }\n\n    void IDisposable.Dispose()\n    {\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Explicit interface impl should be extracted / 明示的インターフェース実装は抽出されるべき
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        // Qualified call sites should NOT be extracted / 修飾付き呼び出しは抽出されないこと
+        Assert.DoesNotContain(symbols, s => s.Name == "GetResult");
+        Assert.DoesNotContain(symbols, s => s.Name == "SendAsync");
+        Assert.DoesNotContain(symbols, s => s.Name == "CreateException");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsNewModifierMethods()
+    {
+        // C# `new` modifier for member hiding should still be extracted as definitions
+        // C# のメンバー隠蔽用 `new` 修飾子は定義として抽出されるべき
+        var content = "public class Derived : Base\n{\n    new void Reset() { }\n    new int Compare(object obj) { return 0; }\n    public new string ToString() { return \"\"; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Reset");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compare");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsPropertyDecorator()
+    {
+        var content = "class User:\n    @property\n    def name(self):\n        return self._name\n\n    def greet(self):\n        print(self.name)";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
+    }
+
+    [Theory]
+    [InlineData("csharp", "public interface IFoo { }", "interface")]
+    [InlineData("csharp", "public enum Color { }", "enum")]
+    [InlineData("csharp", "public struct Point { }", "struct")]
+    [InlineData("csharp", "public delegate void Handler();", "delegate")]
+    [InlineData("csharp", "public event EventHandler Click;", "event")]
+    [InlineData("csharp", "public string Name { get; set; }", "property")]
+    [InlineData("java", "interface Foo { }", "interface")]
+    [InlineData("java", "enum Color { RED }", "enum")]
+    [InlineData("kotlin", "interface Foo", "interface")]
+    [InlineData("kotlin", "enum class Color { RED }", "enum")]
+    [InlineData("kotlin", "val name: String = \"\"", "property")]
+    [InlineData("typescript", "export interface IFoo { }", "interface")]
+    [InlineData("typescript", "export enum Status { A }", "enum")]
+    [InlineData("go", "type Foo struct { }", "struct")]
+    [InlineData("go", "type Foo interface { }", "interface")]
+    [InlineData("rust", "pub struct Config { }", "struct")]
+    [InlineData("rust", "pub enum Color { }", "enum")]
+    [InlineData("rust", "pub trait Foo { }", "interface")]
+    [InlineData("swift", "struct Config { }", "struct")]
+    [InlineData("swift", "enum Color { }", "enum")]
+    [InlineData("swift", "protocol Foo { }", "interface")]
+    [InlineData("c", "struct Config { };", "struct")]
+    [InlineData("c", "enum Color { RED };", "enum")]
+    [InlineData("cpp", "struct Config { };", "struct")]
+    [InlineData("cpp", "enum Color { RED };", "enum")]
+    [InlineData("php", "interface Foo { }", "interface")]
+    [InlineData("php", "enum Color { }", "enum")]
+    [InlineData("scala", "trait Foo", "interface")]
+    [InlineData("scala", "enum Color", "enum")]
+    [InlineData("dart", "enum Status { active }", "enum")]
+    [InlineData("graphql", "interface Node { }", "interface")]
+    [InlineData("graphql", "enum Role { ADMIN }", "enum")]
+    [InlineData("haskell", "class Functor f where", "interface")]
+    [InlineData("elixir", "defprotocol Enumerable do\nend", "interface")]
+    [InlineData("ruby", "  attr_accessor :name", "property")]
+    [InlineData("python", "@property\ndef name(self):", "property")]
+    public void Extract_CrossLanguage_GranularKindsAreConsistent(string lang, string content, string expectedKind)
+    {
+        var symbols = SymbolExtractor.Extract(1, lang, content);
+        Assert.Contains(symbols, s => s.Kind == expectedKind);
+    }
+
+    [Fact]
+    public void EstimateComplexity_StraightLineFunction_ReturnsOne()
+    {
+        var body = "var x = 1;\nreturn x + 2;";
+        Assert.Equal(1, SymbolExtractor.EstimateComplexity(body));
+    }
+
+    [Fact]
+    public void EstimateComplexity_BranchingFunction_CountsBranches()
+    {
+        var body = "if (x > 0)\n    return x;\nelse if (x < 0)\n    return -x;\nfor (int i = 0; i < n; i++)\n    sum += i;\nwhile (retry)\n    attempt();\nvar result = a ?? b;\nvar flag = x && y || z;";
+        // 1 (baseline) + if + else if + for + while + ?? + && + || = 8
+        Assert.Equal(8, SymbolExtractor.EstimateComplexity(body));
+    }
+
+    [Fact]
+    public void EstimateComplexity_EmptyBody_ReturnsOne()
+    {
+        Assert.Equal(1, SymbolExtractor.EstimateComplexity(""));
+        Assert.Equal(1, SymbolExtractor.EstimateComplexity("   "));
+    }
+
+    [Fact]
+    public void Extract_CSS_DetectsSymbols()
+    {
+        var content = "@import 'reset.css';\n\n$primary-color: #333;\n\n@mixin flex-center {\n  display: flex;\n  align-items: center;\n}\n\n@keyframes fade-in {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n\n.container {\n  max-width: 1200px;\n}\n\n#header {\n  background: $primary-color;\n}";
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("reset.css"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary-color");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "container");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "header");
+    }
+
+    [Fact]
+    public void Extract_PowerShell_DetectsSymbols()
+    {
+        var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ActiveDirectory");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "PSDesiredStateConfiguration");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ServerConfig");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Environment");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get-UserInfo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Where-Active");
+    }
+
+    [Fact]
+    public void Extract_Zig_DetectsSymbols()
+    {
+        var content = "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"hello\", .{});\n}\n\nfn helper(x: u32) u32 {\n    return x + 1;\n}\n\npub const Config = struct {\n    name: []const u8,\n};\n\nconst Direction = enum {\n    north,\n    south,\n};\n\ntest \"basic test\" {\n    try std.testing.expect(true);\n}";
+        var symbols = SymbolExtractor.Extract(1, "zig", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main" && s.Visibility == "pub");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config" && s.Visibility == "pub");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Direction");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "basic test");
     }
 
     [Fact]

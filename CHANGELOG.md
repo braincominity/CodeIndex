@@ -9,6 +9,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **Granular C# symbol kinds** — C# symbols now use semantically precise kinds: `property` (get/set and expression-bodied), `interface`, `enum`, `struct` (including `record struct`, `ref struct`, `readonly struct`), `event`, and `delegate`. Previously all mapped to generic `class` or `function`. AI agents can now filter by `--kind property`, `--kind interface`, etc. Shell completions updated for bash/zsh/fish. Affected: `SymbolExtractor.cs`, `ConsoleUi.cs`.
+- **Granular Java/Kotlin symbol kinds** — Java interfaces and enums now use `kind="interface"` and `kind="enum"` instead of `kind="class"`. Kotlin sealed interfaces use `kind="interface"`, enum classes use `kind="enum"`, and `val`/`var` properties use `kind="property"`. Affected: `SymbolExtractor.cs`.
+- **Granular symbol kinds for all typed languages** — TypeScript, Go, Rust, Swift, C, C++, PHP, Scala, Dart, GraphQL, and VB.NET now use semantically precise kinds: `struct`, `interface` (including traits/protocols), `enum`. Affected: `SymbolExtractor.cs`.
+- **Zig symbol extraction** — Added symbol extraction patterns for Zig: `pub fn`/`fn` (function), `const struct` (struct), `const enum` (enum), `const union`/`error` (class), `test` blocks, and `@import`. Zig was previously mapped as a language but had zero extraction patterns. Affected: `SymbolExtractor.cs`.
+- **PowerShell symbol extraction** — Added symbol extraction patterns for PowerShell (.ps1): `function`/`filter` (function), `class` (class), `enum` (enum), `Import-Module`/`using module` (import). Affected: `SymbolExtractor.cs`.
+- **`unused` CLI command and `unused_symbols` MCP tool** — Find symbols defined but never referenced in the indexed codebase (potential dead code). Only meaningful for languages with reference extraction support. Available as `cdidx unused` CLI command and `unused_symbols` MCP tool. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `Program.cs`, `ConsoleUi.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
+- **CSS/SCSS symbol extraction** — Added symbol extraction for CSS/SCSS: `.class` selectors (class), `#id` selectors (function), `@mixin` (function), `@keyframes` (function), `@import`/`@use` (import), `$variable` (property). Affected: `SymbolExtractor.cs`.
+- **`hotspots` CLI command and `symbol_hotspots` MCP tool** — Find the most-referenced symbols in the codebase, ordered by reference count. Useful for identifying central, high-impact code that changes may affect widely. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `Program.cs`, `ConsoleUi.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`.
+
+#### Changed
+- **Visibility-weighted symbol ranking** — `symbols` and `definition` results now rank public symbols above private/internal ones. Ranking tiers: public/open/pub/export (0) > protected (1) > internal (2) > private (3) > unknown (4). AI agents searching for API surface get the most relevant results first. Affected: `DbReader.cs`, `DbSymbolReader.cs`.
+- **Recently-modified tiebreaker in search ranking** — Among equally-ranked search results, recently modified files now appear first. Adds `f.modified DESC` before the final alphabetical tiebreaker. Affected: `DbSearchReader.cs`.
+- **Additional DB indexes for new query patterns** — Added `symbols(kind)` for standalone `--kind` filter, `symbols(visibility)` for visibility-weighted ranking, and `symbol_references(symbol_name, reference_kind)` for hotspot/unused analysis performance. Affected: `DbContext.cs`.
+- **Kind/lang validation hints for unused and hotspots** — `unused` and `hotspots` commands now show helpful hints when zero results are found (invalid kind, unknown language, stale index, filter suggestions). Affected: `QueryCommandRunner.cs`.
+- **F# reference extraction** — F# now supports call-graph queries (`references`, `callers`, `callees`). Parenthesized calls like `someFunc(x)` and constructor calls `new ClassName()` are detected. F#-specific keywords added to the ignore list. Note: space-separated F# calls (`List.map f xs`) are not captured — this is a known limitation of regex-based extraction. Affected: `ReferenceExtractor.cs`.
+- **MCP instructions: symbol kind filter guidance** — AI clients now receive guidance on filtering symbols by kind (function, class, struct, interface, enum, property, event, delegate) in the MCP initialize instructions. Affected: `McpToolHandlers.cs`.
+- **SQL reference extraction** — SQL now supports call-graph queries. SQL function calls like `COALESCE()`, `LOWER()`, `LENGTH()`, `NOW()` are detected. SQL keywords (uppercase) added to the ignore list. Affected: `ReferenceExtractor.cs`.
+- **README MCP tool table sync** — Updated MCP tool tables (English and Japanese) to list all 21 tools including `unused_symbols`, `symbol_hotspots`, `validate`, `ping`, and `suggest_improvement`. Updated tool count from 16 to 21. Affected: `README.md`.
+- **ANSI color-coded symbol kinds** — `symbols`, `unused`, and `hotspots` CLI output now color-codes symbol kinds: cyan for class/struct, blue for interface, magenta for enum/delegate, yellow for function, green for property, red for event, dim for namespace/import. Colors degrade to plain text when output is piped. Affected: `ConsoleUi.cs`, `QueryCommandRunner.cs`.
+- **Cross-language symbol kind consistency tests** — Added 32 parameterized test cases verifying that all typed languages (C#, Java, Kotlin, TypeScript, Go, Rust, Swift, C, C++, PHP, Scala, Dart, GraphQL) produce the expected symbol kinds (struct, interface, enum, property, delegate, event). Prevents regressions when modifying extraction patterns. Affected: `SymbolExtractorTests.cs`.
+- **Cyclomatic complexity estimate** — `definition --body --json` and MCP `definition` with `includeBody` now include a `complexity` field: a regex-based cyclomatic complexity estimate (baseline 1, counting if/else/for/while/case/catch/??/&&/|| etc.). This is a heuristic, not a true CFG analysis, but helps AI agents identify refactoring targets. Affected: `SymbolExtractor.cs`, `DbSymbolReader.cs`, `QueryResults.cs`.
+- **PowerShell .psm1/.psd1 file support** — Added `.psm1` (module) and `.psd1` (data) extensions to PowerShell language detection. Affected: `FileIndexer.cs`.
+
+#### Fixed
+- **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
+- **unused/hotspots bare-name collision and unsupported-language false positives** — `unused` now defaults to graph-supported languages only, preventing unsupported languages (CSS, Zig, PowerShell, etc.) from producing false "all symbols unused" results. `hotspots` GROUP BY now includes container_name to distinguish same-named symbols in different classes. Both commands warn when querying unsupported languages. MCP `unused_symbols` includes `graph_supported` metadata. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
+- **C# call sites misidentified as definitions (#40)** — Fixed C# method pattern and explicit interface implementation pattern matching call-site lines like `await FuncName(...)`, `return service.GetResult()`, `throw factory.Create(...)` as method definitions. Added negative lookahead for statement keywords (await, return, throw, yield, var, etc.) to both patterns. Affected: `SymbolExtractor.cs`.
+- **C# generic method overloads not extracted (#41)** — Fixed C# method pattern not matching generic methods like `TryRaise<T>(...)` or `GetItems<TKey, TValue>(...)`. The pattern now allows optional type parameters `<...>` between the method name and the opening parenthesis. Also applied to explicit interface implementation pattern. Affected: `SymbolExtractor.cs`.
+- **Empty query accepted by definition/references/callers/callees (#43)** — These commands now reject empty or whitespace-only queries with a clear error message (exit code 1), matching the existing behavior of `inspect`. Affected: `QueryCommandRunner.cs`.
+- **`--since` with invalid date silently returns all files (#44)** — `--since` now uses strict invariant ISO 8601 parsing (`DateTimeOffset.TryParseExact` with `CultureInfo.InvariantCulture`), rejecting ambiguous locale-dependent formats like `01/02/2024`. Bare `--since` with no value is also rejected instead of silently dropping the filter. The parser is shared between CLI and MCP. Affected: `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
+- **`map --path` returns exit code 0 for nonexistent path (#45)** — `map` now returns exit code 2 with an error message when filters produce zero files, matching the pattern used by `outline` and `excerpt`. MCP `repo_map` adds freshness hints on zero results. Affected: `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
+- **`outline` throws database NULL error on certain files (#46)** — Fixed `GetOutline` crashing with "The data is NULL at ordinal 3" when a symbol has NULL `start_line`/`end_line`. Now falls back to `line` value, matching the pattern used by `SearchSymbols` and `GetNearbySymbols`. Affected: `DbSymbolReader.cs`.
+- **`excerpt --start N --end M` silently returns single line when start > end (#47)** — CLI `excerpt` now rejects `--start > --end` with exit code 1. MCP `excerpt` already validated this. Affected: `QueryCommandRunner.cs`.
+
 ### [1.6.0] - 2026-04-12
 
 #### Added
@@ -497,6 +532,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **C#シンボル種別の細分化** — C#シンボルに意味的に正確な種別を導入: `property`（get/set・式本体）、`interface`、`enum`、`struct`（`record struct`・`ref struct`・`readonly struct`含む）、`event`、`delegate`。従来は汎用的な `class` や `function` に分類されていた。AIエージェントが `--kind property`、`--kind interface` 等でフィルタ可能に。bash/zsh/fishのシェル補完も更新。対象: `SymbolExtractor.cs`、`ConsoleUi.cs`。
+- **Java/Kotlinシンボル種別の細分化** — Javaのインターフェースとenumが `kind="interface"` / `kind="enum"` に（従来は `kind="class"`）。Kotlinの sealed interface が `kind="interface"`、enum class が `kind="enum"`、`val`/`var` プロパティが `kind="property"` に。対象: `SymbolExtractor.cs`。
+- **全型付き言語のシンボル種別細分化** — TypeScript、Go、Rust、Swift、C、C++、PHP、Scala、Dart、GraphQL、VB.NETで意味的に正確な種別を導入: `struct`、`interface`（trait/protocol含む）、`enum`。対象: `SymbolExtractor.cs`。
+- **Zigシンボル抽出** — Zig向けシンボル抽出パターンを追加: `pub fn`/`fn`（関数）、`const struct`（構造体）、`const enum`（列挙型）、`const union`/`error`（クラス）、`test`ブロック、`@import`。従来はZigは言語として登録されていたが抽出パターンがゼロだった。対象: `SymbolExtractor.cs`。
+- **PowerShellシンボル抽出** — PowerShell (.ps1) 向けシンボル抽出パターンを追加: `function`/`filter`（関数）、`class`（クラス）、`enum`（列挙型）、`Import-Module`/`using module`（インポート）。対象: `SymbolExtractor.cs`。
+- **`unused` CLIコマンドと `unused_symbols` MCPツール** — インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する（潜在的なデッドコード）。参照抽出対応言語でのみ意味がある。`cdidx unused` CLIコマンドと `unused_symbols` MCPツールとして利用可能。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`Program.cs`、`ConsoleUi.cs`、`McpToolDefinitions.cs`、`McpToolHandlers.cs`、`McpServer.cs`。
+- **CSS/SCSSシンボル抽出** — CSS/SCSS向けシンボル抽出を追加: `.class`セレクタ（class）、`#id`セレクタ（function）、`@mixin`（function）、`@keyframes`（function）、`@import`/`@use`（import）、`$variable`（property）。対象: `SymbolExtractor.cs`。
+- **`hotspots` CLIコマンドと `symbol_hotspots` MCPツール** — コードベースで最も参照されるシンボルを参照回数順に検索する。変更が広範囲に影響する中心的なコードの特定に有用。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`Program.cs`、`ConsoleUi.cs`、`McpToolDefinitions.cs`、`McpToolHandlers.cs`、`McpServer.cs`。
+
+#### 変更
+- **可視性に基づくシンボルランキング** — `symbols` と `definition` の結果が public シンボルを private/internal より上位に表示するようになった。ランキング階層: public/open/pub/export (0) > protected (1) > internal (2) > private (3) > 不明 (4)。AIエージェントが API サーフェスを探す際に最も関連性の高い結果が先に得られる。対象: `DbReader.cs`、`DbSymbolReader.cs`。
+- **検索ランキングの最終更新日タイブレーカー** — 同ランクの検索結果の中で、最近変更されたファイルが先に表示されるようになった。最終的なアルファベット順タイブレーカーの前に `f.modified DESC` を追加。対象: `DbSearchReader.cs`。
+- **新しいクエリパターン用の追加DBインデックス** — スタンドアロン `--kind` フィルタ用の `symbols(kind)`、可視性ランキング用の `symbols(visibility)`、ホットスポット/未使用分析用の `symbol_references(symbol_name, reference_kind)` を追加。対象: `DbContext.cs`。
+- **unused/hotspots の kind/lang 検証ヒント** — `unused` と `hotspots` で0件時に有用なヒント（不正な kind、不明な言語、古いインデックス、フィルタ提案）を表示。対象: `QueryCommandRunner.cs`。
+- **F# 参照抽出** — F# でコールグラフクエリ（`references`、`callers`、`callees`）が利用可能に。`someFunc(x)` のような括弧付き呼び出しと `new ClassName()` のコンストラクタ呼び出しを検出。F# 固有キーワードを除外リストに追加。注意: スペース区切りの F# 呼び出し（`List.map f xs`）は検出できない — 正規表現ベース抽出の既知の制限。対象: `ReferenceExtractor.cs`。
+- **MCP instructions: シンボル種別フィルタのガイダンス** — AIクライアントが MCP initialize 応答で、シンボルの種別フィルタ（function, class, struct, interface, enum, property, event, delegate）の使い方を案内されるようになった。対象: `McpToolHandlers.cs`。
+- **SQL 参照抽出** — SQL でコールグラフクエリが利用可能に。`COALESCE()`、`LOWER()`、`LENGTH()`、`NOW()` 等の SQL 関数呼び出しを検出。SQL キーワード（大文字）を除外リストに追加。対象: `ReferenceExtractor.cs`。
+- **README MCPツール表の同期** — MCPツール表（英語・日本語）を全21ツール（`unused_symbols`、`symbol_hotspots`、`validate`、`ping`、`suggest_improvement` を含む）にリストアップ。ツール数を16から21に更新。対象: `README.md`。
+- **ANSIカラーコード付きシンボル種別** — `symbols`、`unused`、`hotspots` のCLI出力でシンボル種別を色分け表示: シアン（class/struct）、青（interface）、マゼンタ（enum/delegate）、黄（function）、緑（property）、赤（event）、暗灰（namespace/import）。パイプ時は無色テキストに自動退化。対象: `ConsoleUi.cs`、`QueryCommandRunner.cs`。
+- **クロス言語シンボル種別一貫性テスト** — 全型付き言語（C#、Java、Kotlin、TypeScript、Go、Rust、Swift、C、C++、PHP、Scala、Dart、GraphQL）が期待通りのシンボル種別（struct、interface、enum、property、delegate、event）を出力することを検証する32件のパラメータ化テストを追加。抽出パターン変更時のリグレッションを防止。対象: `SymbolExtractorTests.cs`。
+- **サイクロマティック複雑度推定** — `definition --body --json` および MCP の `definition`（`includeBody` 指定時）が `complexity` フィールドを含むようになった。if/else/for/while/case/catch/??/&&/|| 等をカウントする正規表現ベースのヒューリスティック推定（基準値1）。AIエージェントがリファクタリング対象を特定するのに有用。対象: `SymbolExtractor.cs`、`DbSymbolReader.cs`、`QueryResults.cs`。
+- **PowerShell .psm1/.psd1 ファイル対応** — PowerShell 言語検出に `.psm1`（モジュール）と `.psd1`（データ）拡張子を追加。対象: `FileIndexer.cs`。
+
+#### 修正
+- **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
+- **unused/hotspots の名前衝突と未対応言語の偽陽性を修正** — `unused` がデフォルトでグラフ対応言語のみに制限されるようになり、未対応言語（CSS、Zig、PowerShell等）の「全シンボル未使用」偽陽性を防止。`hotspots` の GROUP BY に container_name を追加し、異なるクラスの同名シンボルを区別。未対応言語クエリ時に警告を表示。MCP `unused_symbols` に `graph_supported` メタデータを追加。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`McpToolHandlers.cs`。
+- **C# 呼び出し箇所が定義として誤検出される問題を修正 (#40)** — `await FuncName(...)`、`return service.GetResult()`、`throw factory.Create(...)` のような呼び出し行がメソッド定義や明示的インターフェース実装としてマッチしていた問題を修正。メソッドパターンと明示的インターフェース実装パターンの両方にステートメントキーワード（await, return, throw, yield, var 等）の negative lookahead を追加。対象: `SymbolExtractor.cs`。
+- **C# ジェネリックメソッドオーバーロードが抽出されない問題を修正 (#41)** — `TryRaise<T>(...)` や `GetItems<TKey, TValue>(...)` のようなジェネリックメソッドがメソッドパターンにマッチしなかった問題を修正。メソッド名と開き括弧の間にオプションの型パラメータ `<...>` を許容するようパターンを更新。明示的インターフェース実装パターンにも適用。対象: `SymbolExtractor.cs`。
+- **definition/references/callers/callees が空クエリを受け入れる問題を修正 (#43)** — これらのコマンドが空文字列・空白のみのクエリを明確なエラーメッセージ（終了コード1）で拒否するようになった。`inspect` の既存動作と一致。対象: `QueryCommandRunner.cs`。
+- **`--since` に無効な日付を指定すると全ファイルが返される問題を修正 (#44)** — `--since` が厳密なインバリアントISO 8601パース（`DateTimeOffset.TryParseExact` + `CultureInfo.InvariantCulture`）を使うようになり、`01/02/2024` のようなロケール依存の曖昧な形式を拒否する。値なしの `--since` もフィルタを無視せずエラーを返す。パーサーはCLIとMCPで共有。対象: `QueryCommandRunner.cs`、`McpToolHandlers.cs`。
+- **`map --path` が存在しないパスで終了コード0を返す問題を修正 (#45)** — `map` がフィルタ結果0件のとき終了コード2とエラーメッセージを返すようになった。`outline` や `excerpt` のパターンと一致。MCP の `repo_map` も0件時に鮮度ヒントを付加。対象: `QueryCommandRunner.cs`、`McpToolHandlers.cs`。
+- **`outline` が特定ファイルでデータベースNULLエラーを投げる問題を修正 (#46)** — `GetOutline` がシンボルの `start_line`/`end_line` がNULLのとき "The data is NULL at ordinal 3" でクラッシュしていた問題を修正。`SearchSymbols` や `GetNearbySymbols` と同じく `line` 値にフォールバックする。対象: `DbSymbolReader.cs`。
+- **`excerpt --start N --end M` で start > end のとき1行だけ返す問題を修正 (#47)** — CLI の `excerpt` が `--start > --end` を終了コード1で拒否するようになった。MCP の `excerpt` は既に検証済み。対象: `QueryCommandRunner.cs`。
 
 ### [1.6.0] - 2026-04-12
 

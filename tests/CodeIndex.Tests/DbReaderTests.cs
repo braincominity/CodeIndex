@@ -642,4 +642,38 @@ public class DbReaderTests : IDisposable
 
         Assert.Null(outline);
     }
+
+    [Fact]
+    public void GetOutline_NullStartEndLine_FallsBackToLine()
+    {
+        // Insert a file with a symbol that has NULL start_line/end_line (#46)
+        // start_line/end_lineがNULLのシンボルを持つファイルを挿入（#46）
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/nullcol.cs", Lang = "csharp", Size = 100, Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 10,
+            Content = "class Foo { void Bar() {} }",
+        }]);
+        // Insert symbol with NULL start_line and end_line via raw SQL /
+        // start_lineとend_lineがNULLのシンボルを生SQLで挿入
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"INSERT INTO symbols (file_id, kind, name, line, start_line, end_line)
+                            VALUES (@fid, 'function', 'Bar', 5, NULL, NULL)";
+        cmd.Parameters.AddWithValue("@fid", fileId);
+        cmd.ExecuteNonQuery();
+
+        var outline = _reader.GetOutline("src/nullcol.cs");
+
+        Assert.NotNull(outline);
+        var sym = Assert.Single(outline!.Symbols);
+        Assert.Equal("Bar", sym.Name);
+        Assert.Equal(5, sym.Line);
+        // Falls back to line value when start_line/end_line are NULL / NULLの場合lineにフォールバック
+        Assert.Equal(5, sym.StartLine);
+        Assert.Equal(5, sym.EndLine);
+    }
 }

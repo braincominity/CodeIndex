@@ -317,6 +317,46 @@ public partial class McpServer
                 },
                 IndexAnnotations()),
             CreateToolDefinition(
+                "symbol_hotspots",
+                "Find the most-referenced symbols in the codebase (hotspot analysis). "
+                + "Returns symbols ordered by total reference count. Useful for identifying central, high-impact code. "
+                + "/ コードベースで最も参照されるシンボルを検索する（ホットスポット分析）。"
+                + "参照回数順にシンボルを返す。中心的で影響の大きいコードの特定に有用。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Restrict to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude paths containing any of these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files (default: false)", ["default"] = false }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "unused_symbols",
+                "Find symbols that are defined but never referenced in the indexed codebase. "
+                + "Useful for dead code detection. Only meaningful for languages with reference extraction support. "
+                + "/ インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する。"
+                + "デッドコード検出に有用。参照抽出対応言語でのみ意味がある。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind (function, class, property, interface, enum, struct, event, delegate)" },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (recommended: use a graph-supported language)" },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 50)", ["default"] = 50 },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Restrict to paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude paths containing any of these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files (default: false)", ["default"] = false }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "suggest_improvement",
                 "Submit a structured improvement suggestion or error report for cdidx. "
                 + "Call this when you notice a gap (e.g. missing language support, poor ranking) or encounter an unexpected error. "

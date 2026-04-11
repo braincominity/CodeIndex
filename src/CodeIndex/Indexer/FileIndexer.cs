@@ -77,6 +77,8 @@ public class FileIndexer
         [".gradle"] = "gradle",    // Gradle build scripts / Gradle ビルドスクリプト
         [".cmake"]  = "cmake",     // CMake scripts / CMake スクリプト
         [".ps1"]    = "powershell",// PowerShell scripts / PowerShell スクリプト
+        [".psm1"]   = "powershell",// PowerShell modules / PowerShell モジュール
+        [".psd1"]   = "powershell",// PowerShell data files / PowerShell データファイル
         [".bat"]    = "batch",     // Windows batch files / Windows バッチファイル
         [".cmd"]    = "batch",
         [".bash"]   = "shell",

@@ -34,7 +34,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (26 languages)
+    SymbolExtractor.cs        — Regex-based symbol extraction (32 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
@@ -359,41 +359,44 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 
 Symbols are extracted with **compiled regex patterns**, matching one line at a time. Each language has patterns for functions, classes, and sometimes imports. Named capture group `(?<name>\w+)` extracts the identifier.
 
-Supported symbol kinds by language (29 languages with symbol extraction):
+Supported symbol kinds by language (32 languages with symbol extraction):
 
-| Language | function | class / namespace | import | Graph |
-|---|---|---|---|:---:|
-| Python | def, async def | class | from/import | yes |
-| JavaScript | function, arrow, methods | class | import...from | yes |
-| TypeScript | function, arrow, methods | class, interface, type, enum, abstract class, namespace/module | import...from | yes |
-| C# | methods, constructors, operators, indexers, const, static readonly, properties, events, enum members, #region, static ctors, finalizers | class, interface, enum, record, struct, delegate, ref struct | using, using alias | yes |
-| Go | func, methods | struct, interface, type alias | import | yes |
-| Rust | fn, const fn, unsafe fn, macro_rules!, const, static | struct, enum, trait, union, impl, type alias, mod | use | yes |
-| Java | methods, static final constants, enum members | class, interface, enum, record, sealed, @interface | import | yes |
-| Kotlin | fun, extension fun, suspend/inline/infix, val/var | class, interface, enum class, object, companion object, data/sealed/value/inner/annotation class | import | yes |
-| Ruby | def, attr_accessor/reader/writer, Rails DSL (has_many, belongs_to, scope) | class, module | require | yes |
-| C | functions | struct, enum | #include | yes |
-| C++ | functions | class, struct, namespace, enum | #include | yes |
-| PHP | function, const | class (readonly/abstract/final), interface, trait, enum, namespace | use, require/include | yes |
-| Swift | func (mutating/nonisolated) | class, struct, enum, protocol, actor, distributed actor, typealias | import | yes |
-| Dart | functions | class, mixin, enum, extension | import | yes |
-| Scala | def | class, object, trait, case class, enum | import | yes |
-| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require | yes |
-| Shell | function declarations | -- | -- | -- |
-| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- |
-| Terraform | variable, output, locals | resource, data, module | -- | -- |
-| Protobuf | rpc | message, enum, service | import | -- |
-| GraphQL | query, mutation, subscription | type, interface, union, enum, scalar, input | -- | -- |
-| Gradle | task, def | -- | apply plugin, id | -- |
-| Makefile | targets | -- | -- | -- |
-| Dockerfile | named stages (AS) | base images (FROM) | -- | -- |
-| Lua | function, local function | -- | require | yes |
-| R | name <- function() | -- | library, require | -- |
-| Haskell | type signatures (name ::) | data, newtype, type, class, instance | import | -- |
-| F# | let, let rec | type, module | open | -- |
-| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | yes |
+| Language | function | class | struct | interface | enum | property | event/delegate | import | Graph |
+|---|---|---|---|---|---|---|---|---|:---:|
+| Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
+| JavaScript | function, arrow, methods | class | -- | -- | -- | -- | -- | import...from | yes |
+| TypeScript | function, arrow, methods | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
+| C# | methods, ctors, operators, indexers, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
+| Go | func, methods | type alias | struct | interface | -- | -- | -- | import | yes |
+| Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
+| Java | methods, static final, enum members | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
+| Kotlin | fun, extension fun | class, object, companion, data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
+| Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
+| C | functions | -- | struct | -- | enum | -- | -- | #include | yes |
+| C++ | functions | class | struct | -- | enum, enum class | -- | -- | #include | yes |
+| PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
+| Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
+| Dart | functions | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
+| Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
+| Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
+| Shell | function declarations | -- | -- | -- | -- | -- | -- | -- | -- |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- | -- | -- | -- | -- | yes |
+| Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
+| Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
+| GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
+| Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
+| Makefile | targets | -- | -- | -- | -- | -- | -- | -- | -- |
+| Dockerfile | named stages (AS) | base images (FROM) | -- | -- | -- | -- | -- | -- | -- |
+| Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
+| R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
+| Haskell | type signatures (name ::) | data, newtype, type, instance | -- | class (typeclass) | -- | -- | -- | import | -- |
+| F# | let, let rec | type, module | -- | -- | -- | -- | -- | open | yes |
+| VB.NET | Sub, Function | Class, Module | Structure | Interface | Enum | -- | -- | Imports | yes |
+| Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
+| PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
+| CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
 
-Additionally, 17 languages are detected and indexed as raw text without symbol extraction: batch, cmake, css, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, powershell, svelte, toml, vue, xml, yaml, zig.
+Additionally, 14 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml.
 
 Regex-based extraction is intentionally simple. Speed and portability are prioritized over AST-level accuracy.
 
@@ -601,7 +604,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — 正規表現によるシンボル抽出（21言語対応）
+    SymbolExtractor.cs        — 正規表現によるシンボル抽出（32言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -926,41 +929,44 @@ LIMIT 20;
 
 シンボルは**コンパイル済み正規表現パターン**で1行ずつマッチングして抽出されます。各言語に関数、クラス、場合によってはインポート用のパターンがあります。名前付きキャプチャグループ `(?<name>\w+)` で識別子を取得します。
 
-言語別対応シンボル種別（シンボル抽出対応29言語）:
+言語別対応シンボル種別（シンボル抽出対応32言語）:
 
-| 言語 | function | class / namespace | import | Graph |
-|---|---|---|---|:---:|
-| Python | def, async def | class | from/import | yes |
-| JavaScript | function, アロー, メソッド | class | import...from | yes |
-| TypeScript | function, アロー, メソッド | class, interface, type, enum, abstract class, namespace/module | import...from | yes |
-| C# | メソッド, コンストラクタ, 演算子, インデクサ, const, static readonly, プロパティ, イベント, enum メンバー, #region, 静的コンストラクタ, ファイナライザ | class, interface, enum, record, struct, delegate, ref struct | using, using alias | yes |
-| Go | func, メソッド | struct, interface, 型エイリアス | import | yes |
-| Rust | fn, const fn, unsafe fn, macro_rules!, const, static | struct, enum, trait, union, impl, type alias, mod | use | yes |
-| Java | メソッド, static final 定数, enum メンバー | class, interface, enum, record, sealed, @interface | import | yes |
-| Kotlin | fun, 拡張関数, suspend/inline/infix, val/var | class, interface, enum class, object, companion object, data/sealed/value/inner/annotation class | import | yes |
-| Ruby | def, attr_accessor/reader/writer, Rails DSL | class, module | require | yes |
-| C | 関数 | struct, enum | #include | yes |
-| C++ | 関数 | class, struct, namespace, enum | #include | yes |
-| PHP | function, const | class (readonly/abstract/final), interface, trait, enum, namespace | use, require/include | yes |
-| Swift | func (mutating/nonisolated) | class, struct, enum, protocol, actor, distributed actor, typealias | import | yes |
-| Dart | 関数 | class, mixin, enum, extension | import | yes |
-| Scala | def | class, object, trait, case class, enum | import | yes |
-| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require | yes |
-| Shell | 関数宣言 | -- | -- | -- |
-| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- |
-| Terraform | variable, output, locals | resource, data, module | -- | -- |
-| Protobuf | rpc | message, enum, service | import | -- |
-| GraphQL | query, mutation, subscription | type, interface, union, enum, scalar, input | -- | -- |
-| Gradle | task, def | -- | apply plugin, id | -- |
-| Makefile | ターゲット | -- | -- | -- |
-| Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- |
-| Lua | function, local function | -- | require | yes |
-| R | name <- function() | -- | library, require | -- |
-| Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import | -- |
-| F# | let, let rec | type, module | open | -- |
-| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports | yes |
+| 言語 | function | class | struct | interface | enum | property | event/delegate | import | Graph |
+|---|---|---|---|---|---|---|---|---|:---:|
+| Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
+| JavaScript | function, アロー, メソッド | class | -- | -- | -- | -- | -- | import...from | yes |
+| TypeScript | function, アロー, メソッド | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
+| C# | メソッド, コンストラクタ, 演算子, インデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
+| Go | func, メソッド | 型エイリアス | struct | interface | -- | -- | -- | import | yes |
+| Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
+| Java | メソッド, static final, enum メンバー | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
+| Kotlin | fun, 拡張関数 | class, object, companion, data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
+| Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
+| C | 関数 | -- | struct | -- | enum | -- | -- | #include | yes |
+| C++ | 関数 | class | struct | -- | enum, enum class | -- | -- | #include | yes |
+| PHP | function, const | class | -- | interface, trait | enum | -- | -- | use, require/include | yes |
+| Swift | func | class, actor | struct | protocol | enum | -- | -- | import | yes |
+| Dart | 関数 | class, mixin, extension | -- | -- | enum | -- | -- | import | yes |
+| Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
+| Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
+| Shell | 関数宣言 | -- | -- | -- | -- | -- | -- | -- | -- |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- | -- | -- | -- | -- | yes |
+| Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
+| Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
+| GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
+| Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
+| Makefile | ターゲット | -- | -- | -- | -- | -- | -- | -- | -- |
+| Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- | -- | -- | -- | -- | -- |
+| Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
+| R | name <- function() | -- | -- | -- | -- | -- | -- | library, require | -- |
+| Haskell | 型シグネチャ (name ::) | data, newtype, type, instance | -- | class (型クラス) | -- | -- | -- | import | -- |
+| F# | let, let rec | type, module | -- | -- | -- | -- | -- | open | yes |
+| VB.NET | Sub, Function | Class, Module | Structure | Interface | Enum | -- | -- | Imports | yes |
+| Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
+| PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
+| CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
 
-他に17言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, css, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, powershell, svelte, toml, vue, xml, yaml, zig。
+他に14言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 

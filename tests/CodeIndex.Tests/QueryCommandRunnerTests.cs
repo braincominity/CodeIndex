@@ -165,6 +165,17 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunExcerpt_RejectsStartGreaterThanEnd()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["src/app.cs", "--start", "5", "--end", "3"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--start (5) must be less than or equal to --end (3)", stderr);
+    }
+
+    [Fact]
     public void RunInspect_BlankQueryReturnsUsageError()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
@@ -203,6 +214,74 @@ public class QueryCommandRunnerTests
             Assert.Equal(projectRoot, json.GetProperty("project_root").GetString());
             Assert.Equal(expectedHead, json.GetProperty("git_head").GetString());
             Assert.False(json.GetProperty("git_is_dirty").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_NonexistentPathReturnsNotFound()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_notfound");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--path", "nonexistent/"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No files found", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_NonexistentPathJsonReturnsNotFoundWithPayload()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_notfound_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--path", "nonexistent/", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(0, document.RootElement.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_EmptyDbWithoutFiltersReturnsSuccess()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_empty_ok");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            // No files inserted — empty but valid index / ファイル未挿入 — 空だが有効なインデックス
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Files      : 0", stdout);
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
@@ -282,6 +361,105 @@ public class QueryCommandRunnerTests
                 Console.SetError(originalError);
             }
         }
+    }
+
+    // --- TryParseIso8601Since tests / TryParseIso8601Sinceテスト ---
+
+    [Theory]
+    [InlineData("2024-01-15")]
+    [InlineData("2024-01-15T10:30")]              // minute precision / 分精度
+    [InlineData("2024-01-15T10:30Z")]
+    [InlineData("2024-01-15T10:30+09:00")]
+    [InlineData("2024-01-15T10:30:00")]
+    [InlineData("2024-01-15T10:30:00Z")]
+    [InlineData("2024-01-15T10:30:00+09:00")]
+    [InlineData("2024-01-15T10:30:00.000Z")]
+    [InlineData("2024-01-15T10:30:00.123")]       // offsetless fractional / オフセットなし小数秒
+    [InlineData("2024-01-15T10:30:00.1234567Z")]
+    [InlineData("2024-01-15T10:30:00.1Z")]        // 1-digit fraction / 1桁小数
+    public void TryParseIso8601Since_AcceptsValidIsoFormats(string input)
+    {
+        var ok = QueryCommandRunner.TryParseIso8601Since(input, out var result);
+        Assert.True(ok, $"Expected '{input}' to be accepted as ISO 8601");
+        Assert.Equal(DateTimeKind.Utc, result.Kind);
+    }
+
+    [Theory]
+    [InlineData("01/02/2024")]        // ambiguous locale-dependent / ロケール依存の曖昧な形式
+    [InlineData("1/2/2024")]
+    [InlineData("02-Jan-2024")]
+    [InlineData("Jan 15, 2024")]
+    [InlineData("not-a-date")]
+    [InlineData("yesterday")]
+    [InlineData("")]
+    public void TryParseIso8601Since_RejectsNonIsoFormats(string input)
+    {
+        var ok = QueryCommandRunner.TryParseIso8601Since(input, out _);
+        Assert.False(ok, $"Expected '{input}' to be rejected as non-ISO 8601");
+    }
+
+    [Fact]
+    public void TryParseIso8601Since_DateOnlyTreatedAsLocalTime()
+    {
+        // Offsetless dates are treated as local time, matching prior DateTime.TryParse behavior /
+        // オフセットなしの日付はローカル時刻として扱う（従来のDateTime.TryParseの動作と一致）
+        QueryCommandRunner.TryParseIso8601Since("2024-06-15", out var result);
+        var expected = new DateTimeOffset(2024, 6, 15, 0, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2024, 6, 15))).UtcDateTime;
+        Assert.Equal(expected, result);
+        Assert.Equal(DateTimeKind.Utc, result.Kind);
+    }
+
+    [Fact]
+    public void TryParseIso8601Since_ExplicitUtcTimestamp()
+    {
+        QueryCommandRunner.TryParseIso8601Since("2024-06-15T12:00:00Z", out var result);
+        Assert.Equal(new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc), result);
+    }
+
+    [Fact]
+    public void TryParseIso8601Since_ConvertsTimezoneOffsetToUtc()
+    {
+        QueryCommandRunner.TryParseIso8601Since("2024-06-15T12:00:00+09:00", out var result);
+        Assert.Equal(new DateTime(2024, 6, 15, 3, 0, 0, DateTimeKind.Utc), result);
+    }
+
+    [Fact]
+    public void ParseArgs_RejectsSinceWithAmbiguousDate()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["search", "foo", "--since", "01/02/2024"], jsonDefault: false);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("could not parse", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_AcceptsSinceWithIsoDate()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["search", "foo", "--since", "2024-01-02"], jsonDefault: false);
+        Assert.Null(options.ParseError);
+        Assert.NotNull(options.Since);
+        // Offsetless date → local midnight → UTC / オフセットなし → ローカル深夜 → UTC
+        var expected = new DateTimeOffset(2024, 1, 2, 0, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2024, 1, 2))).UtcDateTime;
+        Assert.Equal(expected, options.Since.Value);
+    }
+
+    [Fact]
+    public void ParseArgs_RejectsBareSinceWithNoValue()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["search", "foo", "--since"], jsonDefault: false);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--since requires a value", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_RejectsBareSinceForFiles()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["files", "--since"], jsonDefault: false);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--since requires a value", options.ParseError);
     }
 
     private static JsonDocument ParseJsonOutput(string stdout)

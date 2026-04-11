@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -13,6 +14,11 @@ public static class QueryCommandRunner
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: search requires a query argument");
@@ -69,7 +75,7 @@ public static class QueryCommandRunner
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: definition requires a symbol query argument");
             Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]");
@@ -138,7 +144,7 @@ public static class QueryCommandRunner
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: references requires a symbol query argument");
             Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
@@ -192,7 +198,7 @@ public static class QueryCommandRunner
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callers requires a symbol query argument");
             Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
@@ -242,7 +248,7 @@ public static class QueryCommandRunner
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.Query == null)
+        if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callees requires a caller query argument");
             Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
@@ -330,7 +336,7 @@ public static class QueryCommandRunner
                     var lineRange = r.EndLine > r.StartLine
                         ? $"{r.StartLine}-{r.EndLine}"
                         : r.StartLine.ToString();
-                    Console.WriteLine($"{r.Kind,-10} {r.Name,-40} {r.Path}:{lineRange}");
+                    Console.WriteLine($"{ConsoleUi.ColorizeKind(r.Kind, 10)} {r.Name,-40} {r.Path}:{lineRange}");
                 }
                 var symFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} symbols in {symFileCount} files)");
@@ -342,6 +348,11 @@ public static class QueryCommandRunner
     public static int RunFiles(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -399,6 +410,12 @@ public static class QueryCommandRunner
         }
 
         var endLine = options.EndLine ?? options.StartLine.Value;
+        if (endLine < options.StartLine.Value)
+        {
+            Console.Error.WriteLine($"Error: --start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).");
+            return CommandExitCodes.UsageError;
+        }
+
         return WithDb(options.DbPath, reader =>
         {
             var excerpt = reader.GetExcerpt(options.Query, options.StartLine.Value, endLine, options.ContextBefore, options.ContextAfter);
@@ -430,6 +447,24 @@ public static class QueryCommandRunner
         {
             var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath);
+
+            // Return not-found only when a narrowing filter is active and produces zero files.
+            // Unfiltered empty indexes return success (valid state for health probes).
+            // フィルタ指定時に該当0件なら未検出を返す。フィルタなしの空DBは正常（ヘルスチェック用途）。
+            var hasFilter = options.PathPattern != null || options.ExcludePaths.Count > 0
+                || options.ExcludeTests || options.Lang != null;
+            if (map.FileCount == 0 && hasFilter)
+            {
+                if (options.Json)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(map, jsonOptions));
+                }
+                else
+                {
+                    Console.Error.WriteLine("No files found matching the given filters.");
+                }
+                return CommandExitCodes.NotFound;
+            }
 
             if (options.Json)
             {
@@ -649,6 +684,84 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                {
+                    Console.Error.WriteLine("No symbol hotspots found.");
+                    WriteZeroResultHints(options, reader);
+                    WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
+                }
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                var items = results.Select(r => new { name = r.Symbol.Name, kind = r.Symbol.Kind, path = r.Symbol.Path, line = r.Symbol.Line, reference_count = r.ReferenceCount, visibility = r.Symbol.Visibility, container = r.Symbol.ContainerName });
+                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, hotspots = items }, jsonOptions));
+            }
+            else
+            {
+                foreach (var (s, refCount) in results)
+                {
+                    var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
+                    Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
+                }
+                Console.Error.WriteLine($"({results.Count} symbol hotspots)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
+    public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            // Warn if user specified an unsupported language / 未対応言語の場合は警告
+            if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
+                Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Results may contain false positives.");
+
+            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                {
+                    Console.Error.WriteLine("No unused symbols found.");
+                    WriteZeroResultHints(options, reader);
+                    WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
+                }
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, symbols = results }, jsonOptions));
+            }
+            else
+            {
+                foreach (var s in results)
+                {
+                    var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
+                    var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
+                    Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
+                }
+                Console.Error.WriteLine($"({results.Count} potentially unused symbols)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -757,6 +870,7 @@ public static class QueryCommandRunner
         DateTime? since = null;
         bool noDedup = false;
         bool exact = false;
+        string? parseError = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -812,10 +926,13 @@ public static class QueryCommandRunner
                     excludeTests = true;
                     break;
                 case "--since" when i + 1 < args.Length:
-                    if (DateTime.TryParse(args[++i], null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedSince))
-                        since = parsedSince.ToUniversalTime();
+                    if (TryParseIso8601Since(args[++i], out var parsedSince))
+                        since = parsedSince;
                     else
-                        Console.Error.WriteLine($"Warning: could not parse --since value '{args[i]}' as a date/time");
+                        parseError = $"Error: could not parse --since value '{args[i]}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+                    break;
+                case "--since":
+                    parseError = "Error: --since requires a value. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
                     break;
                 case "--start" when i + 1 < args.Length:
                     startLine = ParsePositiveInt(args[++i], "--start");
@@ -867,6 +984,7 @@ public static class QueryCommandRunner
             Since = since,
             NoDedup = noDedup,
             Exact = exact,
+            ParseError = parseError,
         };
     }
 
@@ -986,6 +1104,45 @@ public static class QueryCommandRunner
 
         return value;
     }
+
+    // Accepted ISO 8601 formats for --since / --sinceフィルタで受け付けるISO 8601書式
+    private static readonly string[] Iso8601Formats =
+    [
+        // date only / 日付のみ
+        "yyyy-MM-dd",
+        // minute precision / 分精度
+        "yyyy-MM-ddTHH:mm",
+        "yyyy-MM-ddTHH:mmZ",
+        "yyyy-MM-ddTHH:mmzzz",
+        // second precision / 秒精度
+        "yyyy-MM-ddTHH:mm:ss",
+        "yyyy-MM-ddTHH:mm:ssZ",
+        "yyyy-MM-ddTHH:mm:sszzz",
+        // fractional seconds (1-7 digits via 'F') / 小数秒（1-7桁、'F'で可変長）
+        "yyyy-MM-ddTHH:mm:ss.FFFFFFFZ",
+        "yyyy-MM-ddTHH:mm:ss.FFFFFFFzzz",
+        "yyyy-MM-ddTHH:mm:ss.FFFFFFF",
+        // round-trip format / ラウンドトリップ書式
+        "o",
+    ];
+
+    /// <summary>
+    /// Parse a --since value using invariant ISO 8601 formats only.
+    /// Rejects ambiguous locale-dependent formats like MM/dd/yyyy.
+    /// Offsetless inputs are treated as local time (matching prior behavior).
+    /// ISO 8601形式のみで--since値をパースする。MM/dd/yyyyなどロケール依存の曖昧な形式は拒否する。
+    /// オフセットなしの入力はローカル時刻として扱う（従来の動作を維持）。
+    /// </summary>
+    internal static bool TryParseIso8601Since(string value, out DateTime result)
+    {
+        if (DateTimeOffset.TryParseExact(value, Iso8601Formats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var dto))
+        {
+            result = dto.UtcDateTime;
+            return true;
+        }
+        result = default;
+        return false;
+    }
 }
 
 public sealed class QueryCommandOptions
@@ -1010,4 +1167,5 @@ public sealed class QueryCommandOptions
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
     public bool Exact { get; init; }
+    public string? ParseError { get; init; }
 }

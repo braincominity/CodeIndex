@@ -13,7 +13,7 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua", "vb"
+        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -31,6 +31,19 @@ public static class ReferenceExtractor
         "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
         // Java contextual keywords / Java 文脈キーワード
         "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
+        // F# contextual keywords / F# 文脈キーワード
+        "match", "with", "member", "override", "abstract", "mutable", "rec", "fun", "open",
+        "module", "type", "of", "then", "elif", "done", "begin", "end", "do",
+        // Shell built-in commands / Shell 組み込みコマンド
+        "echo", "exit", "cd", "set", "unset", "export", "source", "eval", "exec",
+        "test", "read", "shift", "trap", "local", "declare", "readonly",
+        // SQL keywords (uppercase only to avoid collisions with other languages)
+        // SQL キーワード（他言語との衝突を避けるため大文字のみ）
+        "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "JOIN", "INTO",
+        "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "OFFSET", "UNION",
+        "EXISTS", "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE",
+        "AS", "ON", "AND", "OR", "NOT", "NULL", "IN", "IS",
+        "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "IF",
         // Other languages / 他言語
         "print", "require", "import", "include", "raise", "lambda",
     };
@@ -193,8 +206,8 @@ public static class ReferenceExtractor
                 result = result[..slashIndex];
         }
 
-        // Lua uses -- for line comments / Lua は -- を行コメントに使う
-        if (lang is "lua")
+        // Lua and SQL use -- for line comments / Lua と SQL は -- を行コメントに使う
+        if (lang is "lua" or "sql")
         {
             var luaCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
             if (luaCommentIndex >= 0)

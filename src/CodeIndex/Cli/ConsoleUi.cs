@@ -385,6 +385,8 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx outline src/app.cs --json                Symbol outline of a single file");
         Console.WriteLine("  cdidx deps --path src/ --exclude-tests          Show file-level dependency edges");
         Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
+        Console.WriteLine("  cdidx unused --lang csharp --exclude-tests      Find potentially unused symbols");
+        Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find most-referenced symbols");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
@@ -397,7 +399,7 @@ public static class ConsoleUi
     [
         "index", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
-        "languages", "mcp",
+        "unused", "hotspots", "languages", "mcp",
     ];
 
     /// <summary>
@@ -452,7 +454,7 @@ public static class ConsoleUi
     case ""$prev"" in
         --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
         --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
-        --kind) COMPREPLY=($(compgen -W ""function class namespace import"" -- ""$cur"")) ;;
+        --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
         *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --help"" -- ""$cur"")) ;;
     esac
 }}
@@ -481,7 +483,7 @@ _cdidx() {{
                 '--json[JSON output]' \
                 '--limit[Max results]:number' \
                 '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                '--kind[Filter by kind]:kind:(function class namespace import)' \
+                '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
                 '--path[Path filter]:pattern' \
                 '--exclude-path[Exclude path]:pattern' \
                 '--exclude-tests[Exclude tests]' \
@@ -518,6 +520,36 @@ _cdidx");
     }
 
     // --- Helpers / ヘルパー ---
+
+    /// <summary>
+    /// Colorize a symbol kind name with ANSI escape codes for terminal output.
+    /// Degrades to plain text when output is redirected (not a terminal).
+    /// シンボル種別名をANSIエスケープコードで色付けする。出力がリダイレクトされている場合は無色テキスト。
+    /// </summary>
+    public static string ColorizeKind(string kind, int padWidth = 0)
+    {
+        var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
+        if (!Console.IsOutputRedirected)
+        {
+            var color = kind switch
+            {
+                "class" => "\x1b[36m",      // cyan / シアン
+                "struct" => "\x1b[36m",     // cyan / シアン
+                "interface" => "\x1b[34m",  // blue / 青
+                "enum" => "\x1b[35m",       // magenta / マゼンタ
+                "function" => "\x1b[33m",   // yellow / 黄
+                "property" => "\x1b[32m",   // green / 緑
+                "event" => "\x1b[31m",      // red / 赤
+                "delegate" => "\x1b[35m",   // magenta / マゼンタ
+                "namespace" => "\x1b[90m",  // dim / 暗灰
+                "import" => "\x1b[90m",     // dim / 暗灰
+                _ => "",
+            };
+            if (color.Length > 0)
+                return $"{color}{padded}\x1b[0m";
+        }
+        return padded;
+    }
 
     /// <summary>
     /// Get console window width safely (some environments throw IOException).

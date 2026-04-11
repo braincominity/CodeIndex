@@ -224,12 +224,49 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void SupportsLanguage_FSharp_ReturnsFalse()
+    public void SupportsLanguage_FSharp_ReturnsTrue()
     {
-        // F# uses space-separated call syntax (foo x) not parenthesized, so
-        // the regex-based extractor cannot reliably detect call sites.
-        // F#はスペース区切りの呼び出し構文(foo x)を使うため、正規表現ベースの
-        // 抽出では呼び出し箇所を正確に検出できない。
-        Assert.False(ReferenceExtractor.SupportsLanguage("fsharp"));
+        // F# primarily uses space-separated syntax, but parenthesized calls
+        // (someFunc(x), new ClassName()) are common enough to provide value.
+        // F#は主にスペース区切りだが、括弧付き呼び出し（someFunc(x)、new ClassName()）は
+        // 十分一般的で、参照抽出の価値がある。
+        Assert.True(ReferenceExtractor.SupportsLanguage("fsharp"));
+    }
+
+    [Fact]
+    public void Extract_SQL_DetectsCallSites()
+    {
+        const string content = "SELECT COALESCE(name, 'unknown'), LOWER(email)\nFROM users\nWHERE LENGTH(name) > 0\n  AND created_at > NOW()";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "COALESCE" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "LOWER" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "LENGTH" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "NOW" && r.ReferenceKind == "call");
+        // SQL keywords should not be extracted / SQL キーワードは抽出されないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "SELECT");
+        Assert.DoesNotContain(references, r => r.SymbolName == "WHERE");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsParenthesizedCalls()
+    {
+        const string content = """
+            let validate user =
+                printfn("Validating %A" user)
+                let result = checkAge(user.Age)
+                result
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+        var references = ReferenceExtractor.Extract(1, "fsharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "printfn" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "checkAge" && r.ReferenceKind == "call");
+        // F# keywords should not be extracted / F# キーワードは抽出されないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "let");
+        Assert.DoesNotContain(references, r => r.SymbolName == "match");
     }
 }
