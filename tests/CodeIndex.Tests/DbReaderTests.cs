@@ -144,6 +144,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_DeduplicatesOverlappingChunks()
+    {
+        // Create two overlapping chunks in the same file that both match
+        // 同じファイル内でオーバー��ップし、両方マッチする2チャンクを作成
+        var overlapFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/overlap.py", Lang = "python", Size = 2000, Lines = 100,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord { FileId = overlapFileId, ChunkIndex = 0, StartLine = 1, EndLine = 80, Content = "# overlap_marker\ndef func_a():\n    pass\n" + string.Concat(Enumerable.Repeat("# filler\n", 76)) },
+            new ChunkRecord { FileId = overlapFileId, ChunkIndex = 1, StartLine = 71, EndLine = 150, Content = "# overlap_marker\ndef func_b():\n    pass\n" + string.Concat(Enumerable.Repeat("# filler\n", 76)) },
+        ]);
+
+        var results = _reader.Search("overlap_marker", limit: 10);
+
+        // Should deduplicate: only 1 result from overlap.py (higher ranked chunk kept)
+        // 重複排除: overlap.py からは1件のみ（上位ランクのチャンクを保持）
+        var overlapResults = results.Where(r => r.Path == "src/overlap.py").ToList();
+        Assert.Single(overlapResults);
+    }
+
+    [Fact]
     public void Search_PrefersDefinitionFileOverReferenceOnlySourceFile()
     {
         var refFileId = _writer.UpsertFile(new FileRecord

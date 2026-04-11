@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+#### Changed
+
+- **Search result deduplication across overlapping chunks** — When adjacent chunks (which share 10 lines of overlap) both match a query, the lower-ranked duplicate is now removed. This prevents the same code region from appearing twice in search results and reduces token waste for AI agents. Affected: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`.
+
 #### Fixed
 
 - **Outline duplicates visibility when signature already contains it** — `outline` human-readable output showed `public public static class Foo` because `visibility` was prepended to `signature` even though the signature (the raw source line) already included the keyword. Now checks for duplication before prepending. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -308,6 +312,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+#### 変更
+
+- **検索結果のオーバーラップチャンク間重複排除** — 10行のオーバーラップを持つ隣接チャンクが両方同じクエリにマッチした場合、ランクの低い重複を除去するようにした。同じコード領域が検索結果に2回出ることを防ぎ、AIエージェントのトークン消費を削減。対象: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`.
 
 #### 修正
 

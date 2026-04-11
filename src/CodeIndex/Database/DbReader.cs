@@ -122,11 +122,11 @@ public class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
 
-        var results = new List<SearchResult>();
+        var raw = new List<SearchResult>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            results.Add(new SearchResult
+            raw.Add(new SearchResult
             {
                 Path = reader.GetString(0),
                 Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
@@ -136,7 +136,7 @@ public class DbReader
                 Score = reader.GetDouble(5),
             });
         }
-        return results;
+        return DeduplicateOverlappingResults(raw);
     }
 
     /// <summary>
@@ -886,6 +886,35 @@ public class DbReader
             return $"f.{columnName}";
 
         return fallbackSql ?? "NULL";
+    }
+
+    /// <summary>
+    /// Remove search results that overlap with a higher-ranked result in the same file.
+    /// Chunks use 10-line overlap, so adjacent chunks can produce duplicate matches.
+    /// 同じファイル内で上位の結果と行範囲が重なる結果を除去する。
+    /// チャンクは10行重複するため、隣接チャンクが重複マッチを生じうる。
+    /// </summary>
+    private static List<SearchResult> DeduplicateOverlappingResults(List<SearchResult> results)
+    {
+        if (results.Count <= 1)
+            return results;
+
+        var deduped = new List<SearchResult>();
+        foreach (var r in results)
+        {
+            var dominated = false;
+            foreach (var kept in deduped)
+            {
+                if (kept.Path == r.Path && kept.StartLine <= r.EndLine && kept.EndLine >= r.StartLine)
+                {
+                    dominated = true;
+                    break;
+                }
+            }
+            if (!dominated)
+                deduped.Add(r);
+        }
+        return deduped;
     }
 
     internal static void AppendPathFilters(ref string sql, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
