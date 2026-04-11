@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.4.1] - 2026-04-12
+
 ### Fixed
 - Fix broken code blocks in `README.md`.
 
@@ -476,6 +478,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.4.1] - 2026-04-12
+
 ### 修正
 - `README.md` のコードブロック崩れを修正。
 
@@ -937,7 +941,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/Widthdom/CodeIndex/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/Widthdom/CodeIndex/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...v1.2.0
