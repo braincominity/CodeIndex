@@ -36,7 +36,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
 - **unused/hotspots bare-name collision and unsupported-language false positives** — `unused` now defaults to graph-supported languages only, preventing unsupported languages (CSS, Zig, PowerShell, etc.) from producing false "all symbols unused" results. `hotspots` GROUP BY now includes container_name to distinguish same-named symbols in different classes. Both commands warn when querying unsupported languages. MCP `unused_symbols` includes `graph_supported` metadata. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
-- **C# call sites misidentified as definitions (#40)** — Fixed C# method pattern and explicit interface implementation pattern matching call-site lines like `await FuncName(...)`, `return service.GetResult()`, `throw factory.Create(...)` as method definitions. Added negative lookahead for statement keywords (await, return, throw, yield, var, new, etc.) to both patterns. Affected: `SymbolExtractor.cs`.
+- **C# call sites misidentified as definitions (#40)** — Fixed C# method pattern and explicit interface implementation pattern matching call-site lines like `await FuncName(...)`, `return service.GetResult()`, `throw factory.Create(...)` as method definitions. Added negative lookahead for statement keywords (await, return, throw, yield, var, etc.) to both patterns. Affected: `SymbolExtractor.cs`.
+- **C# generic method overloads not extracted (#41)** — Fixed C# method pattern not matching generic methods like `TryRaise<T>(...)` or `GetItems<TKey, TValue>(...)`. The pattern now allows optional type parameters `<...>` between the method name and the opening parenthesis. Also applied to explicit interface implementation pattern. Affected: `SymbolExtractor.cs`.
 
 ### [1.6.0] - 2026-04-12
 
@@ -554,7 +555,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
 - **unused/hotspots の名前衝突と未対応言語の偽陽性を修正** — `unused` がデフォルトでグラフ対応言語のみに制限されるようになり、未対応言語（CSS、Zig、PowerShell等）の「全シンボル未使用」偽陽性を防止。`hotspots` の GROUP BY に container_name を追加し、異なるクラスの同名シンボルを区別。未対応言語クエリ時に警告を表示。MCP `unused_symbols` に `graph_supported` メタデータを追加。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`McpToolHandlers.cs`。
-- **C# 呼び出し箇所が定義として誤検出される問題を修正 (#40)** — `await FuncName(...)`、`return service.GetResult()`、`throw factory.Create(...)` のような呼び出し行がメソッド定義や明示的インターフェース実装としてマッチしていた問題を修正。メソッドパターンと明示的インターフェース実装パターンの両方にステートメントキーワード（await, return, throw, yield, var, new 等）の negative lookahead を追加。対象: `SymbolExtractor.cs`。
+- **C# 呼び出し箇所が定義として誤検出される問題を修正 (#40)** — `await FuncName(...)`、`return service.GetResult()`、`throw factory.Create(...)` のような呼び出し行がメソッド定義や明示的インターフェース実装としてマッチしていた問題を修正。メソッドパターンと明示的インターフェース実装パターンの両方にステートメントキーワード（await, return, throw, yield, var 等）の negative lookahead を追加。対象: `SymbolExtractor.cs`。
+- **C# ジェネリックメソッドオーバーロードが抽出されない問題を修正 (#41)** — `TryRaise<T>(...)` や `GetItems<TKey, TValue>(...)` のようなジェネリックメソッドがメソッドパターンにマッチしなかった問題を修正。メソッド名と開き括弧の間にオプションの型パラメータ `<...>` を許容するようパターンを更新。明示的インターフェース実装パターンにも適用。対象: `SymbolExtractor.cs`。
 
 ### [1.6.0] - 2026-04-12
 

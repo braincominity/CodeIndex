@@ -277,6 +277,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsGenericMethodOverloads()
+    {
+        // Issue #41: generic method overloads should both be extracted as definitions
+        // Issue #41: ジェネリックメソッドのオーバーロードは両方とも定義として抽出されるべき
+        var content = "public class App\n{\n    private static void TryRaise(Action? handler, string context) { }\n    private static void TryRaise<T>(Action<T>? handler, T argument, string context) { }\n    public Task<List<T>> GetItems<T>(int page) { return null; }\n    public void Process<TKey, TValue>(Dictionary<TKey, TValue> map) { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TryRaise" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TryRaise" && s.Line == 4);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetItems");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Process");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedType()
     {
         // C# 11 file-scoped type / C# 11 のファイルスコープ型
