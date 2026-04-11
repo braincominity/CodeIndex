@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **MCP instructions mention files `since` parameter** — The `initialize` instructions now guide AI clients to use `files` with `since` for finding recently modified files. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
 - **MCP `deps` tool reverse parameter** — The MCP `deps` tool now accepts a `reverse` boolean parameter for reverse dependency lookup, matching the CLI `--reverse` flag. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **C# enum member extraction** — Enum members like `Red`, `Green = 1`, `Blue = 2` are now extracted as function symbols inside enum bodies. Enables `outline` and `symbols` to show enum values for navigation. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -346,6 +348,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **MCP instructions に files `since` パラメータの案内追加** — `initialize` の instructions で `files` の `since` パラメータの活用を AI クライアントに案内。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
 - **MCP `deps` ツールに reverse パラメータ** — MCP の `deps` ツールに `reverse` ブーリアンパラメータを追加し、CLI の `--reverse` フラグと同等の逆引き依存検索に対応。対象: `src/CodeIndex/Mcp/McpServer.cs`.
 
