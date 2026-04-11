@@ -95,6 +95,51 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsNoVisibilityMembers()
+    {
+        // Classes/methods without explicit visibility (internal by default)
+        // 明示的な visibility のないクラス/メソッド（デフォルト internal）
+        var content = "namespace MyApp;\n\nclass InternalClass\n{\n    static void Helper() { }\n}\n\nstatic class Utils\n{\n    static int Add(int a, int b) => a + b;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InternalClass");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Helper");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Utils");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Add");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsPrimaryConstructors()
+    {
+        // C# 12 primary constructors on class, struct, record
+        // C# 12 のクラス・構造体・record の primary constructor
+        var content = "public class Service(ILogger logger, IDb db)\n{\n}\n\npublic struct Point(double x, double y);";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        // Signature should contain the parameter list / シグネチャにパラメータリストが含まれるべき
+        var service = symbols.First(s => s.Name == "Service");
+        Assert.Contains("ILogger logger", service.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCompoundVisibility()
+    {
+        // protected internal and private protected / 複合アクセス修飾子
+        var content = "public class Base\n{\n    protected internal void Foo() { }\n    private protected int Bar { get; set; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = symbols.FirstOrDefault(s => s.Name == "Foo");
+        Assert.NotNull(foo);
+        Assert.Equal("protected internal", foo.Visibility);
+
+        var bar = symbols.FirstOrDefault(s => s.Name == "Bar");
+        Assert.NotNull(bar);
+        Assert.Equal("private protected", bar.Visibility);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNullableReturnTypeMethods()
     {
         var content = "public static class GitHelper\n{\n    public static string? ResolveGitCommonDir(string projectRoot)\n    {\n        return null;\n    }\n}";

@@ -54,12 +54,22 @@ public static class SymbolExtractor
             new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
             new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
-            new("class",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|partial|abstract|sealed|readonly|file)\s+)*(?:class|interface|enum|record\s+struct|record\s+class|record|struct)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|virtual|override|abstract|sealed|new|required)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            new("class",     new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static|unsafe)\s+)?delegate\s+\S+\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("function",  new Regex(@"^\s*(?<visibility>public|private|protected|internal)\s+(?:(?:static)\s+)?event\s+\S+\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            // Class/struct/record/interface/enum — visibility is optional (defaults to internal for top-level)
+            // クラス/構造体/record/インターフェース/enum — visibility は省略可能（トップレベルでは internal がデフォルト）
+            new("class",     new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new)\s+)*(?:class|interface|enum|record\s+struct|record\s+class|record|struct)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Method with return type — visibility optional for explicit interface impl and nested members
+            // 戻り値型付きメソッド — 明示的インターフェース実装やネストメンバー向けに visibility 省略可
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Constructor (no return type, name followed by parenthesis) — needs visibility
+            // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
+            new("function",  new Regex(@"^\s*(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Property with get/set/init — visibility optional
+            // プロパティ（get/set/init）— visibility 省略可
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Delegate — visibility optional / デリゲート — visibility 省略可
+            new("class",     new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|unsafe)\s+)?delegate\s+\S+\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            // Event — visibility optional / イベント — visibility 省略可
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static)\s+)?event\s+\S+\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
         ],
         ["go"] =
         [
