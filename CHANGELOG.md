@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Shell, SQL, Terraform symbol extraction** — Shell: bash/zsh function declarations. SQL: CREATE TABLE/VIEW/FUNCTION/PROCEDURE/TRIGGER/INDEX, ALTER TABLE. Terraform: resource, data, module, variable, output, locals. All three languages now support `symbols`, `definition`, and `outline` queries. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Ruby: attr_accessor/reader/writer and Rails DSL extraction** — Ruby patterns now extract `attr_accessor :name`, `attr_reader :email`, and Rails DSL (`has_many`, `has_one`, `belongs_to`, `scope`) as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Rust: macro_rules!, mod, const/static, const fn, unsafe fn, union, type alias** — Rust patterns now support `macro_rules!`, `mod` modules, `const`/`static` items, `const fn`, `unsafe fn`, `extern "C" fn`, `union`, and `type` aliases. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -422,6 +424,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Shell、SQL、Terraform シンボル抽出** — Shell: bash/zsh 関数宣言。SQL: CREATE TABLE/VIEW/FUNCTION/PROCEDURE/TRIGGER/INDEX、ALTER TABLE。Terraform: resource、data、module、variable、output、locals。3言語すべてで `symbols`、`definition`、`outline` が使えるようになった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Ruby: attr_accessor/reader/writer と Rails DSL 抽出** — Ruby パターンに `attr_accessor :name`、`attr_reader :email`、Rails DSL（`has_many`、`has_one`、`belongs_to`、`scope`）を function シンボルとして追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

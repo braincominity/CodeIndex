@@ -373,6 +373,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_DetectsFunctions()
+    {
+        var content = "function setup() {\n  echo 'setup'\n}\n\ncleanup() {\n  echo 'cleanup'\n}";
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "setup");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cleanup");
+    }
+
+    [Fact]
+    public void Extract_SQL_DetectsCreateStatements()
+    {
+        var content = "CREATE TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE VIEW active_users AS SELECT * FROM users;\n\nALTER TABLE users ADD COLUMN email TEXT;";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "get_user");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "active_users");
+    }
+
+    [Fact]
+    public void Extract_Terraform_DetectsResources()
+    {
+        var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
+        var symbols = SymbolExtractor.Extract(1, "terraform", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "aws_s3_bucket");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "region");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bucket_arn");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "vpc");
+    }
+
+    [Fact]
     public void Extract_Ruby_DetectsAttrAndRailsDSL()
     {
         var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n\n  def initialize(name)\n    @name = name\n  end\nend";
