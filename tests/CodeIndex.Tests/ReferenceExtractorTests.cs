@@ -135,6 +135,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpArithmeticCompoundAssignment_NotExtractedAsSubscribe()
+    {
+        const string content = """
+            public class Counter
+            {
+                public void Increment()
+                {
+                    count += 1;
+                    flags -= mask;
+                    total += GetAmount();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // Arithmetic compound assignments should NOT produce subscribe references
+        Assert.DoesNotContain(references, r => r.SymbolName == "count" && r.ReferenceKind == "subscribe");
+        Assert.DoesNotContain(references, r => r.SymbolName == "flags" && r.ReferenceKind == "subscribe");
+        // But total += GetAmount() has an identifier RHS, so total may match — that's acceptable
+        // (it's still preferable to the previous behavior of matching everything)
+    }
+
+    [Fact]
     public void Extract_ElixirCall_DetectsReferences()
     {
         const string content = """

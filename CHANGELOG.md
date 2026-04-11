@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 
+- **Event subscription regex restricted to PascalCase identifiers** — `+=`/`-=` event subscription detection now requires both LHS and RHS to be PascalCase identifiers (e.g. `Click += OnClick`), preventing false positives from arithmetic like `count += 1` or `flags -= mask`. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
 - **Enum member pattern restricted to avoid object initializer false positives** — Tightened the C# enum member regex to only match when the optional `=` value is numeric, hex, or another PascalCase identifier (with optional `|` for flags). String and object assignments in initializers no longer produce false symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`batch_query` now surfaces subquery validation errors** — When a subquery fails validation (e.g. `search` without `query`), the error message is now included in the batch result instead of silently returning `null`. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
@@ -382,6 +384,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 追加
 
 #### 修正
+
+- **イベント購読 regex を PascalCase 識別子に制限** — `+=`/`-=` イベント購読検出で LHS と RHS の両方を PascalCase 識別子に限定（例: `Click += OnClick`）。`count += 1` や `flags -= mask` の算術代入からの偽陽性を防止。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **enum メンバーパターンをオブジェクト初期化子の偽陽性回避で制限** — C# enum メンバーの正規表現を、`=` 後の値が数値・16進数・他の PascalCase 識別子（フラグ用 `|` 含む）の場合のみマッチするよう厳格化。初期化子の文字列・オブジェクト代入が偽シンボルを生まなくなった。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
