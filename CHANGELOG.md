@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Java symbol extraction: record, sealed, @interface, static final, enum members, expanded modifiers** — Java patterns now support `record` (Java 16+), `sealed`/`non-sealed` classes (Java 17+), `@interface` annotation types, `static final` constants (C# const equivalent), enum members, and expanded method modifiers (`default`, `native`, `final`, `strictfp`). Cross-language parity with recent C# improvements. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Pattern externalization design note in DEVELOPER_GUIDE** — Documented the current inline-regex approach, trade-offs, and a future externalization path (JSON/TOML with schema: language, kind, regex, body style, capture groups). Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
 
 - **README TL;DR section and doc links** — Added collapsible TL;DR section at the top of README (EN/JP) with quick-start commands, feature counts, and links to DEVELOPER_GUIDE, SELF_IMPROVEMENT, and TESTING_GUIDE. Makes the GitHub/NuGet entry point more scannable without removing detailed content. Affected: `README.md`.
@@ -406,6 +408,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Java シンボル抽出: record, sealed, @interface, static final, enum メンバー, 拡張修飾子** — Java パターンに `record`（Java 16+）、`sealed`/`non-sealed`（Java 17+）、`@interface` アノテーション型、`static final` 定数（C# const 相当）、enum メンバー、拡張メソッド修飾子（`default`、`native`、`final`、`strictfp`）を追加。C# 改善のクロス言語横展開。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **DEVELOPER_GUIDE にパターン外部化の設計メモ** — 現在のインライン正規表現アプローチ、トレードオフ、将来の外部化パス（JSON/TOML、スキーマ: 言語、種別、正規表現、本体スタイル、キャプチャグループ）を文書化。英語・日本語両セクション。対象: `DEVELOPER_GUIDE.md`.
 

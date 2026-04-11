@@ -398,6 +398,51 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsRecordAndSealedClass()
+    {
+        // Java 16+ record, Java 17+ sealed class / Java 16 の record、Java 17 の sealed class
+        var content = "public record Point(int x, int y) { }\npublic sealed class Shape permits Circle, Rect { }";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsStaticFinalAndEnumMembers()
+    {
+        var content = "public class Config {\n    public static final String VERSION = \"1.0\";\n    private static final int MAX_RETRIES = 3;\n}\n\npublic enum Status {\n    ACTIVE,\n    INACTIVE,\n    PENDING;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_RETRIES");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ACTIVE");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "INACTIVE");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsAnnotationType()
+    {
+        var content = "public @interface MyAnnotation {\n    String value();\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyAnnotation");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "value");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsDefaultAndSynchronizedMethods()
+    {
+        var content = "public interface Service {\n    default void init() { }\n    static Service create() { return null; }\n}\npublic class Worker {\n    synchronized void process() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsFunctionsAndClasses()
     {
         // Kotlin: class, fun / Kotlin: クラス、関数

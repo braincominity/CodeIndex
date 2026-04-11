@@ -119,8 +119,20 @@ public static class SymbolExtractor
         ],
         ["java"] =
         [
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:abstract\s+)?(?:class|interface|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:synchronized\s+)?(?<returnType>\w+(?:<[^>]+>)?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Annotation type (@interface) / アノテーション型
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Class/interface/enum — with extended modifiers (final, sealed, static, abstract, strictfp)
+            // クラス/インターフェース/enum — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*(?:class|interface|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Static final field (Java equivalent of C# const) / static final フィールド（C# の const 相当）
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*static\s+final\s+(?<returnType>[\w?.<>\[\],]+)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Method with return type — expanded modifiers (default, native, synchronized, final)
+            // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Enum member (uppercase constant, similar to C# enum pattern) / enum メンバー（大文字定数）
+            new("function", new Regex(@"^\s{4,}(?<name>[A-Z]\w*)\s*(?:\([^)]*\))?\s*(?:,|\{|;)\s*$", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["kotlin"] =
