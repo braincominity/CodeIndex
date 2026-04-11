@@ -380,8 +380,12 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
         Console.WriteLine("  cdidx outline src/app.cs --json                Symbol outline of a single file");
+        Console.WriteLine("  cdidx deps --path src/ --exclude-tests          Show file-level dependency edges");
+        Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
+        Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
+        Console.WriteLine("  cdidx languages                                Show supported languages");
     }
 
     // --- Shell Completions / シェル補完 ---
