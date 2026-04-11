@@ -57,4 +57,59 @@ public class SearchSnippetFormatterTests
         Assert.Single(compact.Highlights);
         Assert.Equal(-1.5, compact.Score);
     }
+
+    [Fact]
+    public void Format_AddsTruncationMarkers_WhenExcerptIsTruncated()
+    {
+        // 10 lines, match on line 5 — with maxLines=3, both ends should be truncated
+        // 10行、5行目に一致 — maxLines=3 で両端がトランケートされるはず
+        var lines = Enumerable.Range(1, 10).Select(i => i == 5 ? "call Target()" : $"line {i}");
+        var content = string.Join('\n', lines);
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 3);
+
+        Assert.Equal("...", formatted[0]);
+        Assert.Equal("...", formatted[^1]);
+        Assert.True(formatted.Count <= 5); // 3 content lines + up to 2 markers / 3コンテンツ行 + 最大2マーカー
+        Assert.Contains(formatted, line => line.Contains("Target"));
+    }
+
+    [Fact]
+    public void Format_NoMarkers_WhenContentFitsEntirely()
+    {
+        const string content = "line 1\ncall Target()\nline 3";
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 8);
+
+        Assert.DoesNotContain("...", formatted);
+        Assert.Contains(formatted, line => line.Contains("Target"));
+    }
+
+    [Fact]
+    public void Format_TruncatedAfterOnly_WhenMatchIsNearStart()
+    {
+        // Match on line 1 with maxLines=2 out of 6 — truncated after only
+        // 1行目に一致、maxLines=2/全6行 — 後ろだけトランケート
+        var lines = Enumerable.Range(1, 6).Select(i => i == 1 ? "call Target()" : $"line {i}");
+        var content = string.Join('\n', lines);
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 2);
+
+        Assert.NotEqual("...", formatted[0]);
+        Assert.Equal("...", formatted[^1]);
+    }
+
+    [Fact]
+    public void Format_TruncatedBeforeOnly_WhenMatchIsNearEnd()
+    {
+        // Match on last line with maxLines=2 out of 6 — truncated before only
+        // 最終行に一致、maxLines=2/全6行 — 前だけトランケート
+        var lines = Enumerable.Range(1, 6).Select(i => i == 6 ? "call Target()" : $"line {i}");
+        var content = string.Join('\n', lines);
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 2);
+
+        Assert.Equal("...", formatted[0]);
+        Assert.NotEqual("...", formatted[^1]);
+    }
 }

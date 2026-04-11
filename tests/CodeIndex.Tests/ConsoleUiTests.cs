@@ -31,7 +31,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx callers <query>", output);
         Assert.Contains("cdidx callees <query>", output);
         Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]", output);
-        Assert.Contains("--snippet-lines <n>        Search snippet length (default: 8, max: 20)", output);
+        Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
         Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
@@ -56,6 +56,19 @@ public class ConsoleUiTests
         var frames = ConsoleUi.GetSpinnerFrames(null);
 
         Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+    }
+
+    [Fact]
+    public void LoadVersion_ReturnsActualVersion_NotFallback()
+    {
+        // In the test environment the built version.json should be present.
+        // Verify the returned value is a real version, not the "0.0.0" fallback.
+        // テスト環境ではビルド済みの version.json が存在するはず。
+        // フォールバックの "0.0.0" ではなく実際のバージョンが返ることを検証。
+        var version = ConsoleUi.LoadVersion();
+        Assert.False(string.IsNullOrWhiteSpace(version));
+        Assert.NotEqual("0.0.0", version);
+        Assert.Contains('.', version);
     }
 
     private static string CaptureUsageOutput(bool showBanner = true)

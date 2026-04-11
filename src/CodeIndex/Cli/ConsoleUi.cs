@@ -6,6 +6,10 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class ConsoleUi
 {
+    private const int SpinnerFrameDelayMs = 100;
+    private const int SpinnerStopDelayMs = 20;
+    private const int ConsoleLineMargin = 1;
+
     private static readonly string[] DefaultBrailleSpinnerFrames =
     [
         "⠋", "⠙", "⠹", "⠸", "⠼",
@@ -42,7 +46,7 @@ public static class ConsoleUi
                 Console.Write(line);
                 Console.Out.Flush();
                 i++;
-                try { Task.Delay(100, ct).Wait(ct); } catch (OperationCanceledException) { break; }
+                try { Task.Delay(SpinnerFrameDelayMs, ct).Wait(ct); } catch (OperationCanceledException) { break; }
             }
         }, ct);
         return cts;
@@ -57,10 +61,10 @@ public static class ConsoleUi
         if (cts == null) return;
         cts.Cancel();
         // Small delay to let the spinner task exit / スピナータスク終了のための短い待機
-        Thread.Sleep(20);
+        Thread.Sleep(SpinnerStopDelayMs);
         if (!Console.IsOutputRedirected)
         {
-            Console.Write($"\r{new string(' ', GetWindowWidth() - 1)}\r");
+            Console.Write($"\r{new string(' ', GetWindowWidth() - ConsoleLineMargin)}\r");
             Console.Out.Flush();
         }
         cts.Dispose();
@@ -306,6 +310,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
         Console.WriteLine("  cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
+        Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
         Console.WriteLine("  cdidx mcp [--db <path>]");
         Console.WriteLine();
@@ -321,6 +326,7 @@ public static class ConsoleUi
         Console.WriteLine("  excerpt <path>             Reconstruct a line-range excerpt from indexed chunks");
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
+        Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
@@ -346,7 +352,7 @@ public static class ConsoleUi
         Console.WriteLine("  --path <pattern>           Restrict matches to paths containing this text");
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
-        Console.WriteLine("  --snippet-lines <n>        Search snippet length (default: 8, max: 20)");
+        Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine();
@@ -365,6 +371,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
+        Console.WriteLine("  cdidx outline src/app.cs --json                Symbol outline of a single file");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
     }

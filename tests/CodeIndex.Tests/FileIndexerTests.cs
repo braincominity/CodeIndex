@@ -21,6 +21,24 @@ public class FileIndexerTests
     [InlineData("page.vue", "vue")]
     [InlineData("page.svelte", "svelte")]
     [InlineData("main.tf", "terraform")]
+    [InlineData("app.dart", "dart")]
+    [InlineData("Main.scala", "scala")]
+    [InlineData("analysis.r", "r")]
+    [InlineData("analysis.R", "r")]
+    [InlineData("web.ex", "elixir")]
+    [InlineData("test.exs", "elixir")]
+    [InlineData("script.lua", "lua")]
+    [InlineData("Program.fs", "fsharp")]
+    [InlineData("Script.fsx", "fsharp")]
+    [InlineData("Module1.vb", "vb")]
+    [InlineData("script.vbs", "vb")]
+    [InlineData("Index.cshtml", "csharp")]
+    [InlineData("Counter.razor", "csharp")]
+    [InlineData("MainWindow.xaml", "xml")]
+    [InlineData("App.axaml", "xml")]
+    [InlineData("MyApp.csproj", "xml")]
+    [InlineData("Main.hs", "haskell")]
+    [InlineData("main.zig", "zig")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
@@ -71,6 +89,8 @@ public class FileIndexerTests
             Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
             File.WriteAllText(Path.Combine(tempDir, "package-lock.json"), "{}");
+            File.WriteAllText(Path.Combine(tempDir, "Cargo.lock"), "# lock");
+            File.WriteAllText(Path.Combine(tempDir, "Gemfile.lock"), "GEM");
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles();

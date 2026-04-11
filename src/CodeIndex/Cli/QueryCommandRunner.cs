@@ -416,6 +416,52 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunOutline(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        if (cmdArgs.Length == 0 || cmdArgs[0].StartsWith('-'))
+        {
+            Console.Error.WriteLine("Error: outline requires a file path.");
+            Console.Error.WriteLine("Usage: cdidx outline <path> [--db <path>] [--json]");
+            return CommandExitCodes.UsageError;
+        }
+
+        var filePath = cmdArgs[0].Replace('\\', '/');
+        var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var outline = reader.GetOutline(filePath);
+            if (outline == null)
+            {
+                if (options.Json)
+                    Console.WriteLine(JsonSerializer.Serialize(new { path = filePath, error = "file not found in index" }, jsonOptions));
+                else
+                    Console.Error.WriteLine($"Error: '{filePath}' not found in index.");
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(outline, jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {outline.SymbolCount} symbols)");
+                Console.WriteLine();
+                foreach (var sym in outline.Symbols)
+                {
+                    // Indent nested symbols under their container / コンテナ内のシンボルをインデント
+                    var indent = sym.ContainerName != null ? "    " : "";
+                    var vis = sym.Visibility != null ? $"{sym.Visibility} " : "";
+                    var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
+                    var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
+                    Console.WriteLine($"  {sym.Line,5}  {indent}{vis}{sig} {ret}");
+                }
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -567,7 +613,7 @@ public static class QueryCommandRunner
     {
         if (!File.Exists(dbPath))
         {
-            Console.Error.WriteLine($"Error: database not found: {dbPath}");
+            Console.Error.WriteLine($"Error: database not found at {Path.GetFullPath(dbPath)}");
             Console.Error.WriteLine("Run 'cdidx index <projectPath>' first to create the index.");
             return CommandExitCodes.DatabaseError;
         }

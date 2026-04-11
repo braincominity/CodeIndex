@@ -12,7 +12,8 @@ public static class ReferenceExtractor
     private static readonly HashSet<string> SupportedLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
-        "java", "kotlin", "ruby", "c", "cpp", "php", "swift"
+        "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
+        "dart", "scala"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)

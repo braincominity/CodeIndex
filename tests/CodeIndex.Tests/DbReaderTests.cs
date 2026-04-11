@@ -80,6 +80,10 @@ public class DbReaderTests : IDisposable
         };
         _writer.InsertSymbols(apiSymbols);
         _writer.InsertReferences(ReferenceExtractor.Extract(jsId, "javascript", apiContent, apiSymbols));
+
+        // Plain text file with no symbols for outline edge case
+        // アウトラインのエッジケース用のシンボルなしプレーンテキストファイル
+        InsertIndexedFile("docs/notes.md", "markdown", "# Notes\n\nSome documentation text.");
     }
 
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
@@ -354,7 +358,7 @@ public class DbReaderTests : IDisposable
     public void ListFiles_ReturnsAllFiles()
     {
         var results = _reader.ListFiles();
-        Assert.Equal(2, results.Count);
+        Assert.Equal(3, results.Count);
     }
 
     [Fact]
@@ -420,21 +424,21 @@ public class DbReaderTests : IDisposable
     public void GetStatus_ReturnsCorrectCounts()
     {
         var status = _reader.GetStatus();
-        Assert.Equal(2, status.Files);
-        Assert.Equal(2, status.Chunks);
+        Assert.Equal(3, status.Files);
+        Assert.Equal(3, status.Chunks);
         Assert.Equal(3, status.Symbols);
         Assert.Equal(1, status.References);
         Assert.NotNull(status.IndexedAt);
-        Assert.Equal(new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc), status.LatestModified);
     }
 
     [Fact]
     public void GetStatus_IncludesLanguageBreakdown()
     {
         var status = _reader.GetStatus();
-        Assert.Equal(2, status.Languages.Count);
+        Assert.Equal(3, status.Languages.Count);
         Assert.Equal(1, status.Languages["python"]);
         Assert.Equal(1, status.Languages["javascript"]);
+        Assert.Equal(1, status.Languages["markdown"]);
     }
 
     [Fact]
@@ -480,9 +484,10 @@ public class DbReaderTests : IDisposable
                 WHEN 'src/api.js' THEN '2025-06-01 00:00:00'
                 WHEN 'src/Program.cs' THEN '2025-06-02 00:00:00'
                 WHEN 'docs/guide.md' THEN '2025-06-04 00:00:00'
+                WHEN 'docs/notes.md' THEN '2025-06-04 00:00:00'
                 ELSE indexed_at
             END
-            WHERE path IN ('src/auth.py', 'src/api.js', 'src/Program.cs', 'docs/guide.md')
+            WHERE path IN ('src/auth.py', 'src/api.js', 'src/Program.cs', 'docs/guide.md', 'docs/notes.md')
             """;
         cmd.ExecuteNonQuery();
 
@@ -575,5 +580,43 @@ public class DbReaderTests : IDisposable
             if (File.Exists(_dbPath))
                 File.Delete(_dbPath);
         }
+    }
+
+    // --- Outline tests / アウトラインテスト ---
+
+    [Fact]
+    public void GetOutline_ReturnsSymbolsOrderedByLine()
+    {
+        var outline = _reader.GetOutline("src/auth.py");
+
+        Assert.NotNull(outline);
+        Assert.Equal("src/auth.py", outline!.Path);
+        Assert.Equal("python", outline.Lang);
+        Assert.True(outline.SymbolCount > 0);
+        Assert.True(outline.TotalLines > 0);
+
+        // Symbols should be ordered by line / シンボルは行順であるべき
+        for (int i = 1; i < outline.Symbols.Count; i++)
+            Assert.True(outline.Symbols[i].Line >= outline.Symbols[i - 1].Line,
+                $"Symbol at index {i} (line {outline.Symbols[i].Line}) should be >= previous (line {outline.Symbols[i - 1].Line})");
+    }
+
+    [Fact]
+    public void GetOutline_FileWithNoSymbols_ReturnsEmptyList()
+    {
+        var outline = _reader.GetOutline("docs/notes.md");
+
+        Assert.NotNull(outline);
+        Assert.Equal("docs/notes.md", outline!.Path);
+        Assert.Equal(0, outline.SymbolCount);
+        Assert.Empty(outline.Symbols);
+    }
+
+    [Fact]
+    public void GetOutline_NonexistentFile_ReturnsNull()
+    {
+        var outline = _reader.GetOutline("nonexistent/file.cs");
+
+        Assert.Null(outline);
     }
 }

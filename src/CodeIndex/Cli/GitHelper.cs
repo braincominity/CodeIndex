@@ -29,7 +29,7 @@ public static class GitHelper
         var gitFileContent = File.ReadAllText(dotGit).Trim();
         if (!gitFileContent.StartsWith("gitdir:")) return null;
 
-        var worktreeGitDir = gitFileContent.Substring("gitdir:".Length).Trim();
+        var worktreeGitDir = gitFileContent["gitdir:".Length..].Trim();
         if (!Path.IsPathRooted(worktreeGitDir))
             worktreeGitDir = Path.GetFullPath(Path.Combine(projectRoot, worktreeGitDir));
 

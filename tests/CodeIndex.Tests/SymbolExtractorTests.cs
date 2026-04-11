@@ -56,6 +56,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsFileScopedNamespaceAndRecordStruct()
+    {
+        // C# 10+: file-scoped namespace, global using, record struct
+        var content = "global using System.Text;\nnamespace MyApp.Models;\n\npublic record struct Point(int X, int Y);\n\npublic record class User(string Name);";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("System.Text"));
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MyApp.Models");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsDelegateAndEvent()
+    {
+        // C# delegate and event / C# デリゲートとイベント
+        var content = "public delegate void EventHandler(object sender, EventArgs e);\n\npublic class Button\n{\n    public event EventHandler Click;\n    public static event Action<string> OnLog;\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "EventHandler");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Button");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Click");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnLog");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsProperties()
+    {
+        // C# property with get/set / C# プロパティ（get/set付き）
+        var content = "public class User\n{\n    public string Name { get; set; }\n    public int Age { get; init; }\n    public virtual string? Email { get; set; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Age");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Email");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNullableReturnTypeMethods()
     {
         var content = "public static class GitHelper\n{\n    public static string? ResolveGitCommonDir(string projectRoot)\n    {\n        return null;\n    }\n}";
@@ -222,5 +261,188 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "IUser");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+    }
+
+    [Fact]
+    public void Extract_Haskell_DetectsTypeSignaturesAndDataTypes()
+    {
+        // Haskell: type signature, data, import / Haskell: 型シグネチャ、data型、import
+        var content = "import Data.List\nimport qualified Data.Map as Map\n\ndata Tree a = Leaf | Node a (Tree a) (Tree a)\n\ninsert :: Ord a => a -> Tree a -> Tree a\ninsert x Leaf = Node x Leaf Leaf";
+        var symbols = SymbolExtractor.Extract(1, "haskell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Data.List");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Data.Map");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Tree");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "insert");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DetectsLetTypeModuleOpen()
+    {
+        // F#: let, type, module, open / F#: let束縛、型、モジュール、open
+        var content = "module MyApp.Domain\n\nopen System\n\ntype User = { Name: string; Age: int }\n\nlet validate user =\n    user.Age > 0\n\nlet rec factorial n =\n    if n <= 1 then 1 else n * factorial (n - 1)";
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Domain");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "validate");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factorial");
+    }
+
+    [Fact]
+    public void Extract_FSharp_DoesNotMatchValueBindings()
+    {
+        // Value bindings should not be detected as functions / 値束縛は関数として検出されないこと
+        var content = "let x = 5\nlet name = \"hello\"\nlet list = [1; 2; 3]";
+        var symbols = SymbolExtractor.Extract(1, "fsharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsCompoundVisibility()
+    {
+        // VB.NET compound visibility: Protected Friend / VB.NET 複合可視性
+        var content = "Protected Friend Sub OnInit()\nEnd Sub\n\nPrivate Protected Function GetData() As String\n    Return \"\"\nEnd Function";
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnInit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetData");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotMatchFieldDeclarations()
+    {
+        // Fields should not be detected as properties / フィールドはプロパティとして検出されないこと
+        var content = "public class Config\n{\n    public string Name;\n    private int _count;\n    public readonly string Id = \"x\";\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "_count");
+        Assert.DoesNotContain(symbols, s => s.Name == "Id" && s.Kind == "function");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsSubFunctionClassModule()
+    {
+        // VB.NET: Sub, Function, Class, Module, Imports / VB.NET: サブ、関数、クラス、モジュール、Imports
+        var content = "Imports System.IO\n\nPublic Class UserService\n    Public Sub Save(user As User)\n    End Sub\n\n    Private Function Validate(user As User) As Boolean\n        Return True\n    End Function\nEnd Class";
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("System.IO"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Save");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Validate");
+    }
+
+    [Fact]
+    public void Extract_Haskell_DetectsIndentedAndLiterateSignatures()
+    {
+        // Indented where-clause signature and literate Haskell '>' prefix
+        // インデントされたwhere節のシグネチャとliterate Haskellの'>'接頭辞
+        var content = "  helper :: Int -> Int\n  helper x = x + 1\n> main :: IO ()\n> main = putStrLn \"hello\"";
+        var symbols = SymbolExtractor.Extract(1, "haskell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
+    }
+
+    [Fact]
+    public void Extract_R_DoesNotMatchOrdinaryAssignment()
+    {
+        // Ordinary assignment should not be detected as a function
+        // 通常の代入は関数として検出されないこと
+        var content = "x <- 42\ny <- some_func(x)\nz <- list(1, 2, 3)";
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsFunctionAssignmentAndLibrary()
+    {
+        // R: function assignment, library / R: 関数代入、library
+        var content = "library(ggplot2)\n\nmy_plot <- function(data, x, y) {\n  ggplot(data, aes(x, y))\n}";
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ggplot2");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_plot");
+    }
+
+    [Fact]
+    public void Extract_Lua_DetectsFunctionsAndRequire()
+    {
+        // Lua: function, local function, require / Lua: 関数、ローカル関数、require
+        var content = "local http = require('socket.http')\n\nfunction greet(name)\n  print(name)\nend\n\nlocal function helper(x)\n  return x\nend";
+        var symbols = SymbolExtractor.Extract(1, "lua", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "socket.http");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+    }
+
+    [Fact]
+    public void Extract_Elixir_DetectsModuleAndFunctions()
+    {
+        // Elixir: defmodule, def, defp / Elixir: モジュール、関数、プライベート関数
+        var content = "defmodule MyApp.Router do\n  def call(conn, _opts) do\n    conn\n  end\n\n  defp parse(data) do\n    data\n  end\nend";
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyApp.Router");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "call");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse");
+    }
+
+    [Fact]
+    public void Extract_Scala_DetectsObjectTraitAndDef()
+    {
+        // Scala: object, trait, def, case class / Scala: オブジェクト、トレイト、def、ケースクラス
+        var content = "object Main {\n  def run(): Unit = {\n  }\n}\nsealed trait Message\ncase class Ping(id: Int) extends Message";
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Main");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Message");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Ping");
+    }
+
+    [Fact]
+    public void Extract_Dart_DetectsClassFunctionAndMixin()
+    {
+        // Dart: class, mixin, function / Dart: クラス、mixin、関数
+        var content = "abstract class Widget {\n  void build(BuildContext ctx) {\n  }\n}\nmixin Logging on Widget {\n}";
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Widget");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "build");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Logging");
+    }
+
+    [Fact]
+    public void Extract_Dart_DetectsImportAndEnum()
+    {
+        // Dart: import, enum / Dart: インポート、列挙型
+        var content = "import 'package:flutter/material.dart';\n\nenum Status {\n  active,\n  inactive,\n}";
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name.Contains("flutter"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+    }
+
+    [Fact]
+    public void Extract_Dart_DoesNotMatchExpressionLines()
+    {
+        // Expressions that look like "type name(" but are not function definitions
+        // 関数定義に見えるが実際は式の行を誤検出しないことを検証
+        var content = "void main() {\n  return foo(bar);\n  await task(x);\n  const Widget(key: k);\n  throw Error('oops');\n}";
+        var symbols = SymbolExtractor.Extract(1, "dart", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "task");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Error");
+        // main() should still be detected / main()は検出されるべき
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
     }
 }

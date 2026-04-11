@@ -32,6 +32,8 @@ public class FileIndexer
         [".hpp"]    = "cpp",
         [".hxx"]    = "cpp",
         [".cs"]     = "csharp",
+        [".cshtml"] = "csharp",  // Razor (ASP.NET MVC/Pages) / Razor テンプレート
+        [".razor"]  = "csharp",  // Blazor component / Blazor コンポーネント
         [".php"]    = "php",
         [".sh"]     = "shell",
         [".sql"]    = "sql",
@@ -40,12 +42,35 @@ public class FileIndexer
         [".yml"]    = "yaml",
         [".json"]   = "json",
         [".toml"]   = "toml",
+        [".xaml"]   = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
+        [".axaml"]  = "xml",    // Avalonia XAML / Avalonia XAML
+        [".csproj"] = "xml",    // C# project file / C# プロジェクトファイル
+        [".fsproj"] = "xml",    // F# project file / F# プロジェクトファイル
+        [".vbproj"] = "xml",    // VB.NET project file / VB.NET プロジェクトファイル
+        [".props"]  = "xml",    // MSBuild props / MSBuild プロパティ
+        [".targets"]= "xml",    // MSBuild targets / MSBuild ターゲット
         [".html"]   = "html",
         [".css"]    = "css",
         [".scss"]   = "css",
         [".vue"]    = "vue",
         [".svelte"] = "svelte",
         [".tf"]     = "terraform",
+        [".dart"]   = "dart",
+        [".scala"]  = "scala",
+        [".sc"]     = "scala",
+        [".r"]      = "r",
+        [".R"]      = "r",
+        [".ex"]     = "elixir",
+        [".exs"]    = "elixir",
+        [".lua"]    = "lua",
+        [".fs"]     = "fsharp",
+        [".fsx"]    = "fsharp",
+        [".fsi"]    = "fsharp",
+        [".vb"]     = "vb",
+        [".vbs"]    = "vb",
+        [".hs"]     = "haskell",
+        [".lhs"]    = "haskell",
+        [".zig"]    = "zig",
     };
 
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
@@ -61,6 +86,10 @@ public class FileIndexer
         ".next", ".nuxt",
         ".idea", ".vscode",
         "coverage", "vendor",
+        ".terraform",                   // Terraform state/plugin cache / Terraformステート・プラグインキャッシュ
+        ".cargo",                       // Cargo registry cache / Cargoレジストリキャッシュ
+        ".pub-cache",                   // Dart pub cache / Dart pubキャッシュ
+        "_build",                       // Elixir/Mix build output / Elixir/Mixビルド出力
     };
 
     // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
@@ -69,6 +98,7 @@ public class FileIndexer
     {
         ".DS_Store", "Thumbs.db",
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+        "Gemfile.lock", "Cargo.lock", "composer.lock", "poetry.lock", "bun.lockb",
     };
 
     // Maximum file size to index (10 MB) / インデックス対象の最大ファイルサイズ (10 MB)

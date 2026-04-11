@@ -200,13 +200,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns12Tools()
+    public void ToolsList_Returns13Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(12, tools.Count);
+        Assert.Equal(13, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -220,6 +220,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("map", names);
         Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
+        Assert.Contains("outline", names);
         Assert.Contains("index", names);
     }
 
@@ -269,7 +270,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        var queryToolNames = new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "excerpt", "map", "analyze_symbol", "status" };
+        var queryToolNames = new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "excerpt", "map", "analyze_symbol", "status", "outline" };
 
         foreach (var name in queryToolNames)
         {
@@ -309,6 +310,8 @@ public class McpServerTests : IDisposable
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("Found 1 search result", text);
+        // Content summary includes file path for AI orientation / サマリにファイルパスを含む
+        Assert.Contains("src/app.cs", text);
 
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(1, structured["count"]!.GetValue<int>());
@@ -596,6 +599,31 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Outline_ReturnsSymbols()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"outline","arguments":{"path":"src/app.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("symbol", text.ToLowerInvariant());
+        Assert.NotNull(result["structuredContent"]);
+        var structured = result["structuredContent"]!;
+        Assert.Equal("src/app.cs", structured["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Outline_NotFound_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"outline","arguments":{"path":"nonexistent.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.NotNull(structured["error"]);
+        Assert.NotNull(structured["indexed_file_count"]);
     }
 
     [Fact]

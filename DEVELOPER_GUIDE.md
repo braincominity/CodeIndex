@@ -23,17 +23,18 @@ src/CodeIndex/
     DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
     IndexCommandRunner.cs     — Index command execution and update/full-scan flows
-    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/status execution and query arg parsing
+    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
+    WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
-    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, inspect bundles, file listing, status
+    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (13 languages)
+    SymbolExtractor.cs        — Regex-based symbol extraction (21 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools)
@@ -51,6 +52,14 @@ tests/CodeIndex.Tests/
   DbReaderTests.cs            — DbReader query tests
   McpServerTests.cs           — MCP server tests
   GitHelperTests.cs           — Git helper tests
+  ConsoleUiTests.cs           — Console output and help text tests
+  DbPathResolverTests.cs      — DB path resolution tests
+  IndexCommandRunnerTests.cs  — Index command integration tests
+  QueryCommandRunnerTests.cs  — Query CLI integration tests
+  SearchSnippetFormatterTests.cs — Search snippet formatting tests
+  WorkspaceMetadataEnricherTests.cs — Workspace metadata tests
+  TestProjectHelper.cs        — Shared helper for temp indexed projects
+  TestConsoleLock.cs           — Shared lock for console-redirecting tests
 ```
 
 ### Indexing pipeline
@@ -333,6 +342,16 @@ Supported symbol kinds by language:
 | C++ | functions | class, struct, namespace, enum | -- |
 | PHP | function | class, interface, trait, enum | -- |
 | Swift | func | class, struct, enum, protocol | -- |
+| Dart | functions | class, mixin, enum, extension | import |
+| Scala | def | class, object, trait, case class, enum | import |
+| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
+| Lua | function, local function | -- | require |
+| R | name <- function() | -- | library, require |
+| Haskell | type signatures (name ::) | data, newtype, type, class, instance | import |
+| F# | let, let rec | type, module | open |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports |
+
+Razor (`.cshtml`) and Blazor (`.razor`) are detected as csharp. XAML, MSBuild project files (`.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets`), and Zig are detected and indexed as raw text but have no symbol extraction patterns.
 
 Regex-based extraction is intentionally simple. Speed and portability are prioritized over AST-level accuracy.
 
@@ -486,17 +505,18 @@ src/CodeIndex/
     DbPathResolver.cs         — indexコマンド用の既定DBパス解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
     IndexCommandRunner.cs     — indexコマンド実行と更新/フルスキャンフロー
-    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/status実行とクエリ引数解析
+    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status実行とクエリ引数解析
     SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペット整形
+    WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ、参照書き込み
-    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、抜粋再構成、inspect向け集約、ファイル一覧、ステータス
+    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、抜粋再構成、アウトライン、inspect向け集約、ファイル一覧、ステータス
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — 正規表現によるシンボル抽出（13言語対応）
+    SymbolExtractor.cs        — 正規表現によるシンボル抽出（21言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -514,6 +534,14 @@ tests/CodeIndex.Tests/
   DbReaderTests.cs            — DbReaderクエリテスト
   McpServerTests.cs           — MCPサーバーテスト
   GitHelperTests.cs           — Gitヘルパーテスト
+  ConsoleUiTests.cs           — コンソール出力・ヘルプテキストテスト
+  DbPathResolverTests.cs      — DBパス解決テスト
+  IndexCommandRunnerTests.cs  — indexコマンド統合テスト
+  QueryCommandRunnerTests.cs  — クエリCLI統合テスト
+  SearchSnippetFormatterTests.cs — 検索スニペット整形テスト
+  WorkspaceMetadataEnricherTests.cs — ワークスペースメタデータテスト
+  TestProjectHelper.cs        — 一時インデックスプロジェクト作成用共有ヘルパー
+  TestConsoleLock.cs           — コンソールリダイレクトテスト用共有ロック
 ```
 
 ### インデックスパイプライン
@@ -796,6 +824,16 @@ LIMIT 20;
 | C++ | 関数 | class, struct, namespace, enum | -- |
 | PHP | function | class, interface, trait, enum | -- |
 | Swift | func | class, struct, enum, protocol | -- |
+| Dart | 関数 | class, mixin, enum, extension | import |
+| Scala | def | class, object, trait, case class, enum | import |
+| Elixir | def, defp | defmodule, defprotocol | import, alias, use, require |
+| Lua | function, local function | -- | require |
+| R | name <- function() | -- | library, require |
+| Haskell | 型シグネチャ (name ::) | data, newtype, type, class, instance | import |
+| F# | let, let rec | type, module | open |
+| VB.NET | Sub, Function | Class, Module, Structure, Interface, Enum | Imports |
+
+Razor（`.cshtml`）と Blazor（`.razor`）は csharp として検出される。XAML、MSBuild プロジェクトファイル（`.csproj`、`.fsproj`、`.vbproj`、`.props`、`.targets`）、Zig は言語検出・テキストインデックスのみで、シンボル抽出パターンはまだない。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 

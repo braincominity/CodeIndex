@@ -357,6 +357,19 @@ public class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "outline",
+                "Return the symbol outline of a single indexed file: all functions, classes, imports with line numbers, signatures, and nesting. / 1ファイルのシンボルアウトラインを返す: 関数、クラス、importの行番号、シグネチャ、ネスト構造。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Indexed file path (e.g. src/app.cs)" },
+                    },
+                    ["required"] = new JsonArray { "path" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "index",
                 "Index or re-index a project directory. Scans source files, extracts symbols, and builds FTS5 search index. / プロジェクトディレクトリをインデックス（再インデックス）。ソースファイルをスキャンし、シンボルを抽出してFTS5検索インデックスを構築。",
                 new JsonObject
@@ -403,6 +416,7 @@ public class McpServer
                 "map" => ExecuteMap(id, args),
                 "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
                 "status" => ExecuteStatus(id),
+                "outline" => ExecuteOutline(id, args),
                 "index" => ExecuteIndex(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
             };
@@ -431,6 +445,7 @@ public class McpServer
             + "Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools. "
             + $"Graph tools (references, callers, callees) only work for supported languages ({langs}); "
             + "for other languages, use 'search' instead. "
+            + "Use 'outline' to see the full symbol structure of a single file (functions, classes, imports with line numbers) without reading the file content. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results.";
     }
@@ -521,7 +536,11 @@ public class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines)), _jsonOptions)
             };
-            return CreateToolResult(id, $"Found {results.Count} search result(s).", structured);
+            // Include top file paths in summary for quick AI orientation
+            // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
+            var topPaths = results.Select(r => r.Path).Distinct().Take(3);
+            var summary = $"Found {results.Count} search result(s) in {string.Join(", ", topPaths)}.";
+            return CreateToolResult(id, summary, structured);
         });
     }
 
@@ -826,6 +845,31 @@ public class McpServer
             WorkspaceMetadataEnricher.Enrich(status, _dbPath);
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             return CreateToolResult(id, "Database stats returned.", structured);
+        });
+    }
+
+    private JsonNode ExecuteOutline(JsonNode? id, JsonNode? args)
+    {
+        var path = args?["path"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(path))
+            return CreateToolErrorResponse(id, "Missing required parameter: path");
+
+        return WithDbReader(id, reader =>
+        {
+            var outline = reader.GetOutline(path);
+            if (outline == null)
+            {
+                var emptyPayload = new JsonObject
+                {
+                    ["path"] = path,
+                    ["error"] = "file not found in index"
+                };
+                AddFreshnessHint(emptyPayload, reader);
+                return CreateToolResult(id, "File not found in index.", emptyPayload);
+            }
+
+            var structured = JsonSerializer.SerializeToNode(outline, _jsonOptions)!.AsObject();
+            return CreateToolResult(id, $"Outline: {outline.SymbolCount} symbol(s) in {outline.TotalLines} lines.", structured);
         });
     }
 

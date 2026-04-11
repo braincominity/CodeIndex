@@ -9,6 +9,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+
+- **C# ecosystem enhancements** — Razor/Blazor (`.cshtml`, `.razor`) detected as csharp; VB.NET (`.vb`, `.vbs`) with Sub/Function/Class/Module symbol extraction; F# (`.fs`, `.fsx`, `.fsi`) with let/type/module/open extraction (graph queries not supported due to space-separated call syntax); XAML/MSBuild files (`.xaml`, `.axaml`, `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets`) detected as xml. C# improvements: file-scoped namespace (C# 10+), `global using`, `using static`, `record struct`/`record class`, property extraction (get/set/init), delegate and event declarations, `file` class modifier. F#/VB.NET entrypoint hints added for `map`. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
+
+- **Dart, Scala, Elixir, Lua, and R language support** — Added language detection (`.dart`, `.scala`, `.sc`, `.r`, `.R`, `.ex`, `.exs`, `.lua`), symbol extraction for Dart (class/mixin/enum/extension/function/import), Scala (class/object/trait/case class/def/import), Elixir (defmodule/defprotocol/def/defp/import/alias/use), and Lua (function/local function/require). Dart and Scala also gain call-graph reference extraction and entrypoint hints for `map`. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
+- **Skip additional lock files and build cache dirs** — Added `Gemfile.lock`, `Cargo.lock`, `composer.lock`, `poetry.lock`, `bun.lockb` to skip-files; `.terraform`, `.cargo`, `.pub-cache`, `_build` to skip-dirs. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **`outline` command for single-file symbol structure** — New CLI command `cdidx outline <path>` and MCP tool `outline` that return all symbols in a file ordered by line, with kind, signature, visibility, container nesting, and body ranges. Lets AI agents understand file structure in one call instead of chaining `symbols` + `definition`. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
+
+- **R symbol extraction and Haskell/Zig language detection** — R now supports `name <- function()` and `library()`/`require()` extraction. Haskell (`.hs`, `.lhs`) gains type-signature, data/class/import extraction. Zig (`.zig`) is detected for text search. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/`.
+
+- **MCP search summary includes file paths** — The MCP `search` tool now shows top file paths in its content summary for quick AI orientation. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
+
+#### Changed
+
+- **README MCP diagrams render reliably in Markdown preview** — Replaced the ASCII box diagrams in the English and Japanese MCP sections with Mermaid flowcharts and removed stray code fences that could break the surrounding layout. Affected: `README.md`.
+
+- **Entrypoint hints for 6 additional languages** — `map` entrypoint inference now covers C (`main.c`), C++ (`main.cpp`/`.cc`/`.cxx`), Haskell (`Main.hs`/`.lhs`), R (`main.R`), Lua (`main.lua`/`init.lua`), and Elixir (`application.ex`/`router.ex`). Affected: `src/CodeIndex/Database/RepoMapBuilder.cs`.
+
+- **Code quality sweep** — Extract `IsProjectPathArg` helper in `Program.cs` for readability; replace magic numbers with named constants in `ConsoleUi` (`SpinnerFrameDelayMs`, `SpinnerStopDelayMs`, `ConsoleLineMargin`); use C# range syntax in `GitHelper`; deduplicate `WorkspaceMetadataEnricher` with a shared `Apply` helper; document FTS5 token normalization in `SearchSnippetFormatter`. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
+
+- **Clearer CLI error messages and help text** — `--rebuild` conflict error now explains "rebuild requires a full rescan"; database-not-found error shows the full absolute path via `Path.GetFullPath`; `--snippet-lines` help shows "1-20, default: 8" instead of "default: 8, max: 20". Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **Additional test coverage** — Added truncation-marker tests for `SearchSnippetFormatter.Format` (both-sides, before-only, after-only, no-markers), and a `ConsoleUi.LoadVersion` test that verifies the real version is returned instead of the "0.0.0" fallback. Affected: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
 ### [1.2.0] - 2026-04-11
 
 #### Added
@@ -222,6 +248,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+- **C# エコシステム強化** — Razor/Blazor（`.cshtml`、`.razor`）を csharp として検出、VB.NET（`.vb`、`.vbs`）の Sub/Function/Class/Module シンボル抽出、F#（`.fs`、`.fsx`、`.fsi`）の let/type/module/open 抽出（スペース区切りの呼び出し構文のため graph クエリは非対応）、XAML/MSBuild ファイル（`.xaml`、`.axaml`、`.csproj`、`.fsproj`、`.vbproj`、`.props`、`.targets`）を xml として検出。C# 改善: file-scoped namespace（C# 10+）、`global using`、`using static`、`record struct`/`record class`、プロパティ抽出（get/set/init）、delegate/event 宣言、`file` クラス修飾子。F#/VB.NET の `map` 向けエントリポイントヒントも追加。対象: `src/CodeIndex/Indexer/`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
+
+- **Dart、Scala、Elixir、Lua、R 言語サポート** — 言語検出（`.dart`、`.scala`、`.sc`、`.r`、`.R`、`.ex`、`.exs`、`.lua`）、Dart（class/mixin/enum/extension/function/import）・Scala（class/object/trait/case class/def/import）・Elixir（defmodule/defprotocol/def/defp/import/alias/use）・Lua（function/local function/require）のシンボル抽出を追加。Dart と Scala は call graph 参照抽出と `map` 向けエントリポイントヒントにも対応。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `tests/`.
+
+- **ロックファイルとビルドキャッシュディレクトリの追加除外** — `Gemfile.lock`、`Cargo.lock`、`composer.lock`、`poetry.lock`、`bun.lockb` をスキップファイルに、`.terraform`、`.cargo`、`.pub-cache`、`_build` をスキップディレクトリに追加。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **`outline` コマンドで1ファイルのシンボル構造を取得** — 新 CLI コマンド `cdidx outline <path>` と MCP ツール `outline` を追加。1ファイル内の全シンボルを行順に、種別・シグネチャ・可視性・コンテナネスト・本体範囲付きで返す。`symbols` + `definition` のチェーンを1回で置き換え。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/`.
+
+- **R シンボル抽出と Haskell/Zig 言語検出** — R は `name <- function()` と `library()`/`require()` のシンボル抽出に対応。Haskell（`.hs`、`.lhs`）は型シグネチャ・data/class/import の抽出に対応。Zig（`.zig`）はテキスト検索用に検出のみ。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/`.
+
+- **MCP search サマリにファイルパスを含める** — MCP の `search` ツールが content サマリにトップファイルパスを表示し、AI が構造化結果をパースする前に素早く位置を把握できるようにした。対象: `src/CodeIndex/Mcp/McpServer.cs`.
+
+#### 変更
+
+- **README の MCP 図が Markdown プレビューで安定表示されるよう改善** — 英語版・日本語版の MCP セクションにあった ASCII 罫線の図を Mermaid フローチャートへ置き換え、周辺レイアウトを壊していた余分なコードフェンスも削除した。対象: `README.md`.
+
+- **6言語のエントリポイントヒントを追加** — `map` のエントリポイント推定が C（`main.c`）、C++（`main.cpp`/`.cc`/`.cxx`）、Haskell（`Main.hs`/`.lhs`）、R（`main.R`）、Lua（`main.lua`/`init.lua`）、Elixir（`application.ex`/`router.ex`）にも対応。対象: `src/CodeIndex/Database/RepoMapBuilder.cs`.
+
+- **コード品質の一括改善** — `Program.cs` のパス検出ロジックを `IsProjectPathArg` に抽出して可読性向上、`ConsoleUi` のマジックナンバーに名前付き定数（`SpinnerFrameDelayMs`、`SpinnerStopDelayMs`、`ConsoleLineMargin`）を導入、`GitHelper` で C# range syntax を使用、`WorkspaceMetadataEnricher` の重複ロジックを `Apply` ヘルパーに共通化、`SearchSnippetFormatter` のトークン正規化にコメント追加。対象: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/GitHelper.cs`, `src/CodeIndex/Cli/WorkspaceMetadataEnricher.cs`, `src/CodeIndex/Cli/SearchSnippetFormatter.cs`.
+
+- **CLI エラーメッセージとヘルプの明確化** — `--rebuild` の競合エラーに理由（full rescan が必要）を追加、DB 未検出エラーに `Path.GetFullPath` でフルパスを表示、`--snippet-lines` のヘルプを "1-20, default: 8" に変更。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
+
+- **テストカバレッジの追加** — `SearchSnippetFormatter.Format` のトランケーションマーカーテスト（両側・前のみ・後ろのみ・なし）と、`ConsoleUi.LoadVersion` が "0.0.0" フォールバックではなく実バージョンを返すことを検証するテストを追加。対象: `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`.
 
 ### [1.2.0] - 2026-04-11
 

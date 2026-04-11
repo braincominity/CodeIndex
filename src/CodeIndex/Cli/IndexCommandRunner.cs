@@ -57,9 +57,9 @@ public static class IndexCommandRunner
         if (options.Rebuild && isUpdateMode)
         {
             if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message = "--rebuild cannot be used with --commits or --files" }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message = "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)" }, jsonOptions));
             else
-                Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files");
+                Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files (rebuild requires a full rescan)");
             return CommandExitCodes.UsageError;
         }
 

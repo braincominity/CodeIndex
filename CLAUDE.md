@@ -30,6 +30,7 @@ cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -46,11 +47,12 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/status command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
+  Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
-  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, status)
+  Database/DbReader.cs      — Query operations (FTS search, definition lookup, reference/caller/callee lookup, excerpt reconstruction, symbol lookup, file listing, outline, status)
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
@@ -64,9 +66,17 @@ tests/CodeIndex.Tests/
   SymbolExtractorTests.cs   — SymbolExtractor tests (multi-language)
   FileIndexerTests.cs       — FileIndexer tests (scan, detect, build)
   DatabaseTests.cs          — DbContext/DbWriter integration tests
-  DbReaderTests.cs          — DbReader query tests (FTS, symbols, files, status)
+  DbReaderTests.cs          — DbReader query tests (FTS, symbols, files, outline, status)
   McpServerTests.cs         — MCP server JSON-RPC protocol and tool tests
   GitHelperTests.cs         — Git helper tests (normal repo, worktree, fallback cases)
+  ConsoleUiTests.cs         — Console output, help text, spinner, version tests
+  DbPathResolverTests.cs    — DB path resolution tests
+  IndexCommandRunnerTests.cs — Index command integration tests
+  QueryCommandRunnerTests.cs — Query CLI integration tests
+  SearchSnippetFormatterTests.cs — Search snippet formatting tests
+  WorkspaceMetadataEnricherTests.cs — Workspace metadata enrichment tests
+  TestProjectHelper.cs      — Shared helper for creating temp indexed projects
+  TestConsoleLock.cs         — Shared lock for console-redirecting tests
 ```
 
 ## Key design decisions
@@ -170,6 +180,8 @@ The following files contain overlapping content that must be updated together:
 When modifying the CLAUDE.md template (code search rules for AI agents), update both instances in README (English and Japanese). DEVELOPER_GUIDE references README, so no separate update is needed there.
 
 ### CHANGELOG style
+- **Always write new entries under `[Unreleased]`**, never under a versioned heading like `[1.2.0]`. Version headings are created only at release time by the maintainer. Writing entries directly into a version heading causes premature version claims and stale compare links.
+- **Never delete, move, or modify entries under an existing versioned heading** (e.g. `[1.2.0]`). Those entries are part of a published release and must not be touched. If you accidentally wrote new entries under a versioned heading, move only your new entries to `[Unreleased]` — do not delete the version heading or disturb its original entries. Before editing CHANGELOG.md, always check the existing structure first so you know which headings and entries already exist.
 - One entry per distinct change. Don't merge unrelated fixes into a single entry just to reduce line count.
 - But don't write separate entries for iterative commits toward the same fix — consolidate them into one entry describing the final result.
 - Use [Keep a Changelog](https://keepachangelog.com/) categories: Added, Changed, Fixed, Removed.
@@ -228,6 +240,7 @@ cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--json]
+cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）
@@ -244,11 +257,12 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/statusコマンド実行とクエリ引数解析
+  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/statusコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
+  Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
-  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、ステータス）
+  Database/DbReader.cs      — クエリ操作（FTS検索、定義検索、参照/caller/callee検索、抜粋再構成、シンボル検索、ファイル一覧、アウトライン、ステータス）
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
@@ -262,9 +276,17 @@ tests/CodeIndex.Tests/
   SymbolExtractorTests.cs   — SymbolExtractorテスト（多言語対応）
   FileIndexerTests.cs       — FileIndexerテスト（走査、検出、構築）
   DatabaseTests.cs          — DbContext/DbWriter統合テスト
-  DbReaderTests.cs          — DbReaderクエリテスト（FTS、シンボル、ファイル、ステータス）
+  DbReaderTests.cs          — DbReaderクエリテスト（FTS、シンボル、ファイル、アウトライン、ステータス）
   McpServerTests.cs         — MCPサーバーJSON-RPCプロトコル・ツールテスト
   GitHelperTests.cs         — Gitヘルパーテスト（通常repo、worktree、フォールバック）
+  ConsoleUiTests.cs         — コンソール出力、ヘルプテキスト、スピナー、バージョンテスト
+  DbPathResolverTests.cs    — DBパス解決テスト
+  IndexCommandRunnerTests.cs — indexコマンド統合テスト
+  QueryCommandRunnerTests.cs — クエリCLI統合テスト
+  SearchSnippetFormatterTests.cs — 検索スニペット整形テスト
+  WorkspaceMetadataEnricherTests.cs — ワークスペースメタデータ付加テスト
+  TestProjectHelper.cs      — 一時インデックスプロジェクト作成用の共有ヘルパー
+  TestConsoleLock.cs         — コンソールリダイレクトテスト用の共有ロック
 ```
 
 ## 主要な設計判断
@@ -368,6 +390,8 @@ tests/CodeIndex.Tests/
 CLAUDE.mdテンプレート（AI向けコード検索ルール）を変更する場合、READMEの両インスタンス（英語・日本語）を更新すること。DEVELOPER_GUIDEはREADMEを参照しているため個別の更新は不要。
 
 ### CHANGELOGのスタイル
+- **新しいエントリは必ず `[Unreleased]` の下に書く**。`[1.2.0]` のようなバージョン見出しの下には絶対に書かない。バージョン見出しはリリース時にメンテナが作成する。バージョン見出しに直接書くと、早すぎるバージョン宣言と古い compare リンクの原因になる。
+- **既存のバージョン見出し配下のエントリは絶対に削除・移動・変更しない**（例: `[1.2.0]`）。それらはリリース済みの記録であり、触れてはならない。もし誤ってバージョン見出しの下に新エントリを書いてしまった場合は、自分が追加した新エントリだけを `[Unreleased]` に移す — バージョン見出しを消したり元のエントリを巻き込んだりしないこと。CHANGELOG.md を編集する前に、まず既存の構造を確認し、どの見出しとエントリが既に存在するかを把握すること。
 - 変更ごとに1エントリ。無関係な修正を行数削減のために1エントリにまとめない。
 - ただし、同じ修正に向けた段階的なコミットは1エントリに統合し、最終結果を記述する。
 - [Keep a Changelog](https://keepachangelog.com/)のカテゴリを使用: Added, Changed, Fixed, Removed（日本語: 追加, 変更, 修正, 削除）。

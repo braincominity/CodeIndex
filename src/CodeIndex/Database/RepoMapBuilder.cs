@@ -26,10 +26,20 @@ internal sealed class RepoMapBuilder
         ["ruby"] = ["main", "call", "App"],
         ["php"] = ["main", "handle", "App"],
         ["swift"] = ["main", "App"],
+        ["dart"] = ["main", "runApp"],
+        ["scala"] = ["main", "App"],
+        ["fsharp"] = ["main", "Program", "App"],
+        ["vb"] = ["Main", "Program", "App"],
+        ["c"] = ["main"],
+        ["cpp"] = ["main"],
+        ["haskell"] = ["main"],
+        ["r"] = ["main"],
+        ["lua"] = ["main"],
+        ["elixir"] = ["start", "init", "call"],
     };
     private static readonly Dictionary<string, string[]> EntrypointPathHints = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "App.cs"],
+        ["csharp"] = ["Program.cs", "Startup.cs", "App.xaml.cs", "App.cs", "App.razor"],
         ["python"] = ["main.py", "__main__.py", "app.py", "cli.py"],
         ["javascript"] = ["index.js", "main.js", "app.js", "server.js"],
         ["typescript"] = ["index.ts", "main.ts", "app.ts", "server.ts"],
@@ -40,6 +50,16 @@ internal sealed class RepoMapBuilder
         ["ruby"] = ["app.rb", "main.rb", "cli.rb"],
         ["php"] = ["index.php", "app.php"],
         ["swift"] = ["main.swift", "App.swift"],
+        ["dart"] = ["main.dart", "app.dart"],
+        ["scala"] = ["Main.scala", "App.scala", "Application.scala"],
+        ["fsharp"] = ["Program.fs", "App.fs"],
+        ["vb"] = ["Program.vb", "Module1.vb", "App.vb"],
+        ["c"] = ["main.c"],
+        ["cpp"] = ["main.cpp", "main.cc", "main.cxx"],
+        ["haskell"] = ["Main.hs", "Main.lhs"],
+        ["r"] = ["main.R", "app.R"],
+        ["lua"] = ["main.lua", "init.lua"],
+        ["elixir"] = ["application.ex", "router.ex", "endpoint.ex"],
     };
 
     public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns)
