@@ -315,7 +315,33 @@ public partial class McpServer
                     },
                     ["required"] = new JsonArray { "path" }
                 },
-                IndexAnnotations())
+                IndexAnnotations()),
+            CreateToolDefinition(
+                "suggest_improvement",
+                "Submit a structured improvement suggestion or error report for cdidx. "
+                + "Call this when you notice a gap (e.g. missing language support, poor ranking) or encounter an unexpected error. "
+                + "Never include source code — describe the gap in natural language only. "
+                + "/ cdidxへの構造化された改善提案またはエラー報告を送信する。"
+                + "ギャップ（言語サポート不足、ランキング不良等）に気づいたとき、または予期せぬエラーに遭遇したときに呼び出す。"
+                + "ソースコードを含めないこと — 自然言語でのみギャップを記述する。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["category"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Suggestion category: symbol_extraction, reference_extraction, search_ranking, language_support, output_format, crash_report, unexpected_error, or other",
+                            ["enum"] = new JsonArray { "symbol_extraction", "reference_extraction", "search_ranking", "language_support", "output_format", "crash_report", "unexpected_error", "other" }
+                        },
+                        ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Programming language this applies to (optional)" },
+                        ["description"] = new JsonObject { ["type"] = "string", ["description"] = "What gap or improvement you observed, or what error occurred (NOT source code)" },
+                        ["context"] = new JsonObject { ["type"] = "string", ["description"] = "What you were trying to do when you noticed the gap (NOT source code)" }
+                    },
+                    ["required"] = new JsonArray { "category", "description" }
+                },
+                SuggestionAnnotations())
         };
 
         var result = new JsonObject { ["tools"] = tools };

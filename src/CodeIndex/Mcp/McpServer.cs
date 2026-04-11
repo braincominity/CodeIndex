@@ -192,6 +192,7 @@ public partial class McpServer
                 "validate" => ExecuteValidate(id, args),
                 "ping" => ExecutePing(id),
                 "index" => ExecuteIndex(id, args),
+                "suggest_improvement" => ExecuteSuggestImprovement(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
             };
         }
@@ -329,6 +330,22 @@ public partial class McpServer
         ["readOnlyHint"] = false,
         ["destructiveHint"] = true,
         ["idempotentHint"] = false,
+        ["openWorldHint"] = false
+    };
+
+    /// <summary>
+    /// Build MCP tool annotations for the suggest_improvement tool.
+    /// suggest_improvementツール用のMCPツールアノテーションを構築。
+    /// Not read-only (writes suggestion to disk), not destructive,
+    /// idempotent (duplicate submissions are safely deduplicated).
+    /// 読み取り専用ではない（提案をディスクに書き込む）、破壊的ではない、
+    /// 冪等（重複送信は安全に排除される）。
+    /// </summary>
+    private static JsonObject SuggestionAnnotations() => new()
+    {
+        ["readOnlyHint"] = false,
+        ["destructiveHint"] = false,
+        ["idempotentHint"] = true,
         ["openWorldHint"] = false
     };
 }

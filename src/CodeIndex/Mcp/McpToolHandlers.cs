@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Mcp;
 
@@ -36,7 +37,8 @@ public partial class McpServer
             + "Use 'search' with 'exact: true' for case-sensitive substring matching when FTS5 returns too many results. "
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
-            + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files.";
+            + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
+            + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
     /// <summary>
@@ -533,9 +535,9 @@ public partial class McpServer
             }
 
             // Block write operations in batch / バッチ内では書き込み操作をブロック
-            if (toolName == "index")
+            if (toolName == "index" || toolName == "suggest_improvement")
             {
-                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = "index is not allowed in batch_query (write operation)" });
+                resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = $"{toolName} is not allowed in batch_query (write operation)" });
                 continue;
             }
 
@@ -785,6 +787,105 @@ public partial class McpServer
             }
         };
         return CreateToolResult(id, "Indexing complete.", structured);
+    }
+
+    /// <summary>
+    /// Maximum length for suggestion description text.
+    /// 提案説明テキストの最大長。
+    /// </summary>
+    private const int MaxDescriptionLength = 2000;
+
+    /// <summary>
+    /// Maximum length for suggestion context text.
+    /// 提案コンテキストテキストの最大長。
+    /// </summary>
+    private const int MaxContextLength = 1000;
+
+    /// <summary>
+    /// Handle the suggest_improvement tool call.
+    /// Records a structured suggestion to .cdidx/suggestions.json.
+    /// Validates that no source code is included in the description or context.
+    /// suggest_improvementツール呼び出しを処理する。
+    /// 構造化された提案を .cdidx/suggestions.json に記録する。
+    /// description と context にソースコードが含まれていないことを検証する。
+    /// </summary>
+    private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)
+    {
+        // 1. Validate required parameters / 必須パラメータのバリデーション
+        var category = args?["category"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(category))
+            return CreateToolErrorResponse(id, "Missing required parameter: category");
+
+        if (!SuggestionRecord.ValidCategories.Contains(category))
+            return CreateToolErrorResponse(id, $"Invalid category: '{category}'. Must be one of: {string.Join(", ", SuggestionRecord.ValidCategories)}");
+
+        var description = args?["description"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(description))
+            return CreateToolErrorResponse(id, "Missing required parameter: description");
+
+        if (description.Length > MaxDescriptionLength)
+            return CreateToolErrorResponse(id, $"Description too long ({description.Length} chars, max {MaxDescriptionLength})");
+
+        // 2. Validate optional parameters / 任意パラメータのバリデーション
+        var language = args?["language"]?.GetValue<string>();
+        var context = args?["context"]?.GetValue<string>();
+
+        if (context != null && context.Length > MaxContextLength)
+            return CreateToolErrorResponse(id, $"Context too long ({context.Length} chars, max {MaxContextLength})");
+
+        // 3. Source code leak detection — reject if code is detected
+        //    ソースコード漏洩検出 — コードが検出されたら拒否
+        if (SourceCodeDetector.ContainsSourceCode(description))
+            return CreateToolErrorResponse(id, "Description appears to contain source code. Please describe the gap in natural language without including code.");
+
+        if (context != null && SourceCodeDetector.ContainsSourceCode(context))
+            return CreateToolErrorResponse(id, "Context appears to contain source code. Please describe what you were trying to do without including code.");
+
+        // 4. Compute dedup hash / 重複排除ハッシュを計算
+        var hash = SuggestionStore.ComputeHash(category, language, description);
+
+        // 5. Resolve .cdidx directory and create if needed
+        //    .cdidx ディレクトリを解決し、必要に応じて作成
+        var cdidxDir = Path.GetDirectoryName(_dbPath);
+        if (string.IsNullOrEmpty(cdidxDir))
+            cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
+        Directory.CreateDirectory(cdidxDir);
+
+        // 6. Store locally / ローカルに保存
+        var store = new SuggestionStore(cdidxDir);
+        var record = new SuggestionRecord
+        {
+            Category = category,
+            Language = language,
+            Description = description,
+            Context = context,
+            Hash = hash,
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        var isNew = store.TryAdd(record);
+
+        if (!isNew)
+        {
+            var dupPayload = new JsonObject
+            {
+                ["status"] = "duplicate",
+                ["hash"] = hash,
+                ["message"] = "This suggestion has already been recorded."
+            };
+            return CreateToolResult(id, "Duplicate suggestion (already recorded).", dupPayload);
+        }
+
+        // 7. Return success / 成功レスポンスを返す
+        var payload = new JsonObject
+        {
+            ["status"] = "recorded",
+            ["hash"] = hash,
+            ["category"] = category,
+            ["language"] = language,
+            ["stored_locally"] = true,
+        };
+        return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
     }
 
 }
