@@ -5,7 +5,7 @@
 # Usage / 使い方:
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash -s -- v1.5.0
-#   CDIDX_INSTALL_DIR=/usr/local/bin curl -fsSL ... | bash
+#   export CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
 
 set -euo pipefail
 
@@ -148,9 +148,10 @@ download_and_install() {
         actual_checksum="$(sha256sum "${tmpdir}/${archive_name}" | awk '{print $1}')"
     elif command -v shasum > /dev/null 2>&1; then
         actual_checksum="$(shasum -a 256 "${tmpdir}/${archive_name}" | awk '{print $1}')"
+    elif command -v openssl > /dev/null 2>&1; then
+        actual_checksum="$(openssl dgst -sha256 "${tmpdir}/${archive_name}" | awk '{print $NF}')"
     else
-        warn "Neither sha256sum nor shasum found. Skipping checksum verification."
-        actual_checksum="$expected_checksum"
+        error "No checksum tool found (need sha256sum, shasum, or openssl). Cannot verify download integrity."
     fi
 
     if [ "$actual_checksum" != "$expected_checksum" ]; then

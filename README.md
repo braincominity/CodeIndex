@@ -96,8 +96,8 @@ Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux 
 
 ```dockerfile
 # Install cdidx into /usr/local/bin so it's on PATH immediately
-RUN CDIDX_INSTALL_DIR=/usr/local/bin \
-    curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
+    && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 </details>
 
@@ -879,8 +879,8 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 
 ```dockerfile
 # /usr/local/bin にインストールして PATH に即反映
-RUN CDIDX_INSTALL_DIR=/usr/local/bin \
-    curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
+    && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 </details>
 
