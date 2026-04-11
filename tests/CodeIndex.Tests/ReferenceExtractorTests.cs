@@ -44,6 +44,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpKeywords_NotExtractedAsReferences()
+    {
+        // LINQ and C# contextual keywords should be ignored
+        // LINQ や C# の文脈キーワードは参照として抽出されないこと
+        const string content = """
+            public class Query
+            {
+                public void Run()
+                {
+                    var x = from(items);
+                    if (x is string s) { }
+                    var y = default(int);
+                    base.ToString();
+                    value.GetType();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "from");
+        Assert.DoesNotContain(references, r => r.SymbolName == "is");
+        Assert.DoesNotContain(references, r => r.SymbolName == "default");
+        // ToString and GetType are real calls, should be extracted
+        Assert.Contains(references, r => r.SymbolName == "ToString");
+        Assert.Contains(references, r => r.SymbolName == "GetType");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";

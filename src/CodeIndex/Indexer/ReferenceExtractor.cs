@@ -18,9 +18,19 @@ public static class ReferenceExtractor
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
     {
-        "if", "else", "for", "foreach", "while", "switch", "catch", "lock",
-        "sizeof", "typeof", "return", "throw", "nameof", "when", "do",
-        "await", "using", "new", "try", "class", "def", "function", "func",
+        // Control flow / 制御フロー
+        "if", "else", "for", "foreach", "while", "switch", "catch", "lock", "do", "try", "when",
+        // Keywords that look like calls / 呼び出しに見えるキーワード
+        "sizeof", "typeof", "return", "throw", "nameof", "await", "using", "new",
+        // Type/member keywords / 型・メンバーキーワード
+        "class", "struct", "record", "interface", "enum", "delegate", "event", "namespace",
+        "def", "function", "func",
+        // C# contextual keywords and common false positives / C# 文脈キーワードとよくある偽陽性
+        "is", "as", "in", "var", "base", "this", "value", "get", "set", "init", "where",
+        "from", "select", "orderby", "group", "into", "join", "let", "on", "equals",
+        "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
+        // Other languages / 他言語
+        "print", "require", "import", "include", "raise", "lambda",
     };
 
     private static readonly Regex StringLiteralRegex = new(
