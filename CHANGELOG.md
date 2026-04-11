@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **README graph language list updated to 18 languages** — Added Lua and VB.NET to graph-supported language lists in both EN/JP sections. Affected: `README.md`.
+
 - **DEVELOPER_GUIDE: VB.NET graph=yes** — Updated VB.NET to graph=yes in both EN/JP language tables (now 18 graph-supported languages). Affected: `DEVELOPER_GUIDE.md`.
 
 - **VB.NET call-graph reference extraction** — VB.NET now supports `references`, `callers`, and `callees` queries. Added `'` comment stripping. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
@@ -464,6 +466,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **README graph 言語リストを18言語に更新** — Lua と VB.NET を graph 対応言語リストに追加（英語・日本語両セクション）。対象: `README.md`.
 
 - **DEVELOPER_GUIDE: VB.NET graph=yes** — 言語表でVB.NETを graph=yes に更新（graph 対応は18言語に）。対象: `DEVELOPER_GUIDE.md`.
 

@@ -302,7 +302,7 @@ cdidx callers ResolveGitCommonDir --exclude-tests --json
 cdidx callees AddToGitExclude --exclude-tests
 ```
 
-These commands use the indexed reference graph and are intended for languages where cdidx already extracts named symbols and call-like references: Python, JavaScript/TypeScript, C#, Go, Rust, Java, Kotlin, Ruby, C/C++, PHP, Swift, Dart, Scala, and Elixir. F# uses space-separated call syntax so graph queries are not supported; use `search` instead. For docs, config, markup, or other unsupported languages, fall back to `search`.
+These commands use the indexed reference graph and are intended for languages where cdidx already extracts named symbols and call-like references: Python, JavaScript/TypeScript, C#, Go, Rust, Java, Kotlin, Ruby, C/C++, PHP, Swift, Dart, Scala, Elixir, Lua, and VB.NET (18 languages). F# uses space-separated call syntax so graph queries are not supported; use `search` instead. For docs, config, markup, or other unsupported languages, fall back to `search`.
 
 When you pass `--lang` for an unsupported language, human-readable graph commands now say so explicitly, and MCP graph tools expose `graph_language`, `graph_supported`, and `graph_support_reason` alongside the empty result list.
 
@@ -552,7 +552,7 @@ If the checkout changed because of `git reset`, `git rebase`, `git commit --amen
 - Check `status --json` when freshness matters. Use `indexed_at`, `latest_modified`, `git_head`, and `git_is_dirty` to decide whether you need to re-run `cdidx .` before trusting results. If you already started with `map --json`, treat `indexed_at` / `latest_modified` there as filter-scoped freshness and `workspace_indexed_at` / `workspace_latest_modified` as the whole-workspace view.
 - Use `inspect` when you already have a candidate symbol name and want bundled definition/caller/callee/reference context in one round-trip. `inspect --json` also carries `workspace_indexed_at`, `workspace_latest_modified`, `project_root`, `git_head`, and `git_is_dirty` for trust decisions.
 - Use `definition` when you need the declaration text for a named symbol, and add `--body` when the implementation body matters.
-- Use `references`, `callers`, and `callees` for symbol-aware call graph questions in Python, JavaScript/TypeScript, C#, Go, Rust, Java, Kotlin, Ruby, C/C++, PHP, Swift, Dart, Scala, and Elixir. F# uses space-separated call syntax so graph queries are not supported; use `search` instead.
+- Use `references`, `callers`, and `callees` for symbol-aware call graph questions in Python, JavaScript/TypeScript, C#, Go, Rust, Java, Kotlin, Ruby, C/C++, PHP, Swift, Dart, Scala, Elixir, Lua, and VB.NET (18 languages). F# uses space-separated call syntax so graph queries are not supported; use `search` instead.
 - Use `symbols` for named code entities in symbol-aware languages (29 languages including Python, JavaScript/TypeScript, C#, Go, Rust, Java, Kotlin, Ruby, C/C++, PHP, Swift, Dart, Scala, F#, VB.NET, Elixir, Lua, R, Haskell, Shell, SQL, Terraform, Protobuf, GraphQL, Gradle, Makefile, Dockerfile).
 - Use `outline` to see the full symbol structure of a single file without reading its content.
 - Use `search` for raw text, comments, strings, or languages without structured symbol extraction such as Zig, XAML, Markdown, YAML, JSON, TOML, HTML/CSS, Vue, Svelte.
@@ -1044,7 +1044,7 @@ cdidx callers ResolveGitCommonDir --exclude-tests --json
 cdidx callees AddToGitExclude --exclude-tests
 ```
 
-これらのコマンドはインデックス済み参照グラフを使います。対象は、cdidx が名前付きシンボルと call 相当の参照を抽出している言語、つまり Python、JavaScript/TypeScript、C#、Go、Rust、Java、Kotlin、Ruby、C/C++、PHP、Swift、Dart、Scala、Elixir です。F# はスペース区切りの呼び出し構文のため graph クエリ非対応です。ドキュメント、設定ファイル、マークアップなどの未対応言語では `search` に戻してください。
+これらのコマンドはインデックス済み参照グラフを使います。対象は、cdidx が名前付きシンボルと call 相当の参照を抽出している言語、つまり Python、JavaScript/TypeScript、C#、Go、Rust、Java、Kotlin、Ruby、C/C++、PHP、Swift、Dart、Scala、Elixir、Lua、VB.NET です（18言語）。F# はスペース区切りの呼び出し構文のため graph クエリ非対応です。ドキュメント、設定ファイル、マークアップなどの未対応言語では `search` に戻してください。
 
 未対応言語を `--lang` で指定した場合、人間向けの graph コマンドはその旨を明示し、MCP の graph ツールは空結果に加えて `graph_language`、`graph_supported`、`graph_support_reason` を返します。
 
