@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+#### Fixed
+
+- **`deps` false edges from same-name symbols and missing exclude-path** — The `deps` query now uses DISTINCT triples `(source_path, target_path, symbol_name)` to avoid inflated reference counts from same-name symbols across files (e.g. multiple `Run` or `Dispose` methods). Also wired `excludePathPatterns` into the SQL and parameter binding — previously accepted but silently ignored. Affected: `src/CodeIndex/Database/DbReader.cs`.
+
 #### Changed
 
 - **DEVELOPER_GUIDE symbol extraction count updated to 26** — Reflects all newly supported languages. Affected: `DEVELOPER_GUIDE.md`.
@@ -372,6 +376,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+#### 修正
+
+- **`deps` の同名シンボルによる誤エッジと exclude-path 未反映の修正** — `deps` クエリで `(source_path, target_path, symbol_name)` の DISTINCT トリプルを使い、同名シンボル（複数の `Run` や `Dispose` 等）による参照数膨張を防止。また `excludePathPatterns` を SQL とパラメータバインドに反映 — 従来は受け取るだけで無視されていた。対象: `src/CodeIndex/Database/DbReader.cs`.
 
 #### 変更
 

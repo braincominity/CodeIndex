@@ -929,31 +929,48 @@ public class DbReader
     public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
     {
         using var cmd = _conn.CreateCommand();
-        var sql = @"
-            SELECT src.path AS source_path, dst.path AS target_path,
-                   COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.symbol_name) AS symbols
-            FROM symbol_references r
-            JOIN files src ON r.file_id = src.id
-            JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
-            JOIN files dst ON s.file_id = dst.id
-            WHERE src.path != dst.path";
-        if (lang != null)
-            sql += " AND src.lang = @lang";
-        // Apply path filters: to source in normal mode, to target in reverse mode
-        // パスフィルタ適用: 通常モードではソース、逆引きモードではターゲットに適用
+        // Use a subquery to find distinct (reference_file, definition_file, symbol) triples,
+        // avoiding inflated counts from same-name symbols across multiple files.
+        // サブクエリで (参照ファイル, 定義ファイル, シンボル) の重複を排除し、
+        // 同名シンボルによるカウント膨張を防ぐ。
         var filterAlias = reverse ? "dst" : "src";
+        var innerSql = @"
+                SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
+                       r.symbol_name AS symbol_name
+                FROM symbol_references r
+                JOIN files src ON r.file_id = src.id
+                JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
+                JOIN files dst ON s.file_id = dst.id
+                WHERE src.path != dst.path";
+        if (lang != null)
+            innerSql += " AND src.lang = @lang";
         if (pathPattern != null)
-            sql += $" AND {filterAlias}.path LIKE @pathPattern ESCAPE '\\'";
+            innerSql += $" AND {filterAlias}.path LIKE @pathPattern ESCAPE '\\'";
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                innerSql += $" AND {filterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
         if (excludeTests)
-            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{filterAlias}.path")}";
-        sql += " GROUP BY src.path, dst.path ORDER BY reference_count DESC LIMIT @limit";
+            innerSql += $" AND NOT {TestPathCondition.Replace("f.path", $"{filterAlias}.path")}";
+
+        var sql = $@"
+            SELECT source_path, target_path,
+                   COUNT(*) AS reference_count,
+                   GROUP_CONCAT(symbol_name) AS symbols
+            FROM ({innerSql}) edges
+            GROUP BY source_path, target_path ORDER BY reference_count DESC LIMIT @limit";
 
         cmd.CommandText = sql;
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (pathPattern != null)
             cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@excludePath{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
+        }
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<FileDependencyResult>();
