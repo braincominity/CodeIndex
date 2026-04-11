@@ -141,6 +141,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Protobuf, GraphQL, Dockerfile, Makefile, and more file types** — Added language detection for `.proto` (protobuf), `.graphql`/`.gql` (graphql), `.gradle`, `.cmake`/`CMakeLists.txt`, `.ps1` (powershell), `.bat`/`.cmd` (batch), `.bash`/`.zsh`/`.fish` (shell), and filename-based detection for `Dockerfile`, `Makefile`, `Justfile`, `Vagrantfile`, `.editorconfig`, `.gitignore`, `.dockerignore`. These common project files are now indexed for full-text search. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
 
+- **Cross-language feature expansion guidelines** — `SELF_IMPROVEMENT.md` now instructs AI agents to actively check whether language-specific enhancements (especially C# ↔ Java) can be ported to structurally similar languages. Also covers TypeScript/JavaScript, Kotlin/Java, and C/C++ pairs. Affected: `SELF_IMPROVEMENT.md`.
 
 ### [1.3.0] - 2026-04-11
 
@@ -515,6 +516,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **CLI 結果サマリにファイル数を追加** — `search`、`definition`、`references`、`callers`、`callees`、`symbols` の人間向け出力で「(N results)」の代わりに「(N results in M files)」を表示し、結果の散らばり具合を素早く把握できるようにした。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **Protobuf、GraphQL、Dockerfile、Makefile 等のファイル種別追加** — `.proto`（protobuf）、`.graphql`/`.gql`（graphql）、`.gradle`、`.cmake`/`CMakeLists.txt`、`.ps1`（powershell）、`.bat`/`.cmd`（batch）、`.bash`/`.zsh`/`.fish`（shell）の言語検出と、`Dockerfile`、`Makefile`、`Justfile`、`Vagrantfile`、`.editorconfig`、`.gitignore`、`.dockerignore` のファイル名ベース検出を追加。これらの一般的なプロジェクトファイルが全文検索の対象になる。対象: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
+- **言語横展開の指針** — `SELF_IMPROVEMENT.md` に、ある言語向けの強化（特に C# ↔ Java）を構文的に近い言語にも横展開するよう AI エージェントに指示するガイドラインを追加。TypeScript/JavaScript、Kotlin/Java、C/C++ のペアも対象。対象: `SELF_IMPROVEMENT.md`。
 
 ### [1.3.0] - 2026-04-11
 

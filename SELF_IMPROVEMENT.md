@@ -201,6 +201,15 @@ Do not use one search strategy for every language.
 - When proposing new language-specific features, state clearly which languages are in scope and why.
 - When a heuristic is language-specific, document the limitation in README and tests.
 
+## Cross-Language Feature Expansion
+
+When enhancing symbol extraction, reference extraction, or language-specific heuristics for one language, actively check whether the same improvement applies to structurally similar languages — especially C# and Java, which share many syntactic patterns (classes, interfaces, generics, annotations/attributes, access modifiers, method signatures).
+
+- After implementing or refining a C# pattern, review the corresponding Java patterns in `SymbolExtractor.cs` and `ReferenceExtractor.cs` and apply the same improvement where the syntax permits.
+- The same principle applies in reverse (Java → C#) and to other language pairs with strong overlap (TypeScript/JavaScript, Kotlin/Java, C/C++).
+- Do not force a pattern onto a language where it does not fit. If the syntax diverges enough to make the port unreliable, skip it and document why.
+- When the expansion is straightforward, include it in the same commit as the original enhancement so the languages stay in sync. When it requires non-trivial adaptation, make it a separate follow-up commit.
+
 ## Platform-Aware Guidance
 
 Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
@@ -462,6 +471,15 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - C#、Java、Go、Rust、TypeScript/JavaScript、Python、Kotlin、Ruby、C/C++、PHP、Swift と、Markdown、YAML、JSON、TOML、Shell、SQL、HTML/CSS、Vue、Svelte、Terraform は分けて考えてください。
 - 新しい言語依存機能を提案するときは、どの言語を対象にするのか、その理由を明記してください。
 - ヒューリスティックが言語依存なら、README とテストに制限事項を残してください。
+
+## 言語横展開の指針
+
+ある言語のシンボル抽出、参照抽出、言語固有ヒューリスティックを強化したとき、構文的に近い言語にも同じ改善が当てはまらないか能動的に確認してください。特に C# と Java は共通の構文パターンが多い（クラス、インターフェース、ジェネリクス、アノテーション/属性、アクセス修飾子、メソッドシグネチャ）ため、横展開しやすい組み合わせです。
+
+- C# 向けのパターンを実装・改良したら、`SymbolExtractor.cs` と `ReferenceExtractor.cs` の対応する Java パターンを確認し、構文が許す範囲で同じ改善を適用してください。
+- 逆方向（Java → C#）や、重なりの大きい他の言語ペア（TypeScript/JavaScript、Kotlin/Java、C/C++）にも同じ考え方が当てはまります。
+- 構文が十分に異なり、移植すると信頼性が下がる場合は無理をせず、見送った理由を残してください。
+- 横展開が素直にできるなら、元の強化と同じコミットに含めて言語間の同期を保ちます。非自明な適応が必要な場合は、別のフォローアップコミットにしてください。
 
 ## プラットフォーム差分を前提にする指針
 
