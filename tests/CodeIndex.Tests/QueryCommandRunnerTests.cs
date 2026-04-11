@@ -165,6 +165,17 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunExcerpt_RejectsStartGreaterThanEnd()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["src/app.cs", "--start", "5", "--end", "3"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--start (5) must be less than or equal to --end (3)", stderr);
+    }
+
+    [Fact]
     public void RunInspect_BlankQueryReturnsUsageError()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(

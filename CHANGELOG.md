@@ -42,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`--since` with invalid date silently returns all files (#44)** — `--since` now uses strict invariant ISO 8601 parsing (`DateTimeOffset.TryParseExact` with `CultureInfo.InvariantCulture`), rejecting ambiguous locale-dependent formats like `01/02/2024`. Bare `--since` with no value is also rejected instead of silently dropping the filter. The parser is shared between CLI and MCP. Affected: `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
 - **`map --path` returns exit code 0 for nonexistent path (#45)** — `map` now returns exit code 2 with an error message when filters produce zero files, matching the pattern used by `outline` and `excerpt`. MCP `repo_map` adds freshness hints on zero results. Affected: `QueryCommandRunner.cs`, `McpToolHandlers.cs`.
 - **`outline` throws database NULL error on certain files (#46)** — Fixed `GetOutline` crashing with "The data is NULL at ordinal 3" when a symbol has NULL `start_line`/`end_line`. Now falls back to `line` value, matching the pattern used by `SearchSymbols` and `GetNearbySymbols`. Affected: `DbSymbolReader.cs`.
+- **`excerpt --start N --end M` silently returns single line when start > end (#47)** — CLI `excerpt` now rejects `--start > --end` with exit code 1. MCP `excerpt` already validated this. Affected: `QueryCommandRunner.cs`.
 
 ### [1.6.0] - 2026-04-12
 
@@ -565,6 +566,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`--since` に無効な日付を指定すると全ファイルが返される問題を修正 (#44)** — `--since` が厳密なインバリアントISO 8601パース（`DateTimeOffset.TryParseExact` + `CultureInfo.InvariantCulture`）を使うようになり、`01/02/2024` のようなロケール依存の曖昧な形式を拒否する。値なしの `--since` もフィルタを無視せずエラーを返す。パーサーはCLIとMCPで共有。対象: `QueryCommandRunner.cs`、`McpToolHandlers.cs`。
 - **`map --path` が存在しないパスで終了コード0を返す問題を修正 (#45)** — `map` がフィルタ結果0件のとき終了コード2とエラーメッセージを返すようになった。`outline` や `excerpt` のパターンと一致。MCP の `repo_map` も0件時に鮮度ヒントを付加。対象: `QueryCommandRunner.cs`、`McpToolHandlers.cs`。
 - **`outline` が特定ファイルでデータベースNULLエラーを投げる問題を修正 (#46)** — `GetOutline` がシンボルの `start_line`/`end_line` がNULLのとき "The data is NULL at ordinal 3" でクラッシュしていた問題を修正。`SearchSymbols` や `GetNearbySymbols` と同じく `line` 値にフォールバックする。対象: `DbSymbolReader.cs`。
+- **`excerpt --start N --end M` で start > end のとき1行だけ返す問題を修正 (#47)** — CLI の `excerpt` が `--start > --end` を終了コード1で拒否するようになった。MCP の `excerpt` は既に検証済み。対象: `QueryCommandRunner.cs`。
 
 ### [1.6.0] - 2026-04-12
 

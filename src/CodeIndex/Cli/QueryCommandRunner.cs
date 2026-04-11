@@ -410,6 +410,12 @@ public static class QueryCommandRunner
         }
 
         var endLine = options.EndLine ?? options.StartLine.Value;
+        if (endLine < options.StartLine.Value)
+        {
+            Console.Error.WriteLine($"Error: --start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).");
+            return CommandExitCodes.UsageError;
+        }
+
         return WithDb(options.DbPath, reader =>
         {
             var excerpt = reader.GetExcerpt(options.Query, options.StartLine.Value, endLine, options.ContextBefore, options.ContextAfter);
