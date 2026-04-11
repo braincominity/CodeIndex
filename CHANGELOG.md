@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Rust: macro_rules!, mod, const/static, const fn, unsafe fn, union, type alias** — Rust patterns now support `macro_rules!`, `mod` modules, `const`/`static` items, `const fn`, `unsafe fn`, `extern "C" fn`, `union`, and `type` aliases. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **TypeScript: abstract class, declare, namespace/module, readonly/override** — TypeScript patterns now support `abstract class`, `declare class/module/interface`, `namespace/module`, and `readonly`/`abstract`/`override` method modifiers. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Python: decorated and dunder method test coverage** — Added tests verifying `@dataclass`, `@property`, `@staticmethod` decorated classes/methods, dunder methods (`__init__`, `__str__`), and type hints in signatures are correctly extracted by existing patterns. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -418,6 +420,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Rust: macro_rules!, mod, const/static, const fn, unsafe fn, union, type alias** — Rust パターンに `macro_rules!`、`mod` モジュール、`const`/`static` アイテム、`const fn`、`unsafe fn`、`extern "C" fn`、`union`、`type` エイリアスを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **TypeScript: abstract class, declare, namespace/module, readonly/override** — TypeScript パターンに `abstract class`、`declare class/module/interface`、`namespace/module`、`readonly`/`abstract`/`override` メソッド修飾子を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 

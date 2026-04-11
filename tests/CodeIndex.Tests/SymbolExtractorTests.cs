@@ -373,6 +373,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsExpandedFeatures()
+    {
+        var content = "macro_rules! my_macro {\n    () => {};\n}\n\npub mod utils {\n}\n\nconst MAX_SIZE: usize = 1024;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\npub const fn default_value() -> i32 { 42 }\npub unsafe fn raw_ptr() { }\ntype Result<T> = std::result::Result<T, Error>;\npub union MyUnion { f: f32 }";
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "my_macro");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "utils");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_SIZE");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "COUNTER");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "default_value");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "raw_ptr");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Result");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyUnion");
+    }
+
+    [Fact]
     public void Extract_Go_DetectsTypeAliasAndConst()
     {
         var content = "type Handler struct {\n}\ntype ID = string\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
