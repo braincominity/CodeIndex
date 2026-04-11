@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **ANSI color-coded symbol kinds** — `symbols`, `unused`, and `hotspots` CLI output now color-codes symbol kinds: cyan for class/struct, blue for interface, magenta for enum/delegate, yellow for function, green for property, red for event, dim for namespace/import. Colors degrade to plain text when output is piped. Affected: `ConsoleUi.cs`, `QueryCommandRunner.cs`.
 - **Cross-language symbol kind consistency tests** — Added 32 parameterized test cases verifying that all typed languages (C#, Java, Kotlin, TypeScript, Go, Rust, Swift, C, C++, PHP, Scala, Dart, GraphQL) produce the expected symbol kinds (struct, interface, enum, property, delegate, event). Prevents regressions when modifying extraction patterns. Affected: `SymbolExtractorTests.cs`.
 - **Cyclomatic complexity estimate** — `definition --body --json` and MCP `definition` with `includeBody` now include a `complexity` field: a regex-based cyclomatic complexity estimate (baseline 1, counting if/else/for/while/case/catch/??/&&/|| etc.). This is a heuristic, not a true CFG analysis, but helps AI agents identify refactoring targets. Affected: `SymbolExtractor.cs`, `DbSymbolReader.cs`, `QueryResults.cs`.
+- **PowerShell .psm1/.psd1 file support** — Added `.psm1` (module) and `.psd1` (data) extensions to PowerShell language detection. Affected: `FileIndexer.cs`.
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
@@ -546,6 +547,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **ANSIカラーコード付きシンボル種別** — `symbols`、`unused`、`hotspots` のCLI出力でシンボル種別を色分け表示: シアン（class/struct）、青（interface）、マゼンタ（enum/delegate）、黄（function）、緑（property）、赤（event）、暗灰（namespace/import）。パイプ時は無色テキストに自動退化。対象: `ConsoleUi.cs`、`QueryCommandRunner.cs`。
 - **クロス言語シンボル種別一貫性テスト** — 全型付き言語（C#、Java、Kotlin、TypeScript、Go、Rust、Swift、C、C++、PHP、Scala、Dart、GraphQL）が期待通りのシンボル種別（struct、interface、enum、property、delegate、event）を出力することを検証する32件のパラメータ化テストを追加。抽出パターン変更時のリグレッションを防止。対象: `SymbolExtractorTests.cs`。
 - **サイクロマティック複雑度推定** — `definition --body --json` および MCP の `definition`（`includeBody` 指定時）が `complexity` フィールドを含むようになった。if/else/for/while/case/catch/??/&&/|| 等をカウントする正規表現ベースのヒューリスティック推定（基準値1）。AIエージェントがリファクタリング対象を特定するのに有用。対象: `SymbolExtractor.cs`、`DbSymbolReader.cs`、`QueryResults.cs`。
+- **PowerShell .psm1/.psd1 ファイル対応** — PowerShell 言語検出に `.psm1`（モジュール）と `.psd1`（データ）拡張子を追加。対象: `FileIndexer.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
