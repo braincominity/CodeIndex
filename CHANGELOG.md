@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 - **Visibility-weighted symbol ranking** — `symbols` and `definition` results now rank public symbols above private/internal ones. Ranking tiers: public/open/pub/export (0) > protected (1) > internal (2) > private (3) > unknown (4). AI agents searching for API surface get the most relevant results first. Affected: `DbReader.cs`, `DbSymbolReader.cs`.
+- **Recently-modified tiebreaker in search ranking** — Among equally-ranked search results, recently modified files now appear first. Adds `f.modified DESC` before the final alphabetical tiebreaker. Affected: `DbSearchReader.cs`.
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
@@ -526,6 +527,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 変更
 - **可視性に基づくシンボルランキング** — `symbols` と `definition` の結果が public シンボルを private/internal より上位に表示するようになった。ランキング階層: public/open/pub/export (0) > protected (1) > internal (2) > private (3) > 不明 (4)。AIエージェントが API サーフェスを探す際に最も関連性の高い結果が先に得られる。対象: `DbReader.cs`、`DbSymbolReader.cs`。
+- **検索ランキングの最終更新日タイブレーカー** — 同ランクの検索結果の中で、最近変更されたファイルが先に表示されるようになった。最終的なアルファベット順タイブレーカーの前に `f.modified DESC` を追加。対象: `DbSearchReader.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。
