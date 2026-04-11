@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **CLAUDE.md CLI commands updated with --since and deps** — CLAUDE.md now reflects `--since` in `files` and includes the `deps` command. Affected: `CLAUDE.md`.
+
 - **README option tables updated with --since, --no-dedup, --reverse, --top** — Both English and Japanese option tables now document all new query options. Affected: `README.md`.
 
 - **README MCP tool tables updated with deps and batch_query** — Both English and Japanese MCP tool tables now include `deps` and `batch_query`. Affected: `README.md`.
@@ -358,6 +360,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **CLAUDE.md CLI コマンドに --since と deps を反映** — CLAUDE.md の `files` に `--since` を追加し、`deps` コマンドを記載。対象: `CLAUDE.md`.
 
 - **README オプション表に --since, --no-dedup, --reverse, --top を追加** — 英語・日本語のオプション表を新しいクエリオプションで更新。対象: `README.md`.
 
