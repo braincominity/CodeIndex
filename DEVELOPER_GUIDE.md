@@ -485,13 +485,16 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 - cdidx version string
 - SHA256 suggestion hash (for deduplication)
 
-### What is NEVER sent
+### What is NOT included in the payload by design
 
-- Source code content
 - File paths from the user's project
 - Any data from the indexed SQLite database
 - Any data from `.cdidx/codeindex.db`
 - Operating system or environment information
+
+### Heuristic source code guard (not a security boundary)
+
+The description and context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
 
 ### SourceCodeDetector design
 
@@ -1047,13 +1050,16 @@ MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に
 - cdidx バージョン文字列
 - SHA256 提案ハッシュ（重複排除用）
 
-### 絶対に送信されないもの
+### ペイロードに設計上含まれないもの
 
-- ソースコード内容
 - ユーザーのプロジェクトからのファイルパス
 - インデックス済み SQLite データベースからのあらゆるデータ
 - `.cdidx/codeindex.db` からのあらゆるデータ
 - OS やシステム環境の情報
+
+### ヒューリスティックなソースコードガード（セキュリティ境界ではない）
+
+description と context フィールドは、保存およびオプションの GitHub 送信前に `SourceCodeDetector` を通過する。このヒューリスティックは一般的なコードコピペパターン（複数行ブロック、フェンスドコード、import の連打、関数定義）を拒否するが、ギャップの説明として有用な短いインラインコード例は意図的に許容する。これは**セキュリティ境界ではない** — 意図的に回避しようとするエージェントは回避できる。このガードはコードの誤混入を防ぐベストエフォートのフィルタであり、コード的テキストが一切送信されないことの保証ではない。
 
 ### SourceCodeDetector の設計
 
