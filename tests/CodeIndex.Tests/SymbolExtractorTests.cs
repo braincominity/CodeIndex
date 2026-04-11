@@ -432,6 +432,29 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsFlexibleConstantOrder()
+    {
+        // final static order (reversed) and generic types with spaces
+        var content = "public class Config {\n    private final static int MAX = 100;\n    public static final Map<String, Integer> COUNTS = Map.of();\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "COUNTS");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsEnumMembersWithTwoSpaceIndent()
+    {
+        // 2-space indent enum / 2スペースインデントの enum
+        var content = "public enum Color {\n  RED,\n  GREEN,\n  BLUE;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RED");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GREEN");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BLUE");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsDefaultAndSynchronizedMethods()
     {
         var content = "public interface Service {\n    default void init() { }\n    static Service create() { return null; }\n}\npublic class Worker {\n    synchronized void process() { }\n}";
