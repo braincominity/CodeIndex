@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+
+- **Cross-language feature expansion guidelines** — `SELF_IMPROVEMENT.md` now instructs AI agents to actively check whether language-specific enhancements (especially C# ↔ Java) can be ported to structurally similar languages. Also covers TypeScript/JavaScript, Kotlin/Java, and C/C++ pairs. Affected: `SELF_IMPROVEMENT.md`.
+
 ### [1.3.0] - 2026-04-11
 
 #### Added
@@ -250,6 +254,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+
+- **言語横展開の指針** — `SELF_IMPROVEMENT.md` に、ある言語向けの強化（特に C# ↔ Java）を構文的に近い言語にも横展開するよう AI エージェントに指示するガイドラインを追加。TypeScript/JavaScript、Kotlin/Java、C/C++ のペアも対象。対象: `SELF_IMPROVEMENT.md`。
 
 ### [1.3.0] - 2026-04-11
 
