@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# explicit interface implementation extraction** — `void IDisposable.Dispose()` and similar explicit interface implementations are now extracted as function symbols with their return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Expanded IgnoredCallNames for C# and other languages** — Added ~30 keywords to the reference extractor's ignore list: C# contextual keywords (`is`, `as`, `in`, `var`, `base`, `this`, `value`, `get`, `set`, `init`, `where`), LINQ keywords (`from`, `select`, `orderby`, `group`, etc.), type keywords (`struct`, `record`, `interface`, `delegate`, `event`), and utility keywords (`default`, `stackalloc`, `fixed`, `checked`). Reduces false-positive call references in C# code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **C# indexer extraction** — `this[int index]` indexer declarations are now extracted as function symbols with their return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -294,6 +296,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# 明示的インターフェース実装の抽出** — `void IDisposable.Dispose()` 等の明示的インターフェース実装を戻り値型付きの function シンボルとして抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# 偽陽性参照の削減: IgnoredCallNames 拡張** — 参照抽出器の無視リストに約30のキーワードを追加: C# 文脈キーワード（`is`、`as`、`in`、`var`、`base`、`this`、`value`、`get`、`set`、`init`、`where`）、LINQ キーワード（`from`、`select`、`orderby`、`group` 等）、型キーワード（`struct`、`record`、`interface`、`delegate`、`event`）、ユーティリティキーワード（`default`、`stackalloc`、`fixed`、`checked`）。C# コードの偽陽性参照を低減。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
