@@ -541,7 +541,7 @@ dotnet tool install -g cdidx
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-If install fails (no network, unsupported platform), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`, provided the database was already built.
+If install fails (no network, unsupported platform), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`, provided the database was already built. If neither `cdidx` nor `sqlite3` is available, fall back to `rg` (ripgrep), `grep`, `find`, and `cat` for code search.
 
 Before searching, update the index so results are accurate:
 
@@ -1324,7 +1324,7 @@ dotnet tool install -g cdidx
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-インストールに失敗した場合（ネットワーク不通、未対応プラットフォーム等）は、データベースが構築済みであれば下記の **「直接SQLクエリ」** セクションで `sqlite3` から `.cdidx/codeindex.db` を直接検索できます。
+インストールに失敗した場合（ネットワーク不通、未対応プラットフォーム等）は、データベースが構築済みであれば下記の **「直接SQLクエリ」** セクションで `sqlite3` から `.cdidx/codeindex.db` を直接検索できます。`cdidx` も `sqlite3` も利用できない場合は、`rg`（ripgrep）、`grep`、`find`、`cat` でコードを検索してください。
 
 検索を始める前に、インデックスを最新化してください:
 
