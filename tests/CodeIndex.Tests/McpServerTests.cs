@@ -200,13 +200,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns18Tools()
+    public void ToolsList_Returns19Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(18, tools.Count);
+        Assert.Equal(19, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -227,6 +227,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("deps", names);
         Assert.Contains("languages", names);
         Assert.Contains("index", names);
+        Assert.Contains("suggest_improvement", names);
     }
 
     [Fact]
@@ -778,6 +779,149 @@ public class McpServerTests : IDisposable
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("not found", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    // --- suggest_improvement tests / suggest_improvement テスト ---
+
+    [Fact]
+    public void SuggestImprovement_ValidInput_ReturnsSuccess()
+    {
+        // Use unique description to avoid dedup collision with other test runs
+        // 他テスト実行との重複排除衝突を避けるため一意な description を使用
+        var uniqueDesc = $"Arrow functions are not detected as symbols {Guid.NewGuid():N}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject { ["category"] = "symbol_extraction", ["language"] = "typescript", ["description"] = uniqueDesc }
+            }
+        };
+        var request = (JsonNode)json;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+        Assert.NotNull(structured["hash"]);
+        Assert.True(structured["stored_locally"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_CrashReport_ReturnsSuccess()
+    {
+        var uniqueDesc = $"NullReferenceException when searching with empty query {Guid.NewGuid():N}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject { ["category"] = "crash_report", ["description"] = uniqueDesc }
+            }
+        };
+        var request = (JsonNode)json;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("recorded", structured["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_DuplicateSubmission_ReturnsDuplicate()
+    {
+        var uniqueDesc = $"Add support for Zig language {Guid.NewGuid():N}";
+        JsonNode MakeRequest(int id) => new JsonObject
+        {
+            ["jsonrpc"] = "2.0", ["id"] = id,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject { ["category"] = "language_support", ["description"] = uniqueDesc }
+            }
+        };
+
+        _server.HandleMessage(MakeRequest(1));
+        var response2 = _server.HandleMessage(MakeRequest(2))!;
+
+        var structured = response2["result"]!["structuredContent"]!;
+        Assert.Equal("duplicate", structured["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_InvalidCategory_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"suggest_improvement","arguments":{"category":"invalid_category","description":"Some description"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("Invalid category", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_MissingDescription_ReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"suggest_improvement","arguments":{"category":"other"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("description", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_SourceCodeInDescription_ReturnsError()
+    {
+        // Build the JSON with actual newlines in description so SourceCodeDetector sees code lines
+        // SourceCodeDetector がコード行を認識するよう、description に実際の改行を含む JSON を構築
+        var desc = "public void Foo()\n{\n    var x = 1;\n    var y = 2;\n    var z = x + y;\n    Console.WriteLine(z);\n}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject { ["category"] = "other", ["description"] = desc }
+            }
+        };
+        var response = _server.HandleMessage(json)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("source code", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_SourceCodeInContext_ReturnsError()
+    {
+        var ctx = "function foo() {\n    let x = 1;\n    let y = 2;\n    return x + y;\n}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject { ["category"] = "other", ["description"] = "Something is wrong", ["context"] = ctx }
+            }
+        };
+        var response = _server.HandleMessage(json)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("source code", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_BlockedInBatchQuery()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"suggest_improvement","arguments":{"category":"other","description":"test"}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Single(results);
+        Assert.Contains("not allowed in batch_query", results[0]!["error"]!.GetValue<string>());
     }
 
     public void Dispose()

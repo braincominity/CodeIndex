@@ -52,6 +52,9 @@ src/CodeIndex/
   Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
+  Cli/SuggestionStore.cs    — Local JSON storage for AI suggestions with SHA256 dedup
+  Cli/SourceCodeDetector.cs — Heuristic source code leak prevention for suggestion submissions
+  Cli/GitHubIssueReporter.cs — GitHub Issues API client for suggestion submission (best-effort)
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
   Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, excerpt reconstruction, status, file-level deps)
@@ -65,7 +68,7 @@ src/CodeIndex/
   Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
   Mcp/McpToolDefinitions.cs — MCP tool schema definitions (partial class)
   Mcp/McpToolHandlers.cs    — MCP tool execution logic (partial class)
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, QueryResults (plain DTOs)
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, SuggestionRecord, QueryResults (plain DTOs)
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitter tests
   ReferenceExtractorTests.cs — ReferenceExtractor tests
@@ -84,6 +87,9 @@ tests/CodeIndex.Tests/
   DbRecoveryTests.cs         — DB corruption recovery tests
   SearchSnippetFormatterTests.cs — Search snippet formatting tests
   WorkspaceMetadataEnricherTests.cs — Workspace metadata enrichment tests
+  SuggestionStoreTests.cs   — Suggestion store unit tests (dedup, persistence, corruption recovery)
+  SourceCodeDetectorTests.cs — Source code leak detection tests (allowed vs rejected inputs)
+  GitHubIssueReporterTests.cs — GitHub token resolution tests
   TestProjectHelper.cs      — Shared helper for creating temp indexed projects
   TestConsoleLock.cs         — Shared lock for console-redirecting tests
 ```
@@ -279,6 +285,9 @@ src/CodeIndex/
   Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/statusコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
   Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
+  Cli/SuggestionStore.cs    — AI提案のSHA256重複排除付きローカルJSON蓄積
+  Cli/SourceCodeDetector.cs — 提案送信時のヒューリスティックによるソースコード漏洩防止
+  Cli/GitHubIssueReporter.cs — 提案送信用GitHub Issues APIクライアント（ベストエフォート）
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
   Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、抜粋再構成、ステータス、ファイル間依存分析）
@@ -292,7 +301,7 @@ src/CodeIndex/
   Mcp/McpServer.cs          — MCPサーバーコア（stdin/stdout JSON-RPC 2.0 プロトコル処理）（partial class）
   Mcp/McpToolDefinitions.cs — MCPツールスキーマ定義（partial class）
   Mcp/McpToolHandlers.cs    — MCPツール実行ロジック（partial class）
-  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, QueryResults（プレーンDTO）
+  Models/                   — FileRecord, ChunkRecord, SymbolRecord, ReferenceRecord, SuggestionRecord, QueryResults（プレーンDTO）
 tests/CodeIndex.Tests/
   ChunkSplitterTests.cs     — ChunkSplitterテスト
   ReferenceExtractorTests.cs — ReferenceExtractorテスト
@@ -311,6 +320,9 @@ tests/CodeIndex.Tests/
   DbRecoveryTests.cs         — DB破損復旧テスト
   SearchSnippetFormatterTests.cs — 検索スニペット整形テスト
   WorkspaceMetadataEnricherTests.cs — ワークスペースメタデータ付加テスト
+  SuggestionStoreTests.cs   — 提案ストアのユニットテスト（重複排除、永続化、破損復旧）
+  SourceCodeDetectorTests.cs — ソースコード漏洩検出テスト（許容 vs 拒否入力）
+  GitHubIssueReporterTests.cs — GitHubトークン解決テスト
   TestProjectHelper.cs      — 一時インデックスプロジェクト作成用の共有ヘルパー
   TestConsoleLock.cs         — コンソールリダイレクトテスト用の共有ロック
 ```

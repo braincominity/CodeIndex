@@ -461,6 +461,47 @@ The direct MCP graph tools (`references`, `callers`, `callees`) also emit `graph
 {"path":"src/auth.py","lang":"python","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":1,"snippet_end_line":6,"snippet":"def authenticate(user):\n    token = issue_token(user)\n    return token","match_lines":[2],"highlights":[{"line":2,"text":"    token = issue_token(user)","terms":["token"]}],"context_before":1,"context_after":3,"score":-1.5}
 ```
 
+## AI Feedback Implementation
+
+The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
+
+### Source files
+
+| File | Purpose |
+|------|---------|
+| [`src/CodeIndex/Models/SuggestionRecord.cs`](src/CodeIndex/Models/SuggestionRecord.cs) | Suggestion data model (DTO) |
+| [`src/CodeIndex/Cli/SuggestionStore.cs`](src/CodeIndex/Cli/SuggestionStore.cs) | Local JSON storage with SHA256 dedup |
+| [`src/CodeIndex/Cli/SourceCodeDetector.cs`](src/CodeIndex/Cli/SourceCodeDetector.cs) | Heuristic source code leak prevention |
+| [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues API client (best-effort) |
+| [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` handler |
+| [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | Tool schema definition |
+
+### What is sent (when GitHub token is configured)
+
+- Category (one of 8 fixed values: `symbol_extraction`, `reference_extraction`, `search_ranking`, `language_support`, `output_format`, `crash_report`, `unexpected_error`, `other`)
+- Language name (e.g. `typescript`)
+- Description text (natural language, validated by SourceCodeDetector)
+- Context text (natural language, validated by SourceCodeDetector)
+- cdidx version string
+- SHA256 suggestion hash (for deduplication)
+
+### What is NOT included in the payload by design
+
+- File paths from the user's project
+- Any data from the indexed SQLite database
+- Any data from `.cdidx/codeindex.db`
+- Operating system or environment information
+
+### Heuristic source code guard (not a security boundary)
+
+The description and context fields pass through `SourceCodeDetector` before storage and optional GitHub submission. This heuristic rejects common pasted code patterns (multi-line blocks, fenced code, import runs, function definitions) but intentionally allows short inline code examples so gap descriptions remain useful. It is **not a security boundary** — a determined agent could bypass it. The guard is a best-effort filter to catch accidental code inclusion, not a guarantee that no code-like text will ever be transmitted.
+
+### SourceCodeDetector design
+
+`SourceCodeDetector` uses five independent heuristics to reject text that looks like pasted source code. Each heuristic is implemented as a clearly named private method with detailed comments explaining what it detects and why. The class is designed for readability: anyone reviewing the open-source code can verify the detection logic and confirm that no source code passes through.
+
+The detector intentionally allows short inline code examples (e.g. `` `const foo = () => {}` ``) and only rejects multi-line code blocks. False negatives (missing some code) are acceptable; false positives (rejecting valid descriptions) are not.
+
 ## Exit codes
 
 See [Exit codes](README.md#exit-codes) in README.
@@ -984,6 +1025,47 @@ MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に
 ```json
 {"path":"src/auth.py","lang":"python","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":1,"snippet_end_line":6,"snippet":"def authenticate(user):\n    token = issue_token(user)\n    return token","match_lines":[2],"highlights":[{"line":2,"text":"    token = issue_token(user)","terms":["token"]}],"context_before":1,"context_after":3,"score":-1.5}
 ```
+
+## AIフィードバックの実装
+
+`suggest_improvement` MCPツールにより、AIエージェントがギャップやエラーを報告できる。
+
+### ソースファイル
+
+| ファイル | 役割 |
+|---------|------|
+| [`src/CodeIndex/Models/SuggestionRecord.cs`](src/CodeIndex/Models/SuggestionRecord.cs) | 提案データモデル（DTO） |
+| [`src/CodeIndex/Cli/SuggestionStore.cs`](src/CodeIndex/Cli/SuggestionStore.cs) | SHA256重複排除付きのローカルJSON蓄積 |
+| [`src/CodeIndex/Cli/SourceCodeDetector.cs`](src/CodeIndex/Cli/SourceCodeDetector.cs) | ヒューリスティックによるソースコード漏洩防止 |
+| [`src/CodeIndex/Cli/GitHubIssueReporter.cs`](src/CodeIndex/Cli/GitHubIssueReporter.cs) | GitHub Issues APIクライアント（ベストエフォート） |
+| [`src/CodeIndex/Mcp/McpToolHandlers.cs`](src/CodeIndex/Mcp/McpToolHandlers.cs) | `ExecuteSuggestImprovement` ハンドラ |
+| [`src/CodeIndex/Mcp/McpToolDefinitions.cs`](src/CodeIndex/Mcp/McpToolDefinitions.cs) | ツールスキーマ定義 |
+
+### 送信されるデータ（GitHubトークン設定時）
+
+- カテゴリ（8つの固定値のいずれか: `symbol_extraction`, `reference_extraction`, `search_ranking`, `language_support`, `output_format`, `crash_report`, `unexpected_error`, `other`）
+- 言語名（例: `typescript`）
+- 説明テキスト（自然言語、SourceCodeDetectorにより検証済み）
+- コンテキストテキスト（自然言語、SourceCodeDetectorにより検証済み）
+- cdidx バージョン文字列
+- SHA256 提案ハッシュ（重複排除用）
+
+### ペイロードに設計上含まれないもの
+
+- ユーザーのプロジェクトからのファイルパス
+- インデックス済み SQLite データベースからのあらゆるデータ
+- `.cdidx/codeindex.db` からのあらゆるデータ
+- OS やシステム環境の情報
+
+### ヒューリスティックなソースコードガード（セキュリティ境界ではない）
+
+description と context フィールドは、保存およびオプションの GitHub 送信前に `SourceCodeDetector` を通過する。このヒューリスティックは一般的なコードコピペパターン（複数行ブロック、フェンスドコード、import の連打、関数定義）を拒否するが、ギャップの説明として有用な短いインラインコード例は意図的に許容する。これは**セキュリティ境界ではない** — 意図的に回避しようとするエージェントは回避できる。このガードはコードの誤混入を防ぐベストエフォートのフィルタであり、コード的テキストが一切送信されないことの保証ではない。
+
+### SourceCodeDetector の設計
+
+`SourceCodeDetector` は5つの独立したヒューリスティックを使って、コピペされたソースコードに見えるテキストを拒否する。各ヒューリスティックは明確な名前の private メソッドとして実装され、何を検出し、なぜそれがソースコードの兆候なのかを詳細なコメントで説明している。可読性を重視して設計されており、オープンソースのコードをレビューする誰もが検出ロジックを検証し、ソースコードが通過しないことを確認できる。
+
+短いインラインコード例（例: `` `const foo = () => {}` ``）は意図的に許容し、複数行のコードブロックのみを拒否する。偽陰性（一部のコードの見逃し）は許容する。偽陽性（有効な説明の拒否）は許容しない。
 
 ## 終了コード
 

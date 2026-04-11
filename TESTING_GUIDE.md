@@ -41,6 +41,12 @@ The test project mirrors the production areas closely.
   Git-specific behavior, including worktrees and commit-based updates.
 - `WorkspaceMetadataEnricherTests.cs`
   Workspace freshness and git metadata enrichment behavior.
+- `SuggestionStoreTests.cs`
+  Local suggestion JSON storage: dedup hashing, persistence, corruption recovery, atomic writes.
+- `SourceCodeDetectorTests.cs`
+  Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
+- `GitHubIssueReporterTests.cs`
+  GitHub token resolution logic (CDIDX_GITHUB_TOKEN only; generic GITHUB_TOKEN is ignored).
 - `ConcurrencyTests.cs`
   Concurrent read and read-during-write scenarios (WAL mode validation).
 - `PerformanceTests.cs`
@@ -177,6 +183,12 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   worktree や commit ベース更新を含む Git まわりのテスト。
 - `WorkspaceMetadataEnricherTests.cs`
   ワークスペース鮮度と git メタデータ付与のテスト。
+- `SuggestionStoreTests.cs`
+  ローカル提案JSON蓄積: ハッシュ重複排除、永続化、破損復旧、アトミック書き込み。
+- `SourceCodeDetectorTests.cs`
+  ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
+- `GitHubIssueReporterTests.cs`
+  GitHubトークン解決ロジック（CDIDX_GITHUB_TOKENのみ。汎用GITHUB_TOKENは無視）。
 - `ConcurrencyTests.cs`
   並行読み取りと書き込み中読み取りシナリオ（WALモード検証）。
 - `PerformanceTests.cs`
