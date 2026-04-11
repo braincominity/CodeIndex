@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# partial method test coverage** — Added test verifying C# 9 extended partial methods (`partial void OnInit();`, `public partial string GetName();`) are correctly extracted. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **DEVELOPER_GUIDE architecture updated for deps and batch_query** — DbReader description mentions file-level deps; McpServer mentions batch_query. Affected: `DEVELOPER_GUIDE.md`.
 
 - **C# `file` modifier in method patterns** — `file static void DoWork()` (C# 11 file-scoped members) is now extracted. Test added for file-scoped types. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -364,6 +366,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# partial メソッドのテストカバレッジ** — C# 9 拡張 partial メソッド（`partial void OnInit();`、`public partial string GetName();`）が正しく抽出されることのテスト追加。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **DEVELOPER_GUIDE アーキテクチャに deps と batch_query を反映** — DbReader の説明にファイル間依存、McpServer に batch_query を追記。対象: `DEVELOPER_GUIDE.md`.
 

@@ -226,6 +226,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPartialMethods()
+    {
+        // C# 9 extended partial methods / C# 9 拡張 partial メソッド
+        var content = "public partial class App\n{\n    partial void OnInit();\n    public partial string GetName();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "App");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnInit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetName");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedType()
     {
         // C# 11 file-scoped type / C# 11 のファイルスコープ型
