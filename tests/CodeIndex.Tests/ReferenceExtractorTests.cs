@@ -204,6 +204,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_LuaCall_DetectsReferences()
+    {
+        const string content = """
+            function main()
+                io.write("world")
+                table.insert(items, value)
+                -- this is a comment with call()
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "lua", content);
+        var references = ReferenceExtractor.Extract(1, "lua", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "write");
+        Assert.Contains(references, r => r.SymbolName == "insert");
+        // Comments should not produce references / コメントは参照を生成しないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "call");
+    }
+
+    [Fact]
     public void SupportsLanguage_FSharp_ReturnsFalse()
     {
         // F# uses space-separated call syntax (foo x) not parenthesized, so

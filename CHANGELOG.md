@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Lua call-graph reference extraction** — Lua now supports `references`, `callers`, and `callees` queries. Added `--` comment stripping for Lua. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
+
 - **MCP `search` tool `exact` parameter** — The MCP `search` tool now accepts `exact` boolean for case-sensitive substring matching, matching the CLI `--exact` flag. Affected: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 
 - **`search --exact` flag for case-sensitive substring match** — New `--exact` option bypasses FTS5 tokenization and uses direct `instr()` for case-sensitive exact substring matching. Useful when FTS5's case-insensitive token matching returns too many results. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
@@ -448,6 +450,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Lua コールグラフ参照抽出** — Lua が `references`、`callers`、`callees` クエリに対応。`--` コメント除去も追加。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **MCP `search` ツールに `exact` パラメータ** — MCP の `search` ツールに `exact` ブーリアンを追加し、CLI の `--exact` フラグと同等の大文字小文字区別一致に対応。対象: `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 

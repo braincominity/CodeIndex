@@ -13,7 +13,7 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir"
+        "dart", "scala", "elixir", "lua"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -191,6 +191,14 @@ public static class ReferenceExtractor
             var slashIndex = result.IndexOf("//", StringComparison.Ordinal);
             if (slashIndex >= 0)
                 result = result[..slashIndex];
+        }
+
+        // Lua uses -- for line comments / Lua は -- を行コメントに使う
+        if (lang is "lua")
+        {
+            var luaCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
+            if (luaCommentIndex >= 0)
+                result = result[..luaCommentIndex];
         }
 
         return result;
