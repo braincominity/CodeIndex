@@ -183,6 +183,7 @@ Before every commit, check whether each of the following needs updating. Don't b
 7. **SELF_IMPROVEMENT.md** — Does this change affect the AI self-improvement workflow, rebuild/index-refresh loop, or approval rules?
 8. **CLAUDE.md** — Does this change affect architecture, design decisions, or development rules?
 9. **PR description** — Does this commit change the scope of the PR? Update the title/description to reflect the final state.
+10. **Broken characters** — Scan changed files for U+FFFD replacement characters. These appear when Python scripts or other tools split multi-byte UTF-8 characters at the wrong boundary. Especially likely after file-splitting operations. Run: `python3 -c "import sys; [print(f'{f}:{i}') for f in sys.argv[1:] for i,l in enumerate(open(f),1) if '\ufffd' in l]" <files>`
 
 ### Documentation — keep in sync
 The following files contain overlapping content that must be updated together:
@@ -409,6 +410,7 @@ tests/CodeIndex.Tests/
 7. **SELF_IMPROVEMENT.md** — AI自己改善フロー、再ビルド/再インデックス手順、承認ルールに影響するか？
 8. **CLAUDE.md** — アーキテクチャ、設計判断、開発ルールに影響するか？
 9. **PR説明** — このコミットでPRのスコープが変わったか？タイトル・説明を最終状態に合わせて更新。
+10. **文字化けチェック** — 変更したファイルに U+FFFD 置換文字がないか確認。Pythonスクリプト等でマルチバイトUTF-8文字が途中で切れると発生する。特にファイル分割操作後に注意。
 
 ### ドキュメント — 同期を保つ
 以下のファイルには重複する内容があり、同時に更新する必要がある:
