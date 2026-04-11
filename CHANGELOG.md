@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--rebuild` flag behavior tests** — Added tests verifying `--rebuild` drops and re-scans all files, and that `--rebuild` conflicts with `--commits`. Affected: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
+
 - **Large-scale performance tests (10K+ files)** — Added `PerformanceTests.cs` with 10K file insert benchmark and 1K file FTS5 search latency test. Affected: `tests/CodeIndex.Tests/PerformanceTests.cs`.
 
 - **Concurrent access tests** — Added `ConcurrencyTests.cs` with tests for concurrent reads (WAL mode allows parallel readers) and concurrent read-during-write scenarios. Affected: `tests/CodeIndex.Tests/ConcurrencyTests.cs`.
@@ -394,6 +396,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`--rebuild` フラグ動作テスト** — `--rebuild` が全ファイル再スキャンすること、`--commits` と競合することのテスト追加。対象: `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`.
 
 - **大規模パフォーマンステスト（10K+ファイル）** — 10Kファイル挿入ベンチマークと1KファイルFTS5検索レイテンシテストを `PerformanceTests.cs` に追加。対象: `tests/CodeIndex.Tests/PerformanceTests.cs`.
 
