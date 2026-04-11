@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Granular Java/Kotlin symbol kinds** — Java interfaces and enums now use `kind="interface"` and `kind="enum"` instead of `kind="class"`. Kotlin sealed interfaces use `kind="interface"`, enum classes use `kind="enum"`, and `val`/`var` properties use `kind="property"`. Affected: `SymbolExtractor.cs`.
 - **Granular symbol kinds for all typed languages** — TypeScript, Go, Rust, Swift, C, C++, PHP, Scala, Dart, GraphQL, and VB.NET now use semantically precise kinds: `struct`, `interface` (including traits/protocols), `enum`. Affected: `SymbolExtractor.cs`.
 - **Zig symbol extraction** — Added symbol extraction patterns for Zig: `pub fn`/`fn` (function), `const struct` (struct), `const enum` (enum), `const union`/`error` (class), `test` blocks, and `@import`. Zig was previously mapped as a language but had zero extraction patterns. Affected: `SymbolExtractor.cs`.
+- **PowerShell symbol extraction** — Added symbol extraction patterns for PowerShell (.ps1): `function`/`filter` (function), `class` (class), `enum` (enum), `Import-Module`/`using module` (import). Affected: `SymbolExtractor.cs`.
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
@@ -512,6 +513,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Java/Kotlinシンボル種別の細分化** — Javaのインターフェースとenumが `kind="interface"` / `kind="enum"` に（従来は `kind="class"`）。Kotlinの sealed interface が `kind="interface"`、enum class が `kind="enum"`、`val`/`var` プロパティが `kind="property"` に。対象: `SymbolExtractor.cs`。
 - **全型付き言語のシンボル種別細分化** — TypeScript、Go、Rust、Swift、C、C++、PHP、Scala、Dart、GraphQL、VB.NETで意味的に正確な種別を導入: `struct`、`interface`（trait/protocol含む）、`enum`。対象: `SymbolExtractor.cs`。
 - **Zigシンボル抽出** — Zig向けシンボル抽出パターンを追加: `pub fn`/`fn`（関数）、`const struct`（構造体）、`const enum`（列挙型）、`const union`/`error`（クラス）、`test`ブロック、`@import`。従来はZigは言語として登録されていたが抽出パターンがゼロだった。対象: `SymbolExtractor.cs`。
+- **PowerShellシンボル抽出** — PowerShell (.ps1) 向けシンボル抽出パターンを追加: `function`/`filter`（関数）、`class`（クラス）、`enum`（列挙型）、`Import-Module`/`using module`（インポート）。対象: `SymbolExtractor.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。

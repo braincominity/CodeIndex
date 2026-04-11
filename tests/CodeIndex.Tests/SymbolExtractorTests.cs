@@ -939,6 +939,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PowerShell_DetectsSymbols()
+    {
+        var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ActiveDirectory");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "PSDesiredStateConfiguration");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ServerConfig");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Environment");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get-UserInfo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Where-Active");
+    }
+
+    [Fact]
     public void Extract_Zig_DetectsSymbols()
     {
         var content = "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"hello\", .{});\n}\n\nfn helper(x: u32) u32 {\n    return x + 1;\n}\n\npub const Config = struct {\n    name: []const u8,\n};\n\nconst Direction = enum {\n    north,\n    south,\n};\n\ntest \"basic test\" {\n    try std.testing.expect(true);\n}";

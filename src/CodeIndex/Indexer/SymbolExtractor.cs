@@ -357,6 +357,17 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*output\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*locals\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
         ],
+        ["powershell"] =
+        [
+            // Function/filter declarations / 関数・フィルタ宣言
+            new("function", new Regex(@"^\s*(?:function|filter)\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // Class (PowerShell 5+) / クラス (PowerShell 5+)
+            new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // Enum (PowerShell 5+) / enum (PowerShell 5+)
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
+            // Import-Module / using module / モジュールインポート
+            new("import",   new Regex(@"^\s*(?:Import-Module|using\s+module)\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
         ["zig"] =
         [
             // Public and private function declarations / 公開・非公開の関数宣言
