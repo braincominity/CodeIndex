@@ -568,6 +568,7 @@ public static class QueryCommandRunner
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath);
             // Attach runtime metadata / ランタイムメタデータを付加
+            status.SymbolKinds = reader.GetSymbolKindCounts();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             if (appVersion != null)
                 status.Version = appVersion;
@@ -597,6 +598,12 @@ public static class QueryCommandRunner
                     Console.WriteLine("Languages:");
                     foreach (var (lang, count) in status.Languages)
                         Console.WriteLine($"  {lang,-12} {count,6}");
+                }
+                if (status.SymbolKinds is { Count: > 0 })
+                {
+                    Console.WriteLine("Kinds:");
+                    foreach (var (kind, count) in status.SymbolKinds)
+                        Console.WriteLine($"  {kind,-12} {count,6}");
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine($"Graph   : {string.Join(", ", status.GraphSupportedLanguages)}");

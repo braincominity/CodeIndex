@@ -147,6 +147,21 @@ public class DbReader
     /// Return all distinct symbol kinds present in the index.
     /// インデックス内の全シンボル種別を返す。
     /// </summary>
+    /// <summary>
+    /// Return symbol kind counts for status display.
+    /// ステータス表示用のシンボル種別カウントを返す。
+    /// </summary>
+    public Dictionary<string, long> GetSymbolKindCounts()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT kind, COUNT(*) FROM symbols GROUP BY kind ORDER BY COUNT(*) DESC";
+        var counts = new Dictionary<string, long>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            counts[reader.GetString(0)] = reader.GetInt64(1);
+        return counts;
+    }
+
     public List<string> GetDistinctKinds()
     {
         using var cmd = _conn.CreateCommand();
@@ -1139,6 +1154,7 @@ public class StatusResult
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
+    public Dictionary<string, long>? SymbolKinds { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }
     public string? Version { get; set; }
 }
