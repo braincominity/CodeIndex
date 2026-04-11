@@ -21,6 +21,9 @@ jobs:
         include:
           - os: ubuntu-latest
             rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+            cross_compile: true
           - os: windows-latest
             rid: win-x64
           - os: macos-latest
@@ -55,6 +58,7 @@ jobs:
         run: dotnet build CodeIndex.sln --configuration Release --no-restore
 
       - name: Test
+        if: ${{ !matrix.cross_compile }}
         run: dotnet test CodeIndex.sln --configuration Release --no-build --nologo
 
       - name: Publish (self-contained)
