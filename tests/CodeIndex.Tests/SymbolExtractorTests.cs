@@ -939,6 +939,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Zig_DetectsSymbols()
+    {
+        var content = "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"hello\", .{});\n}\n\nfn helper(x: u32) u32 {\n    return x + 1;\n}\n\npub const Config = struct {\n    name: []const u8,\n};\n\nconst Direction = enum {\n    north,\n    south,\n};\n\ntest \"basic test\" {\n    try std.testing.expect(true);\n}";
+        var symbols = SymbolExtractor.Extract(1, "zig", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "std");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main" && s.Visibility == "pub");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "helper");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Config" && s.Visibility == "pub");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Direction");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "basic test");
+    }
+
+    [Fact]
     public void Extract_Makefile_DetectsTargets()
     {
         var content = "all: build test\n\nbuild:\n\tgcc -o main main.c\n\ntest:\n\t./run_tests\n\nclean:\n\trm -f main\n";
