@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Kind/lang validation hints for unused and hotspots** — `unused` and `hotspots` commands now show helpful hints when zero results are found (invalid kind, unknown language, stale index, filter suggestions). Affected: `QueryCommandRunner.cs`.
 - **F# reference extraction** — F# now supports call-graph queries (`references`, `callers`, `callees`). Parenthesized calls like `someFunc(x)` and constructor calls `new ClassName()` are detected. F#-specific keywords added to the ignore list. Note: space-separated F# calls (`List.map f xs`) are not captured — this is a known limitation of regex-based extraction. Affected: `ReferenceExtractor.cs`.
 - **MCP instructions: symbol kind filter guidance** — AI clients now receive guidance on filtering symbols by kind (function, class, struct, interface, enum, property, event, delegate) in the MCP initialize instructions. Affected: `McpToolHandlers.cs`.
+- **SQL reference extraction** — SQL now supports call-graph queries. SQL function calls like `COALESCE()`, `LOWER()`, `LENGTH()`, `NOW()` are detected. SQL keywords (uppercase) added to the ignore list. Affected: `ReferenceExtractor.cs`.
 
 #### Fixed
 - **README HTML tag rendering on NuGet** — Removed all `<details>` / `<summary>` HTML tags that NuGet's Markdown renderer displayed as raw text. Replaced collapsible sections with bold labels. Shortened Japanese comparison heading from `cdidx と rg の違い` to `rg との違い`. Affected: `README.md`.
@@ -536,6 +537,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **unused/hotspots の kind/lang 検証ヒント** — `unused` と `hotspots` で0件時に有用なヒント（不正な kind、不明な言語、古いインデックス、フィルタ提案）を表示。対象: `QueryCommandRunner.cs`。
 - **F# 参照抽出** — F# でコールグラフクエリ（`references`、`callers`、`callees`）が利用可能に。`someFunc(x)` のような括弧付き呼び出しと `new ClassName()` のコンストラクタ呼び出しを検出。F# 固有キーワードを除外リストに追加。注意: スペース区切りの F# 呼び出し（`List.map f xs`）は検出できない — 正規表現ベース抽出の既知の制限。対象: `ReferenceExtractor.cs`。
 - **MCP instructions: シンボル種別フィルタのガイダンス** — AIクライアントが MCP initialize 応答で、シンボルの種別フィルタ（function, class, struct, interface, enum, property, event, delegate）の使い方を案内されるようになった。対象: `McpToolHandlers.cs`。
+- **SQL 参照抽出** — SQL でコールグラフクエリが利用可能に。`COALESCE()`、`LOWER()`、`LENGTH()`、`NOW()` 等の SQL 関数呼び出しを検出。SQL キーワード（大文字）を除外リストに追加。対象: `ReferenceExtractor.cs`。
 
 #### 修正
 - **NuGetでのREADME HTMLタグ表示問題** — NuGetのMarkdownレンダラが生テキストとして表示してしまう `<details>` / `<summary>` HTMLタグを全て除去。折りたたみセクションを太字ラベルに置換。日本語の比較見出しを `cdidx と rg の違い` から `rg との違い` に簡潔化。対象: `README.md`。

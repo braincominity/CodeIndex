@@ -234,6 +234,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DetectsCallSites()
+    {
+        const string content = "SELECT COALESCE(name, 'unknown'), LOWER(email)\nFROM users\nWHERE LENGTH(name) > 0\n  AND created_at > NOW()";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "COALESCE" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "LOWER" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "LENGTH" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "NOW" && r.ReferenceKind == "call");
+        // SQL keywords should not be extracted / SQL キーワードは抽出されないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "SELECT");
+        Assert.DoesNotContain(references, r => r.SymbolName == "WHERE");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsParenthesizedCalls()
     {
         const string content = """
