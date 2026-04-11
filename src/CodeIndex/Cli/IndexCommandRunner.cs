@@ -67,7 +67,36 @@ public static class IndexCommandRunner
         if (options.DryRun)
         {
             var dryIndexer = new FileIndexer(options.ProjectPath);
-            var dryFiles = dryIndexer.ScanFiles();
+            IReadOnlyList<string> dryFiles;
+
+            if (options.UpdateFiles.Count > 0)
+            {
+                // --files: only the specified files / --files: 指定ファイルのみ
+                dryFiles = options.UpdateFiles
+                    .Select(f => Path.IsPathRooted(f) ? f : Path.Combine(options.ProjectPath, f))
+                    .Where(File.Exists)
+                    .ToList();
+            }
+            else if (options.Commits.Count > 0)
+            {
+                // --commits: files changed in the specified commits / --commits: 指定コミットの変更ファイル
+                var changedFiles = new List<string>();
+                foreach (var commit in options.Commits)
+                {
+                    try
+                    {
+                        var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
+                        changedFiles.AddRange(changed.Select(f => Path.Combine(options.ProjectPath, f)).Where(File.Exists));
+                    }
+                    catch { /* ignore git errors in dry-run */ }
+                }
+                dryFiles = changedFiles.Distinct().ToList();
+            }
+            else
+            {
+                dryFiles = dryIndexer.ScanFiles();
+            }
+
             var langCounts = new Dictionary<string, int>();
             foreach (var f in dryFiles)
             {
