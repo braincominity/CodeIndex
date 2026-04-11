@@ -140,6 +140,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsIndexer()
+    {
+        var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexer = symbols.FirstOrDefault(s => s.Name == "this");
+        Assert.NotNull(indexer);
+        Assert.Equal("function", indexer.Kind);
+        Assert.Equal("string", indexer.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsOperatorOverloads()
     {
         var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";

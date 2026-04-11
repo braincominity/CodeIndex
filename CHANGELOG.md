@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# indexer extraction** — `this[int index]` indexer declarations are now extracted as function symbols with their return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **C# operator overload and conversion operator extraction** — `operator +`, `operator ==`, `implicit operator`, `explicit operator` are now extracted as function symbols. Patterns are ordered before the general method pattern to prevent false matches on the return type. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# static constructor and finalizer extraction** — `static ClassName()` and `~ClassName()` are now extracted as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -290,6 +292,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# インデクサ抽出** — `this[int index]` のインデクサ宣言を戻り値型付きの function シンボルとして抽出。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# 演算子オーバーロード・変換演算子抽出** — `operator +`、`operator ==`、`implicit operator`、`explicit operator` を function シンボルとして抽出。戻り値型との誤マッチを防ぐため、一般メソッドパターンより前に配置。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
