@@ -164,6 +164,34 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_NormalizesPathSeparators()
+    {
+        // Ensure Windows-style backslashes are converted to forward slashes
+        // Windows形式のバックスラッシュがフォワードスラッシュに変換されることを確認
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var subDir = Path.Combine(tempDir, "src", "models");
+            Directory.CreateDirectory(subDir);
+            var filePath = Path.Combine(subDir, "user.py");
+            File.WriteAllText(filePath, "class User: pass\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            // Path should use forward slashes regardless of OS
+            // OSに関わらずフォワードスラッシュを使うべき
+            Assert.DoesNotContain("\\", record.Path);
+            Assert.Contains("/", record.Path);
+            Assert.Equal("src/models/user.py", record.Path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_IncludesFileNameBasedLanguages()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Cross-platform path separator test** — Verified Windows-style backslash paths are normalized to forward slashes in file records. Affected: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
+
 - **C# attribute-decorated member test coverage** — Verified `[Serializable]`, `[Obsolete]`, `[HttpGet]` on lines before class/method do not block extraction. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **MCP `ping` tool** — Lightweight connection check that returns server version, timestamp, DB path, and whether the DB exists. No database required. AI agents can verify MCP connectivity before issuing queries. Affected: `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
@@ -436,6 +438,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **クロスプラットフォームパスセパレータテスト** — Windows 形式のバックスラッシュパスがファイルレコードでフォワードスラッシュに正規化されることを検証。対象: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
 
 - **C# 属性付きメンバーのテストカバレッジ** — `[Serializable]`、`[Obsolete]`、`[HttpGet]` がクラス/メソッド前行にあっても抽出を妨げないことを検証。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
