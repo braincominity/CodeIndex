@@ -560,7 +560,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "VERSION");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX_RETRIES");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ACTIVE");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "INACTIVE");
     }
@@ -604,6 +604,7 @@ public class SymbolExtractorTests
         var content = "public interface Service {\n    default void init() { }\n    static Service create() { return null; }\n}\npublic class Worker {\n    synchronized void process() { }\n}";
         var symbols = SymbolExtractor.Extract(1, "java", content);
 
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "init");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "create");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
@@ -626,7 +627,7 @@ public class SymbolExtractorTests
         var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
         var symbols = SymbolExtractor.Extract(1, "kotlin", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Shape");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Email");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
         // Companion object (unnamed) / コンパニオンオブジェクト（無名）
@@ -635,7 +636,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "truncate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetchData");
         // const val / 定数プロパティ
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MAX");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MAX");
     }
 
     [Fact]
