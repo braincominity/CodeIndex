@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **TESTING_GUIDE updated with new test files** — Added ConcurrencyTests, PerformanceTests, DbRecoveryTests to both English and Japanese test layout sections. Affected: `TESTING_GUIDE.md`.
+
 - **Cross-platform path separator test** — Verified Windows-style backslash paths are normalized to forward slashes in file records. Affected: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
 
 - **C# attribute-decorated member test coverage** — Verified `[Serializable]`, `[Obsolete]`, `[HttpGet]` on lines before class/method do not block extraction. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
@@ -438,6 +440,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **TESTING_GUIDE に新テストファイルを追記** — ConcurrencyTests、PerformanceTests、DbRecoveryTests を英語・日本語のテストレイアウトセクションに追加。対象: `TESTING_GUIDE.md`.
 
 - **クロスプラットフォームパスセパレータテスト** — Windows 形式のバックスラッシュパスがファイルレコードでフォワードスラッシュに正規化されることを検証。対象: `tests/CodeIndex.Tests/FileIndexerTests.cs`.
 
