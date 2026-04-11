@@ -29,7 +29,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -49,6 +49,8 @@ public partial class DbReader
         sql += " WHERE fts_chunks MATCH @query";
         if (lang != null)
             sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
 
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {GetSearchOrderSql()} LIMIT @limit";
@@ -60,6 +62,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
 
         var raw = new List<SearchResult>();

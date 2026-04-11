@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`search --since` filter** — The `--since` option now works on `search` (CLI and MCP), not just `files`. AI agents can search only within recently modified files, reducing noise in large repositories. Affected: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
+
 - **`--dry-run` flag for index command** — New `--dry-run` option scans files without writing to the database. Shows file count and language breakdown, useful for verifying what would be indexed. Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
 
 - **DB compound indexes for query performance** — Added `symbols(file_id, kind)`, `files(lang, modified)`, and `symbol_references(container_name, reference_kind)` compound indexes to accelerate common query patterns. Affected: `src/CodeIndex/Database/DbContext.cs`.
@@ -428,6 +430,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`search --since` フィルタ** — `--since` オプションが `files` だけでなく `search`（CLI・MCP 両方）でも使えるようになった。AI エージェントが最近変更されたファイル内のみを検索でき、大規模リポジトリでのノイズ削減に有効。対象: `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`.
 
 - **index コマンドに `--dry-run` フラグ** — DBに書き込まずにファイルスキャンのみ行う `--dry-run` オプション。ファイル数と言語内訳を表示。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`.
 
