@@ -143,6 +143,21 @@ public class DbReader
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
     /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
     /// </summary>
+    /// <summary>
+    /// Return all distinct symbol kinds present in the index.
+    /// インデックス内の全シンボル種別を返す。
+    /// </summary>
+    public List<string> GetDistinctKinds()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT DISTINCT kind FROM symbols ORDER BY kind";
+        var kinds = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            kinds.Add(reader.GetString(0));
+        return kinds;
+    }
+
     internal static string EscapeLikeQuery(string input)
     {
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");

@@ -86,6 +86,7 @@ public static class QueryCommandRunner
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No definitions found.");
+                    WriteKindHint(options.Kind, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
@@ -299,7 +300,11 @@ public static class QueryCommandRunner
                 if (options.CountOnly)
                     Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
                 else if (!options.Json)
+                {
                     Console.Error.WriteLine("No symbols found.");
+                    WriteKindHint(options.Kind, reader);
+                    WriteZeroResultHints(options, reader);
+                }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
@@ -829,6 +834,18 @@ public static class QueryCommandRunner
 
         if (indexedAt.HasValue && (DateTime.UtcNow - indexedAt.Value).TotalHours > 24)
             Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
+    }
+
+    /// <summary>
+    /// Show available symbol kinds when --kind produces zero results.
+    /// --kind で 0 件のとき、有効なシンボル種別を表示する。
+    /// </summary>
+    private static void WriteKindHint(string? kind, DbReader reader)
+    {
+        if (kind == null) return;
+        var validKinds = reader.GetDistinctKinds();
+        if (validKinds.Count > 0 && !validKinds.Contains(kind))
+            Console.Error.WriteLine($"Hint: '{kind}' is not a known kind. Available: {string.Join(", ", validKinds)}");
     }
 
     private static void WriteGraphSupportHint(string? lang)

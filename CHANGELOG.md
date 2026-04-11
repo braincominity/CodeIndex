@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--kind` validation with available kinds hint** — When `symbols` or `definition` with `--kind` returns zero results due to an invalid kind value, the CLI now shows the valid kinds from the index (e.g. "Available: class, function, import, namespace"). New `DbReader.GetDistinctKinds()` method. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 #### Changed
 
 - **Search result deduplication across overlapping chunks** — When adjacent chunks (which share 10 lines of overlap) both match a query, the lower-ranked duplicate is now removed. This prevents the same code region from appearing twice in search results and reduces token waste for AI agents. Affected: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`.
@@ -312,6 +314,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`--kind` バリデーションと有効値ヒント** — `symbols` や `definition` で `--kind` に無効な値を指定して 0 件になった場合、インデックス内の有効な kind 一覧を表示するようにした（例: "Available: class, function, import, namespace"）。`DbReader.GetDistinctKinds()` メソッドを追加。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 #### 変更
 
