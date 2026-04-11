@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Pattern externalization design note in DEVELOPER_GUIDE** — Documented the current inline-regex approach, trade-offs, and a future externalization path (JSON/TOML with schema: language, kind, regex, body style, capture groups). Both English and Japanese sections. Affected: `DEVELOPER_GUIDE.md`.
+
 - **README TL;DR section and doc links** — Added collapsible TL;DR section at the top of README (EN/JP) with quick-start commands, feature counts, and links to DEVELOPER_GUIDE, SELF_IMPROVEMENT, and TESTING_GUIDE. Makes the GitHub/NuGet entry point more scannable without removing detailed content. Affected: `README.md`.
 
 - **CLAUDE.md Japanese section sync** — Added missing `--reverse` to deps, updated architecture sections for file split (DbSearchReader, DbSymbolReader, McpToolDefinitions, McpToolHandlers, QueryResults), added new test files. Both English and Japanese sections now match. Affected: `CLAUDE.md`.
@@ -404,6 +406,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **DEVELOPER_GUIDE にパターン外部化の設計メモ** — 現在のインライン正規表現アプローチ、トレードオフ、将来の外部化パス（JSON/TOML、スキーマ: 言語、種別、正規表現、本体スタイル、キャプチャグループ）を文書化。英語・日本語両セクション。対象: `DEVELOPER_GUIDE.md`.
 
 - **README に TL;DR セクションとドキュメントリンクを追加** — README 冒頭（英語・日本語）に折りたたみ式の TL;DR を追加。クイックスタートコマンド、機能数、DEVELOPER_GUIDE/SELF_IMPROVEMENT/TESTING_GUIDE へのリンクを含む。GitHub/NuGet の入口をスキャンしやすくしつつ、詳細コンテンツは維持。対象: `README.md`.
 
