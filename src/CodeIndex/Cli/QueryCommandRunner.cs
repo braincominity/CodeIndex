@@ -22,7 +22,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPattern, options.ExcludePaths, options.ExcludeTests, !options.NoDedup);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -708,6 +708,7 @@ public static class QueryCommandRunner
         var excludePaths = new List<string>();
         bool excludeTests = false;
         DateTime? since = null;
+        bool noDedup = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -744,6 +745,9 @@ public static class QueryCommandRunner
                     break;
                 case "--count":
                     countOnly = true;
+                    break;
+                case "--no-dedup":
+                    noDedup = true;
                     break;
                 case "--path" when i + 1 < args.Length:
                     pathPattern = args[++i];
@@ -808,6 +812,7 @@ public static class QueryCommandRunner
             ExcludeTests = excludeTests,
             CountOnly = countOnly,
             Since = since,
+            NoDedup = noDedup,
         };
     }
 
@@ -937,4 +942,5 @@ public sealed class QueryCommandOptions
     public bool ExcludeTests { get; init; }
     public bool CountOnly { get; init; }
     public DateTime? Since { get; init; }
+    public bool NoDedup { get; init; }
 }

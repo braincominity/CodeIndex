@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--no-dedup` flag to disable search deduplication** — Opt out of overlapping-chunk deduplication with `--no-dedup` when debugging or when raw FTS5 results are needed. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 - **C# event subscription/unsubscription reference extraction** — `Click += Handler` and `Loaded -= Handler` patterns are now extracted as `subscribe` references. Enables `references` and `callers` to find event wiring in C# code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 - **`--top` alias for `--limit`** — More intuitive option name for limiting results. `cdidx symbols --top 5` is equivalent to `--limit 5`. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`.
@@ -326,6 +328,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`--no-dedup` フラグで検索重複排除をスキップ** — デバッグ時や生の FTS5 結果が必要なときに `--no-dedup` で重複排除を無効化。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **C# イベント購読・解除の参照抽出** — `Click += Handler` や `Loaded -= Handler` パターンを `subscribe` 参照として抽出。C# コードのイベント配線を `references` と `callers` で発見可能に。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 

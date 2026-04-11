@@ -89,7 +89,7 @@ public class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -136,7 +136,7 @@ public class DbReader
                 Score = reader.GetDouble(5),
             });
         }
-        return DeduplicateOverlappingResults(raw);
+        return deduplicate ? DeduplicateOverlappingResults(raw) : raw;
     }
 
     /// <summary>
