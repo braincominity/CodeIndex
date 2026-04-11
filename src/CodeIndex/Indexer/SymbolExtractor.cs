@@ -70,6 +70,10 @@ public static class SymbolExtractor
             new("class",     new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|unsafe)\s+)?delegate\s+\S+\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Event — visibility optional / イベント — visibility 省略可
             new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static)\s+)?event\s+\S+\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            // Static constructor / 静的コンストラクタ
+            new("function",  new Regex(@"^\s*static\s+(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
+            // Finalizer (destructor) / ファイナライザ（デストラクタ）
+            new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
         ],
         ["go"] =
         [

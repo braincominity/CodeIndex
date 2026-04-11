@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **C# static constructor and finalizer extraction** — `static ClassName()` and `~ClassName()` are now extracted as function symbols. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **C# optional visibility and compound access modifiers** — Class, method, property, delegate, and event patterns no longer require an explicit visibility keyword, so `class Foo`, `static void Run()`, and other implicitly-internal members are now extracted. Compound modifiers `protected internal` and `private protected` are correctly captured as a single visibility value. Primary constructor signatures (C# 12) are verified in new tests. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **`languages` CLI command and MCP tool** — New `cdidx languages [--json]` command and MCP `languages` tool that list all supported languages with their file extensions, symbol extraction support, and call-graph query support. Lets AI agents and new users discover cdidx capabilities at runtime without consulting documentation. Affected: `src/CodeIndex/Program.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Indexer/FileIndexer.cs`, `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`.
@@ -286,6 +288,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **C# 静的コンストラクタ・ファイナライザ抽出** — `static ClassName()` と `~ClassName()` を function シンボルとして抽出するパターンを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **C# visibility 省略可・複合アクセス修飾子対応** — クラス・メソッド・プロパティ・デリゲート・イベントの各パターンで visibility キーワードを省略可にし、`class Foo`、`static void Run()` 等の暗黙 internal メンバーを抽出できるようにした。`protected internal`・`private protected` の複合修飾子を単一の visibility 値として正しく取得。C# 12 の primary constructor シグネチャの検証テストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
