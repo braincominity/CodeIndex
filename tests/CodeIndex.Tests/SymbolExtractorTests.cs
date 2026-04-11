@@ -349,6 +349,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsTypeAliasAndConst()
+    {
+        var content = "type Handler struct {\n}\ntype ID = string\ntype Logger interface {\n}\n\nconst (\n    MaxRetries = 3\n    DefaultTimeout = 30\n)\n\nvar GlobalConfig Config";
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Logger");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DefaultTimeout");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GlobalConfig");
+    }
+
+    [Fact]
     public void Extract_Rust_DetectsFunctionsAndStructs()
     {
         var content = "pub fn handle_request() {}\npub struct Config {}\nimpl Config {";

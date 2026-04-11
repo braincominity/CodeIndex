@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **Go: type aliases, const block members, package-level var** — Go patterns now extract `type Name = OtherType` aliases, `const ( Name = value )` block members, and `var Name Type` package-level variables. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
+
 - **Kotlin: companion object, value/sealed/inner/annotation class, extension functions, val/var properties** — Expanded Kotlin patterns with companion object, value class, sealed interface, inner class, annotation class, extension functions (`fun Type.name()`), suspend/inline/infix/operator/tailrec modifiers, and const/lateinit val/var property extraction. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Java IgnoredCallNames expansion** — Added `instanceof`, `super`, `assert`, `throws`, `extends`, `implements`, `synchronized` to the reference extractor's ignore list to reduce false-positive call references in Java code. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`.
@@ -412,6 +414,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **Go: 型エイリアス、const ブロックメンバー、パッケージレベル var** — Go パターンに `type Name = OtherType` エイリアス、`const ( Name = value )` ブロックメンバー、`var Name Type` パッケージレベル変数を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **Kotlin: companion object, value/sealed/inner/annotation class, 拡張関数, val/var プロパティ** — Kotlin パターンに companion object、value class、sealed interface、inner class、annotation class、拡張関数（`fun Type.name()`）、suspend/inline/infix/operator/tailrec 修飾子、const/lateinit val/var プロパティ抽出を追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
