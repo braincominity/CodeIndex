@@ -29,7 +29,7 @@ src/CodeIndex/
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
-    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status
+    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status, file-level deps
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
@@ -37,7 +37,7 @@ src/CodeIndex/
     SymbolExtractor.cs        — Regex-based symbol extraction (26 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction for supported languages
   Mcp/
-    McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools)
+    McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
   Models/
     FileRecord.cs             — File metadata DTO
     ChunkRecord.cs            — Chunk DTO

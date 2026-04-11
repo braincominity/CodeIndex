@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **DEVELOPER_GUIDE architecture updated for deps and batch_query** — DbReader description mentions file-level deps; McpServer mentions batch_query. Affected: `DEVELOPER_GUIDE.md`.
+
 - **C# `file` modifier in method patterns** — `file static void DoWork()` (C# 11 file-scoped members) is now extracted. Test added for file-scoped types. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
 - **CLAUDE.md CLI commands updated with --since and deps** — CLAUDE.md now reflects `--since` in `files` and includes the `deps` command. Affected: `CLAUDE.md`.
@@ -362,6 +364,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **DEVELOPER_GUIDE アーキテクチャに deps と batch_query を反映** — DbReader の説明にファイル間依存、McpServer に batch_query を追記。対象: `DEVELOPER_GUIDE.md`.
 
 - **C# `file` 修飾子のメソッドパターン対応** — `file static void DoWork()`（C# 11 のファイルスコープメンバー）を抽出可能に。ファイルスコープ型のテストも追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`.
 
