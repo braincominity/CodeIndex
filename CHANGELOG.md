@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.4.0] - 2026-04-12
+
 #### Added
 
 - **Final dogfooding verification** — Full rebuild and self-analysis: 61 files, 1254 symbols, 4798 references, 46 languages detected, 29 with symbol extraction, 18 with graph queries. 322 tests (320 pass + 2 skip). All documentation synchronized. Affected: `CHANGELOG.md`.
@@ -471,6 +473,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.4.0] - 2026-04-12
+
 #### 追加
 
 - **最終ドッグフーディング検証** — 全再構築と自己分析: 61ファイル、1254シンボル、4798参照、46言語検出、29シンボル抽出対応、18グラフクエリ対応。322テスト（320パス+2スキップ）。全ドキュメント同期完了。対象: `CHANGELOG.md`.
@@ -927,7 +931,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/Widthdom/CodeIndex/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Widthdom/CodeIndex/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Widthdom/CodeIndex/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Widthdom/CodeIndex/compare/v1.0.5...v1.1.0
