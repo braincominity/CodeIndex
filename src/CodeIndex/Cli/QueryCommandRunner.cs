@@ -619,7 +619,8 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var reverse = cmdArgs.Any(a => a == "--reverse");
+            var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests, reverse);
             if (results.Count == 0)
             {
                 if (!options.Json)
@@ -757,6 +758,8 @@ public static class QueryCommandRunner
                 case "--no-dedup":
                     noDedup = true;
                     break;
+                case "--reverse":
+                    break; // handled by specific commands / 特定コマンドで処理
                 case "--path" when i + 1 < args.Length:
                     pathPattern = args[++i];
                     break;

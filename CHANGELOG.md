@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
+- **`--reverse` flag for `deps` command** — `deps --reverse --path <file>` shows which files depend on the specified file (reverse dependency lookup). Essential for refactoring impact analysis. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
+
 - **Help text shows --top alias** — `--help` output now shows `--top <n>` as an alias alongside `--limit <n>`. Affected: `src/CodeIndex/Cli/ConsoleUi.cs`.
 
 - **MCP instructions updated for batch_query and deps** — The `initialize` response instructions now guide AI clients to use `batch_query` for multi-query round-trip reduction and `deps` for file-level dependency analysis. Affected: `src/CodeIndex/Mcp/McpServer.cs`.
@@ -336,6 +338,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
+
+- **`deps` コマンドに `--reverse` フラグ** — `deps --reverse --path <file>` で指定ファイルに依存しているファイルを表示（逆引き依存関係）。リファクタリング影響分析に不可欠。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`.
 
 - **ヘルプテキストに --top エイリアスを表示** — `--help` 出力で `--limit <n>` の横に `--top <n>` エイリアスを表示。対象: `src/CodeIndex/Cli/ConsoleUi.cs`.
 

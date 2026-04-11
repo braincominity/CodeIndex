@@ -926,7 +926,7 @@ public class DbReader
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
     /// </summary>
-    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
     {
         using var cmd = _conn.CreateCommand();
         var sql = @"
@@ -940,11 +940,13 @@ public class DbReader
             WHERE src.path != dst.path";
         if (lang != null)
             sql += " AND src.lang = @lang";
-        // Apply path filters to source file / ソースファイルにパスフィルタを適用
+        // Apply path filters: to source in normal mode, to target in reverse mode
+        // パスフィルタ適用: 通常モードではソース、逆引きモードではターゲットに適用
+        var filterAlias = reverse ? "dst" : "src";
         if (pathPattern != null)
-            sql += " AND src.path LIKE @pathPattern ESCAPE '\\'";
+            sql += $" AND {filterAlias}.path LIKE @pathPattern ESCAPE '\\'";
         if (excludeTests)
-            sql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{filterAlias}.path")}";
         sql += " GROUP BY src.path, dst.path ORDER BY reference_count DESC LIMIT @limit";
 
         cmd.CommandText = sql;
