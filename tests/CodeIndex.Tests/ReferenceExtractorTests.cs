@@ -269,4 +269,70 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "let");
         Assert.DoesNotContain(references, r => r.SymbolName == "match");
     }
+
+    [Fact]
+    public void Extract_R_DetectsCallSites()
+    {
+        const string content = """
+            process_data <- function(df) {
+                result <- filter(df, x > 0)
+                mean(result$value)
+                # This is a comment with fake_call()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "mean" && r.ReferenceKind == "call");
+        // Comments should not produce references / コメントは参照を生成しないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_call");
+    }
+
+    [Fact]
+    public void Extract_PowerShell_DetectsCallSites()
+    {
+        const string content = """
+            function Deploy-App {
+                param([string]$Path)
+                $items = Get-ChildItem($Path)
+                Write-Host("Deploying...")
+                # comment with FakeCall()
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+        var references = ReferenceExtractor.Extract(1, "powershell", content, symbols);
+
+        // PowerShell cmdlets like Get-ChildItem are split by hyphen — the call regex captures "ChildItem"
+        // PowerShell コマンドレットはハイフンで分割される — CallRegex は "ChildItem" を捕捉
+        Assert.Contains(references, r => r.SymbolName == "ChildItem" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Host" && r.ReferenceKind == "call");
+        // Comments should not produce references / コメントは参照を生成しないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "FakeCall");
+    }
+
+    [Fact]
+    public void Extract_Haskell_DetectsParenthesizedCalls()
+    {
+        // Note: Haskell space-separated calls (e.g. `map f xs`) are not captured — only parenthesized calls.
+        // Haskell のスペース区切り呼び出し（例: `map f xs`）は抽出できない。括弧付き呼び出しのみ。
+        const string content = """
+            process :: [Int] -> Int
+            process xs = sum(filter(even)(xs))
+            compute y = transform(y) + calculate(y)
+            -- this is a comment with fakeCall()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "haskell", content);
+        var references = ReferenceExtractor.Extract(1, "haskell", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sum" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "transform" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "calculate" && r.ReferenceKind == "call");
+        // Comments should not produce references / コメントは参照を生成しないこと
+        Assert.DoesNotContain(references, r => r.SymbolName == "fakeCall");
+    }
 }
