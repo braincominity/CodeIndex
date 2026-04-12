@@ -111,6 +111,11 @@ public class StatusResult
     public Dictionary<string, long>? SymbolKinds { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }
     public string? Version { get; set; }
+    /// <summary>
+    /// One-line human-readable summary for quick orientation.
+    /// クイックオリエンテーション用の1行サマリー。
+    /// </summary>
+    public string? Summary { get; set; }
 }
 
 public class RepoMapResult

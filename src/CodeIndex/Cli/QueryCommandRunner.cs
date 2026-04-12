@@ -613,12 +613,23 @@ public static class QueryCommandRunner
             if (appVersion != null)
                 status.Version = appVersion;
 
+            // Build one-line summary for AI orientation / AI向けの1行サマリーを構築
+            var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
+            var freshness = status.IndexedAt.HasValue
+                ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
+                : "unknown";
+            var dirty = status.GitIsDirty == true ? ", dirty" : "";
+            status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}";
+
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(status, jsonOptions));
             }
             else
             {
+                if (status.Summary != null)
+                    Console.WriteLine(status.Summary);
+                Console.WriteLine();
                 if (status.Version != null)
                     Console.WriteLine($"Version : cdidx v{status.Version}");
                 Console.WriteLine($"Files   : {status.Files:N0}");

@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 - **Did-you-mean suggestions for unknown commands** — When a user types an unrecognized command (e.g. `cdidx serach`), cdidx now suggests the closest valid command using Levenshtein distance (threshold: 3). Affected: `Program.cs`, `ConsoleUi.cs`.
+- **One-line summary in `status` output** — `status` now includes a `summary` field with a human-readable one-liner (file/symbol/ref counts, top languages, freshness, dirty state). Shown as the first line in human-readable mode and as a JSON field for AI agents. Affected: `QueryCommandRunner.cs`, `QueryResults.cs`.
 
 #### Fixed
 - **Shell completions and help text missing `validate`, `deps`, `unused`, `hotspots`** — Added `validate` and `deps` to the shell completions command list and added usage lines and command descriptions for `validate`, `deps`, `unused`, and `hotspots` in help output. Affected: `ConsoleUi.cs`.
@@ -544,6 +545,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 追加
 - **不明コマンドに対する「もしかして」推薦** — 認識できないコマンド（例: `cdidx serach`）が入力されたとき、Levenshtein距離（閾値: 3）で最も近い有効コマンドを提案する。対象: `Program.cs`、`ConsoleUi.cs`。
+- **`status` 出力に1行サマリー** — `status` にファイル・シンボル・参照数、主要言語、鮮度、dirty状態を含む `summary` フィールドを追加。人間向けモードでは先頭行に表示し、JSON モードでは AI エージェント向けフィールドとして出力。対象: `QueryCommandRunner.cs`、`QueryResults.cs`。
 
 #### 修正
 - **シェル補完とヘルプテキストに `validate`、`deps`、`unused`、`hotspots` が欠落** — シェル補完のコマンドリストに `validate` と `deps` を追加し、ヘルプ出力に `validate`、`deps`、`unused`、`hotspots` の usage 行とコマンド説明を追加。対象: `ConsoleUi.cs`。
