@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **Release checklist: triage every unmerged branch and open PR before version bump** — The "Releasing a new version" section now opens with a step 0 requiring maintainers to list *all* `git branch --no-merged main` entries and *all* `gh pr list --state open` entries and decide, per entry, to merge or explicitly defer — without pre-filtering by branch name, so a release-relevant fix on a differently named branch cannot silently slip through. Closes the process gap that caused v1.8.1 to ship without the `fix/unused-null-ordinal-58` fix (re-reported as #60). Affected: `README.md`.
+
 ### [1.8.1] - 2026-04-13
 
 #### Added
@@ -572,6 +575,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **リリース前チェックリスト: 未マージブランチと open PR を全件トリアージ** — 「新バージョンのリリース」手順の冒頭に、`git branch --no-merged main` の全エントリと `gh pr list --state open` の全エントリを列挙し、各件を「マージする」「PR 説明で明示的に見送る」のどちらかに必ず振り分ける step 0 を追加。ブランチ名で事前フィルタしないため、命名が異なるブランチに載った release-relevant な修正も素通りできない。v1.8.1 が `fix/unused-null-ordinal-58` を取り込まず公開され #60 として再報告されたプロセスギャップを塞ぐためのチェック。対象: `README.md`。
 
 ### [1.8.1] - 2026-04-13
 
