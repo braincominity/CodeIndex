@@ -23,6 +23,20 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     return args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
 }
 
+// Recognize --help / -h after a subcommand too (e.g. `cdidx unused --help`)
+// so that the near-universal help convention works everywhere. The scan is
+// option-arity aware: a `-h` / `--help` token that actually belongs to a
+// value-taking flag (`--db -h`, `--limit -h`, etc.) is left alone for the
+// subcommand parser to process, so legitimate values aren't turned into
+// false-success help exits.
+// サブコマンド後の --help / -h も認識する。ただし値を取るフラグ（--db 等）
+// の直後に来たトークンはその値として扱い、subcommand パーサに委ねる。
+if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+{
+    ConsoleUi.PrintUsage(showBanner: true);
+    return CommandExitCodes.Success;
+}
+
 if (args[0] is "--version" or "-V")
 {
     Console.WriteLine($"cdidx v{appVersion}");
