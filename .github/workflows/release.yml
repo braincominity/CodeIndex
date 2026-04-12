@@ -131,6 +131,31 @@ jobs:
             --verify-tag \
             --generate-notes
 
+      - name: Verify install.sh against the published release
+        env:
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          export CDIDX_INSTALL_DIR="$(mktemp -d)/bin"
+          mkdir -p "$CDIDX_INSTALL_DIR"
+          bash install.sh "${TAG_NAME}"
+
+          # All three runtime assets must land next to the binary.
+          for asset in cdidx libe_sqlite3.so version.json; do
+            test -e "$CDIDX_INSTALL_DIR/$asset" \
+              || { echo "Missing $asset in $CDIDX_INSTALL_DIR" >&2; ls -la "$CDIDX_INSTALL_DIR" >&2; exit 1; }
+          done
+
+          # --version must reflect the tag, not the v0.0.0 fallback.
+          EXPECTED="cdidx ${TAG_NAME}"
+          ACTUAL="$("$CDIDX_INSTALL_DIR/cdidx" --version)"
+          [ "$ACTUAL" = "$EXPECTED" ] \
+            || { echo "Version mismatch: expected '$EXPECTED', got '$ACTUAL'" >&2; exit 1; }
+
+          # A command that touches SQLite must not DllNotFoundException.
+          "$CDIDX_INSTALL_DIR/cdidx" . >/dev/null
+          "$CDIDX_INSTALL_DIR/cdidx" status >/dev/null
+
   publish-nuget:
     runs-on: ubuntu-latest
     needs: release

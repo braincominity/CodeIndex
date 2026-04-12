@@ -562,6 +562,354 @@ See [Exit codes](README.md#exit-codes) in README.
 
 - **Cross-compiled linux-arm64 without runtime smoke test** — The `release.yml` workflow cross-compiles `linux-arm64` on an x64 runner (`dotnet publish -r linux-arm64 --self-contained`). Tests are skipped because the runner cannot execute ARM binaries natively. Ideally, a QEMU-based smoke test (`cdidx --version`) would run before publishing, but GitHub Actions free-tier runners do not include QEMU or ARM runners. Adding a QEMU setup step is possible but increases CI complexity and wall-clock time for every release. .NET's cross-compilation is an officially supported and widely used feature, so the risk of a broken artifact is low in practice. If ARM-specific failures are reported in the future, adding `docker run --platform linux/arm64` with QEMU should be the first mitigation step.
 
+## Cloud Claude Code bootstrap (no .NET SDK)
+
+> **Maintainers / forkers only** — see [MAINTAINERS.md](MAINTAINERS.md). End users can skip this section.
+
+This section explains — in detail — the mechanism by which a Claude Code
+cloud session that follows [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md)
+ends up with a working `cdidx` binary plus a working SQLite runtime, even
+though the container has no .NET SDK installed. Understanding each layer
+matters because every regression in the install path is invisible to
+anyone who can just run `dotnet build` — the cloud session is the canary
+for the published release experience.
+
+### The moving parts
+
+Four artifacts have to end up in three correct places for `cdidx` to work:
+
+| Artifact | Origin | Final location | Required by |
+| --- | --- | --- | --- |
+| `cdidx` (self-contained single-file binary) | `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` in `release.yml` | `$HOME/.local/bin/cdidx` | User's `PATH` |
+| `libe_sqlite3.so` (Linux) / `libe_sqlite3.dylib` (macOS) | Native asset from the `Microsoft.Data.Sqlite` (SQLitePCLRaw) NuGet, copied into the publish output | `$HOME/.local/bin/` (next to the binary) | `SqliteConnection` static ctor → P/Invoke |
+| `version.json` | Repo root; `CodeIndex.csproj` copies it to the publish output as a `Content` item | `$HOME/.local/bin/` (next to the binary) | `ConsoleUi.LoadVersion()` via `AppContext.BaseDirectory` |
+| `sha256sums.txt` | `release.yml` computes it after packaging | Downloaded to a temp dir during install, not kept | `install.sh` integrity check |
+
+The first three are packaged into `CodeIndex-<rid>.tar.gz` by
+`release.yml`. A clean install has to reproduce that layout on the user's
+machine. Miss any of the runtime files and one of the symptoms in the
+diagnostic table below appears.
+
+```mermaid
+flowchart LR
+    subgraph Repo["Repo (source of truth)"]
+        V[version.json]
+        C[CodeIndex.csproj]
+    end
+    subgraph CI["GitHub Actions — release.yml on v* tag"]
+        P["dotnet publish<br/>--self-contained<br/>PublishSingleFile=true<br/>PublishTrimmed=true"]
+        T["tar czf<br/>CodeIndex-&lt;rid&gt;.tar.gz"]
+        H["sha256sums.txt"]
+    end
+    subgraph Tarball["Release tarball payload"]
+        B[cdidx]
+        L["libe_sqlite3.so<br/>(or .dylib on macOS)"]
+        J[version.json]
+    end
+    subgraph User["User machine after install.sh"]
+        UB["~/.local/bin/cdidx"]
+        UL["~/.local/bin/libe_sqlite3.so"]
+        UJ["~/.local/bin/version.json"]
+    end
+    V -->|read at build time| C
+    V -->|copied via Content item| P
+    C --> P
+    P --> B
+    P --> L
+    P --> J
+    B --> T
+    L --> T
+    J --> T
+    T -->|install.sh: download + verify| H
+    T -->|install.sh: extract + copy| UB
+    T --> UL
+    T --> UJ
+```
+
+### Phase 1 — The one-liner download
+
+Command (from the prompt):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+```
+
+What `install.sh` does, in order (see `install.sh`):
+
+1. **Detect platform.** `uname -s` / `uname -m` are normalized to the
+   `<os>-<arch>` RID the release workflow publishes (`linux-x64`,
+   `linux-arm64`, `osx-arm64`, `win-x64`). Alpine / musl is rejected up
+   front with an actionable error because the self-contained binary
+   links against glibc. `osx-x64` is rejected because the release matrix
+   does not ship that RID.
+2. **Resolve version.** With no argument, it hits the GitHub API
+   (`/repos/Widthdom/CodeIndex/releases/latest`) and greps `tag_name`.
+   With an argument it accepts either the `v`-prefixed or bare form
+   (e.g. `v1.8.0` or `1.8.0` — the version string itself is not
+   hard-coded in `install.sh`; `version.json` at the repo root and the
+   GitHub Releases tag are the sources of truth). Failure produces a
+   single actionable error, not a stack trace.
+3. **Short-circuit if already installed.** If `INSTALL_DIR/cdidx --version`
+   already reports the target version, exit 0. This relies on
+   `version.json` being present — previously-broken installs return
+   `v0.0.0` and are treated as upgrades, which is the desired behaviour.
+4. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
+   into a `mktemp -d` directory trap-cleaned on exit.
+5. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
+   (whichever is present) and compares against the signed checksum file.
+   A mismatch aborts before any file is placed into `INSTALL_DIR`.
+6. **Extract into a dedicated subdirectory.** `tar xzf … -C
+   ${tmpdir}/extract` so the unpacked payload does not mix with the
+   downloaded archive or checksum file.
+7. **Install binary.** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` +
+   `chmod +x`.
+8. **Install adjacent runtime assets.** Loops over `version.json`,
+   `libe_sqlite3.so`, `libe_sqlite3.dylib` and copies whichever of them
+   exist in the extract directory into `INSTALL_DIR`. This covers both
+   Linux (`.so`) and macOS (`.dylib`) with one code path and silently
+   skips assets that this RID's tarball does not ship.
+9. **PATH guidance.** If `INSTALL_DIR` is not on `PATH`, emit the
+   shell-specific snippet (`bashrc` / `zshrc` / `fish_add_path`).
+
+After a successful run, `ls $HOME/.local/bin/` shows `cdidx`,
+`libe_sqlite3.so` (on Linux), and `version.json` side-by-side. Any other
+layout is a bug.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User shell
+    participant S as install.sh
+    participant API as api.github.com
+    participant GH as github.com/releases
+    participant TMP as mktemp -d
+    participant FS as ~/.local/bin
+    U->>S: curl | bash
+    S->>S: detect_platform (uname)
+    Note over S: reject musl / osx-x64 early
+    S->>API: GET /releases/latest
+    API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
+    S->>FS: if existing cdidx --version matches → exit 0
+    S->>TMP: mkdir, trap cleanup
+    S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
+    S->>GH: GET sha256sums.txt
+    S->>S: sha256sum / shasum / openssl verify
+    S->>TMP: tar xzf -C extract/
+    S->>FS: cp extract/cdidx + chmod +x
+    loop version.json, libe_sqlite3.so, libe_sqlite3.dylib
+        S->>FS: cp if file exists
+    end
+    S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
+```
+
+### Phase 2 — First invocation: `cdidx --version`
+
+`Program.cs:12` calls `ConsoleUi.LoadVersion()` as the very first line of
+`Main`. That method (`src/CodeIndex/Cli/ConsoleUi.cs:268-285`) does:
+
+1. `AppContext.BaseDirectory` — for a single-file self-contained
+   executable on Linux this resolves to the directory containing the
+   extracted `cdidx` binary (.NET's single-file host extracts to a temp
+   location but exposes the *apphost* directory — i.e. `~/.local/bin/` —
+   through `AppContext.BaseDirectory`).
+2. `Path.Combine(exeDir, "version.json")`. If present, parse JSON and
+   return the `version` string.
+3. Fallback: try `AppDomain.CurrentDomain.BaseDirectory`.
+4. Final fallback: return the literal string `"0.0.0"`.
+
+If the installer forgot to place `version.json` next to the binary,
+`--version` prints `cdidx v0.0.0` — which is not just cosmetic. The same
+string is used in the MCP `serverInfo.version` and in
+`status --json`'s `version` field, so AI clients see a nonsense version
+too. This is the most visible way a broken install path surfaces.
+
+```mermaid
+flowchart TD
+    A[Program.Main] --> B["ConsoleUi.LoadVersion()"]
+    B --> C{"exeDir/version.json<br/>exists?"}
+    C -->|yes| D[Parse JSON → read 'version']
+    C -->|no| E{"CurrentDomain.BaseDirectory/<br/>version.json exists?"}
+    E -->|yes| D
+    E -->|no| F["return '0.0.0' (fallback)"]
+    D --> G["return version string"]
+    G --> H["cdidx --version prints 'cdidx vX.Y.Z'<br/>MCP serverInfo.version = X.Y.Z<br/>status --json .version = X.Y.Z"]
+    F --> I["cdidx --version prints 'cdidx v0.0.0'<br/>→ broken install-path signal"]
+```
+
+### Phase 3 — First SQLite-touching command: `cdidx .` (index)
+
+This exercises the entire stack end-to-end.
+
+1. **Binary boots.** The self-contained host resolves the managed
+   entrypoint (`Program.Main`).
+2. **CLI routing.** `Program.cs` dispatches to
+   `IndexCommandRunner.Run(args, jsonOptions)`.
+3. **DB path resolution.** `DbPathResolver` computes
+   `<projectPath>/.cdidx/codeindex.db` unless `--db` overrides it, and
+   creates the `.cdidx/` directory.
+4. **Open SQLite.** `IndexCommandRunner` constructs
+   `new DbContext(dbPath)`, which calls `new SqliteConnection(...)`.
+   **This is when the native library is resolved.** `SqliteConnection`'s
+   static ctor calls `SQLitePCL.Batteries_V2.Init()`, which invokes
+   `sqlite3_libversion_number()` on `SQLite3Provider_e_sqlite3`, which
+   P/Invokes into `e_sqlite3`. The .NET dynamic loader on Linux searches
+   in this order (see the error message if it fails):
+   - `${apphost_dir}/libe_sqlite3.so`
+   - `${apphost_dir}/e_sqlite3.so` (and the non-`lib`-prefixed variants)
+   - Then the OS's normal `dlopen` search path (`/lib`, `/usr/lib`, etc.)
+   Because the self-contained publish bundles `libe_sqlite3.so` into the
+   publish output, the release tarball ships it, and the fixed
+   `install.sh` copies it alongside the binary, the very first probe
+   succeeds. If it is missing, `DllNotFoundException: Unable to load
+   shared library 'e_sqlite3'` is thrown at `SqliteConnection`
+   construction and **the process terminates before any user code runs**.
+5. **Schema init.** `DbContext.ctor` runs `PRAGMA journal_mode=WAL`,
+   `PRAGMA busy_timeout=5000`, and the `CREATE TABLE IF NOT EXISTS` /
+   `CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5 (…)` /
+   trigger DDL. A successful run proves that the native library is not
+   just loadable but is a working SQLite build with FTS5 compiled in
+   (SQLitePCLRaw's bundled build always has FTS5).
+6. **Scan + write.** `FileIndexer` walks the project tree, reads files,
+   detects languages, splits into chunks, extracts symbols and
+   references, and `DbWriter` batches UPSERTs (500 per transaction).
+   Progress is rendered via `ConsoleUi.SetProgressTheme()`.
+7. **FTS optimize.** After the write is committed,
+   `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')` runs.
+8. **Print summary.** `Files / Chunks / Symbols / Refs / Elapsed`.
+
+Seeing `Done.` means every prior step — native load, SQLite init, WAL
+setup, FTS5 availability, trigger sync, batch write path — succeeded.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OS as Linux dynamic loader
+    participant Host as .NET apphost (cdidx)
+    participant Main as Program.Main
+    participant CU as ConsoleUi.LoadVersion
+    participant IR as IndexCommandRunner
+    participant Ctx as DbContext
+    participant Conn as SqliteConnection
+    participant PCL as SQLitePCL.Batteries_V2
+    participant SO as libe_sqlite3.so
+    OS->>Host: execve(cdidx)
+    Host->>Main: managed entry
+    Main->>CU: LoadVersion()
+    CU-->>Main: "1.8.0"
+    Main->>IR: Run(args)
+    IR->>Ctx: new DbContext(dbPath)
+    Ctx->>Conn: new SqliteConnection(connStr)
+    Conn->>PCL: static ctor → Init()
+    PCL->>SO: P/Invoke sqlite3_libversion_number()
+    alt libe_sqlite3.so next to binary
+        SO-->>PCL: OK
+        PCL-->>Conn: provider registered
+        Ctx->>Ctx: PRAGMA journal_mode=WAL
+        Ctx->>Ctx: PRAGMA busy_timeout=5000
+        Ctx->>Ctx: CREATE TABLE IF NOT EXISTS ...
+        Ctx->>Ctx: CREATE VIRTUAL TABLE fts_chunks USING fts5(...)
+        Ctx->>Ctx: CREATE TRIGGER (sync chunks ↔ fts_chunks)
+        IR->>IR: FileIndexer scan + DbWriter batch UPSERT
+        IR-->>Main: "Done."
+    else libe_sqlite3.so missing
+        SO--xPCL: dlopen failed
+        PCL--xConn: DllNotFoundException
+        Conn--xMain: crash before user code runs
+    end
+```
+
+### Phase 4 — SQLite read path: `cdidx status`, `cdidx search`
+
+`cdidx status` runs `DbReader.GetStatus(...)`, which issues a small set
+of `SELECT COUNT(*)` / `SELECT … GROUP BY` queries against `files`,
+`chunks`, `symbols`, `symbol_references`. It proves the read path
+(including the opportunistic read-only schema migration in
+`TryMigrateForRead`) works.
+
+`cdidx search "<query>" --path install.sh --snippet-lines 4` goes
+through `DbSearchReader`. It:
+
+1. Token-quotes the user query to make it FTS-safe (unless `--fts`).
+2. Runs `SELECT … FROM fts_chunks JOIN chunks …` with path filters.
+3. `SearchSnippetFormatter.Format` rebuilds compact match-centred
+   snippets with highlights.
+
+A successful snippet proves the FTS5 virtual table, the content-sync
+triggers, and snippet assembly via `SearchSnippetFormatter` all line up.
+
+### Phase 5 — The MCP path: `cdidx mcp`
+
+Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
+`cdidx mcp` exercises a different code path:
+
+- `McpServer` owns stdin/stdout and parses JSON-RPC 2.0 frames.
+- Response construction is **hand-rolled** via
+  `System.Text.Json.Nodes.JsonObject` / `JsonArray`, not
+  `JsonSerializer.Serialize<T>(...)`. That is why the MCP path keeps
+  working even when the trimmed binary has reflection-based
+  serialization disabled.
+- The `initialize` response returns `protocolVersion`, `capabilities`,
+  `serverInfo.name`, `serverInfo.version` (read via
+  `ConsoleUi.LoadVersion()` — the same `version.json` source), and the
+  long `instructions` string that guides AI clients on tool selection.
+
+Because MCP uses a distinct serialization strategy, it is the most
+robust smoke test for "is the binary runnable at all?" — it stresses
+the .NET host, `Program.Main`, CLI routing, and
+`ConsoleUi.LoadVersion()`, but not SQLite. (MCP tool *calls* like
+`search` do hit SQLite; `initialize` alone does not.)
+
+### Why `--json` currently crashes (and MCP does not)
+
+`release.yml` builds with `-p:PublishTrimmed=true`. In .NET 8, trimming
+sets `JsonSerializerIsReflectionEnabledByDefault=false` implicitly. Any
+call to `JsonSerializer.Serialize<T>(...)` without a source-generated
+`JsonTypeInfo<T>` throws `InvalidOperationException: Reflection-based
+serialization has been disabled for this application`. The CLI
+`--json` paths in `IndexCommandRunner` / `QueryCommandRunner` use
+reflection-based serialization today, hence they crash. The MCP path
+does not — it manually builds `JsonObject` graphs and writes them — so
+it is unaffected. Fixing the CLI JSON paths requires either disabling
+`PublishTrimmed`, setting `JsonSerializerIsReflectionEnabledByDefault=true`
+in the `.csproj`, or adding source-generated `JsonSerializerContext`
+classes for the serialized DTOs. None of those can be validated in the
+cloud session (no SDK), so the fix is deferred and documented as a known
+caveat in `CLOUD_BOOTSTRAP_PROMPT.md`.
+
+```mermaid
+flowchart TD
+    B["cdidx binary<br/>built with PublishTrimmed=true<br/>⇒ reflection-based JSON implicitly disabled"]
+    B --> R{User command}
+    R -->|cdidx status / index with --json| A["CLI runners call<br/>JsonSerializer.Serialize&lt;T&gt;(value)"]
+    R -->|cdidx search / status without --json| H["Human-readable writer<br/>(no JSON)"]
+    R -->|cdidx mcp| M["McpServer builds<br/>JsonObject / JsonArray graphs<br/>by hand, then Write()"]
+    A --> AX["❌ InvalidOperationException:<br/>'Reflection-based serialization<br/>has been disabled'"]
+    H --> HX["✅ works"]
+    M --> MX["✅ works (no reflection path)"]
+```
+
+### Diagnostic table: symptom → cause → fix
+
+| Symptom | Root cause | Fix |
+| --- | --- | --- |
+| `cdidx --version` prints `cdidx v0.0.0` | `version.json` not next to the binary in `$HOME/.local/bin/` | Re-run the fixed `install.sh`; verify `ls $HOME/.local/bin/version.json` exists |
+| `DllNotFoundException: Unable to load shared library 'e_sqlite3'` on any command | `libe_sqlite3.so` (or `.dylib`) not next to the binary | Re-run the fixed `install.sh`; verify `ls $HOME/.local/bin/libe_sqlite3.*` exists |
+| `install.sh` error: `musl-based Linux (e.g. Alpine) is not supported` | Container uses musl libc | Switch to a glibc-based image (debian/ubuntu) or install via `dotnet tool install -g cdidx` in an environment with the SDK |
+| `install.sh` error: `macOS x86_64 (Intel) binaries are not published` | Intel Mac hitting `osx-x64` RID | Run under Rosetta 2 with `osx-arm64`, or use `dotnet tool install -g cdidx` |
+| `install.sh` error: `Checksum mismatch!` | Tarball tampered with or transport corrupted | Retry; if persistent, check the `sha256sums.txt` and the tarball on the release page |
+| `InvalidOperationException: Reflection-based serialization has been disabled` on a `--json` command | `PublishTrimmed` + reflection-based `JsonSerializer` | Known issue; use the default human-readable output or the MCP server until a source-gen fix ships |
+| `cdidx status` shows `Files: 0` on a repo that clearly has files | Index DB never built, or pointing at the wrong `--db` | Run `cdidx <projectPath>` first; verify `.cdidx/codeindex.db` exists |
+| Every command shows `index fresh` but results are obviously stale | You indexed a different working copy | Re-run `cdidx . --commits HEAD` or `cdidx . --files <paths>` |
+
+### Why this matters
+
+The cloud session is the only environment in the development loop that
+cannot fall back to `dotnet build`. A broken install path would be
+invisible to anyone with an SDK — they would just rebuild. The
+bootstrap prompt, the smoke tests, and this section exist so that any
+regression in the user-facing install flow is caught by the next person
+who opens a cloud session, not by a real user after release.
+
 ## Coding conventions
 
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
@@ -1131,6 +1479,248 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
   解決手順: `.git`ファイルを読む → `gitdir:`を解析 → そのパスの`commondir`ファイルを読む → `../..`を`feature-branch/`ディレクトリ起点で解決（`feature-branch/` → `..` → `worktrees/` → `..` → `.git/`）→ `info/exclude`に書き込む。
 
 - **クロスコンパイルの linux-arm64 にランタイムスモークテストがない** — `release.yml` は x64 ランナー上で `linux-arm64` をクロスコンパイルする（`dotnet publish -r linux-arm64 --self-contained`）。ランナーが ARM バイナリをネイティブ実行できないためテストはスキップされる。理想的には QEMU ベースのスモークテスト（`cdidx --version`）をリリース前に実行すべきだが、GitHub Actions の無料枠ランナーには QEMU も ARM ランナーも含まれない。QEMU セットアップステップの追加は可能だが、リリースごとに CI の複雑さと実行時間が増す。.NET のクロスコンパイルは公式サポート機能で広く使われているため、実際に壊れたアーティファクトが出るリスクは低い。将来 ARM 固有の不具合が報告された場合、`docker run --platform linux/arm64` と QEMU の組み合わせが最初の対策となる。
+
+## Cloud Claude Code bootstrap（.NET SDK なし）
+
+> **Maintainer・forker 向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
+
+このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Claude Code のCloud セッションが、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、Cloud セッションは公開リリース体験のカナリアとなる（「炭鉱のカナリア」に由来する比喩。ここでいうカナリアはペットとして飼われる小型の鳴鳥で、体が小さく呼吸も速いため人間より遥かに少ない量の有毒ガスで中毒症状を起こす。かつて炭鉱ではこの性質を利用し、人間より先に一酸化炭素などの有毒ガスに反応して鳴き止む・倒れるカナリアを坑内に連れて入り、作業員がまだ気付けない危険を早期に検知する生体センサーとして使っていた。そこから転じて IT では、本番のユーザーが被害を受ける前に異常を真っ先に検知する役割を指す）。各層を理解することが重要である理由はここにある。
+
+### 構成要素
+
+`cdidx` が動作するためには、4つのアーティファクトが3つの正しい場所に収まる必要がある:
+
+| アーティファクト | 由来 | 最終配置先 | 必要とする処理 |
+| --- | --- | --- | --- |
+| `cdidx`（自己完結型シングルファイルバイナリ） | `release.yml` 内の `dotnet publish -r <rid> --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true` | `$HOME/.local/bin/cdidx` | ユーザーの `PATH` |
+| `libe_sqlite3.so`（Linux）/ `libe_sqlite3.dylib`（macOS） | `Microsoft.Data.Sqlite`（SQLitePCLRaw）NuGet のネイティブ資産。publish 出力に同梱される | `$HOME/.local/bin/`（バイナリの隣） | `SqliteConnection` 静的コンストラクタ → P/Invoke |
+| `version.json` | リポジトリルート。`CodeIndex.csproj` が `Content` として publish 出力にコピー | `$HOME/.local/bin/`（バイナリの隣） | `AppContext.BaseDirectory` 経由の `ConsoleUi.LoadVersion()` |
+| `sha256sums.txt` | `release.yml` がパッケージング後に計算 | インストール中は一時ディレクトリに保持のみ | `install.sh` の整合性チェック |
+
+最初の3つは `release.yml` により `CodeIndex-<rid>.tar.gz` にパッケージされる。クリーンインストールは同じレイアウトをユーザーの環境で再現する必要がある。ランタイムファイルが欠けると、後述の診断表にある症状のいずれかが発生する。
+
+```mermaid
+flowchart LR
+    subgraph Repo["リポジトリ（真実の源）"]
+        V[version.json]
+        C[CodeIndex.csproj]
+    end
+    subgraph CI["GitHub Actions — v* タグでの release.yml"]
+        P["dotnet publish<br/>--self-contained<br/>PublishSingleFile=true<br/>PublishTrimmed=true"]
+        T["tar czf<br/>CodeIndex-&lt;rid&gt;.tar.gz"]
+        H["sha256sums.txt"]
+    end
+    subgraph Tarball["リリース tarball の中身"]
+        B[cdidx]
+        L["libe_sqlite3.so<br/>（macOS では .dylib）"]
+        J[version.json]
+    end
+    subgraph User["install.sh 実行後のユーザー環境"]
+        UB["~/.local/bin/cdidx"]
+        UL["~/.local/bin/libe_sqlite3.so"]
+        UJ["~/.local/bin/version.json"]
+    end
+    V -->|ビルド時に読む| C
+    V -->|Content として複製| P
+    C --> P
+    P --> B
+    P --> L
+    P --> J
+    B --> T
+    L --> T
+    J --> T
+    T -->|install.sh: ダウンロード + 検証| H
+    T -->|install.sh: 展開 + コピー| UB
+    T --> UL
+    T --> UJ
+```
+
+### フェーズ1 — ワンライナーでのダウンロード
+
+ここでいう「ワンライナー」とは、ターミナルにコピー＆ペーストで貼り付けて Enter を押すだけで完結する、1行のシェルコマンドのこと。インストーラをダウンロードして実行する複数ステップを `curl` とパイプ `|` で1行につないでいるためこう呼ぶ（例: `curl -fsSL …/install.sh | bash` は「install.sh を取得 → そのまま bash に流し込んで実行」を1行で行っている）。
+
+プロンプトから実行されるコマンド:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
+```
+
+`install.sh` が順に行うこと（`install.sh` 参照）:
+
+1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
+2. **バージョン解決。** 引数なしなら GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて `tag_name` を grep する。引数ありなら `v` プレフィックス付き・無しの両方を受け付ける（例: `v1.8.0` と `1.8.0` のどちらでも可。バージョン番号自体は `install.sh` にハードコードされておらず、リポジトリ直下の `version.json` と GitHub Releases のタグが真実の源）。失敗時はスタックトレースではなく実行可能なエラーを1行で出す。
+3. **既にインストール済みなら短絡終了。** `INSTALL_DIR/cdidx --version` が目的のバージョンを返すなら 0 終了。これは `version.json` の存在に依存する。過去の壊れたインストールは `v0.0.0` を返すためアップグレード扱いになる — これは意図した挙動。
+4. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
+5. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
+6. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
+7. **バイナリ配置。** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` + `chmod +x`。
+8. **隣接ランタイム資産の配置。** `version.json`、`libe_sqlite3.so`、`libe_sqlite3.dylib` をループし、extract ディレクトリに存在するものだけを `INSTALL_DIR` にコピー。これで Linux（`.so`）と macOS（`.dylib`）を1つのコードパスで扱いつつ、この RID の tarball に含まれない資産は静かにスキップする。
+9. **PATH ガイダンス。** `INSTALL_DIR` が `PATH` に無ければ、シェル別のスニペット（`bashrc` / `zshrc` / `fish_add_path`）を表示する。
+
+成功後は `ls $HOME/.local/bin/` に `cdidx`、`libe_sqlite3.so`（Linux の場合）、`version.json` が並んで見える。それ以外のレイアウトはバグである。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as ユーザーシェル
+    participant S as install.sh
+    participant API as api.github.com
+    participant GH as github.com/releases
+    participant TMP as mktemp -d
+    participant FS as ~/.local/bin
+    U->>S: curl | bash
+    S->>S: detect_platform (uname)
+    Note over S: musl / osx-x64 は早期に拒否
+    S->>API: GET /releases/latest
+    API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
+    S->>FS: 既存 cdidx --version と一致 → exit 0
+    S->>TMP: mkdir、trap でクリーンアップ
+    S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
+    S->>GH: GET sha256sums.txt
+    S->>S: sha256sum / shasum / openssl で検証
+    S->>TMP: tar xzf -C extract/
+    S->>FS: cp extract/cdidx + chmod +x
+    loop version.json, libe_sqlite3.so, libe_sqlite3.dylib
+        S->>FS: ファイルがあればコピー
+    end
+    S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
+```
+
+### フェーズ2 — 初回起動: `cdidx --version`
+
+`Program.cs:12` が `Main` の先頭で `ConsoleUi.LoadVersion()` を呼ぶ。そのメソッド（`src/CodeIndex/Cli/ConsoleUi.cs:268-285`）が行うこと:
+
+1. `AppContext.BaseDirectory` — Linux の単一ファイル自己完結型実行可能ファイルでは、展開された `cdidx` バイナリが置かれたディレクトリに解決される（.NET の単一ファイルホストは一時ディレクトリに展開するが、*apphost* ディレクトリ（`~/.local/bin/`）を `AppContext.BaseDirectory` として公開する）。
+2. `Path.Combine(exeDir, "version.json")`。存在すれば JSON を解析し `version` 文字列を返す。
+3. フォールバック: `AppDomain.CurrentDomain.BaseDirectory` を試す。
+4. 最終フォールバック: リテラル文字列 `"0.0.0"` を返す。
+
+インストーラが `version.json` をバイナリの隣に置き忘れると、`--version` が `cdidx v0.0.0` を返す。これは見た目の問題だけではない。同じ文字列が MCP の `serverInfo.version` や `status --json` の `version` フィールドにも使われるため、AI クライアントまで無意味なバージョンを見ることになる。これが、壊れたインストールパスが最も顕在化しやすい箇所である。
+
+```mermaid
+flowchart TD
+    A[Program.Main] --> B["ConsoleUi.LoadVersion()"]
+    B --> C{"exeDir/version.json<br/>は存在する?"}
+    C -->|yes| D[JSON 解析 → 'version' を読む]
+    C -->|no| E{"CurrentDomain.BaseDirectory/<br/>version.json は存在する?"}
+    E -->|yes| D
+    E -->|no| F["'0.0.0' を返す（フォールバック）"]
+    D --> G["バージョン文字列を返す"]
+    G --> H["cdidx --version は 'cdidx vX.Y.Z' を表示<br/>MCP serverInfo.version = X.Y.Z<br/>status --json .version = X.Y.Z"]
+    F --> I["cdidx --version は 'cdidx v0.0.0' を表示<br/>→ 壊れたインストールパスのシグナル"]
+```
+
+### フェーズ3 — SQLite を最初に呼び出すコマンド: `cdidx .`（index）
+
+これはスタック全体をエンドツーエンドで駆動する。
+
+1. **バイナリ起動。** 自己完結型ホストがマネージエントリポイント（`Program.Main`）を解決。
+2. **CLI ルーティング。** `Program.cs` が `IndexCommandRunner.Run(args, jsonOptions)` に振り分け。
+3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。
+4. **SQLite オープン。** `IndexCommandRunner` が `new DbContext(dbPath)` を構築し、内部で `new SqliteConnection(...)` が呼ばれる。**ネイティブライブラリの解決はこの時点で行われる。** `SqliteConnection` の静的コンストラクタが `SQLitePCL.Batteries_V2.Init()` を呼び、それが `SQLite3Provider_e_sqlite3` 上で `sqlite3_libversion_number()` を起動し、`e_sqlite3` への P/Invoke に到達する。Linux の .NET 動的ローダは次の順で探す（失敗時のエラーメッセージを参照）:
+   - `${apphost_dir}/libe_sqlite3.so`
+   - `${apphost_dir}/e_sqlite3.so`（および `lib` プレフィックスなしのバリエーション）
+   - 次に OS の通常の `dlopen` 検索パス（`/lib`、`/usr/lib` など）
+   自己完結型 publish は `libe_sqlite3.so` を publish 出力に同梱し、リリース tarball に含め、修正後の `install.sh` がバイナリの隣に置くため、最初のプローブで成功する。これが欠けていると、`SqliteConnection` のインスタンス生成時点で `DllNotFoundException: Unable to load shared library 'e_sqlite3'` が送出され、**ユーザーコードが実行される前にプロセスが終了する**。
+5. **スキーマ初期化。** `DbContext.ctor` が `PRAGMA journal_mode=WAL`、`PRAGMA busy_timeout=5000`、`CREATE TABLE IF NOT EXISTS` / `CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5 (…)` / トリガー DDL を実行する。成功は、ネイティブライブラリがロードできるだけでなく、FTS5 がビルドに含まれた動作する SQLite であることも証明する（SQLitePCLRaw の同梱ビルドは常に FTS5 有効）。
+6. **スキャンと書き込み。** `FileIndexer` がプロジェクトツリーを走査し、ファイルを読み、言語を検出し、チャンク分割し、シンボルと参照を抽出し、`DbWriter` がトランザクションあたり500件ずつ UPSERT する。進捗は `ConsoleUi.SetProgressTheme()` でレンダリング。
+7. **FTS optimize。** 書き込みのコミット後、`INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')` を実行。
+8. **サマリー表示。** `Files / Chunks / Symbols / Refs / Elapsed`。
+
+`Done.` が見えれば、ネイティブロード、SQLite 初期化、WAL セットアップ、FTS5 利用可能、トリガー同期、バッチ書き込みまで全ての先行ステップが成功したことを意味する。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OS as Linux 動的ローダ
+    participant Host as .NET apphost (cdidx)
+    participant Main as Program.Main
+    participant CU as ConsoleUi.LoadVersion
+    participant IR as IndexCommandRunner
+    participant Ctx as DbContext
+    participant Conn as SqliteConnection
+    participant PCL as SQLitePCL.Batteries_V2
+    participant SO as libe_sqlite3.so
+    OS->>Host: execve(cdidx)
+    Host->>Main: マネージエントリ
+    Main->>CU: LoadVersion()
+    CU-->>Main: "1.8.0"
+    Main->>IR: Run(args)
+    IR->>Ctx: new DbContext(dbPath)
+    Ctx->>Conn: new SqliteConnection(connStr)
+    Conn->>PCL: 静的コンストラクタ → Init()
+    PCL->>SO: P/Invoke sqlite3_libversion_number()
+    alt libe_sqlite3.so がバイナリの隣にある
+        SO-->>PCL: OK
+        PCL-->>Conn: プロバイダ登録
+        Ctx->>Ctx: PRAGMA journal_mode=WAL
+        Ctx->>Ctx: PRAGMA busy_timeout=5000
+        Ctx->>Ctx: CREATE TABLE IF NOT EXISTS ...
+        Ctx->>Ctx: CREATE VIRTUAL TABLE fts_chunks USING fts5(...)
+        Ctx->>Ctx: CREATE TRIGGER（chunks ↔ fts_chunks 同期）
+        IR->>IR: FileIndexer スキャン + DbWriter バッチ UPSERT
+        IR-->>Main: "Done."
+    else libe_sqlite3.so が無い
+        SO--xPCL: dlopen 失敗
+        PCL--xConn: DllNotFoundException
+        Conn--xMain: ユーザーコード実行前にクラッシュ
+    end
+```
+
+### フェーズ4 — SQLite 読み取りパス: `cdidx status`、`cdidx search`
+
+`cdidx status` は `DbReader.GetStatus(...)` を実行し、`files`、`chunks`、`symbols`、`symbol_references` に対して少数の `SELECT COUNT(*)` / `SELECT … GROUP BY` を発行する。これで読み取りパス（`TryMigrateForRead` による読み取り時スキーマ移行を含む）が動くことが証明される。
+
+`cdidx search "<query>" --path install.sh --snippet-lines 4` は `DbSearchReader` を通る。順に:
+
+1. ユーザークエリを FTS セーフにするためトークン単位で引用化する（`--fts` 指定時は除く）。
+2. パスフィルタ付きで `SELECT … FROM fts_chunks JOIN chunks …` を実行。
+3. `SearchSnippetFormatter.Format` が一致中心のコンパクトなスニペットをハイライト付きで再構成する。
+
+スニペットが返れば、FTS5 仮想テーブル、コンテンツ同期トリガー、`SearchSnippetFormatter` によるスニペット整形までが一通り正しく連携していることが確認できる。
+
+### フェーズ5 — MCP パス: `cdidx mcp`
+
+`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` を `cdidx mcp` にパイプすると別のコードパスが走る:
+
+- `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
+- レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
+- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。
+
+MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
+
+### なぜ `--json` は現在クラッシュする（そして MCP はしない）のか
+
+`release.yml` は `-p:PublishTrimmed=true` でビルドする。.NET 8 ではトリミングが暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない `JsonSerializer.Serialize<T>(...)` 呼び出しはすべて `InvalidOperationException: Reflection-based serialization has been disabled for this application` を投げる。`IndexCommandRunner` / `QueryCommandRunner` の CLI `--json` パスは現在リフレクションベースのシリアライズを使うため、クラッシュする。MCP パスは `JsonObject` グラフを手で組み立てて書き出しているため影響を受けない。CLI の JSON パスの修正には、`PublishTrimmed` を無効にする、`.csproj` で `JsonSerializerIsReflectionEnabledByDefault=true` を設定する、シリアライズ対象 DTO に対するソース生成 `JsonSerializerContext` クラスを追加する、のいずれかが必要。いずれもCloud セッションでは検証できない（SDK が無い）ため、修正は保留し `CLOUD_BOOTSTRAP_PROMPT.md` に既知の注意点として記載している。
+
+```mermaid
+flowchart TD
+    B["cdidx バイナリ<br/>PublishTrimmed=true でビルド<br/>⇒ リフレクションベース JSON が暗黙に無効"]
+    B --> R{ユーザーコマンド}
+    R -->|cdidx status / index --json| A["CLI ランナーが<br/>JsonSerializer.Serialize&lt;T&gt;(value) を呼ぶ"]
+    R -->|cdidx search / status（--json なし）| H["人間向け出力<br/>（JSON 不使用）"]
+    R -->|cdidx mcp| M["McpServer が<br/>JsonObject / JsonArray を<br/>手組みして Write()"]
+    A --> AX["❌ InvalidOperationException:<br/>'Reflection-based serialization<br/>has been disabled'"]
+    H --> HX["✅ 成功"]
+    M --> MX["✅ 成功（リフレクションパスを通らない）"]
+```
+
+### 診断表: 症状 → 原因 → 対処
+
+| 症状 | 根本原因 | 対処 |
+| --- | --- | --- |
+| `cdidx --version` が `cdidx v0.0.0` | `version.json` が `$HOME/.local/bin/` のバイナリの隣に無い | 修正後の `install.sh` を再実行。`ls $HOME/.local/bin/version.json` を確認 |
+| 任意のコマンドで `DllNotFoundException: Unable to load shared library 'e_sqlite3'` | `libe_sqlite3.so`（または `.dylib`）がバイナリの隣に無い | 修正後の `install.sh` を再実行。`ls $HOME/.local/bin/libe_sqlite3.*` を確認 |
+| `install.sh` のエラー: `musl-based Linux (e.g. Alpine) is not supported` | コンテナが musl libc を使用 | glibc ベース（debian/ubuntu）に切り替えるか、SDK のある環境で `dotnet tool install -g cdidx` を使う |
+| `install.sh` のエラー: `macOS x86_64 (Intel) binaries are not published` | Intel Mac が `osx-x64` RID に到達 | Rosetta 2 下で `osx-arm64` を使うか、`dotnet tool install -g cdidx` を使う |
+| `install.sh` のエラー: `Checksum mismatch!` | tarball の改ざんまたは転送時破損 | 再実行。それでも起きるならリリースページの `sha256sums.txt` と tarball を確認 |
+| `--json` コマンドで `InvalidOperationException: Reflection-based serialization has been disabled` | `PublishTrimmed` + リフレクションベース `JsonSerializer` | 既知の問題。ソース生成対応版が出るまでは人間向け出力または MCP サーバーを使う |
+| 明らかにファイルのあるリポジトリで `cdidx status` が `Files: 0` | インデックス DB を作っていない、あるいは別の `--db` を指している | 先に `cdidx <projectPath>` を実行。`.cdidx/codeindex.db` の存在を確認 |
+| 全コマンドが `index fresh` だが結果は明らかに古い | 別の作業コピーにインデックスを張っている | `cdidx . --commits HEAD` または `cdidx . --files <paths>` を再実行 |
+
+### なぜこれが重要か
+
+Cloud セッションは開発ループの中で `dotnet build` にフォールバックできない唯一の環境である。壊れたインストールパスは、SDK を持つ開発者には可視化されない — ローカルで再ビルドすれば済んでしまうためである。bootstrap プロンプト、スモークテスト、および本セクションを整備しているのは、ユーザー向けインストールフローにおけるリグレッションが、リリース後の実ユーザーではなく、次に Cloud セッションを開いた者によって検出されるようにすることを意図している。
 
 ## コーディング規約
 
