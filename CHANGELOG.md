@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **Did-you-mean suggestions for unknown commands** — When a user types an unrecognized command (e.g. `cdidx serach`), cdidx now suggests the closest valid command using Levenshtein distance (threshold: 3). Affected: `Program.cs`, `ConsoleUi.cs`.
+
 #### Fixed
 - **Shell completions and help text missing `validate`, `deps`, `unused`, `hotspots`** — Added `validate` and `deps` to the shell completions command list and added usage lines and command descriptions for `validate`, `deps`, `unused`, and `hotspots` in help output. Affected: `ConsoleUi.cs`.
 - **Kind hint shows all valid kinds, not just in-index kinds** — `--kind` validation now uses a static list of all 10 valid symbol kinds instead of querying only kinds present in the current index. Invalid kinds get an "Available:" list; valid-but-absent kinds get a separate "no X symbols in the index" message with the indexed kinds. Affected: `QueryCommandRunner.cs`.
@@ -538,6 +541,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **不明コマンドに対する「もしかして」推薦** — 認識できないコマンド（例: `cdidx serach`）が入力されたとき、Levenshtein距離（閾値: 3）で最も近い有効コマンドを提案する。対象: `Program.cs`、`ConsoleUi.cs`。
 
 #### 修正
 - **シェル補完とヘルプテキストに `validate`、`deps`、`unused`、`hotspots` が欠落** — シェル補完のコマンドリストに `validate` と `deps` を追加し、ヘルプ出力に `validate`、`deps`、`unused`、`hotspots` の usage 行とコマンド説明を追加。対象: `ConsoleUi.cs`。

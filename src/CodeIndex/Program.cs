@@ -89,6 +89,16 @@ int RunMcp(string[] cmdArgs)
 int ShowError(string message)
 {
     Console.Error.WriteLine($"Error: {message}");
+
+    // Did-you-mean suggestion for unknown commands / 不明なコマンドに対する推薦
+    var input = args[0];
+    if (!input.StartsWith('-'))
+    {
+        var best = ConsoleUi.FindClosestCommand(input);
+        if (best != null)
+            Console.Error.WriteLine($"Did you mean: cdidx {best}?");
+    }
+
     Console.Error.WriteLine("Run 'cdidx --help' for usage information.");
     return CommandExitCodes.UsageError;
 }

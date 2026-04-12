@@ -399,6 +399,48 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx languages                                Show supported languages");
     }
 
+    // --- Did-you-mean / もしかして ---
+
+    /// <summary>
+    /// Find the closest matching command name using Levenshtein distance.
+    /// Returns null if no command is close enough (distance > 3).
+    /// Levenshtein距離で最も近いコマンド名を返す。距離が3超なら null を返す。
+    /// </summary>
+    public static string? FindClosestCommand(string input)
+    {
+        string? best = null;
+        var bestDist = int.MaxValue;
+        foreach (var cmd in Commands)
+        {
+            var dist = LevenshteinDistance(input.ToLowerInvariant(), cmd);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = cmd;
+            }
+        }
+        // Only suggest if edit distance is at most 3 / 編集距離3以下のみ推薦
+        return bestDist <= 3 ? best : null;
+    }
+
+    private static int LevenshteinDistance(string s, string t)
+    {
+        var n = s.Length;
+        var m = t.Length;
+        var d = new int[n + 1, m + 1];
+        for (var i = 0; i <= n; i++) d[i, 0] = i;
+        for (var j = 0; j <= m; j++) d[0, j] = j;
+        for (var i = 1; i <= n; i++)
+        {
+            for (var j = 1; j <= m; j++)
+            {
+                var cost = s[i - 1] == t[j - 1] ? 0 : 1;
+                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+            }
+        }
+        return d[n, m];
+    }
+
     // --- Shell Completions / シェル補完 ---
 
     private static readonly string[] Commands =
