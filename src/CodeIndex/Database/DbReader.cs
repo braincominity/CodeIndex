@@ -749,7 +749,15 @@ public partial class DbReader
     private string GetSymbolColumnSql(string columnName, string? fallbackSql = null)
     {
         if (_symbolColumns.Contains(columnName))
-            return $"s.{columnName}";
+        {
+            // Older binaries added the column but may have left existing rows with NULL.
+            // Coalesce to the fallback so queries don't crash on legacy indexes.
+            // 古いバイナリがカラムだけ追加して既存行を NULL のまま残しているケースに備え、
+            // fallback と COALESCE してレガシーインデックスでクラッシュしないようにする。
+            return fallbackSql != null
+                ? $"COALESCE(s.{columnName}, {fallbackSql})"
+                : $"s.{columnName}";
+        }
 
         return fallbackSql ?? "NULL";
     }
