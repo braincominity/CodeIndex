@@ -62,6 +62,7 @@ return args[0] switch
     "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions, appVersion),
     "validate" => QueryCommandRunner.RunValidate(args[1..], jsonOptions),
     "languages" => QueryCommandRunner.RunLanguages(args[1..], jsonOptions),
+    "impact" => QueryCommandRunner.RunImpact(args[1..], jsonOptions),
     "deps" => QueryCommandRunner.RunDeps(args[1..], jsonOptions),
     "unused" => QueryCommandRunner.RunUnused(args[1..], jsonOptions),
     "hotspots" => QueryCommandRunner.RunHotspots(args[1..], jsonOptions),

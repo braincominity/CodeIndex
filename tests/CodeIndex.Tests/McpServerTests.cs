@@ -206,10 +206,11 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(21, tools.Count);
+        Assert.Equal(22, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
+        Assert.Contains("impact_analysis", names);
         Assert.Contains("definition", names);
         Assert.Contains("references", names);
         Assert.Contains("callers", names);

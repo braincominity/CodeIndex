@@ -206,6 +206,25 @@ public partial class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "impact_analysis",
+                "Compute the transitive caller chain for a symbol — the ripple effect of changing it. Returns callers at each depth level via BFS. / シンボルの推移的呼び出しチェーン（変更の波及効果）をBFSで算出。各深さレベルの呼び出し元を返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name to analyze impact for" },
+                        ["maxDepth"] = new JsonObject { ["type"] = "integer", ["description"] = "Max BFS depth (default: 5)", ["default"] = 5 },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max total callers to return (default: 50)", ["default"] = 50 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "status",
                 "Get database statistics: file count, chunk count, symbol count, reference count, and language breakdown. / DB統計情報を取得：ファイル数、チャンク数、シンボル数、参照数、言語別内訳。",
                 new JsonObject

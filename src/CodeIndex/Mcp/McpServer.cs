@@ -188,6 +188,7 @@ public partial class McpServer
                 "outline" => ExecuteOutline(id, args),
                 "batch_query" => ExecuteBatchQuery(id, args),
                 "deps" => ExecuteDeps(id, args),
+                "impact_analysis" => ExecuteImpactAnalysis(id, args),
                 "languages" => ExecuteLanguages(id),
                 "validate" => ExecuteValidate(id, args),
                 "unused_symbols" => ExecuteUnusedSymbols(id, args),

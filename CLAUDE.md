@@ -35,6 +35,7 @@ cdidx status [--json]
 cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx impact <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>] [--json]
 cdidx languages [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -272,6 +273,7 @@ cdidx status [--json]
 cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse] [--json]
 cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx impact <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>] [--json]
 cdidx languages [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）

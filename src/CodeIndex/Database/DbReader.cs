@@ -319,6 +319,61 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Compute transitive callers of a symbol using BFS.
+    /// Returns each unique caller in the call chain with its depth from the root symbol.
+    /// BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
+    /// </summary>
+    public List<ImpactResult> GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        var results = new List<ImpactResult>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<(string Symbol, int Depth)>();
+        queue.Enqueue((symbolName, 0));
+        visited.Add(symbolName);
+
+        while (queue.Count > 0 && results.Count < limit)
+        {
+            var (currentSymbol, depth) = queue.Dequeue();
+            if (depth > maxDepth)
+                break;
+
+            // Find direct callers of this symbol / このシンボルの直接の呼び出し元を探す
+            var callers = GetCallers(currentSymbol, limit: 100, lang: lang, pathPattern: pathPattern,
+                excludePathPatterns: excludePathPatterns, excludeTests: excludeTests);
+
+            foreach (var caller in callers)
+            {
+                if (results.Count >= limit)
+                    break;
+
+                var callerName = caller.CallerName ?? "<top-level>";
+                var key = $"{caller.Path}:{callerName}";
+
+                if (!visited.Add(key))
+                    continue;
+
+                results.Add(new ImpactResult
+                {
+                    Path = caller.Path,
+                    Lang = caller.Lang,
+                    CallerKind = caller.CallerKind,
+                    CallerName = caller.CallerName,
+                    CalleeName = caller.CalleeName,
+                    Depth = depth + 1,
+                    FirstLine = caller.FirstLine,
+                    ReferenceCount = caller.ReferenceCount,
+                });
+
+                // Enqueue for further BFS if within depth limit / 深さ制限内ならさらにBFS
+                if (caller.CallerName != null && depth + 1 < maxDepth)
+                    queue.Enqueue((caller.CallerName, depth + 1));
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>

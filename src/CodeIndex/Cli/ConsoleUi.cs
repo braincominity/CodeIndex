@@ -315,6 +315,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
         Console.WriteLine("  cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx impact <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]");
         Console.WriteLine("  cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]");
         Console.WriteLine("  cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
@@ -336,6 +337,7 @@ public static class ConsoleUi
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings)");
+        Console.WriteLine("  impact <query>             Show transitive callers (ripple effect of changing a symbol)");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
         Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
         Console.WriteLine("  hotspots                   Find most-referenced symbols (high-impact code)");
@@ -447,7 +449,7 @@ public static class ConsoleUi
     [
         "index", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "unused", "hotspots", "languages", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp",
     ];
 
     /// <summary>

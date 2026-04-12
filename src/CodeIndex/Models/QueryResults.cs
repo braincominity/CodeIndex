@@ -96,6 +96,18 @@ public class CalleeResult
     public int ReferenceCount { get; set; }
 }
 
+public class ImpactResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string? CallerKind { get; set; }
+    public string? CallerName { get; set; }
+    public string CalleeName { get; set; } = string.Empty;
+    public int Depth { get; set; }
+    public int FirstLine { get; set; }
+    public int ReferenceCount { get; set; }
+}
+
 public class StatusResult
 {
     public long Files { get; set; }

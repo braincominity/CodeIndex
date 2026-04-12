@@ -663,6 +663,53 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (string.IsNullOrWhiteSpace(options.Query))
+        {
+            Console.Error.WriteLine("Error: impact requires a symbol query argument");
+            Console.Error.WriteLine("Usage: cdidx impact <symbol> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
+            var results = reader.GetTransitiveCallers(options.Query, maxDepth, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                {
+                    Console.Error.WriteLine("No impact found.");
+                    WriteGraphSupportHint(options.Lang);
+                }
+                return CommandExitCodes.NotFound;
+            }
+
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { query = options.Query, count = results.Count, max_depth = maxDepth, callers = results }, jsonOptions));
+            }
+            else
+            {
+                var grouped = results.GroupBy(r => r.Depth).OrderBy(g => g.Key);
+                foreach (var group in grouped)
+                {
+                    Console.Error.WriteLine($"--- Depth {group.Key} ---");
+                    foreach (var r in group)
+                    {
+                        var indent = new string(' ', (r.Depth - 1) * 2);
+                        Console.WriteLine($"  {indent}{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                    }
+                }
+                var fileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"\n({results.Count} callers across {fileCount} files, max depth {maxDepth})");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -924,6 +971,9 @@ public static class QueryCommandRunner
                     break;
                 case "--exact":
                     exact = true;
+                    break;
+                case "--depth" when i + 1 < args.Length:
+                    contextAfter = ParseNonNegativeInt(args[++i], "--depth"); // reused as depth for impact / impact用に再利用
                     break;
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
