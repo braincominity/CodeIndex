@@ -798,4 +798,30 @@ public class DbReaderTests : IDisposable
         Assert.Equal(5, sym.StartLine);
         Assert.Equal(5, sym.EndLine);
     }
+
+    [Fact]
+    public void GetUnusedSymbols_NullStartEndLine_DoesNotCrash()
+    {
+        // Regression: #49 — legacy indexes can have NULL start_line/end_line on symbol rows.
+        // cdidx unused crashed with "The data is NULL at ordinal 5" before the COALESCE fix.
+        // リグレッション: #49 — 古いインデックスは symbols 行の start_line/end_line が NULL になりうる。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_null.cs", Lang = "csharp", Size = 100, Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"INSERT INTO symbols (file_id, kind, name, line, start_line, end_line)
+                            VALUES (@fid, 'function', 'Orphan', 7, NULL, NULL)";
+        cmd.Parameters.AddWithValue("@fid", fileId);
+        cmd.ExecuteNonQuery();
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: null,
+            pathPattern: null, excludePathPatterns: null, excludeTests: false);
+
+        var sym = Assert.Single(unused, s => s.Name == "Orphan");
+        Assert.Equal(7, sym.Line);
+        Assert.Equal(7, sym.StartLine);
+        Assert.Equal(7, sym.EndLine);
+    }
 }
