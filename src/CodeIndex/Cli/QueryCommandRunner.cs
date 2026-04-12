@@ -1069,12 +1069,23 @@ public static class QueryCommandRunner
             Console.Error.WriteLine($"Hint: '{lang}' not found in index. Available: {string.Join(", ", status.Languages.Keys.OrderBy(l => l))}");
     }
 
+    // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
+    private static readonly string[] AllValidKinds =
+        ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct"];
+
     private static void WriteKindHint(string? kind, DbReader reader)
     {
         if (kind == null) return;
-        var validKinds = reader.GetDistinctKinds();
-        if (validKinds.Count > 0 && !validKinds.Contains(kind))
-            Console.Error.WriteLine($"Hint: '{kind}' is not a known kind. Available: {string.Join(", ", validKinds)}");
+        if (!AllValidKinds.Contains(kind))
+        {
+            Console.Error.WriteLine($"Hint: '{kind}' is not a known kind. Available: {string.Join(", ", AllValidKinds)}");
+            return;
+        }
+        // Kind is valid but not found in this index — hint that no symbols of this kind exist
+        // 種別は有効だがインデックスに存在しない場合のヒント
+        var existingKinds = reader.GetDistinctKinds();
+        if (!existingKinds.Contains(kind))
+            Console.Error.WriteLine($"Hint: no '{kind}' symbols in the index. Indexed kinds: {string.Join(", ", existingKinds)}");
     }
 
     private static void WriteGraphSupportHint(string? lang)
