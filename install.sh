@@ -171,23 +171,42 @@ download_and_install() {
     cp "${extract_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
-    # Install runtime assets alongside the binary.
+    # Install runtime assets alongside the binary. Fail fast if any required
+    # asset is missing rather than silently installing a partially broken
+    # binary that will crash on first use.
     # - cdidx loads version.json via AppContext.BaseDirectory (the binary's dir),
     #   so without it `cdidx --version` reports v0.0.0.
     # - The native SQLite library (libe_sqlite3.so on Linux, libe_sqlite3.dylib
     #   on macOS) must live next to the binary for P/Invoke to resolve; without
     #   it every command crashes with DllNotFoundException at startup.
-    # ランタイム資産をバイナリの隣へ配置する。
+    # Required assets are OS-specific, so we match on $OS_NAME instead of
+    # "copy whatever happens to be in the archive". This keeps the installer
+    # compatible with bash 3.2 (the default /bin/bash on macOS) — no arrays,
+    # no `mapfile`, no `find` — and works for all currently published tarballs.
+    # ランタイム資産をバイナリの隣へ配置する。必須資産が欠落している場合は、
+    # 部分的に壊れたインストールを黙って進めず即時失敗させる（起動直後の
+    # クラッシュを防ぐため）。
     # - cdidx は AppContext.BaseDirectory（バイナリのディレクトリ）から
     #   version.json を読むため、これが無いと --version が v0.0.0 になる。
     # - ネイティブ SQLite ライブラリ（Linux は libe_sqlite3.so、macOS は
     #   libe_sqlite3.dylib）は P/Invoke 解決のためバイナリの隣に必要で、
     #   無いと起動直後に DllNotFoundException で全コマンドが落ちる。
+    # 必須資産は OS ごとに異なるため「アーカイブにあるものを何でも」ではなく
+    # $OS_NAME で分岐する。macOS の既定 /bin/bash 3.2 でも動くよう、配列・
+    # `mapfile`・`find` は使わず、現行リリースの tarball 配置前提で実装する。
+    local required_assets
+    case "$OS_NAME" in
+        linux) required_assets="version.json libe_sqlite3.so"   ;;
+        osx)   required_assets="version.json libe_sqlite3.dylib" ;;
+        *)     error "Internal error: unknown OS_NAME '$OS_NAME' for asset selection." ;;
+    esac
+
     local asset
-    for asset in version.json libe_sqlite3.so libe_sqlite3.dylib; do
-        if [ -f "${extract_dir}/${asset}" ]; then
-            cp "${extract_dir}/${asset}" "${INSTALL_DIR}/${asset}"
+    for asset in $required_assets; do
+        if [ ! -f "${extract_dir}/${asset}" ]; then
+            error "Required runtime asset missing from release tarball: ${asset}. Refusing to install a partially broken binary. Please report this at https://github.com/${REPO}/issues."
         fi
+        cp "${extract_dir}/${asset}" "${INSTALL_DIR}/${asset}"
     done
 
     info "Installed cdidx to ${INSTALL_DIR}/${BINARY_NAME}"
