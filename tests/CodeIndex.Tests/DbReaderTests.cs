@@ -798,4 +798,35 @@ public class DbReaderTests : IDisposable
         Assert.Equal(5, sym.StartLine);
         Assert.Equal(5, sym.EndLine);
     }
+
+    [Fact]
+    public void GetUnusedSymbols_HandlesNullStartAndEndLine()
+    {
+        // Regression for #58 — older DBs migrated in place can have NULL start_line/end_line.
+        // `cdidx unused` previously crashed with "The data is NULL at ordinal 5".
+        // #58の回帰 — その場移行された古いDBはstart_line/end_lineがNULLになりうる。
+        // 以前は`cdidx unused`が「ordinal 5でNULL」でクラッシュしていた。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/legacy.cs", Lang = "csharp", Size = 50, Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 10,
+            Content = "class Legacy {}",
+        }]);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"INSERT INTO symbols (file_id, kind, name, line, start_line, end_line)
+                            VALUES (@fid, 'class', 'OrphanedClass', 7, NULL, NULL)";
+        cmd.Parameters.AddWithValue("@fid", fileId);
+        cmd.ExecuteNonQuery();
+
+        var results = _reader.GetUnusedSymbols(limit: 50, kind: null, lang: "csharp", pathPattern: null, excludePathPatterns: null, excludeTests: false);
+
+        var orphan = Assert.Single(results, s => s.Name == "OrphanedClass");
+        Assert.Equal(7, orphan.Line);
+        Assert.Equal(7, orphan.StartLine);
+        Assert.Equal(7, orphan.EndLine);
+    }
 }

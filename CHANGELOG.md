@@ -573,6 +573,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### 修正
+- **古いインデックスで `start_line`/`end_line` が NULL のときに `unused` がクラッシュしなくなった** — これらのカラムが存在しなかった頃にインデックスされたシンボルは、その場移行後も `start_line` / `end_line` が NULL のまま残ることがある。`GetUnusedSymbols` は ordinal 5 と 6 を非 NULL 前提で読んでいたため、正常な DB でも `cdidx unused` が `SqliteException: The data is NULL at ordinal 5` を投げていた。既に symbols/definition 経路で入っているガードに合わせ、NULL のときは `line` にフォールバックするよう修正。対象: `DbSymbolReader.cs`、`DbReaderTests.cs`。
+
 ### [1.8.1] - 2026-04-13
 
 #### 追加
