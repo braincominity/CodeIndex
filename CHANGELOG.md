@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **Multi-value `--path` filter** — `search`/`definition`/`references`/`callers`/`callees`/`symbols`/`files`/`map`/`inspect`/`unused`/`hotspots`/`deps` now accept repeated `--path` values, combined with OR semantics. MCP tools also accept an array for `"path"`. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Database/`, `src/CodeIndex/Mcp/`. Closes #50.
+
 ### [1.8.1] - 2026-04-13
 
 #### Added
@@ -572,6 +575,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **複数値対応の `--path` フィルタ** — `search`/`definition`/`references`/`callers`/`callees`/`symbols`/`files`/`map`/`inspect`/`unused`/`hotspots`/`deps` が `--path` の繰り返し指定を受け付け、複数値は OR で結合されるようになった。MCP ツールも `"path"` に配列を受け付ける。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Database/`, `src/CodeIndex/Mcp/`。Closes #50.
 
 ### [1.8.1] - 2026-04-13
 

@@ -75,6 +75,48 @@ public partial class McpServer
             : [];
     }
 
+    /// <summary>
+    /// Read a path filter argument that accepts either a scalar string or an array of strings.
+    /// Returns null when the value is missing or empty so downstream SQL omits the filter.
+    /// スカラー文字列と文字列配列の両方を受け付けるパスフィルタを読み取る。
+    /// 値が無い/空なら null を返し下流 SQL でフィルタを省略する。
+    /// </summary>
+    private static List<string>? ReadPathList(JsonNode? args, string propertyName)
+    {
+        var node = args?[propertyName];
+        if (node is null)
+            return null;
+        if (node is JsonArray array)
+        {
+            var list = array.Select(n => n?.GetValue<string>())
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Cast<string>()
+                .ToList();
+            return list.Count > 0 ? list : null;
+        }
+        // Scalar string (backward compat) / スカラー文字列（後方互換）
+        var value = node.GetValue<string>();
+        return string.IsNullOrWhiteSpace(value) ? null : new List<string> { value };
+    }
+
+    /// <summary>
+    /// Serialize a path filter list back into a JSON echo value.
+    /// Null/empty → JSON null; single element → string; multiple → array.
+    /// パスフィルタリストをJSONエコー値として直列化。
+    /// null/空 → JSON null、1要素 → 文字列、複数 → 配列。
+    /// </summary>
+    private static JsonNode? PathEcho(IReadOnlyList<string>? paths)
+    {
+        if (paths is null || paths.Count == 0)
+            return null;
+        if (paths.Count == 1)
+            return JsonValue.Create(paths[0]);
+        var arr = new JsonArray();
+        foreach (var p in paths)
+            arr.Add(JsonValue.Create(p));
+        return arr;
+    }
+
     private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported)
     {
         if (count > 0)
@@ -98,7 +140,7 @@ public partial class McpServer
         var lang = args?["lang"]?.GetValue<string>();
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -115,7 +157,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.Search(query, limit, lang, rawQuery, pathPattern, excludePaths, excludeTests, deduplicate, since, exact);
+            var results = reader.Search(query, limit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -123,7 +165,7 @@ public partial class McpServer
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
                     ["snippetLines"] = snippetLines,
-                    ["path"] = pathPattern,
+                    ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
@@ -137,7 +179,7 @@ public partial class McpServer
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
                 ["snippetLines"] = snippetLines,
-                ["path"] = pathPattern,
+                ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact)), _jsonOptions)
@@ -158,7 +200,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -168,7 +210,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchSymbols(query, limit, kind, lang, pathPattern, excludePaths, excludeTests, since);
+            var results = reader.SearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -176,7 +218,7 @@ public partial class McpServer
                     ["query"] = query,
                     ["kind"] = kind,
                     ["lang"] = lang,
-                    ["path"] = pathPattern,
+                    ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
@@ -190,7 +232,7 @@ public partial class McpServer
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
-                ["path"] = pathPattern,
+                ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
@@ -211,7 +253,7 @@ public partial class McpServer
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -221,14 +263,14 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPattern, excludePaths, excludeTests, since);
+            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
                 ["includeBody"] = includeBody,
-                ["path"] = pathPattern,
+                ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
@@ -252,20 +294,20 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchReferences(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
-                ["path"] = pathPattern,
+                ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
                 ["graphSupported"] = graphSupported,
@@ -292,20 +334,20 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
-                ["path"] = pathPattern,
+                ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
                 ["graphSupported"] = graphSupported,
@@ -332,20 +374,20 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPattern, excludePaths, excludeTests);
+            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
-                ["path"] = pathPattern,
+                ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
                 ["graphSupported"] = graphSupported,
@@ -368,7 +410,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var sinceStr = args?["since"]?.GetValue<string>();
@@ -383,14 +425,14 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.ListFiles(query, limit, lang, pathPattern, excludePaths, excludeTests, since);
+            var results = reader.ListFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, since);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
                 {
                     ["query"] = query,
                     ["lang"] = lang,
-                    ["path"] = pathPattern,
+                    ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
                     ["count"] = 0,
                     ["results"] = new JsonArray()
@@ -403,7 +445,7 @@ public partial class McpServer
             {
                 ["query"] = query,
                 ["lang"] = lang,
-                ["path"] = pathPattern,
+                ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
@@ -416,20 +458,20 @@ public partial class McpServer
     {
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var map = reader.GetRepoMap(limit, lang, pathPattern, excludePaths, excludeTests);
+            var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
             WorkspaceMetadataEnricher.Enrich(map, _dbPath);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             structured["limit"] = limit;
             structured["lang"] = lang;
-            structured["path"] = pathPattern;
+            structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
-            var hasFilter = pathPattern != null || excludePaths.Count > 0 || excludeTests || lang != null;
+            var hasFilter = (pathPatterns is { Count: > 0 }) || excludePaths.Count > 0 || excludeTests || lang != null;
             if (map.FileCount == 0 && hasFilter)
                 AddFreshnessHint(structured, reader);
             var summary = map.FileCount > 0
@@ -450,17 +492,17 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var lang = args?["lang"]?.GetValue<string>();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPattern, excludePaths, excludeTests);
+            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests);
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             structured["lang"] = lang;
-            structured["path"] = pathPattern;
+            structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
             return CreateToolResult(id, "Symbol analysis returned.", structured);
         });
@@ -637,14 +679,14 @@ public partial class McpServer
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var lang = args?["lang"]?.GetValue<string>();
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetFileDependencies(limit, lang, pathPattern, excludePaths, excludeTests, reverse);
+            var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
@@ -668,13 +710,13 @@ public partial class McpServer
         var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 1, 10);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var lang = args?["lang"]?.GetValue<string>();
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var (results, truncated) = reader.GetTransitiveCallers(query, maxDepth, limit, lang, pathPattern, excludePaths, excludeTests);
+            var (results, truncated) = reader.GetTransitiveCallers(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
             var fileCount = results.Select(r => r.Path).Distinct().Count();
             var maxActualDepth = results.Count > 0 ? results.Max(r => r.Depth) : 0;
             var payload = new JsonObject
@@ -705,11 +747,11 @@ public partial class McpServer
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
     {
         var kind = args?["kind"]?.GetValue<string>();
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
 
         return WithDbReader(id, reader =>
         {
-            var issues = reader.GetIssues(kind, pathPattern);
+            var issues = reader.GetIssues(kind, pathPatterns);
             var payload = new JsonObject
             {
                 ["count"] = issues.Count,
@@ -727,13 +769,13 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetSymbolHotspots(limit, kind, lang, pathPattern, excludePaths, excludeTests);
+            var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var items = results.Select(r => new
             {
                 name = r.Symbol.Name,
@@ -763,7 +805,7 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
-        var pathPattern = args?["path"]?.GetValue<string>();
+        var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
@@ -773,7 +815,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetUnusedSymbols(limit, kind, lang, pathPattern, excludePaths, excludeTests);
+            var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,

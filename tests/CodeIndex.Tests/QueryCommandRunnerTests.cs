@@ -46,7 +46,7 @@ public class QueryCommandRunnerTests
         Assert.Equal("RunSearch", options.Query);
         Assert.True(options.RawFts);
         Assert.True(options.IncludeBody);
-        Assert.Equal("src/**", options.PathPattern);
+        Assert.Equal(new[] { "src/**" }, options.PathPatterns);
         Assert.Equal(["tests/**", "docs/**"], options.ExcludePaths);
         Assert.True(options.ExcludeTests);
         Assert.Equal(12, options.StartLine);

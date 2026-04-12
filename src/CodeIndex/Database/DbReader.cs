@@ -115,7 +115,7 @@ public partial class DbReader
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
     /// </summary>
-    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    public List<FileResult> ListFiles(string? query = null, int limit = 20, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -135,7 +135,7 @@ public partial class DbReader
             sql += " AND f.lang = @lang";
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -145,7 +145,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<FileResult>();
@@ -172,7 +172,7 @@ public partial class DbReader
     /// Search indexed references such as call sites.
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
-    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -190,7 +190,7 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         if (lang != null)
             sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -209,7 +209,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<ReferenceResult>();
@@ -236,7 +236,7 @@ public partial class DbReader
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
-    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -255,7 +255,7 @@ public partial class DbReader
         sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -265,7 +265,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<CallerResult>();
@@ -290,7 +290,7 @@ public partial class DbReader
     /// Find callees used by a caller/container symbol.
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
     /// </summary>
-    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -309,7 +309,7 @@ public partial class DbReader
         sql += " AND r.container_name LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -319,7 +319,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<CalleeResult>();
@@ -373,7 +373,7 @@ public partial class DbReader
     /// BFS 走査用の完全一致 caller 検索。行ごとの case sensitivity 判定、
     /// かつ graph 対応言語のみにフィルタ（アップグレード前 DB の古いエッジ漏れを防止）。
     /// </summary>
-    private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -400,14 +400,14 @@ public partial class DbReader
               {nameCondition}";
         if (lang != null)
             sql += " AND f.lang = @lang";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, reference_count DESC, f.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
         cmd.Parameters.AddWithValue("@offset", offset);
 
@@ -436,7 +436,7 @@ public partial class DbReader
     /// 完全一致の BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
     /// 結果が切り詰められた場合は Truncated フラグで通知する。
     /// </summary>
-    public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         // Resolve the symbol name through definitions first so case-mismatched queries
         // like "run" find the actual "Run" symbol. Falls back to user input if not found.
@@ -471,7 +471,7 @@ public partial class DbReader
             while (results.Count < limit && fetchIterations < maxFetchIterations)
             {
                 fetchIterations++;
-                var page = GetCallersExact(currentSymbol, pageSize, offset, lang, pathPattern, excludePathPatterns, excludeTests);
+                var page = GetCallersExact(currentSymbol, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests);
 
                 if (page.Count == 0)
                     break; // No more callers for this symbol / このシンボルの caller は尽きた
@@ -680,10 +680,10 @@ public partial class DbReader
     /// Delegate to RepoMapBuilder for repo-level overview generation.
     /// RepoMapBuilderに委譲してリポジトリ俯瞰情報を生成する。
     /// </summary>
-    public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         var builder = new RepoMapBuilder(_conn, _fileColumns);
-        return builder.Build(limit, lang, pathPattern, excludePathPatterns, excludeTests, GetWorkspaceFreshness);
+        return builder.Build(limit, lang, pathPatterns, excludePathPatterns, excludeTests, GetWorkspaceFreshness);
     }
 
     private long ExecuteScalar(string sql)
@@ -766,7 +766,7 @@ public partial class DbReader
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
     /// </summary>
-    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
+    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
     {
         using var cmd = _conn.CreateCommand();
         // Use a subquery to find distinct (reference_file, definition_file, symbol) triples,
@@ -785,8 +785,14 @@ public partial class DbReader
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
-        if (pathPattern != null)
-            innerSql += $" AND {filterAlias}.path LIKE @pathPattern ESCAPE '\\'";
+        if (pathPatterns is { Count: > 0 })
+        {
+            // OR together multiple --path values / 複数の --path 値を OR で結合
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{filterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            innerSql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
         if (excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
@@ -805,8 +811,11 @@ public partial class DbReader
         cmd.CommandText = sql;
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        if (pathPattern != null)
-            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+        if (pathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < pathPatterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@pathPattern{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+        }
         if (excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
@@ -829,10 +838,16 @@ public partial class DbReader
         return results;
     }
 
-    internal static void AppendPathFilters(ref string sql, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    internal static void AppendPathFilters(ref string sql, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
-        if (pathPattern != null)
-            sql += " AND f.path LIKE @pathPattern ESCAPE '\\'";
+        if (pathPatterns != null && pathPatterns.Count > 0)
+        {
+            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
 
         if (excludePathPatterns != null)
         {
@@ -844,10 +859,13 @@ public partial class DbReader
             sql += $" AND NOT {TestPathCondition}";
     }
 
-    internal static void AddPathFilterParameters(SqliteCommand cmd, string? pathPattern, IReadOnlyList<string>? excludePathPatterns)
+    internal static void AddPathFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns)
     {
-        if (pathPattern != null)
-            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+        if (pathPatterns != null)
+        {
+            for (int i = 0; i < pathPatterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@pathPattern{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+        }
 
         if (excludePathPatterns != null)
         {
@@ -878,7 +896,7 @@ public partial class DbReader
     /// Get all file validation issues from the index.
     /// インデックスから全ファイル検証問題を取得する。
     /// </summary>
-    public List<Models.FileIssue> GetIssues(string? kind = null, string? pathPattern = null)
+    public List<Models.FileIssue> GetIssues(string? kind = null, IReadOnlyList<string>? pathPatterns = null)
     {
         using var cmd = _conn.CreateCommand();
         var sql = @"
@@ -888,15 +906,24 @@ public partial class DbReader
             WHERE 1=1";
         if (kind != null)
             sql += " AND i.kind = @kind";
-        if (pathPattern != null)
-            sql += " AND f.path LIKE @pathPattern ESCAPE '\\'";
+        if (pathPatterns is { Count: > 0 })
+        {
+            // OR multiple path filters / 複数パスフィルタを OR で結合
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
         sql += " ORDER BY f.path, i.line";
 
         cmd.CommandText = sql;
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
-        if (pathPattern != null)
-            cmd.Parameters.AddWithValue("@pathPattern", $"%{EscapeLikeQuery(pathPattern)}%");
+        if (pathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < pathPatterns.Count; i++)
+                cmd.Parameters.AddWithValue($"@pathPattern{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+        }
 
         var results = new List<Models.FileIssue>();
         using var reader = cmd.ExecuteReader();
