@@ -47,7 +47,7 @@ public partial class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -72,6 +72,8 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
         if (lang != null)
             sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
@@ -82,6 +84,8 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
