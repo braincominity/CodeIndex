@@ -1,6 +1,6 @@
 # Maintainers & Forkers
 
-> **[日本語版はこちら / Japanese version](#メンテナーとフォーク利用者向け)**
+> **[日本語版はこちら / Japanese version](#maintainer-と-forker-向け)**
 
 This index lists the documents and sections that are **only relevant to the
 repository owner, maintainers, or forkers** — not to end users who simply
@@ -37,9 +37,9 @@ end-user documentation surface* so that:
 
 ---
 
-# メンテナーとフォーク利用者向け
+# Maintainer と forker 向け
 
-このページは、**このリポジトリのオーナー・メンテナー・フォーク利用者にのみ
+このページは、**このリポジトリの Maintainer または forker にのみ
 関係する**ドキュメントとセクションの索引です。単に自分のコードベースを
 `cdidx index` したいエンドユーザーには不要な情報です。リリース、CI と
 インストールの裏側、およびこのリポジトリ固有の AI 駆動自己改善フローを扱います。
@@ -49,12 +49,12 @@ end-user documentation surface* so that:
 
 ## このページが扱う範囲
 
-- **cdidx の新バージョンリリース。** リリースの push 権限を持つのはオーナーだけですが、フォークで自分のリリースを切る人にも同じ手順が必要です。
+- **cdidx の新バージョンリリース。** リリースの push 権限を持つのは Maintainer だけですが、fork して自分のリリースを切る人にも同じ手順が必要です。
   → [README.md → 「新バージョンのリリース」](README.md#新バージョンのリリース)
-- **.NET SDK のないコンテナから Claude Code クラウドセッションをブートストラップする。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code を走らせたい人（オーナーのワークフロー。フォーク利用者も同じプロンプトを流用可）に限って有用。
+- **.NET SDK のないコンテナから Claude Code Cloud セッションを bootstrap する。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code を走らせたい人（Maintainer のワークフロー。forker も同じプロンプトを流用可）に限って有用。
   → [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) — 初回投入用のプロンプト。
-  → [DEVELOPER_GUIDE.md → 「クラウド Claude Code ブートストラップ（.NET SDK なし）」](DEVELOPER_GUIDE.md#クラウド-claude-code-ブートストラップnet-sdk-なし) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。
-- **AI 駆動の自己改善ループ。** メンテナーが走らせる Claude Code セッションが cdidx 自身を改善するときの運用契約。エンドユーザーには不要。フォーク利用者は改変して使える。
+  → [DEVELOPER_GUIDE.md → 「Cloud Claude Code bootstrap（.NET SDK なし）」](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrapnet-sdk-なし) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。
+- **AI 駆動の自己改善ループ。** Maintainer が走らせる Claude Code セッションが cdidx 自身を改善するときの運用契約。エンドユーザーには不要。forker は改変して使える。
   → [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
 
 ## なぜ分離するのか
@@ -64,5 +64,5 @@ end-user documentation surface* so that:
 立てる役割を担います:
 
 - エンドユーザーがリリース内部や CI 内部の情報を読んで時間を無駄にしない。
-- メンテナーとフォーク利用者に、運用系ドキュメントの単一の入口を提供する。
+- Maintainer と forker に、運用系ドキュメントの単一の入口を提供する。
 - 今後 maintainer 向けドキュメントを足すときの、明示的なリンク元になる。

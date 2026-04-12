@@ -1,13 +1,13 @@
 # Cloud Bootstrap Prompt
 
 > **Maintainers / forkers only** — see [MAINTAINERS.md](MAINTAINERS.md). End users running cdidx on their own codebase don't need this file.
-> **メンテナー・フォーク利用者向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。自分のコードベースに cdidx を使うだけのエンドユーザーには不要です。
+> **Maintainer・forker 向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。自分のコードベースに cdidx を使うだけのエンドユーザーには不要です。
 
 Kickoff prompt for Claude Code (cloud / claude.ai/code) sessions that work on
 this repo without a local .NET SDK. Paste the English block or the Japanese
 block — not both — into your session's first message.
 
-クラウド側の Claude Code セッション（.NET SDK が無い前提）に最初に投げる
+Cloud 側の Claude Code セッション（.NET SDK が無い前提）に最初に投げる
 プロンプトです。英語ブロックか日本語ブロックの**どちらか一方**を貼り付けて
 ください。両方は貼らないでください。
 

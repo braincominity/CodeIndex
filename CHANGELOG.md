@@ -569,10 +569,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 追加
-- **`MAINTAINERS.md`** — リリース手順、クラウドセッションのブートストラップ、自己改善ループなど、メンテナーおよびフォーク利用者にのみ関係するドキュメント／セクションをまとめた単一の入口。エンドユーザーはここを読み飛ばせるよう、対象セクション冒頭に「メンテナー・フォーク利用者向け」注記を1行ずつ追加。対象: `MAINTAINERS.md`、`README.md`、`DEVELOPER_GUIDE.md`、`CLOUD_BOOTSTRAP_PROMPT.md`、`SELF_IMPROVEMENT.md`。
-- **`CLOUD_BOOTSTRAP_PROMPT.md`** — .NET SDK の無いクラウド Claude Code セッション向けに、英日併記でそのまま貼れるブートストラッププロンプト。ワンライナーでのインストール、クリーンインストール直後のスモーク手順、`--json` / trimming に起因する既知の注意点、安全に改善できる領域の境界を記載。対象: `CLOUD_BOOTSTRAP_PROMPT.md`。
+- **`MAINTAINERS.md`** — リリース手順、Cloud セッションの bootstrap、自己改善ループなど、Maintainer および forker にのみ関係するドキュメント／セクションをまとめた単一の入口。エンドユーザーはここを読み飛ばせるよう、対象セクション冒頭に「Maintainer・forker 向け」注記を1行ずつ追加。対象: `MAINTAINERS.md`、`README.md`、`DEVELOPER_GUIDE.md`、`CLOUD_BOOTSTRAP_PROMPT.md`、`SELF_IMPROVEMENT.md`。
+- **`CLOUD_BOOTSTRAP_PROMPT.md`** — .NET SDK の無い Claude Code Cloud セッション向けに、英日併記でそのまま貼れる bootstrap プロンプト。ワンライナーでのインストール、クリーンインストール直後のスモーク手順、`--json` / trimming に起因する既知の注意点、安全に改善できる領域の境界を記載。対象: `CLOUD_BOOTSTRAP_PROMPT.md`。
 - **README「新バージョンのリリース」セクション** — バージョン文字列の真実が `version.json` 1箇所であること、ビルド時に `csproj` の `<Version>` に流れ、実行時に `ConsoleUi.LoadVersion()` が読むこと、C# 側にハードコードされたバージョン定数が無いこと、`version.json` 更新 → タグ → push のリリース手順を明文化。対象: `README.md`。
-- **DEVELOPER_GUIDE「クラウド Claude Code ブートストラップ（.NET SDK なし）」セクション** — インストール時の4つの資産（`cdidx`、`libe_sqlite3.so`/`.dylib`、`version.json`、`sha256sums.txt`）、install.sh の各フェーズ、`ConsoleUi.LoadVersion` のフォールバック、`SqliteConnection` → `libe_sqlite3` の P/Invoke ロード順、`PublishTrimmed` 下での `--json` と MCP の差、症状→原因→対処の診断表を詳述。Mermaid 図5点付き。英語セクションと日本語セクションの両方に追記。対象: `DEVELOPER_GUIDE.md`。
+- **DEVELOPER_GUIDE「Cloud Claude Code bootstrap（.NET SDK なし）」セクション** — インストール時の4つの資産（`cdidx`、`libe_sqlite3.so`/`.dylib`、`version.json`、`sha256sums.txt`）、install.sh の各フェーズ、`ConsoleUi.LoadVersion` のフォールバック、`SqliteConnection` → `libe_sqlite3` の P/Invoke ロード順、`PublishTrimmed` 下での `--json` と MCP の差、症状→原因→対処の診断表を詳述。Mermaid 図5点付き。英語セクションと日本語セクションの両方に追記。対象: `DEVELOPER_GUIDE.md`。
 
 #### 修正
 - **`install.sh` が SQLite ネイティブライブラリと `version.json` も配置するように修正** — リリース tarball には `cdidx`、`libe_sqlite3.so`（macOS では `.dylib`）、`version.json` が含まれているが、従来のインストーラはバイナリのみをコピーしていた。このためワンライナーでのクリーンインストール直後は `cdidx --version` が `v0.0.0` を返し、全コマンドが `DllNotFoundException: Unable to load shared library 'e_sqlite3'` でクラッシュしていた。インストーラが専用サブディレクトリに展開し、バイナリに加えて隣接ランタイム資産（`version.json`、`libe_sqlite3.so`、`libe_sqlite3.dylib`）も `INSTALL_DIR` にコピーするよう修正。対象: `install.sh`。

@@ -644,7 +644,10 @@ What `install.sh` does, in order (see `install.sh`):
    does not ship that RID.
 2. **Resolve version.** With no argument, it hits the GitHub API
    (`/repos/Widthdom/CodeIndex/releases/latest`) and greps `tag_name`.
-   With an argument it accepts `v1.8.0` or `1.8.0`. Failure produces a
+   With an argument it accepts either the `v`-prefixed or bare form
+   (e.g. `v1.8.0` or `1.8.0` — the version string itself is not
+   hard-coded in `install.sh`; `version.json` at the repo root and the
+   GitHub Releases tag are the sources of truth). Failure produces a
    single actionable error, not a stack trace.
 3. **Short-circuit if already installed.** If `INSTALL_DIR/cdidx --version`
    already reports the target version, exit 0. This relies on
@@ -685,7 +688,7 @@ sequenceDiagram
     S->>S: detect_platform (uname)
     Note over S: reject musl / osx-x64 early
     S->>API: GET /releases/latest
-    API-->>S: tag_name (e.g. v1.8.0)
+    API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
     S->>FS: if existing cdidx --version matches → exit 0
     S->>TMP: mkdir, trap cleanup
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
@@ -746,7 +749,7 @@ This exercises the entire stack end-to-end.
    creates the `.cdidx/` directory.
 4. **Open SQLite.** `IndexCommandRunner` constructs
    `new DbContext(dbPath)`, which calls `new SqliteConnection(...)`.
-   **This is the moment native resolution happens.** `SqliteConnection`'s
+   **This is when the native library is resolved.** `SqliteConnection`'s
    static ctor calls `SQLitePCL.Batteries_V2.Init()`, which invokes
    `sqlite3_libversion_number()` on `SQLite3Provider_e_sqlite3`, which
    P/Invokes into `e_sqlite3`. The .NET dynamic loader on Linux searches
@@ -757,10 +760,9 @@ This exercises the entire stack end-to-end.
    Because the self-contained publish bundles `libe_sqlite3.so` into the
    publish output, the release tarball ships it, and the fixed
    `install.sh` copies it alongside the binary, the very first probe
-   succeeds. If it is missing, the error surfaces as
-   `DllNotFoundException: Unable to load shared library 'e_sqlite3'`
-   **before any user code runs** — the binary dies on the first attempt
-   to create a `SqliteConnection`.
+   succeeds. If it is missing, `DllNotFoundException: Unable to load
+   shared library 'e_sqlite3'` is thrown at `SqliteConnection`
+   construction and **the process terminates before any user code runs**.
 5. **Schema init.** `DbContext.ctor` runs `PRAGMA journal_mode=WAL`,
    `PRAGMA busy_timeout=5000`, and the `CREATE TABLE IF NOT EXISTS` /
    `CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5 (…)` /
@@ -833,7 +835,7 @@ through `DbSearchReader`. It:
    snippets with highlights.
 
 A successful snippet proves the FTS5 virtual table, the content-sync
-triggers, and the snippet formatter all line up.
+triggers, and snippet assembly via `SearchSnippetFormatter` all line up.
 
 ### Phase 5 — The MCP path: `cdidx mcp`
 
@@ -1478,11 +1480,11 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 
 - **クロスコンパイルの linux-arm64 にランタイムスモークテストがない** — `release.yml` は x64 ランナー上で `linux-arm64` をクロスコンパイルする（`dotnet publish -r linux-arm64 --self-contained`）。ランナーが ARM バイナリをネイティブ実行できないためテストはスキップされる。理想的には QEMU ベースのスモークテスト（`cdidx --version`）をリリース前に実行すべきだが、GitHub Actions の無料枠ランナーには QEMU も ARM ランナーも含まれない。QEMU セットアップステップの追加は可能だが、リリースごとに CI の複雑さと実行時間が増す。.NET のクロスコンパイルは公式サポート機能で広く使われているため、実際に壊れたアーティファクトが出るリスクは低い。将来 ARM 固有の不具合が報告された場合、`docker run --platform linux/arm64` と QEMU の組み合わせが最初の対策となる。
 
-## クラウド Claude Code ブートストラップ（.NET SDK なし）
+## Cloud Claude Code bootstrap（.NET SDK なし）
 
-> **メンテナー・フォーク利用者向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
+> **Maintainer・forker 向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
 
-このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Claude Code のクラウドセッションが、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、クラウドセッションは公開リリース体験のカナリアとなる。各層を理解することが重要である理由はここにある。
+このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Claude Code のCloud セッションが、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、Cloud セッションは公開リリース体験のカナリアとなる（「炭鉱のカナリア」に由来する比喩。ここでいうカナリアはペットとして飼われる小型の鳴鳥で、体が小さく呼吸も速いため人間より遥かに少ない量の有毒ガスで中毒症状を起こす。かつて炭鉱ではこの性質を利用し、人間より先に一酸化炭素などの有毒ガスに反応して鳴き止む・倒れるカナリアを坑内に連れて入り、作業員がまだ気付けない危険を早期に検知する生体センサーとして使っていた。そこから転じて IT では、本番のユーザーが被害を受ける前に異常を真っ先に検知する役割を指す）。各層を理解することが重要である理由はここにある。
 
 ### 構成要素
 
@@ -1535,6 +1537,8 @@ flowchart LR
 
 ### フェーズ1 — ワンライナーでのダウンロード
 
+ここでいう「ワンライナー」とは、ターミナルにコピー＆ペーストで貼り付けて Enter を押すだけで完結する、1行のシェルコマンドのこと。インストーラをダウンロードして実行する複数ステップを `curl` とパイプ `|` で1行につないでいるためこう呼ぶ（例: `curl -fsSL …/install.sh | bash` は「install.sh を取得 → そのまま bash に流し込んで実行」を1行で行っている）。
+
 プロンプトから実行されるコマンド:
 
 ```bash
@@ -1544,7 +1548,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
 1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
-2. **バージョン解決。** 引数なしなら GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて `tag_name` を grep する。引数ありなら `v1.8.0` と `1.8.0` の両方を受け付ける。失敗時はスタックトレースではなく実行可能なエラーを1行で出す。
+2. **バージョン解決。** 引数なしなら GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて `tag_name` を grep する。引数ありなら `v` プレフィックス付き・無しの両方を受け付ける（例: `v1.8.0` と `1.8.0` のどちらでも可。バージョン番号自体は `install.sh` にハードコードされておらず、リポジトリ直下の `version.json` と GitHub Releases のタグが真実の源）。失敗時はスタックトレースではなく実行可能なエラーを1行で出す。
 3. **既にインストール済みなら短絡終了。** `INSTALL_DIR/cdidx --version` が目的のバージョンを返すなら 0 終了。これは `version.json` の存在に依存する。過去の壊れたインストールは `v0.0.0` を返すためアップグレード扱いになる — これは意図した挙動。
 4. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
 5. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
@@ -1568,7 +1572,7 @@ sequenceDiagram
     S->>S: detect_platform (uname)
     Note over S: musl / osx-x64 は早期に拒否
     S->>API: GET /releases/latest
-    API-->>S: tag_name（例: v1.8.0）
+    API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
     S->>FS: 既存 cdidx --version と一致 → exit 0
     S->>TMP: mkdir、trap でクリーンアップ
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
@@ -1591,7 +1595,7 @@ sequenceDiagram
 3. フォールバック: `AppDomain.CurrentDomain.BaseDirectory` を試す。
 4. 最終フォールバック: リテラル文字列 `"0.0.0"` を返す。
 
-インストーラが `version.json` をバイナリの隣に置き忘れると、`--version` が `cdidx v0.0.0` を返す。これは見た目の問題だけではない。同じ文字列が MCP の `serverInfo.version` や `status --json` の `version` フィールドにも使われるため、AI クライアントまで無意味なバージョンを見ることになる。壊れたインストールパスが最も目立つかたちで表面化するのがここ。
+インストーラが `version.json` をバイナリの隣に置き忘れると、`--version` が `cdidx v0.0.0` を返す。これは見た目の問題だけではない。同じ文字列が MCP の `serverInfo.version` や `status --json` の `version` フィールドにも使われるため、AI クライアントまで無意味なバージョンを見ることになる。これが、壊れたインストールパスが最も顕在化しやすい箇所である。
 
 ```mermaid
 flowchart TD
@@ -1606,18 +1610,18 @@ flowchart TD
     F --> I["cdidx --version は 'cdidx v0.0.0' を表示<br/>→ 壊れたインストールパスのシグナル"]
 ```
 
-### フェーズ3 — 初回の SQLite 接触: `cdidx .`（index）
+### フェーズ3 — SQLite を最初に呼び出すコマンド: `cdidx .`（index）
 
 これはスタック全体をエンドツーエンドで駆動する。
 
 1. **バイナリ起動。** 自己完結型ホストがマネージエントリポイント（`Program.Main`）を解決。
 2. **CLI ルーティング。** `Program.cs` が `IndexCommandRunner.Run(args, jsonOptions)` に振り分け。
 3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。
-4. **SQLite オープン。** `IndexCommandRunner` が `new DbContext(dbPath)` を構築し、内部で `new SqliteConnection(...)` が呼ばれる。**ここがネイティブ解決が起きる瞬間。** `SqliteConnection` の静的コンストラクタが `SQLitePCL.Batteries_V2.Init()` を呼び、それが `SQLite3Provider_e_sqlite3` 上で `sqlite3_libversion_number()` を起動し、`e_sqlite3` への P/Invoke に到達する。Linux の .NET 動的ローダは次の順で探す（失敗時のエラーメッセージを参照）:
+4. **SQLite オープン。** `IndexCommandRunner` が `new DbContext(dbPath)` を構築し、内部で `new SqliteConnection(...)` が呼ばれる。**ネイティブライブラリの解決はこの時点で行われる。** `SqliteConnection` の静的コンストラクタが `SQLitePCL.Batteries_V2.Init()` を呼び、それが `SQLite3Provider_e_sqlite3` 上で `sqlite3_libversion_number()` を起動し、`e_sqlite3` への P/Invoke に到達する。Linux の .NET 動的ローダは次の順で探す（失敗時のエラーメッセージを参照）:
    - `${apphost_dir}/libe_sqlite3.so`
    - `${apphost_dir}/e_sqlite3.so`（および `lib` プレフィックスなしのバリエーション）
    - 次に OS の通常の `dlopen` 検索パス（`/lib`、`/usr/lib` など）
-   自己完結型 publish は `libe_sqlite3.so` を publish 出力に同梱し、リリース tarball に含め、修正後の `install.sh` がバイナリの隣に置くため、最初のプローブで成功する。これが欠けていると、`DllNotFoundException: Unable to load shared library 'e_sqlite3'` として**ユーザーコードが走る前に**失敗する — `SqliteConnection` を作った最初の瞬間でバイナリが死ぬ。
+   自己完結型 publish は `libe_sqlite3.so` を publish 出力に同梱し、リリース tarball に含め、修正後の `install.sh` がバイナリの隣に置くため、最初のプローブで成功する。これが欠けていると、`SqliteConnection` のインスタンス生成時点で `DllNotFoundException: Unable to load shared library 'e_sqlite3'` が送出され、**ユーザーコードが実行される前にプロセスが終了する**。
 5. **スキーマ初期化。** `DbContext.ctor` が `PRAGMA journal_mode=WAL`、`PRAGMA busy_timeout=5000`、`CREATE TABLE IF NOT EXISTS` / `CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5 (…)` / トリガー DDL を実行する。成功は、ネイティブライブラリがロードできるだけでなく、FTS5 がビルドに含まれた動作する SQLite であることも証明する（SQLitePCLRaw の同梱ビルドは常に FTS5 有効）。
 6. **スキャンと書き込み。** `FileIndexer` がプロジェクトツリーを走査し、ファイルを読み、言語を検出し、チャンク分割し、シンボルと参照を抽出し、`DbWriter` がトランザクションあたり500件ずつ UPSERT する。進捗は `ConsoleUi.SetProgressTheme()` でレンダリング。
 7. **FTS optimize。** 書き込みのコミット後、`INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')` を実行。
@@ -1673,7 +1677,7 @@ sequenceDiagram
 2. パスフィルタ付きで `SELECT … FROM fts_chunks JOIN chunks …` を実行。
 3. `SearchSnippetFormatter.Format` が一致中心のコンパクトなスニペットをハイライト付きで再構成する。
 
-スニペットが返れば、FTS5 仮想テーブル、コンテンツ同期トリガー、スニペット整形器すべてが噛み合っていることが確認できる。
+スニペットが返れば、FTS5 仮想テーブル、コンテンツ同期トリガー、`SearchSnippetFormatter` によるスニペット整形までが一通り正しく連携していることが確認できる。
 
 ### フェーズ5 — MCP パス: `cdidx mcp`
 
@@ -1683,11 +1687,11 @@ sequenceDiagram
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
 - `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。
 
-MCP は独立したシリアライズ戦略を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテストとなる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
+MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
 ### なぜ `--json` は現在クラッシュする（そして MCP はしない）のか
 
-`release.yml` は `-p:PublishTrimmed=true` でビルドする。.NET 8 ではトリミングが暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない `JsonSerializer.Serialize<T>(...)` 呼び出しはすべて `InvalidOperationException: Reflection-based serialization has been disabled for this application` を投げる。`IndexCommandRunner` / `QueryCommandRunner` の CLI `--json` パスは現在リフレクションベースのシリアライズを使うため、クラッシュする。MCP パスは `JsonObject` グラフを手で組み立てて書き出しているため影響を受けない。CLI の JSON パスの修正には、`PublishTrimmed` を無効にする、`.csproj` で `JsonSerializerIsReflectionEnabledByDefault=true` を設定する、シリアライズ対象 DTO に対するソース生成 `JsonSerializerContext` クラスを追加する、のいずれかが必要。いずれもクラウドセッションでは検証できない（SDK が無い）ため、修正は保留し `CLOUD_BOOTSTRAP_PROMPT.md` に既知の注意点として記載している。
+`release.yml` は `-p:PublishTrimmed=true` でビルドする。.NET 8 ではトリミングが暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない `JsonSerializer.Serialize<T>(...)` 呼び出しはすべて `InvalidOperationException: Reflection-based serialization has been disabled for this application` を投げる。`IndexCommandRunner` / `QueryCommandRunner` の CLI `--json` パスは現在リフレクションベースのシリアライズを使うため、クラッシュする。MCP パスは `JsonObject` グラフを手で組み立てて書き出しているため影響を受けない。CLI の JSON パスの修正には、`PublishTrimmed` を無効にする、`.csproj` で `JsonSerializerIsReflectionEnabledByDefault=true` を設定する、シリアライズ対象 DTO に対するソース生成 `JsonSerializerContext` クラスを追加する、のいずれかが必要。いずれもCloud セッションでは検証できない（SDK が無い）ため、修正は保留し `CLOUD_BOOTSTRAP_PROMPT.md` に既知の注意点として記載している。
 
 ```mermaid
 flowchart TD
@@ -1716,7 +1720,7 @@ flowchart TD
 
 ### なぜこれが重要か
 
-クラウドセッションは開発ループの中で `dotnet build` にフォールバックできない唯一の環境である。壊れたインストールパスは SDK を持つ人には不可視 — 再ビルドすれば済んでしまう。ブートストラッププロンプト、スモークテスト、そしてこのセクションの存在理由は、ユーザー向けインストールフローのリグレッションをリリース後の実ユーザーでなく、次にクラウドセッションを開く人が捕まえられるようにすることにある。
+Cloud セッションは開発ループの中で `dotnet build` にフォールバックできない唯一の環境である。壊れたインストールパスは、SDK を持つ開発者には可視化されない — ローカルで再ビルドすれば済んでしまうためである。bootstrap プロンプト、スモークテスト、および本セクションを整備しているのは、ユーザー向けインストールフローにおけるリグレッションが、リリース後の実ユーザーではなく、次に Cloud セッションを開いた者によって検出されるようにすることを意図している。
 
 ## コーディング規約
 
