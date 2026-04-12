@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.8.0] - 2026-04-12
+
 #### Added
 - **Did-you-mean suggestions for unknown commands** — When a user types an unrecognized command (e.g. `cdidx serach`), cdidx now suggests the closest valid command using Levenshtein distance (threshold: 3). Affected: `Program.cs`, `ConsoleUi.cs`.
 - **One-line summary in `status` output** — `status` now includes a `summary` field with a human-readable one-liner (file/symbol/ref counts, top languages, freshness, dirty state). Shown as the first line in human-readable mode and as a JSON field for AI agents. Affected: `QueryCommandRunner.cs`, `QueryResults.cs`.
@@ -557,6 +559,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.8.0] - 2026-04-12
+
 #### 追加
 - **不明コマンドに対する「もしかして」推薦** — 認識できないコマンド（例: `cdidx serach`）が入力されたとき、Levenshtein距離（閾値: 3）で最も近い有効コマンドを提案する。対象: `Program.cs`、`ConsoleUi.cs`。
 - **`status` 出力に1行サマリー** — `status` にファイル・シンボル・参照数、主要言語、鮮度、dirty状態を含む `summary` フィールドを追加。人間向けモードでは先頭行に表示し、JSON モードでは AI エージェント向けフィールドとして出力。対象: `QueryCommandRunner.cs`、`QueryResults.cs`。
@@ -1099,7 +1103,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/Widthdom/CodeIndex/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/Widthdom/CodeIndex/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/Widthdom/CodeIndex/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Widthdom/CodeIndex/compare/v1.4.1...v1.5.0
