@@ -26,8 +26,8 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT kind, COUNT(*) FROM symbols GROUP BY kind ORDER BY COUNT(*) DESC";
         var counts = new Dictionary<string, long>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
             counts[reader.GetString(0)] = reader.GetInt64(1);
         return counts;
     }
@@ -37,8 +37,8 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT DISTINCT kind FROM symbols ORDER BY kind";
         var kinds = new List<string>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
             kinds.Add(reader.GetString(0));
         return kinds;
     }
@@ -90,8 +90,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<SymbolResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new SymbolResult
             {
@@ -199,8 +199,8 @@ public partial class DbReader
         }
 
         var results = new List<SymbolResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new SymbolResult
             {
@@ -270,9 +270,9 @@ public partial class DbReader
         string? lang = null;
         int totalLines = 0;
         long fileId = 0;
-        using (var reader = cmd.ExecuteReader())
+        using (var reader = cmd.ExecuteTrackedReader())
         {
-            if (!reader.Read())
+            if (!reader.TrackedRead())
                 return null;
             fileId = reader.GetInt64(0);
             lang = reader.IsDBNull(2) ? null : reader.GetString(2);
@@ -297,9 +297,9 @@ public partial class DbReader
         symCmd.Parameters.AddWithValue("@fileId", fileId);
 
         var symbols = new List<OutlineSymbol>();
-        using (var reader = symCmd.ExecuteReader())
+        using (var reader = symCmd.ExecuteTrackedReader())
         {
-            while (reader.Read())
+            while (reader.TrackedRead())
             {
                 symbols.Add(new OutlineSymbol
                 {
@@ -383,8 +383,8 @@ public partial class DbReader
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
 
         var results = new List<(SymbolResult, int)>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add((new SymbolResult
             {
@@ -462,8 +462,8 @@ public partial class DbReader
         AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
 
         var results = new List<SymbolResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new SymbolResult
             {

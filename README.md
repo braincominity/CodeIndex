@@ -405,6 +405,17 @@ cdidx map --path src/ --exclude-tests --json
 | `2` | Not found (no search results, missing directory) |
 | `3` | Database error |
 
+### Debugging reader errors
+
+If a query fails with a SQLite reader error such as `The data is NULL at ordinal N`, set `CDIDX_DEBUG=1` and rerun. The failing SQL, bound parameters, and the last-read row's columns will be printed to stderr so the offending record can be located. No-op when unset.
+
+Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` instead (never paste this output publicly).
+
+```bash
+CDIDX_DEBUG=1 cdidx unused            # redacted text / テキスト伏字化
+CDIDX_DEBUG=unsafe cdidx unused       # raw content, local only / 生テキスト、ローカルのみ
+```
+
 ## How it works
 
 cdidx scans your project directory, splits each source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. This means re-indexing after a branch switch only processes the files that actually differ.
@@ -1229,6 +1240,17 @@ cdidx map --path src/ --exclude-tests --json
 | `1` | 引数エラー |
 | `2` | 未検出（検索結果なし、ディレクトリ不在） |
 | `3` | データベースエラー |
+
+### reader エラーのデバッグ
+
+`The data is NULL at ordinal N` のような SQLite reader エラーでクエリが失敗した場合は、`CDIDX_DEBUG=1` を設定して再実行してください。失敗した SQL、バインド済みパラメータ、直近に読み取った行のカラムが stderr に出力されます。未設定時は何もしません。
+
+テキスト値（チャンクの `content`、`context`、パス、シグネチャ、文字列パラメータ）は**既定で伏字化**され、長さと SHA256 先頭のみを出力します。Issue に貼っても索引済みソースが漏れません。数値・カラム名・NULL マーカー・SQL 本文はそのまま出力されます。ローカルでの調査で生テキストが必要な場合は `CDIDX_DEBUG=unsafe` を指定してください（公開の場には貼らないこと）。
+
+```bash
+CDIDX_DEBUG=1 cdidx unused            # テキスト伏字化
+CDIDX_DEBUG=unsafe cdidx unused       # 生テキスト、ローカルのみ
+```
 
 ## 動作の仕組み
 

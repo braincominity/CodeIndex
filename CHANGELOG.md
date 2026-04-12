@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **`CDIDX_DEBUG=1` reader diagnostics** — When set, any reader-level exception bubbling out of CLI query commands or MCP tool calls now prints the last executed SQL, bound parameter values, and the last-read row's column/value snapshot to stderr before the normal error line. Text values (chunk content, paths, signatures, string parameters) are redacted to `len=N sha256=...` by default so output is safe to paste into issues; set `CDIDX_DEBUG=unsafe` locally to include raw content. Tracked state is reset at the start of every CLI query and MCP tool call so unrelated failures never dump stale state from a previous request. No-op and zero overhead when unset. Affected: `src/CodeIndex/Database/DbDebug.cs`, `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Database/DbSearchReader.cs`, `src/CodeIndex/Database/DbWriter.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Database/RepoMapBuilder.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `tests/CodeIndex.Tests/DbDebugTests.cs`.
+
 ### [1.8.1] - 2026-04-13
 
 #### Added
@@ -572,6 +575,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **`CDIDX_DEBUG=1` による reader 診断** — 環境変数を設定すると、CLI のクエリコマンドや MCP ツール呼び出しから reader 例外が漏れた際に、直前に実行された SQL、バインド済みパラメータの値、直前に読み取った行のカラム／値スナップショットを通常のエラーメッセージに先立って stderr に出力する。テキスト値（チャンク content、パス、シグネチャ、文字列パラメータ）は既定で `len=N sha256=...` に伏字化されるため Issue に貼っても安全。ローカル調査で生テキストが必要な場合のみ `CDIDX_DEBUG=unsafe` を使う。追跡状態は CLI の各クエリ／MCP の各ツール呼び出しの開始時にリセットされ、別リクエストの状態が後続の失敗に混入しない。未設定時はノーオペでオーバーヘッドなし。対象: `src/CodeIndex/Database/DbDebug.cs`、`src/CodeIndex/Database/DbReader.cs`、`src/CodeIndex/Database/DbSymbolReader.cs`、`src/CodeIndex/Database/DbSearchReader.cs`、`src/CodeIndex/Database/DbWriter.cs`、`src/CodeIndex/Database/DbContext.cs`、`src/CodeIndex/Database/RepoMapBuilder.cs`、`src/CodeIndex/Cli/QueryCommandRunner.cs`、`src/CodeIndex/Mcp/McpServer.cs`、`tests/CodeIndex.Tests/DbDebugTests.cs`。
 
 ### [1.8.1] - 2026-04-13
 

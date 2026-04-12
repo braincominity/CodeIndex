@@ -1,0 +1,206 @@
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Data.Sqlite;
+
+namespace CodeIndex.Database;
+
+/// <summary>
+/// Opt-in reader debug helper: when CDIDX_DEBUG=1, tracks the last SQL,
+/// bound parameters, and last-read row so that reader-level exceptions
+/// (e.g. "The data is NULL at ordinal N") can be attributed to a concrete
+/// query and row. Text values are redacted by default (length + short SHA256
+/// prefix). Set CDIDX_DEBUG=unsafe to include raw text content — this can
+/// leak indexed source code to stderr and should only be used locally.
+/// CDIDX_DEBUG=1 のときだけ、直近の SQL・バインドパラメータ・直近の行を追跡し、
+/// reader 例外（例: "The data is NULL at ordinal N"）を具体的なクエリと行に結び付ける。
+/// 既定ではテキスト値はハッシュ化（長さと SHA256 先頭）される。CDIDX_DEBUG=unsafe を指定すると
+/// インデックス済みソースをそのまま出力し得るため、ローカル用途のみに限定する。
+/// </summary>
+public static class DbDebug
+{
+    private const int MaxNumericChars = 64;
+
+    [ThreadStatic]
+    private static string? _lastSql;
+    [ThreadStatic]
+    private static List<(string Name, string Value)>? _lastParams;
+    [ThreadStatic]
+    private static List<(string Name, string Value)>? _lastRow;
+    [ThreadStatic]
+    private static bool _hasContext;
+
+    public static bool IsEnabled => ResolveMode() != DebugMode.Off;
+
+    private enum DebugMode { Off, Redacted, Unsafe }
+
+    private static DebugMode ResolveMode()
+    {
+        var raw = Environment.GetEnvironmentVariable("CDIDX_DEBUG");
+        if (string.IsNullOrEmpty(raw))
+            return DebugMode.Off;
+        if (raw.Equals("unsafe", StringComparison.OrdinalIgnoreCase) ||
+            raw.Equals("full", StringComparison.OrdinalIgnoreCase))
+            return DebugMode.Unsafe;
+        if (raw == "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase))
+            return DebugMode.Redacted;
+        return DebugMode.Off;
+    }
+
+    /// <summary>
+    /// Clear tracked SQL/params/row for the current thread. Must be called at
+    /// the start of each request/command so a later unrelated exception does
+    /// not dump stale state from a previous query.
+    /// スレッド単位で追跡中の SQL/パラメータ/行をリセットする。リクエスト開始時に必ず呼び、
+    /// 別リクエストで発生した無関係な例外に過去の状態を流用しないこと。
+    /// </summary>
+    public static void ResetContext()
+    {
+        _lastSql = null;
+        _lastParams = null;
+        _lastRow = null;
+        _hasContext = false;
+    }
+
+    internal static void TrackCommand(SqliteCommand cmd)
+    {
+        if (!IsEnabled)
+            return;
+        var mode = ResolveMode();
+        _lastSql = cmd.CommandText;
+        var ps = new List<(string, string)>(cmd.Parameters.Count);
+        foreach (SqliteParameter p in cmd.Parameters)
+            ps.Add((p.ParameterName, FormatValue(p.Value, mode)));
+        _lastParams = ps;
+        _lastRow = null;
+        _hasContext = true;
+    }
+
+    internal static void SnapshotRow(SqliteDataReader reader)
+    {
+        if (!IsEnabled)
+            return;
+        var mode = ResolveMode();
+        var row = new List<(string, string)>(reader.FieldCount);
+        for (int i = 0; i < reader.FieldCount; i++)
+        {
+            var name = reader.GetName(i);
+            try
+            {
+                var value = reader.IsDBNull(i) ? "<NULL>" : FormatValue(reader.GetValue(i), mode);
+                row.Add((name, value));
+            }
+            catch (Exception ex)
+            {
+                row.Add((name, $"<error: {ex.GetType().Name}: {ex.Message}>"));
+            }
+        }
+        _lastRow = row;
+        _hasContext = true;
+    }
+
+    /// <summary>
+    /// When debug is enabled and the current thread has tracked a reader
+    /// context since the last ResetContext(), append SQL/params/row info to
+    /// stderr. No-op otherwise — never dumps stale state from a previous
+    /// request.
+    /// デバッグ有効で、直近の ResetContext() 以降にこのスレッドで reader コンテキストを
+    /// 追跡していた場合のみ stderr に追記する。それ以外は何もせず、過去リクエストの状態を流出させない。
+    /// </summary>
+    public static void DumpToStderr(Exception ex)
+    {
+        if (!IsEnabled || !_hasContext)
+            return;
+        var mode = ResolveMode();
+        var sb = new StringBuilder();
+        sb.AppendLine("--- CDIDX_DEBUG ---");
+        sb.AppendLine($"Mode: {(mode == DebugMode.Unsafe ? "unsafe (raw content)" : "redacted (text hashed)")}");
+        sb.AppendLine($"Exception: {ex.GetType().FullName}: {ex.Message}");
+        if (_lastSql != null)
+        {
+            sb.AppendLine("Last SQL:");
+            foreach (var line in _lastSql.Split('\n'))
+                sb.AppendLine($"  {line.TrimEnd()}");
+        }
+        if (_lastParams is { Count: > 0 })
+        {
+            sb.AppendLine("Parameters:");
+            foreach (var (name, value) in _lastParams)
+                sb.AppendLine($"  {name} = {value}");
+        }
+        if (_lastRow is { Count: > 0 })
+        {
+            sb.AppendLine("Last row read:");
+            foreach (var (name, value) in _lastRow)
+                sb.AppendLine($"  [{name}] = {value}");
+        }
+        if (ex.StackTrace != null)
+        {
+            sb.AppendLine("Stack:");
+            sb.AppendLine(ex.StackTrace);
+        }
+        sb.AppendLine("--- END CDIDX_DEBUG ---");
+        Console.Error.Write(sb.ToString());
+    }
+
+    private static string FormatValue(object? value, DebugMode mode)
+    {
+        if (value is null || value is DBNull)
+            return "<NULL>";
+        return value switch
+        {
+            string str => FormatString(str, mode),
+            byte[] bytes => $"<byte[{bytes.Length}]>",
+            _ => TruncateNumeric(value.ToString() ?? "<NULL>"),
+        };
+    }
+
+    private static string FormatString(string s, DebugMode mode)
+    {
+        if (mode == DebugMode.Unsafe)
+        {
+            var shown = s.Length <= 200 ? s : s.Substring(0, 200) + $"…<+{s.Length - 200}>";
+            return "\"" + shown + "\"";
+        }
+        // Redacted mode: emit length + short SHA256 prefix so values are
+        // comparable across rows without exposing source content.
+        return $"<str len={s.Length} sha256={ShortHash(s)}>";
+    }
+
+    private static string ShortHash(string s)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(s));
+        var sb = new StringBuilder(16);
+        for (int i = 0; i < 8; i++)
+            sb.Append(bytes[i].ToString("x2"));
+        return sb.ToString();
+    }
+
+    private static string TruncateNumeric(string s)
+    {
+        if (s.Length <= MaxNumericChars)
+            return s;
+        return s.Substring(0, MaxNumericChars) + $"…<+{s.Length - MaxNumericChars} chars>";
+    }
+}
+
+/// <summary>
+/// Extensions that route SQLite reads through DbDebug tracking when enabled.
+/// Zero overhead when CDIDX_DEBUG is unset.
+/// CDIDX_DEBUG 有効時のみ DbDebug を経由して SQLite 読み取りを追跡する拡張。
+/// </summary>
+internal static class DbDebugExtensions
+{
+    public static SqliteDataReader ExecuteTrackedReader(this SqliteCommand cmd)
+    {
+        DbDebug.TrackCommand(cmd);
+        return cmd.ExecuteReader();
+    }
+
+    public static bool TrackedRead(this SqliteDataReader reader)
+    {
+        var ok = reader.Read();
+        if (ok)
+            DbDebug.SnapshotRow(reader);
+        return ok;
+    }
+}

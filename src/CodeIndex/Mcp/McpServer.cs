@@ -170,6 +170,7 @@ public partial class McpServer
         if (toolName == null)
             return CreateErrorResponse(id, -32602, "Missing tool name");
 
+        Database.DbDebug.ResetContext();
         try
         {
             return toolName switch
@@ -202,7 +203,12 @@ public partial class McpServer
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[cdidx-mcp] Tool error ({toolName}): {ex.Message}");
+            Database.DbDebug.DumpToStderr(ex);
             return CreateToolErrorResponse(id, $"Error executing {toolName}: {ex.Message}");
+        }
+        finally
+        {
+            Database.DbDebug.ResetContext();
         }
     }
 
