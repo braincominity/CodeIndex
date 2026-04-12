@@ -15,7 +15,8 @@ public static class ReferenceExtractor
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
         "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql",
         "r", "powershell", "haskell",
-        "gradle", "terraform", "protobuf", "dockerfile", "makefile"
+        "gradle", "terraform", "protobuf", "dockerfile", "makefile",
+        "zig", "css", "shell"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -246,11 +247,13 @@ public static class ReferenceExtractor
 
     private static bool UsesHashComments(string lang) =>
         lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell"
-            or "makefile" or "terraform" or "dockerfile" or "protobuf";
+            or "makefile" or "terraform" or "dockerfile" or "protobuf"
+            or "shell";
 
     private static bool UsesSlashComments(string lang) =>
         lang is not "python" and not "ruby" and not "r" and not "haskell"
-            and not "makefile" and not "terraform" and not "dockerfile";
+            and not "makefile" and not "terraform" and not "dockerfile"
+            and not "shell" and not "css";
 
     private static bool UsesDashDashComments(string lang) =>
         lang is "lua" or "sql" or "haskell";
