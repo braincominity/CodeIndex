@@ -59,6 +59,7 @@ src/CodeIndex/
   Cli/SourceCodeDetector.cs — Heuristic source code leak prevention for suggestion submissions
   Cli/GitHubIssueReporter.cs — GitHub Issues API client for suggestion submission (best-effort)
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
+  Database/DbDebug.cs       — Opt-in reader diagnostics (CDIDX_DEBUG=1): tracks last SQL, params, and row snapshot, dumps to stderr on reader exceptions
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
   Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, excerpt reconstruction, status, file-level deps)
   Database/DbSearchReader.cs — Full-text search operations (FTS5 search, deduplication) (partial class)
@@ -299,6 +300,7 @@ src/CodeIndex/
   Cli/SourceCodeDetector.cs — 提案送信時のヒューリスティックによるソースコード漏洩防止
   Cli/GitHubIssueReporter.cs — 提案送信用GitHub Issues APIクライアント（ベストエフォート）
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
+  Database/DbDebug.cs       — オプトインの reader 診断（CDIDX_DEBUG=1）: 直近 SQL・パラメータ・行スナップショットを追跡し、reader 例外時に stderr へ出力
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
   Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、抜粋再構成、ステータス、ファイル間依存分析）
   Database/DbSearchReader.cs — 全文検索操作（FTS5検索、重複排除）（partial class）

@@ -185,8 +185,8 @@ internal sealed class RepoMapBuilder
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<RepoFileStat>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new RepoFileStat
             {
@@ -226,8 +226,8 @@ internal sealed class RepoMapBuilder
         DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<RepoEntrypointResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             var path = reader.GetString(0);
             var candidateLang = reader.IsDBNull(1) ? null : reader.GetString(1);

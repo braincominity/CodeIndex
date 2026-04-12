@@ -263,8 +263,8 @@ public class DbContext : IDisposable
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = $"PRAGMA table_info({tableName})";
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
                 return;

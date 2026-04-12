@@ -83,8 +83,8 @@ public partial class DbReader
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var raw = new List<SearchResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             raw.Add(new SearchResult
             {

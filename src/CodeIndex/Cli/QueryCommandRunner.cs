@@ -1099,6 +1099,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.DatabaseError;
         }
 
+        Database.DbDebug.ResetContext();
         try
         {
             using var db = new DbContext(dbPath);
@@ -1109,7 +1110,12 @@ public static class QueryCommandRunner
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error: database error: {ex.Message}");
+            Database.DbDebug.DumpToStderr(ex);
             return CommandExitCodes.DatabaseError;
+        }
+        finally
+        {
+            Database.DbDebug.ResetContext();
         }
     }
 

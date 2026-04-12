@@ -149,8 +149,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<FileResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new FileResult
             {
@@ -213,8 +213,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<ReferenceResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new ReferenceResult
             {
@@ -269,8 +269,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<CallerResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new CallerResult
             {
@@ -323,8 +323,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<CalleeResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new CalleeResult
             {
@@ -362,8 +362,8 @@ public partial class DbReader
                               AND " + supportedLangFilter + @"
                             ORDER BY CASE WHEN s.name = @name THEN 0 ELSE 1 END LIMIT 1";
         cmd.Parameters.AddWithValue("@name", symbolName);
-        using var reader = cmd.ExecuteReader();
-        return reader.Read() ? reader.GetString(0) : symbolName;
+        using var reader = cmd.ExecuteTrackedReader();
+        return reader.TrackedRead() ? reader.GetString(0) : symbolName;
     }
 
     /// <summary>
@@ -412,8 +412,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@offset", offset);
 
         var results = new List<CallerResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new CallerResult
             {
@@ -547,8 +547,8 @@ public partial class DbReader
         fileCmd.CommandText = "SELECT lang, lines FROM files WHERE path = @path";
         fileCmd.Parameters.AddWithValue("@path", path);
 
-        using var fileReader = fileCmd.ExecuteReader();
-        if (!fileReader.Read())
+        using var fileReader = fileCmd.ExecuteTrackedReader();
+        if (!fileReader.TrackedRead())
             return null;
 
         var lang = fileReader.IsDBNull(0) ? null : fileReader.GetString(0);
@@ -570,8 +570,8 @@ public partial class DbReader
         chunkCmd.Parameters.AddWithValue("@endLine", requestedEnd);
 
         var lineMap = new SortedDictionary<int, string>();
-        using var chunkReader = chunkCmd.ExecuteReader();
-        while (chunkReader.Read())
+        using var chunkReader = chunkCmd.ExecuteTrackedReader();
+        while (chunkReader.TrackedRead())
         {
             var chunkStartLine = chunkReader.GetInt32(0);
             var chunkEndLine = chunkReader.GetInt32(1);
@@ -626,8 +626,8 @@ public partial class DbReader
             WHERE f.path = @path";
         cmd.Parameters.AddWithValue("@path", path);
 
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
             return null;
 
         return new FileResult
@@ -660,8 +660,8 @@ public partial class DbReader
         var langs = new Dictionary<string, long>();
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
             langs[reader.GetString(0)] = reader.GetInt64(1);
 
         return new StatusResult
@@ -739,8 +739,8 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $"PRAGMA table_info({tableName})";
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
             columns.Add(reader.GetString(1));
 
         return columns;
@@ -832,8 +832,8 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<FileDependencyResult>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new FileDependencyResult
             {
@@ -934,8 +934,8 @@ public partial class DbReader
         }
 
         var results = new List<Models.FileIssue>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
         {
             results.Add(new Models.FileIssue
             {

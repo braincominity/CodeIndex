@@ -145,8 +145,8 @@ public class DbWriter
         cmd.CommandText = "SELECT id, modified, checksum FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", relativePath);
 
-        using var reader = cmd.ExecuteReader();
-        if (reader.Read())
+        using var reader = cmd.ExecuteTrackedReader();
+        if (reader.TrackedRead())
         {
             var id = reader.GetInt64(0);
             var existingModified = reader.GetDateTime(1);
@@ -481,8 +481,8 @@ public class DbWriter
         using (var cmd = _conn.CreateCommand())
         {
             cmd.CommandText = "SELECT id, path FROM files";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
                 dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
         }
 
