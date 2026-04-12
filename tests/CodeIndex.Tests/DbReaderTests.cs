@@ -21,10 +21,14 @@ public class DbReaderTests : IDisposable
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
         _writer = new DbWriter(_db.Connection);
-        _reader = new DbReader(_db.Connection);
 
-        // Seed test data / テストデータを投入
+        // Seed test data first, then stamp the index-complete marker so DbReader sees the
+        // same state a production post-indexing open would: populated tables + user_version.
+        // DbReader を構築する前に seed と MarkIndexComplete を済ませ、本番の index 完了時と同じ状態にする。
         SeedData();
+        _writer.MarkGraphReady();
+        _writer.MarkIssuesReady();
+        _reader = new DbReader(_db.Connection);
     }
 
     private void SeedData()

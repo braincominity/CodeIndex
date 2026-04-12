@@ -26,7 +26,7 @@ public static class DbPathResolver
     /// </summary>
     public static string ResolveProjectRootForQuery(string dbPath)
     {
-        var fullDbPath = Path.GetFullPath(dbPath);
+        var fullDbPath = Path.GetFullPath(NormalizeDbPath(dbPath));
         var dbDir = Path.GetDirectoryName(fullDbPath);
         if (dbDir == null)
             return Path.GetFullPath(".");
@@ -35,5 +35,31 @@ public static class DbPathResolver
             return Path.GetDirectoryName(dbDir) ?? Path.GetFullPath(".");
 
         return Path.GetFullPath(".");
+    }
+
+    /// <summary>
+    /// Normalize a SQLite `file:///...?immutable=1`-style URI to a plain filesystem path.
+    /// Plain paths pass through unchanged. Used by metadata resolution so CLI `--db` URIs
+    /// (the read-only escape hatch) don't poison workspace / git lookups that depend on a
+    /// real path — feeding `file:///…` into `Path.GetFullPath` otherwise produces paths
+    /// like `/cwd/file:/abs/...` and breaks `project_root`, `git_head`, `git_is_dirty`.
+    /// SQLite の file: URI をローカルパスに正規化する。平文パスは素通し。
+    /// </summary>
+    public static string NormalizeDbPath(string dbPath)
+    {
+        if (!dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return dbPath;
+        try
+        {
+            // Strip query params (?immutable=1 etc.) before URI parsing so LocalPath is clean.
+            var qIdx = dbPath.IndexOf('?');
+            var trimmed = qIdx >= 0 ? dbPath[..qIdx] : dbPath;
+            var uri = new Uri(trimmed);
+            return uri.IsFile ? uri.LocalPath : dbPath;
+        }
+        catch
+        {
+            return dbPath;
+        }
     }
 }

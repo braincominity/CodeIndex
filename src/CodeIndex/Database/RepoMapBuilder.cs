@@ -62,10 +62,13 @@ internal sealed class RepoMapBuilder
         ["elixir"] = ["application.ex", "router.ex", "endpoint.ex"],
     };
 
-    public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns)
+    private readonly bool _hasReferencesTable;
+
+    public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns, bool hasReferencesTable)
     {
         _conn = connection;
         _fileColumns = fileColumns;
+        _hasReferencesTable = hasReferencesTable;
     }
 
     /// <summary>
@@ -157,6 +160,7 @@ internal sealed class RepoMapBuilder
                 .Select(CreateUnscoredFileSummary)
                 .ToList(),
             Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPattern, excludePathPatterns, excludeTests),
+            GraphTableAvailable = _hasReferencesTable,
         };
     }
 
@@ -164,13 +168,16 @@ internal sealed class RepoMapBuilder
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         using var cmd = _conn.CreateCommand();
-        var sql = @"
+        var refCountExpr = _hasReferencesTable
+            ? "(SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id)"
+            : "0";
+        var sql = $@"
             SELECT f.path, f.lang, f.size, f.lines,
                    (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) AS symbol_count,
-                   (SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id) AS reference_count,
-                   " + GetFileColumnSql("checksum") + @" AS checksum,
-                   " + GetFileColumnSql("modified") + @" AS modified,
-                   " + GetFileColumnSql("indexed_at") + @" AS indexed_at
+                   {refCountExpr} AS reference_count,
+                   {GetFileColumnSql("checksum")} AS checksum,
+                   {GetFileColumnSql("modified")} AS modified,
+                   {GetFileColumnSql("indexed_at")} AS indexed_at
             FROM files f
             WHERE 1=1";
 

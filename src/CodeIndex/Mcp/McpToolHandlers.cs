@@ -865,13 +865,26 @@ public partial class McpServer
         // DBパスを決定 — 指定された_dbPathまたはデフォルトを使用
         using var db = new DbContext(_dbPath);
 
+        // On --rebuild, clear readiness before DropAll so a crash during the window
+        // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
+        // blessing the freshly-empty tables. On non-rebuild runs, readiness is cleared
+        // just before the first write below so a scan failure does not downgrade a
+        // previously-healthy index.
+        // --rebuild は DropAll 前に clear。通常は実書き込み直前で clear。
         if (rebuild)
+        {
+            db.ClearReadyFlags();
             db.DropAll();
+        }
 
         db.InitializeSchema();
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
+
+        // First mutation point — demote readiness just before any write.
+        // 実書き込み直前で readiness をクリア。
+        writer.ClearReadyFlags();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
@@ -914,6 +927,13 @@ public partial class McpServer
         }
 
         writer.OptimizeFts();
+        // MCP indexing populates graph data but does NOT run ValidateContent / file_issues,
+        // so mark graph-ready only on success. Issues trust stays degraded, which correctly
+        // drives `validate` to warn "file_issues table missing" on MCP-built DBs rather
+        // than silently reporting a false clean result.
+        // MCP は graph のみ。validate の縮退シグナルを正しく残す。
+        if (errors == 0)
+            writer.MarkGraphReady();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
         var structured = new JsonObject

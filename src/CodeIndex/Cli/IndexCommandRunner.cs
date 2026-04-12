@@ -122,8 +122,26 @@ public static class IndexCommandRunner
 
         using var db = new DbContext(dbPath);
 
+        // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
+        // touches a subset of files, so stamping readiness after a partial pass on a
+        // previously-degraded DB would falsely bless untouched files as authoritative. Only
+        // a DB that was already fully ready may be restamped after a partial update.
+        // update モードは一部ファイルしか再インデックスしないため、元々縮退状態だった DB を
+        // partial pass の後に trusted 扱いに昇格させてはいけない。元の readiness を捕獲しておく。
+        var wasFullyReady = db.GetUserVersion() == DbContext.CurrentSchemaVersion;
+
+        // Don't demote readiness yet. A transient usage error in update-mode preflight
+        // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
+        // DB even though no data was touched. Clearing happens just before the first
+        // destructive / schema-changing operation, inside the mode-specific runner.
+        // まだ clear しない。update モードの preflight が失敗しただけで healthy な DB を
+        // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
+
         if (options.Rebuild)
+        {
+            db.ClearReadyFlags();
             db.DropAll();
+        }
 
         db.InitializeSchema();
         AddToGitExclude(options.ProjectPath, dbPath);
@@ -132,10 +150,17 @@ public static class IndexCommandRunner
         var indexer = new FileIndexer(options.ProjectPath);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
+        // Full-scan covers the whole repo, so it may always stamp on success. Update mode
+        // only stamps when the DB was already fully ready, preventing a partial pass from
+        // promoting a legacy / degraded DB to trusted.
+        // full-scan は常に stamp 可。update は元々 trusted だった場合のみ再 stamp 可。
+        var canStampReadiness = !isUpdateMode || wasFullyReady;
+
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions)
-            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions);
+            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, canStampReadiness)
+            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, canStampReadiness);
     }
+
 
     public static IndexCommandOptions ParseArgs(string[] args)
     {
@@ -234,7 +259,8 @@ public static class IndexCommandRunner
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        bool canStampReadiness)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -286,6 +312,13 @@ public static class IndexCommandRunner
                 targetPaths.Add(relPath);
             }
         }
+
+        // Now that preflight (commit / file resolution) has succeeded and we're committed to
+        // mutating the DB, demote readiness. Doing this earlier — before commit resolution —
+        // would turn a transient git failure or a typo in --commits into a permanent
+        // downgrade of a previously-healthy index.
+        // preflight 成功後、実書き込み直前で readiness をクリア。途中で失敗した場合は healthy index を壊さない。
+        writer.ClearReadyFlags();
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -374,6 +407,16 @@ public static class IndexCommandRunner
         }
 
         writer.OptimizeFts();
+        // Only stamp readiness on a fully successful run (errors == 0). A partial / error
+        // run leaves the DB unstamped so readers correctly treat graph / issues data as
+        // degraded rather than authoritative. Interrupted runs also stay unstamped because
+        // ClearReadyFlags() ran at the start.
+        // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        if (errors == 0 && canStampReadiness)
+        {
+            writer.MarkGraphReady();
+            writer.MarkIssuesReady();
+        }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
@@ -438,7 +481,8 @@ public static class IndexCommandRunner
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        bool canStampReadiness)
     {
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
@@ -450,6 +494,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Found {files.Count:N0} files");
             Console.WriteLine();
         }
+
+        // Full-scan commits to mutating the DB from here on. Demote readiness just before
+        // the first write (PurgeStaleFiles). This is equivalent to clearing earlier in terms
+        // of the --rebuild crash-window guard (the --rebuild path already cleared before
+        // DropAll in RunIndex), but avoids downgrading a healthy DB if full-scan itself
+        // never reaches this point for any reason.
+        // 実書き込み直前で readiness をクリア。--rebuild 経路は RunIndex で既に clear 済み。
+        writer.ClearReadyFlags();
 
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
@@ -545,6 +597,16 @@ public static class IndexCommandRunner
         }
 
         writer.OptimizeFts();
+        // Only stamp readiness on a fully successful run (errors == 0). A partial / error
+        // run leaves the DB unstamped so readers correctly treat graph / issues data as
+        // degraded rather than authoritative. Interrupted runs also stay unstamped because
+        // ClearReadyFlags() ran at the start.
+        // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        if (errors == 0 && canStampReadiness)
+        {
+            writer.MarkGraphReady();
+            writer.MarkIssuesReady();
+        }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
