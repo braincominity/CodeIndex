@@ -685,12 +685,23 @@ public static class QueryCommandRunner
             var results = reader.GetTransitiveCallers(options.Query, maxDepth, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.CountOnly)
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (!options.Json)
                 {
                     Console.Error.WriteLine("No impact found.");
                     WriteGraphSupportHint(options.Lang);
                 }
-                return CommandExitCodes.NotFound;
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
             }
 
             if (options.Json)
