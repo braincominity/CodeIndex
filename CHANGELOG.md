@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **R, PowerShell, Haskell reference extraction** — R, PowerShell, and Haskell now support call-graph queries (`references`, `callers`, `callees`). R uses `#` for comments with standard parenthesized call detection. PowerShell uses `#` for comments; cmdlet hyphenated names are split at hyphens. Haskell uses `--` for comments; only parenthesized calls are captured (space-separated calls are a known limitation). Language-specific keywords added to the ignore list. Affected: `ReferenceExtractor.cs`.
 
 #### Changed
+- **Language support summary in status output** — `status` now shows a "Support" line with total detected languages, languages with symbol extraction, and languages with graph queries (e.g. "46 detected, 32 with symbols, 31 with graph"). Graph line also shows the count prefix. Affected: `QueryCommandRunner.cs`.
 - **`--since` filter for `symbols` and `definition` commands** — Both `symbols` and `definition` now accept `--since <datetime>` to filter to recently modified files, matching the existing `files --since` pattern. MCP `symbols` tool also exposes the `since` parameter. Useful for AI agents tracking recent code changes. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `McpToolHandlers.cs`, `McpToolDefinitions.cs`.
 - **Consistent `--lang` validation hints on zero-result commands** — `references`, `callers`, and `callees` now show a `WriteLangHint` when `--lang` produces zero results, matching the pattern used by `symbols`, `unused`, and `hotspots`. Affected: `QueryCommandRunner.cs`.
 
@@ -562,6 +563,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **R、PowerShell、Haskell 参照抽出** — R、PowerShell、Haskell でコールグラフクエリ（`references`、`callers`、`callees`）が利用可能に。R は `#` コメントと標準的な括弧付き呼び出し検出。PowerShell は `#` コメント; コマンドレットのハイフン名はハイフンで分割。Haskell は `--` コメント; 括弧付き呼び出しのみ（スペース区切り呼び出しは既知の制限）。各言語のキーワードを除外リストに追加。対象: `ReferenceExtractor.cs`。
 
 #### 変更
+- **status 出力に言語サポートサマリー** — `status` が "Support" 行で検出言語総数、シンボル抽出対応数、グラフクエリ対応数を表示するようになった（例: "46 detected, 32 with symbols, 31 with graph"）。Graph 行にもカウントプレフィックスを追加。対象: `QueryCommandRunner.cs`。
 - **`symbols` と `definition` コマンドに `--since` フィルタ** — 両コマンドが `--since <datetime>` を受け付け、最近変更されたファイルのシンボル/定義だけに絞り込めるようになった。MCP `symbols` ツールも `since` パラメータを公開。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`McpToolHandlers.cs`、`McpToolDefinitions.cs`。
 - **ゼロ結果コマンドでの一貫した `--lang` 検証ヒント** — `references`、`callers`、`callees` が `--lang` でゼロ結果のとき `WriteLangHint` を表示するようになり、`symbols`、`unused`、`hotspots` と同じパターンに統一。対象: `QueryCommandRunner.cs`。
 

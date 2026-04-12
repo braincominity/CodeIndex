@@ -660,7 +660,10 @@ public static class QueryCommandRunner
                         Console.WriteLine($"  {kind,-12} {count,6}");
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
-                    Console.WriteLine($"Graph   : {string.Join(", ", status.GraphSupportedLanguages)}");
+                    Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
+                var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
+                var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
+                Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");
             }
             return CommandExitCodes.Success;
         });
