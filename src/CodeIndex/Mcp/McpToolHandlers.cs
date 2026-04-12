@@ -41,6 +41,7 @@ public partial class McpServer
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
             + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
             + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
+            + "Use 'impact_analysis' to compute transitive callers of a symbol — the ripple effect of changing it. Returns callers at each BFS depth level. "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
@@ -160,10 +161,14 @@ public partial class McpServer
         var pathPattern = args?["path"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var sinceStr = args?["since"]?.GetValue<string>();
+        DateTime? since = null;
+        if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
+            since = parsedSince;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchSymbols(query, limit, kind, lang, pathPattern, excludePaths, excludeTests);
+            var results = reader.SearchSymbols(query, limit, kind, lang, pathPattern, excludePaths, excludeTests, since);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -209,10 +214,14 @@ public partial class McpServer
         var pathPattern = args?["path"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var sinceStr = args?["since"]?.GetValue<string>();
+        DateTime? since = null;
+        if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedDefSince))
+            since = parsedDefSince;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPattern, excludePaths, excludeTests);
+            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPattern, excludePaths, excludeTests, since);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -578,6 +587,7 @@ public partial class McpServer
                     "status" => ExecuteStatus(null),
                     "outline" => ExecuteOutline(null, toolArgs),
                     "deps" => ExecuteDeps(null, toolArgs),
+                    "impact_analysis" => ExecuteImpactAnalysis(null, toolArgs),
                     "languages" => ExecuteLanguages(null),
                     "validate" => ExecuteValidate(null, toolArgs),
                     "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
@@ -645,6 +655,49 @@ public partial class McpServer
                 : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
+            return CreateToolResult(id, summary, payload);
+        });
+    }
+
+    private JsonNode ExecuteImpactAnalysis(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+
+        var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 1, 10);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
+        var lang = args?["lang"]?.GetValue<string>();
+        var pathPattern = args?["path"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var (results, truncated) = reader.GetTransitiveCallers(query, maxDepth, limit, lang, pathPattern, excludePaths, excludeTests);
+            var fileCount = results.Select(r => r.Path).Distinct().Count();
+            var maxActualDepth = results.Count > 0 ? results.Max(r => r.Depth) : 0;
+            var payload = new JsonObject
+            {
+                ["query"] = query,
+                ["count"] = results.Count,
+                ["file_count"] = fileCount,
+                ["max_depth"] = maxDepth,
+                ["actual_depth"] = maxActualDepth,
+                ["truncated"] = truncated,
+                ["callers"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+            };
+            var summary = results.Count > 0
+                ? $"Found {results.Count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
+                  + (truncated ? " Results truncated — increase limit for more." : "")
+                : "No transitive callers found.";
+            if (results.Count == 0)
+            {
+                AddFreshnessHint(payload, reader);
+                var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null);
+                if (graphReason != null)
+                    payload["graph_support_reason"] = graphReason;
+            }
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -822,6 +875,9 @@ public partial class McpServer
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
+
+        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
+        writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
         var files = indexer.ScanFiles();

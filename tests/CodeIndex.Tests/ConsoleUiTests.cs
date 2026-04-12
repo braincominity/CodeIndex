@@ -116,6 +116,26 @@ public class ConsoleUiTests
         }
     }
 
+    [Theory]
+    [InlineData("serach", "search")]
+    [InlineData("statu", "status")]
+    [InlineData("defnition", "definition")]
+    [InlineData("refernces", "references")]
+    [InlineData("indx", "index")]
+    [InlineData("mpa", "map")]
+    public void FindClosestCommand_Typo_ReturnsCorrectSuggestion(string input, string expected)
+    {
+        Assert.Equal(expected, ConsoleUi.FindClosestCommand(input));
+    }
+
+    [Theory]
+    [InlineData("xyzabc")]
+    [InlineData("foobarqux")]
+    public void FindClosestCommand_GarbageInput_ReturnsNull(string input)
+    {
+        Assert.Null(ConsoleUi.FindClosestCommand(input));
+    }
+
     private static string CaptureUsageOutput(bool showBanner = true)
     {
         lock (TestConsoleLock.Gate)

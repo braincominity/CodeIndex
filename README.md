@@ -24,7 +24,7 @@ cdidx deps --path src/           # File-level dependency graph
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-46 languages supported. 21 MCP tools. Incremental updates. Zero config.
+46 languages supported. 22 MCP tools. Incremental updates. Zero config.
 
 - **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, DB schema, FTS5 internals
 - **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
@@ -727,6 +727,7 @@ Once configured, the AI can directly call these tools:
 | `outline` | Show all symbols in a single file with line numbers, signatures, and nesting |
 | `status` | Database statistics |
 | `deps` | File-level dependency edges from the reference graph |
+| `impact_analysis` | Compute transitive callers of a symbol (ripple effect of changes) |
 | `unused_symbols` | Find symbols defined but never referenced (dead code detection) |
 | `symbol_hotspots` | Find most-referenced symbols (high-impact code) |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10) |
@@ -1506,6 +1507,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `outline` | 1ファイルの全シンボルを行番号・シグネチャ・ネスト構造付きで表示 |
 | `status` | データベース統計情報 |
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
+| `impact_analysis` | シンボルの推移的呼び出し元を算出（変更の波及効果） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを検索（デッドコード検出） |
 | `symbol_hotspots` | 最も参照されるシンボルを検索（影響の大きいコード） |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件） |

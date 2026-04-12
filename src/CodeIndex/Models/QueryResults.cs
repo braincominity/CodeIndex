@@ -39,6 +39,7 @@ public class FileResult
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }
+    public int ReferenceCount { get; set; }
     public string? Checksum { get; set; }
     public DateTime? Modified { get; set; }
     public DateTime? IndexedAt { get; set; }
@@ -96,6 +97,18 @@ public class CalleeResult
     public int ReferenceCount { get; set; }
 }
 
+public class ImpactResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public string? CallerKind { get; set; }
+    public string? CallerName { get; set; }
+    public string CalleeName { get; set; } = string.Empty;
+    public int Depth { get; set; }
+    public int FirstLine { get; set; }
+    public int ReferenceCount { get; set; }
+}
+
 public class StatusResult
 {
     public long Files { get; set; }
@@ -111,6 +124,11 @@ public class StatusResult
     public Dictionary<string, long>? SymbolKinds { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }
     public string? Version { get; set; }
+    /// <summary>
+    /// One-line human-readable summary for quick orientation.
+    /// クイックオリエンテーション用の1行サマリー。
+    /// </summary>
+    public string? Summary { get; set; }
 }
 
 public class RepoMapResult

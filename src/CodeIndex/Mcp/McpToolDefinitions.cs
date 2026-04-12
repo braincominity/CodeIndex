@@ -55,7 +55,8 @@ public partial class McpServer
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content when body ranges are available", ["default"] = false },
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -131,7 +132,8 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict matches to paths containing this text" },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -198,6 +200,25 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max items per section (default: 10)", ["default"] = 10 },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content in definitions when available", ["default"] = false },
+                        ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict paths containing this text" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
+                "impact_analysis",
+                "Compute the transitive caller chain for a symbol — the ripple effect of changing it. Returns callers at each depth level via BFS. / シンボルの推移的呼び出しチェーン（変更の波及効果）をBFSで算出。各深さレベルの呼び出し元を返す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name to analyze impact for" },
+                        ["maxDepth"] = new JsonObject { ["type"] = "integer", ["description"] = "Max BFS depth (default: 5)", ["default"] = 5 },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max total callers to return (default: 50)", ["default"] = 50 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Prefer or restrict paths containing this text" },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }

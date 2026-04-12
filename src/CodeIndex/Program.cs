@@ -62,6 +62,7 @@ return args[0] switch
     "status" => QueryCommandRunner.RunStatus(args[1..], jsonOptions, appVersion),
     "validate" => QueryCommandRunner.RunValidate(args[1..], jsonOptions),
     "languages" => QueryCommandRunner.RunLanguages(args[1..], jsonOptions),
+    "impact" => QueryCommandRunner.RunImpact(args[1..], jsonOptions),
     "deps" => QueryCommandRunner.RunDeps(args[1..], jsonOptions),
     "unused" => QueryCommandRunner.RunUnused(args[1..], jsonOptions),
     "hotspots" => QueryCommandRunner.RunHotspots(args[1..], jsonOptions),
@@ -89,6 +90,16 @@ int RunMcp(string[] cmdArgs)
 int ShowError(string message)
 {
     Console.Error.WriteLine($"Error: {message}");
+
+    // Did-you-mean suggestion for unknown commands / 不明なコマンドに対する推薦
+    var input = args[0];
+    if (!input.StartsWith('-'))
+    {
+        var best = ConsoleUi.FindClosestCommand(input);
+        if (best != null)
+            Console.Error.WriteLine($"Did you mean: cdidx {best}?");
+    }
+
     Console.Error.WriteLine("Run 'cdidx --help' for usage information.");
     return CommandExitCodes.UsageError;
 }

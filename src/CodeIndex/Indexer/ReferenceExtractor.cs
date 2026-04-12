@@ -13,7 +13,10 @@ public static class ReferenceExtractor
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql"
+        "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql",
+        "r", "powershell", "haskell",
+        "gradle", "terraform", "protobuf", "dockerfile", "makefile",
+        "zig", "css"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -44,8 +47,25 @@ public static class ReferenceExtractor
         "EXISTS", "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE",
         "AS", "ON", "AND", "OR", "NOT", "NULL", "IN", "IS",
         "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "IF",
+        // R keywords / R キーワード
+        "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
+        "invisible", "tryCatch", "withCallingHandlers", "next", "break", "repeat",
+        // PowerShell keywords / PowerShell キーワード
+        "param", "begin", "process", "Write", "trap", "finally", "elseif",
+        // Haskell keywords / Haskell キーワード
+        "data", "newtype", "instance", "deriving", "infixl", "infixr", "infix",
+        "qualified", "hiding", "forall", "Just", "Nothing", "Left", "Right", "True", "False",
+        "putStrLn", "putStr", "print",
+        // Gradle/Groovy keywords / Gradle/Groovy キーワード
+        "apply", "plugins", "dependencies", "repositories", "allprojects", "subprojects",
+        "task", "buildscript", "ext", "group", "version", "description",
+        // Terraform keywords / Terraform キーワード
+        "resource", "data", "variable", "output", "locals", "module", "provider",
+        "terraform", "required_providers", "backend",
+        // Makefile keywords / Makefile キーワード
+        "all", "clean", "install", "build", "run", "help",
         // Other languages / 他言語
-        "print", "require", "import", "include", "raise", "lambda",
+        "require", "import", "include", "raise", "lambda",
     };
 
     private static readonly Regex StringLiteralRegex = new(
@@ -206,12 +226,12 @@ public static class ReferenceExtractor
                 result = result[..slashIndex];
         }
 
-        // Lua and SQL use -- for line comments / Lua と SQL は -- を行コメントに使う
-        if (lang is "lua" or "sql")
+        // Lua, SQL, Haskell use -- for line comments / Lua、SQL、Haskell は -- を行コメントに使う
+        if (UsesDashDashComments(lang))
         {
-            var luaCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
-            if (luaCommentIndex >= 0)
-                result = result[..luaCommentIndex];
+            var dashCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
+            if (dashCommentIndex >= 0)
+                result = result[..dashCommentIndex];
         }
 
         // VB.NET uses ' for line comments / VB.NET は ' を行コメントに使う
@@ -226,8 +246,14 @@ public static class ReferenceExtractor
     }
 
     private static bool UsesHashComments(string lang) =>
-        lang is "python" or "ruby" or "php" or "elixir";
+        lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell"
+            or "makefile" or "terraform" or "dockerfile" or "protobuf";
 
     private static bool UsesSlashComments(string lang) =>
-        lang is not "python" and not "ruby";
+        lang is not "python" and not "ruby" and not "r" and not "haskell"
+            and not "makefile" and not "terraform" and not "dockerfile"
+            and not "css";
+
+    private static bool UsesDashDashComments(string lang) =>
+        lang is "lua" or "sql" or "haskell";
 }

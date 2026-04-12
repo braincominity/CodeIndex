@@ -35,6 +35,7 @@ cdidx status [--json]
 cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx impact <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>] [--json]
 cdidx languages [--json]
 
 # MCP server (for AI tools: Claude Code, Cursor, Windsurf, etc.)
@@ -51,7 +52,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/unused/hotspots command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/impact/unused/hotspots command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Cli/SuggestionStore.cs    — Local JSON storage for AI suggestions with SHA256 dedup
@@ -66,6 +67,7 @@ src/CodeIndex/
   Indexer/FileIndexer.cs    — Directory scan, language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Regex-based symbol extraction (32 languages)
+  Indexer/ReferenceExtractor.cs — Regex-based reference extraction (31 languages with graph queries)
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
   Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
   Mcp/McpToolDefinitions.cs — MCP tool schema definitions (partial class)
@@ -109,7 +111,8 @@ tests/CodeIndex.Tests/
 - **Repo map for first-pass orientation** — `map` summarizes languages, modules, top files, file hot spots, and likely entrypoints so AI clients can form an initial navigation plan before issuing deeper queries. Entrypoint inference falls back to known top-level entry files when symbol extraction does not yield an explicit `Main`-style symbol.
 - **Freshness metadata for trust decisions** — `status` exposes whole-workspace freshness plus `git_head` / `git_is_dirty`. `map` keeps `indexed_at` / `latest_modified` scoped to the filtered result set and also exposes `workspace_indexed_at` / `workspace_latest_modified` for whole-workspace freshness. `inspect` mirrors those whole-workspace timestamps and git fields so symbol-oriented AI flows can judge trust without a separate `status` call. `files` exposes per-file checksum and timestamp metadata. Older DBs auto-add missing file columns when possible, and read paths avoid crashing if migration cannot happen in place. MCP zero-result responses include `indexed_file_count` and `indexed_at` so AI clients can self-diagnose stale or empty indexes without a separate `status` call.
 - **Bundled symbol analysis** — `inspect` and MCP `analyze_symbol` combine definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph-support metadata so AI clients can answer common symbol questions with one request.
-- **Language-aware reference extraction** — `references`, `callers`, and `callees` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results.
+- **Transitive impact analysis** — `impact` and MCP `impact_analysis` compute the transitive caller chain using BFS. Key design constraints learned through adversarial review: (1) caller matching uses `lower(r.symbol_name) = lower(@symbolName)` — case-insensitive exact match avoids both LIKE substring expansion (`Run` matching `RunAsync`) and case-sensitivity brittleness (`run` missing `Run`); (2) symbol name is pre-resolved through definitions via `ResolveSymbolName` (case-insensitive with exact-case preference, no path/test filters) so definitions outside the caller-scoped path are still found; (3) the read path filters to graph-supported languages via IN clause to prevent stale edges from removed languages leaking into results; (4) BFS pages through callers post-deduplication with `maxFetchIterations` safety cap, and `truncated` flag is set on both limit cap and iteration cap; (5) `PurgeUnsupportedReferences` runs in all three indexing paths (CLI full scan, CLI update mode, MCP index) to clean up stale edges when languages lose graph support.
+- **Language-aware reference extraction** — `references`, `callers`, `callees`, and `impact` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful. Unsupported languages are expected to use `search` instead of receiving low-confidence pseudo-graph results. When a language is removed from graph support, `PurgeUnsupportedReferences` deletes its stale `symbol_references` rows on the next indexing run, and the read path additionally filters by supported languages to prevent stale edges from surviving between index runs.
 - **Explicit graph-support hints** — `inspect`, MCP `analyze_symbol`, and direct MCP graph tools annotate unsupported language filters with graph-support metadata so AI clients can distinguish "unsupported language" from "supported but zero hits."
 - **Regex symbol extraction** — Intentionally simple. Accuracy is secondary to speed and portability, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when patterns can infer them.
 - **Granular symbol kinds** — Symbols use semantically precise kinds: `function`, `class`, `struct`, `interface`, `enum`, `property`, `event`, `delegate`, `namespace`, `import`. Languages map their constructs to the closest kind (e.g. Rust `trait` → `interface`, Swift `protocol` → `interface`, PHP `trait` → `interface`). Symbol search and definition results are ranked by visibility (public first).
@@ -272,6 +275,7 @@ cdidx status [--json]
 cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse] [--json]
 cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
+cdidx impact <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>] [--json]
 cdidx languages [--json]
 
 # MCPサーバー（AIツール向け: Claude Code, Cursor, Windsurf等）

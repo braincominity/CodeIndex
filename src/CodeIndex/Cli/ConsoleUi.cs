@@ -314,6 +314,11 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
         Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
+        Console.WriteLine("  cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx impact <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]");
+        Console.WriteLine("  cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]");
+        Console.WriteLine("  cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx languages [--json]");
         Console.WriteLine("  cdidx mcp [--db <path>]");
         Console.WriteLine();
@@ -332,7 +337,10 @@ public static class ConsoleUi
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings)");
+        Console.WriteLine("  impact <query>             Show transitive callers (ripple effect of changing a symbol)");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
+        Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
+        Console.WriteLine("  hotspots                   Find most-referenced symbols (high-impact code)");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
@@ -366,6 +374,8 @@ public static class ConsoleUi
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine("  --count                    Return only the result count (for AI preflight)");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
+        Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis (default: 5)");
+        Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
@@ -387,10 +397,53 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
         Console.WriteLine("  cdidx unused --lang csharp --exclude-tests      Find potentially unused symbols");
         Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find most-referenced symbols");
+        Console.WriteLine("  cdidx impact Run --depth 3 --exclude-tests      Transitive callers of a symbol");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
         Console.WriteLine("  cdidx languages                                Show supported languages");
+    }
+
+    // --- Did-you-mean / もしかして ---
+
+    /// <summary>
+    /// Find the closest matching command name using Levenshtein distance.
+    /// Returns null if no command is close enough (distance > 3).
+    /// Levenshtein距離で最も近いコマンド名を返す。距離が3超なら null を返す。
+    /// </summary>
+    public static string? FindClosestCommand(string input)
+    {
+        string? best = null;
+        var bestDist = int.MaxValue;
+        foreach (var cmd in Commands)
+        {
+            var dist = LevenshteinDistance(input.ToLowerInvariant(), cmd);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = cmd;
+            }
+        }
+        // Only suggest if edit distance is at most 3 / 編集距離3以下のみ推薦
+        return bestDist <= 3 ? best : null;
+    }
+
+    private static int LevenshteinDistance(string s, string t)
+    {
+        var n = s.Length;
+        var m = t.Length;
+        var d = new int[n + 1, m + 1];
+        for (var i = 0; i <= n; i++) d[i, 0] = i;
+        for (var j = 0; j <= m; j++) d[0, j] = j;
+        for (var i = 1; i <= n; i++)
+        {
+            for (var j = 1; j <= m; j++)
+            {
+                var cost = s[i - 1] == t[j - 1] ? 0 : 1;
+                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+            }
+        }
+        return d[n, m];
     }
 
     // --- Shell Completions / シェル補完 ---
@@ -399,7 +452,7 @@ public static class ConsoleUi
     [
         "index", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
-        "unused", "hotspots", "languages", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp",
     ];
 
     /// <summary>
@@ -455,7 +508,7 @@ public static class ConsoleUi
         --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
         --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
         --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
-        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --help"" -- ""$cur"")) ;;
+        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --help"" -- ""$cur"")) ;;
     esac
 }}
 complete -F _cdidx cdidx");

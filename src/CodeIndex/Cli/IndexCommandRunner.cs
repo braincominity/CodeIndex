@@ -287,6 +287,11 @@ public static class IndexCommandRunner
             }
         }
 
+        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
+        var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        if (purgedRefs > 0 && !options.Json)
+            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
+
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         int updated = 0, removed = 0, skipped = 0, errors = 0;
@@ -453,6 +458,11 @@ public static class IndexCommandRunner
         ConsoleUi.StopSpinner(purgeCts);
         if (purged > 0 && !options.Json)
             Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
+
+        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
+        var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        if (purgedRefs > 0 && !options.Json)
+            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         CancellationTokenSource? indexCts = null;
         if (!options.Json)

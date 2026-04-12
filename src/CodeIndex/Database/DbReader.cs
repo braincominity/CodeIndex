@@ -92,6 +92,25 @@ public partial class DbReader
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    private static string BuildGraphSupportedLanguagePredicate(SqliteCommand cmd, string fileAlias, string parameterPrefix)
+    {
+        var supportedLanguages = ReferenceExtractor.GetSupportedLanguages()
+            .OrderBy(lang => lang, StringComparer.Ordinal)
+            .ToList();
+        if (supportedLanguages.Count == 0)
+            return "1 = 0";
+
+        var parameterNames = new List<string>(supportedLanguages.Count);
+        for (int i = 0; i < supportedLanguages.Count; i++)
+        {
+            var parameterName = $"@{parameterPrefix}{i}";
+            parameterNames.Add(parameterName);
+            cmd.Parameters.AddWithValue(parameterName, supportedLanguages[i]);
+        }
+
+        return $"{fileAlias}.lang IN ({string.Join(", ", parameterNames)})";
+    }
+
     /// <summary>
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
@@ -102,12 +121,12 @@ public partial class DbReader
 
         var sql = @"
             SELECT f.path, f.lang, f.size, f.lines,
-                   COUNT(s.id) as symbol_count,
+                   (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
+                   (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) AS reference_count,
                    " + GetFileColumnSql("checksum") + @" AS checksum,
                    " + GetFileColumnSql("modified") + @" AS modified,
                    " + GetFileColumnSql("indexed_at") + @" AS indexed_at
             FROM files f
-            LEFT JOIN symbols s ON s.file_id = f.id
             WHERE 1=1";
 
         if (query != null)
@@ -117,7 +136,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.id ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
+        sql += $" ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -140,9 +159,10 @@ public partial class DbReader
                 Size = reader.GetInt64(2),
                 Lines = reader.GetInt32(3),
                 SymbolCount = reader.GetInt32(4),
-                Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
-                Modified = GetNullableDateTime(reader, 6),
-                IndexedAt = GetNullableDateTime(reader, 7),
+                ReferenceCount = reader.GetInt32(5),
+                Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Modified = GetNullableDateTime(reader, 7),
+                IndexedAt = GetNullableDateTime(reader, 8),
             });
         }
         return results;
@@ -162,6 +182,7 @@ public partial class DbReader
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE 1=1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (query != null)
             sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
@@ -225,6 +246,7 @@ public partial class DbReader
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -278,6 +300,7 @@ public partial class DbReader
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -316,6 +339,190 @@ public partial class DbReader
             });
         }
         return results;
+    }
+
+    /// <summary>
+    /// Resolve a user-provided symbol name to its actual indexed casing via definition lookup.
+    /// Prefers exact-case match, then falls back to case-insensitive. Only considers
+    /// graph-supported languages. Returns the original input if no match is found.
+    /// ユーザ入力のシンボル名を定義検索で実際のインデックス済みケーシングに解決する。
+    /// 完全一致を優先し、なければ大文字小文字無視でフォールバック。graph 対応言語のみ対象。
+    /// 見つからなければ元の入力をそのまま返す。
+    /// </summary>
+    private string ResolveSymbolName(string symbolName, string? lang)
+    {
+        // Simple case-insensitive lookup preferring exact-case match.
+        // No path/test filters — definitions outside caller scope must still be found.
+        // Only considers graph-supported languages to avoid resolving to unsupported ones.
+        // シンプルな case-insensitive 検索で完全一致を優先。graph 対応言語のみ対象。
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
+        cmd.CommandText = @"SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id
+                            WHERE lower(s.name) = lower(@name)
+                              AND " + supportedLangFilter + @"
+                            ORDER BY CASE WHEN s.name = @name THEN 0 ELSE 1 END LIMIT 1";
+        cmd.Parameters.AddWithValue("@name", symbolName);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? reader.GetString(0) : symbolName;
+    }
+
+    /// <summary>
+    /// Find exact-match callers for BFS traversal. Uses per-row case sensitivity
+    /// and filters to graph-supported languages only (preventing stale edges from
+    /// unsupported languages leaking into results on pre-upgrade databases).
+    /// BFS 走査用の完全一致 caller 検索。行ごとの case sensitivity 判定、
+    /// かつ graph 対応言語のみにフィルタ（アップグレード前 DB の古いエッジ漏れを防止）。
+    /// </summary>
+    private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "callerLang");
+
+        // Case-insensitive exact match via lower() — prevents substring expansion while
+        // handling both case-insensitive languages (SQL, VB, PowerShell) and user queries
+        // that don't match the indexed casing. The symbol is pre-resolved through definitions
+        // via ResolveSymbolName, so this primarily catches references stored with different
+        // casing than the definition (e.g. constructor calls vs class names).
+        // lower() による case-insensitive 完全一致 — 部分文字列展開を防ぎつつ、
+        // case-insensitive 言語とケース違いのユーザクエリの両方に対応。
+        var nameCondition = @"
+              AND lower(r.symbol_name) = lower(@symbolName)";
+
+        var sql = $@"
+            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                   MIN(r.line) AS first_line, COUNT(*) AS reference_count
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL
+              AND r.reference_kind IN ('call', 'instantiate')
+              AND {supportedLangFilter}
+              {nameCondition}";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, reference_count DESC, f.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@offset", offset);
+
+        var results = new List<CallerResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new CallerResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                CallerKind = reader.IsDBNull(2) ? null : reader.GetString(2),
+                CallerName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                CalleeName = reader.GetString(4),
+                FirstLine = reader.GetInt32(5),
+                ReferenceCount = reader.GetInt32(6),
+            });
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Compute transitive callers of a symbol using BFS with exact matching.
+    /// Returns each unique caller in the call chain with its depth from the root symbol.
+    /// Truncation is signaled via the Truncated property in results.
+    /// 完全一致の BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
+    /// 結果が切り詰められた場合は Truncated フラグで通知する。
+    /// </summary>
+    public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        // Resolve the symbol name through definitions first so case-mismatched queries
+        // like "run" find the actual "Run" symbol. Falls back to user input if not found.
+        // 定義を通じてシンボル名を解決し、"run" → "Run" のようなケース違いを補正する。
+        // 見つからなければユーザ入力をフォールバック使用。
+        var resolvedName = ResolveSymbolName(symbolName, lang);
+
+        var results = new List<ImpactResult>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<(string Symbol, int Depth)>();
+        queue.Enqueue((resolvedName, 0));
+        visited.Add(resolvedName);
+        var truncated = false;
+        // Safety cap to prevent infinite loops on pathological graphs / 病的グラフでの無限ループ防止
+        const int maxFetchIterations = 1000;
+
+        while (queue.Count > 0 && results.Count < limit)
+        {
+            var (currentSymbol, depth) = queue.Dequeue();
+            if (depth > maxDepth)
+                break;
+
+            // Fetch callers in pages, filtering out already-visited before counting toward limit.
+            // This prevents diamond graphs from hiding reachable callers behind visited duplicates.
+            // ページングで caller を取得し、visited フィルタ後にカウント。
+            // ダイヤモンド型グラフで到達可能な caller が visited 重複に隠れるのを防止。
+            var needed = limit - results.Count;
+            var offset = 0;
+            const int pageSize = 200;
+            var fetchIterations = 0;
+
+            while (results.Count < limit && fetchIterations < maxFetchIterations)
+            {
+                fetchIterations++;
+                var page = GetCallersExact(currentSymbol, pageSize, offset, lang, pathPattern, excludePathPatterns, excludeTests);
+
+                if (page.Count == 0)
+                    break; // No more callers for this symbol / このシンボルの caller は尽きた
+
+                foreach (var caller in page)
+                {
+                    if (results.Count >= limit)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
+                    var callerName = caller.CallerName ?? "<top-level>";
+                    var key = $"{caller.Path}:{callerName}";
+
+                    if (!visited.Add(key))
+                        continue;
+
+                    results.Add(new ImpactResult
+                    {
+                        Path = caller.Path,
+                        Lang = caller.Lang,
+                        CallerKind = caller.CallerKind,
+                        CallerName = caller.CallerName,
+                        CalleeName = caller.CalleeName,
+                        Depth = depth + 1,
+                        FirstLine = caller.FirstLine,
+                        ReferenceCount = caller.ReferenceCount,
+                    });
+
+                    if (caller.CallerName != null && depth + 1 < maxDepth)
+                        queue.Enqueue((caller.CallerName, depth + 1));
+                }
+
+                offset += page.Count;
+
+                // If this page was full, there might be more — continue paging
+                // ページが満杯なら、まだある可能性 — ページングを継続
+                if (page.Count < pageSize)
+                    break;
+            }
+
+            // If fetch iteration cap was hit, mark as truncated / フェッチ反復上限に達した場合も truncated
+            if (fetchIterations >= maxFetchIterations)
+                truncated = true;
+        }
+
+        if (queue.Count > 0 && results.Count >= limit)
+            truncated = true;
+
+        return (results, truncated);
     }
 
     /// <summary>
@@ -410,14 +617,13 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
             SELECT f.path, f.lang, f.size, f.lines,
-                   COUNT(s.id) AS symbol_count,
+                   (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
+                   (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) AS reference_count,
                    {GetFileColumnSql("checksum")} AS checksum,
                    {GetFileColumnSql("modified")} AS modified,
                    {GetFileColumnSql("indexed_at")} AS indexed_at
             FROM files f
-            LEFT JOIN symbols s ON s.file_id = f.id
-            WHERE f.path = @path
-            GROUP BY f.id";
+            WHERE f.path = @path";
         cmd.Parameters.AddWithValue("@path", path);
 
         using var reader = cmd.ExecuteReader();
@@ -431,9 +637,10 @@ public partial class DbReader
             Size = reader.GetInt64(2),
             Lines = reader.GetInt32(3),
             SymbolCount = reader.GetInt32(4),
-            Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
-            Modified = GetNullableDateTime(reader, 6),
-            IndexedAt = GetNullableDateTime(reader, 7),
+            ReferenceCount = reader.GetInt32(5),
+            Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+            Modified = GetNullableDateTime(reader, 7),
+            IndexedAt = GetNullableDateTime(reader, 8),
         };
     }
 
@@ -575,6 +782,7 @@ public partial class DbReader
                 JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
                 JOIN files dst ON s.file_id = dst.id
                 WHERE src.path != dst.path";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
         if (pathPattern != null)
