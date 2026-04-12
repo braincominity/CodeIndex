@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 - **`unused` no longer crashes with "data is NULL at ordinal 5" on legacy indexes (#49)** — When older cdidx binaries added the `start_line` / `end_line` symbol columns but left existing rows with NULL, `cdidx unused` crashed because `GetUnusedSymbols` called `GetInt32` on those NULL ordinals. The symbol-column SQL helper now wraps fallback-aware reads in `COALESCE(s.<col>, <fallback>)`, and `GetUnusedSymbols` additionally defends each read with `IsDBNull` so a fully-legacy row falls back to `s.line`. Affected: `DbReader.cs`, `DbSymbolReader.cs`, `DbReaderTests.cs`.
+- **`install.sh` fails fast on missing runtime assets instead of silently installing a broken binary** — Previously the installer copied `version.json`, `libe_sqlite3.so`, and `libe_sqlite3.dylib` only "if present", so a tarball missing any of them would still complete "successfully" and then crash on first use (`cdidx --version` → `v0.0.0`, or `DllNotFoundException: e_sqlite3`). The installer now selects required assets by detected `$OS_NAME` (`version.json` + `libe_sqlite3.so` on Linux, `version.json` + `libe_sqlite3.dylib` on macOS) and aborts with a clear error if any are missing from the release tarball. The check intentionally avoids bash 4+ builtins (`mapfile`) and external `find` calls so the one-liner stays compatible with macOS `/bin/bash` 3.2, where `curl … | bash` runs. Addresses the same concern as #72 (codex) without introducing a macOS portability regression. Affected: `install.sh`.
 
 ### [1.8.1] - 2026-04-13
 
@@ -588,6 +589,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 - **`unused` がレガシーインデックスで「data is NULL at ordinal 5」でクラッシュしなくなった (#49)** — 古い cdidx バイナリが symbols の `start_line` / `end_line` カラムを追加しただけで既存行を NULL のまま残していた場合、`cdidx unused` は `GetInt32` が NULL を読めずクラッシュしていた。シンボルカラム SQL ヘルパーを `COALESCE(s.<col>, <fallback>)` で包み、さらに `GetUnusedSymbols` の読み出しも `IsDBNull` でガードして、完全にレガシーな行は `s.line` にフォールバックするようにした。対象: `DbReader.cs`、`DbSymbolReader.cs`、`DbReaderTests.cs`。
+- **`install.sh` が必須ランタイム資産の欠落で即時失敗するよう修正（壊れたバイナリの黙ったインストールを防止）** — 旧実装は `version.json`・`libe_sqlite3.so`・`libe_sqlite3.dylib` を「あればコピー」する仕様で、tarball から欠落していてもインストールは「成功」扱いになり、初回起動で `cdidx --version` が `v0.0.0` を返す、あるいは `DllNotFoundException: e_sqlite3` で落ちる状態になっていた。検出済みの `$OS_NAME` に応じて必須資産を選び（Linux: `version.json` + `libe_sqlite3.so`、macOS: `version.json` + `libe_sqlite3.dylib`）、release tarball に欠落があれば明確なエラーで中断する。チェックは bash 4+ ビルトイン（`mapfile`）や外部 `find` を意図的に避け、`curl … | bash` が macOS の `/bin/bash` 3.2 で実行された場合にも壊れないようにしている。#72（codex 発）と同じ課題に、macOS 移植性を壊さずに対処する。対象: `install.sh`。
 
 ### [1.8.1] - 2026-04-13
 
