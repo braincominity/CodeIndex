@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.7.0] - 2026-04-12
+
 #### Added
 - **Granular C# symbol kinds** — C# symbols now use semantically precise kinds: `property` (get/set and expression-bodied), `interface`, `enum`, `struct` (including `record struct`, `ref struct`, `readonly struct`), `event`, and `delegate`. Previously all mapped to generic `class` or `function`. AI agents can now filter by `--kind property`, `--kind interface`, etc. Shell completions updated for bash/zsh/fish. Affected: `SymbolExtractor.cs`, `ConsoleUi.cs`.
 - **Granular Java/Kotlin symbol kinds** — Java interfaces and enums now use `kind="interface"` and `kind="enum"` instead of `kind="class"`. Kotlin sealed interfaces use `kind="interface"`, enum classes use `kind="enum"`, and `val`/`var` properties use `kind="property"`. Affected: `SymbolExtractor.cs`.
@@ -533,6 +535,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.7.0] - 2026-04-12
+
 #### 追加
 - **C#シンボル種別の細分化** — C#シンボルに意味的に正確な種別を導入: `property`（get/set・式本体）、`interface`、`enum`、`struct`（`record struct`・`ref struct`・`readonly struct`含む）、`event`、`delegate`。従来は汎用的な `class` や `function` に分類されていた。AIエージェントが `--kind property`、`--kind interface` 等でフィルタ可能に。bash/zsh/fishのシェル補完も更新。対象: `SymbolExtractor.cs`、`ConsoleUi.cs`。
 - **Java/Kotlinシンボル種別の細分化** — Javaのインターフェースとenumが `kind="interface"` / `kind="enum"` に（従来は `kind="class"`）。Kotlinの sealed interface が `kind="interface"`、enum class が `kind="enum"`、`val`/`var` プロパティが `kind="property"` に。対象: `SymbolExtractor.cs`。
@@ -1051,7 +1055,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/Widthdom/CodeIndex/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/Widthdom/CodeIndex/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Widthdom/CodeIndex/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/Widthdom/CodeIndex/compare/v1.4.0...v1.4.1
