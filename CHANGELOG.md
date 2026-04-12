@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **Shell completions and help text missing `validate`, `deps`, `unused`, `hotspots`** — Added `validate` and `deps` to the shell completions command list and added usage lines and command descriptions for `validate`, `deps`, `unused`, and `hotspots` in help output. Affected: `ConsoleUi.cs`.
+
 ### [1.7.0] - 2026-04-12
 
 #### Added
@@ -534,6 +537,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **シェル補完とヘルプテキストに `validate`、`deps`、`unused`、`hotspots` が欠落** — シェル補完のコマンドリストに `validate` と `deps` を追加し、ヘルプ出力に `validate`、`deps`、`unused`、`hotspots` の usage 行とコマンド説明を追加。対象: `ConsoleUi.cs`。
 
 ### [1.7.0] - 2026-04-12
 

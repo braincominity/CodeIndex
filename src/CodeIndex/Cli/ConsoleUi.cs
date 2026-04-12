@@ -314,6 +314,10 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
         Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
+        Console.WriteLine("  cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]");
+        Console.WriteLine("  cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx languages [--json]");
         Console.WriteLine("  cdidx mcp [--db <path>]");
         Console.WriteLine();
@@ -333,6 +337,8 @@ public static class ConsoleUi
         Console.WriteLine("  status                     Show database statistics");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings)");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
+        Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
+        Console.WriteLine("  hotspots                   Find most-referenced symbols (high-impact code)");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
@@ -399,7 +405,7 @@ public static class ConsoleUi
     [
         "index", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
-        "unused", "hotspots", "languages", "mcp",
+        "validate", "deps", "unused", "hotspots", "languages", "mcp",
     ];
 
     /// <summary>
