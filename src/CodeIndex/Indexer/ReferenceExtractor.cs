@@ -14,7 +14,8 @@ public static class ReferenceExtractor
         "python", "javascript", "typescript", "csharp", "go", "rust",
         "java", "kotlin", "ruby", "c", "cpp", "php", "swift",
         "dart", "scala", "elixir", "lua", "vb", "fsharp", "sql",
-        "r", "powershell", "haskell"
+        "r", "powershell", "haskell",
+        "gradle", "terraform", "protobuf", "dockerfile", "makefile"
     ];
 
     private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
@@ -54,6 +55,14 @@ public static class ReferenceExtractor
         "data", "newtype", "instance", "deriving", "infixl", "infixr", "infix",
         "qualified", "hiding", "forall", "Just", "Nothing", "Left", "Right", "True", "False",
         "putStrLn", "putStr", "print",
+        // Gradle/Groovy keywords / Gradle/Groovy キーワード
+        "apply", "plugins", "dependencies", "repositories", "allprojects", "subprojects",
+        "task", "buildscript", "ext", "group", "version", "description",
+        // Terraform keywords / Terraform キーワード
+        "resource", "data", "variable", "output", "locals", "module", "provider",
+        "terraform", "required_providers", "backend",
+        // Makefile keywords / Makefile キーワード
+        "all", "clean", "install", "build", "run", "help",
         // Other languages / 他言語
         "require", "import", "include", "raise", "lambda",
     };
@@ -236,10 +245,12 @@ public static class ReferenceExtractor
     }
 
     private static bool UsesHashComments(string lang) =>
-        lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell";
+        lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell"
+            or "makefile" or "terraform" or "dockerfile" or "protobuf";
 
     private static bool UsesSlashComments(string lang) =>
-        lang is not "python" and not "ruby" and not "r" and not "haskell";
+        lang is not "python" and not "ruby" and not "r" and not "haskell"
+            and not "makefile" and not "terraform" and not "dockerfile";
 
     private static bool UsesDashDashComments(string lang) =>
         lang is "lua" or "sql" or "haskell";
