@@ -830,7 +830,7 @@ public class DbReaderTests : IDisposable
         cmd.ExecuteNonQuery();
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: null,
-            pathPattern: null, excludePathPatterns: null, excludeTests: false);
+            pathPatterns: null, excludePathPatterns: null, excludeTests: false);
 
         var sym = Assert.Single(unused, s => s.Name == "Orphan");
         Assert.Equal(7, sym.Line);
