@@ -214,10 +214,14 @@ public partial class McpServer
         var pathPattern = args?["path"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var sinceStr = args?["since"]?.GetValue<string>();
+        DateTime? since = null;
+        if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedDefSince))
+            since = parsedDefSince;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPattern, excludePaths, excludeTests);
+            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPattern, excludePaths, excludeTests, since);
             var payload = new JsonObject
             {
                 ["query"] = query,
