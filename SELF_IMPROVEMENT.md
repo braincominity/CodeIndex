@@ -1,6 +1,8 @@
 # Self-Improvement Loop
 
 > **[日本語版はこちら / Japanese version](#自己改善ループ)**
+>
+> **Maintainers / forkers only** — see [MAINTAINERS.md](MAINTAINERS.md). End users don't need this document.
 
 This document is a ready-to-use operating contract for AI agents improving `cdidx` from inside this repository.
 

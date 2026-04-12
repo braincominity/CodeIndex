@@ -564,6 +564,8 @@ See [Exit codes](README.md#exit-codes) in README.
 
 ## Cloud Claude Code bootstrap (no .NET SDK)
 
+> **Maintainers / forkers only** — see [MAINTAINERS.md](MAINTAINERS.md). End users can skip this section.
+
 This section explains — in detail — the mechanism by which a Claude Code
 cloud session that follows [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md)
 ends up with a working `cdidx` binary plus a working SQLite runtime, even
@@ -1477,6 +1479,8 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **クロスコンパイルの linux-arm64 にランタイムスモークテストがない** — `release.yml` は x64 ランナー上で `linux-arm64` をクロスコンパイルする（`dotnet publish -r linux-arm64 --self-contained`）。ランナーが ARM バイナリをネイティブ実行できないためテストはスキップされる。理想的には QEMU ベースのスモークテスト（`cdidx --version`）をリリース前に実行すべきだが、GitHub Actions の無料枠ランナーには QEMU も ARM ランナーも含まれない。QEMU セットアップステップの追加は可能だが、リリースごとに CI の複雑さと実行時間が増す。.NET のクロスコンパイルは公式サポート機能で広く使われているため、実際に壊れたアーティファクトが出るリスクは低い。将来 ARM 固有の不具合が報告された場合、`docker run --platform linux/arm64` と QEMU の組み合わせが最初の対策となる。
 
 ## クラウド Claude Code ブートストラップ（.NET SDK なし）
+
+> **メンテナー・フォーク利用者向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
 
 このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Claude Code のクラウドセッションが、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、クラウドセッションは公開リリース体験のカナリアとなる。各層を理解することが重要である理由はここにある。
 
