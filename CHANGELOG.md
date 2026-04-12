@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **`unused` no longer crashes on older indexes with NULL `start_line`/`end_line`** — Symbols indexed before those columns existed can retain NULL `start_line` / `end_line` even after in-place migration. `GetUnusedSymbols` read ordinals 5 and 6 as non-nullable, so `cdidx unused` threw `SqliteException: The data is NULL at ordinal 5` on otherwise healthy DBs. Fall back to `line` when either column is NULL, matching the guards already in the symbols/definition read paths. Affected: `DbSymbolReader.cs`, `DbReaderTests.cs`.
+
 ### [1.8.1] - 2026-04-13
 
 #### Added
