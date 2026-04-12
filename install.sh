@@ -158,14 +158,37 @@ download_and_install() {
         error "Checksum mismatch!\n  Expected: $expected_checksum\n  Actual:   $actual_checksum"
     fi
 
-    # Extract / 展開
+    # Extract into a dedicated subdirectory so we don't mix extracted files
+    # with the downloaded archive/checksums when copying.
+    # 展開用サブディレクトリを使い、アーカイブや checksum ファイルと混在させない。
+    local extract_dir="${tmpdir}/extract"
+    mkdir -p "$extract_dir"
     info "Extracting..."
-    tar xzf "${tmpdir}/${archive_name}" -C "$tmpdir"
+    tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
 
-    # Install / インストール
+    # Install binary / バイナリをインストール
     mkdir -p "$INSTALL_DIR"
-    cp "${tmpdir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    cp "${extract_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Install runtime assets alongside the binary.
+    # - cdidx loads version.json via AppContext.BaseDirectory (the binary's dir),
+    #   so without it `cdidx --version` reports v0.0.0.
+    # - The native SQLite library (libe_sqlite3.so on Linux, libe_sqlite3.dylib
+    #   on macOS) must live next to the binary for P/Invoke to resolve; without
+    #   it every command crashes with DllNotFoundException at startup.
+    # ランタイム資産をバイナリの隣へ配置する。
+    # - cdidx は AppContext.BaseDirectory（バイナリのディレクトリ）から
+    #   version.json を読むため、これが無いと --version が v0.0.0 になる。
+    # - ネイティブ SQLite ライブラリ（Linux は libe_sqlite3.so、macOS は
+    #   libe_sqlite3.dylib）は P/Invoke 解決のためバイナリの隣に必要で、
+    #   無いと起動直後に DllNotFoundException で全コマンドが落ちる。
+    local asset
+    for asset in version.json libe_sqlite3.so libe_sqlite3.dylib; do
+        if [ -f "${extract_dir}/${asset}" ]; then
+            cp "${extract_dir}/${asset}" "${INSTALL_DIR}/${asset}"
+        fi
+    done
 
     info "Installed cdidx to ${INSTALL_DIR}/${BINARY_NAME}"
 }

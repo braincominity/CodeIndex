@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **`install.sh` now installs the SQLite native library and `version.json`** — The released tarball ships `cdidx`, `libe_sqlite3.so` (or `.dylib` on macOS), and `version.json`, but the installer previously copied only the binary. A clean install via the one-liner therefore produced `cdidx --version` reporting `v0.0.0` and every command crashing with `DllNotFoundException: Unable to load shared library 'e_sqlite3'`. The installer now extracts into a dedicated subdirectory and copies the binary plus the adjacent runtime assets (`version.json`, `libe_sqlite3.so`, `libe_sqlite3.dylib`) into `INSTALL_DIR`. Affected: `install.sh`.
+
 ### [1.8.0] - 2026-04-12
 
 #### Added
@@ -558,6 +561,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **`install.sh` が SQLite ネイティブライブラリと `version.json` も配置するように修正** — リリース tarball には `cdidx`、`libe_sqlite3.so`（macOS では `.dylib`）、`version.json` が含まれているが、従来のインストーラはバイナリのみをコピーしていた。このためワンライナーでのクリーンインストール直後は `cdidx --version` が `v0.0.0` を返し、全コマンドが `DllNotFoundException: Unable to load shared library 'e_sqlite3'` でクラッシュしていた。インストーラが専用サブディレクトリに展開し、バイナリに加えて隣接ランタイム資産（`version.json`、`libe_sqlite3.so`、`libe_sqlite3.dylib`）も `INSTALL_DIR` にコピーするよう修正。対象: `install.sh`。
 
 ### [1.8.0] - 2026-04-12
 
