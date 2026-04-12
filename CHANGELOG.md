@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **`CLOUD_BOOTSTRAP_PROMPT.md`** — Drop-in English/Japanese prompt for cloud Claude Code sessions that lack a local .NET SDK. Walks through the install one-liner, the clean-install smoke tests, the known `--json` / trimming caveat, and the safe-improvement boundaries. Affected: `CLOUD_BOOTSTRAP_PROMPT.md`.
+- **"Releasing a new version" README section** — Documents the single source of truth (`version.json`), how the version flows from `version.json` → `csproj` `<Version>` at build time → `ConsoleUi.LoadVersion()` at runtime, the absence of hard-coded version constants in C#, and the step-by-step bump-tag-push release checklist. Affected: `README.md`.
+
 #### Fixed
 - **`install.sh` now installs the SQLite native library and `version.json`** — The released tarball ships `cdidx`, `libe_sqlite3.so` (or `.dylib` on macOS), and `version.json`, but the installer previously copied only the binary. A clean install via the one-liner therefore produced `cdidx --version` reporting `v0.0.0` and every command crashing with `DllNotFoundException: Unable to load shared library 'e_sqlite3'`. The installer now extracts into a dedicated subdirectory and copies the binary plus the adjacent runtime assets (`version.json`, `libe_sqlite3.so`, `libe_sqlite3.dylib`) into `INSTALL_DIR`. Affected: `install.sh`.
 
@@ -561,6 +565,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **`CLOUD_BOOTSTRAP_PROMPT.md`** — .NET SDK の無いクラウド Claude Code セッション向けに、英日併記でそのまま貼れるブートストラッププロンプト。ワンライナーでのインストール、クリーンインストール直後のスモーク手順、`--json` / trimming に起因する既知の注意点、安全に改善できる領域の境界を記載。対象: `CLOUD_BOOTSTRAP_PROMPT.md`。
+- **README「新バージョンのリリース」セクション** — バージョン文字列の真実が `version.json` 1箇所であること、ビルド時に `csproj` の `<Version>` に流れ、実行時に `ConsoleUi.LoadVersion()` が読むこと、C# 側にハードコードされたバージョン定数が無いこと、`version.json` 更新 → タグ → push のリリース手順を明文化。対象: `README.md`。
 
 #### 修正
 - **`install.sh` が SQLite ネイティブライブラリと `version.json` も配置するように修正** — リリース tarball には `cdidx`、`libe_sqlite3.so`（macOS では `.dylib`）、`version.json` が含まれているが、従来のインストーラはバイナリのみをコピーしていた。このためワンライナーでのクリーンインストール直後は `cdidx --version` が `v0.0.0` を返し、全コマンドが `DllNotFoundException: Unable to load shared library 'e_sqlite3'` でクラッシュしていた。インストーラが専用サブディレクトリに展開し、バイナリに加えて隣接ランタイム資産（`version.json`、`libe_sqlite3.so`、`libe_sqlite3.dylib`）も `INSTALL_DIR` にコピーするよう修正。対象: `install.sh`。
