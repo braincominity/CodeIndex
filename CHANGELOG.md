@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.8.1] - 2026-04-13
+
 #### Added
 - **`MAINTAINERS.md`** — Single entry point listing documents and sections that are maintainer- or forker-only (release process, cloud-session bootstrap, self-improvement loop), so end users can skip them. Each referenced section now carries a one-line "Maintainers / forkers only" note at the top. Affected: `MAINTAINERS.md`, `README.md`, `DEVELOPER_GUIDE.md`, `CLOUD_BOOTSTRAP_PROMPT.md`, `SELF_IMPROVEMENT.md`.
 - **`CLOUD_BOOTSTRAP_PROMPT.md`** — Drop-in English/Japanese prompt for cloud Claude Code sessions that lack a local .NET SDK. Walks through the install one-liner, the clean-install smoke tests, the known `--json` / trimming caveat, and the safe-improvement boundaries. Affected: `CLOUD_BOOTSTRAP_PROMPT.md`.
@@ -571,6 +573,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.8.1] - 2026-04-13
+
 #### 追加
 - **`MAINTAINERS.md`** — リリース手順、Cloud セッションの bootstrap、自己改善ループなど、Maintainer および forker にのみ関係するドキュメント／セクションをまとめた単一の入口。エンドユーザーはここを読み飛ばせるよう、対象セクション冒頭に「Maintainer・forker 向け」注記を1行ずつ追加。対象: `MAINTAINERS.md`、`README.md`、`DEVELOPER_GUIDE.md`、`CLOUD_BOOTSTRAP_PROMPT.md`、`SELF_IMPROVEMENT.md`。
 - **`CLOUD_BOOTSTRAP_PROMPT.md`** — .NET SDK の無い Claude Code Cloud セッション向けに、英日併記でそのまま貼れる bootstrap プロンプト。ワンライナーでのインストール、クリーンインストール直後のスモーク手順、`--json` / trimming に起因する既知の注意点、安全に改善できる領域の境界を記載。対象: `CLOUD_BOOTSTRAP_PROMPT.md`。
@@ -1127,7 +1131,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/Widthdom/CodeIndex/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/Widthdom/CodeIndex/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/Widthdom/CodeIndex/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/Widthdom/CodeIndex/compare/v1.5.0...v1.6.0
