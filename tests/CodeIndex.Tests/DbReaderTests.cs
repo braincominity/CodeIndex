@@ -378,6 +378,128 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphReaders_IgnoreLegacyReferencesFromUnsupportedLanguages()
+    {
+        var pythonFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/session.py",
+            Lang = "python",
+            Size = 80,
+            Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = pythonFileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 2,
+            Content = "def login(user, password):\n    return authenticate(user, password)\n",
+        }]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = pythonFileId,
+                SymbolName = "authenticate",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 12,
+                Context = "return authenticate(user, password)",
+                ContainerKind = "function",
+                ContainerName = "login",
+            },
+        ]);
+
+        var shellFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "scripts/legacy.sh",
+            Lang = "shell",
+            Size = 48,
+            Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = shellFileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 2,
+            Content = "login() {\n  authenticate \"$1\"\n}\n",
+        }]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = shellFileId,
+                SymbolName = "authenticate",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 3,
+                Context = "authenticate \"$1\"",
+                ContainerKind = "function",
+                ContainerName = "login",
+            },
+        ]);
+
+        var references = _reader.SearchReferences("authenticate");
+        var callers = _reader.GetCallers("authenticate");
+        var callees = _reader.GetCallees("login");
+
+        var reference = Assert.Single(references);
+        Assert.Equal("src/session.py", reference.Path);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/session.py", caller.Path);
+
+        var callee = Assert.Single(callees);
+        Assert.Equal("src/session.py", callee.Path);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_ReturnsAllDirectCallersAcrossPages()
+    {
+        const int callerCount = 205;
+        for (int i = 0; i < callerCount; i++)
+        {
+            var callerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = $"src/caller_{i:D3}.py",
+                Lang = "python",
+                Size = 96,
+                Lines = 2,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            _writer.InsertChunks([new ChunkRecord
+            {
+                FileId = callerFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 2,
+                Content = $"def caller_{i:D3}():\n    return authenticate('user', 'pw')\n",
+            }]);
+            _writer.InsertReferences([
+                new ReferenceRecord
+                {
+                    FileId = callerFileId,
+                    SymbolName = "authenticate",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 12,
+                    Context = "return authenticate('user', 'pw')",
+                    ContainerKind = "function",
+                    ContainerName = $"caller_{i:D3}",
+                },
+            ]);
+        }
+
+        var (results, truncated) = _reader.GetTransitiveCallers("authenticate", maxDepth: 1, limit: 300);
+
+        Assert.False(truncated);
+        Assert.Equal(callerCount, results.Count);
+        Assert.Equal(callerCount, results.Select(result => $"{result.Path}:{result.CallerName}").Distinct(StringComparer.Ordinal).Count());
+        Assert.All(results, result => Assert.Equal(1, result.Depth));
+    }
+
+    [Fact]
     public void ListFiles_ReturnsAllFiles()
     {
         var results = _reader.ListFiles();

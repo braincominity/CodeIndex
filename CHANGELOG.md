@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### Fixed
 - **Shell completions and help text missing `validate`, `deps`, `unused`, `hotspots`** — Added `validate` and `deps` to the shell completions command list and added usage lines and command descriptions for `validate`, `deps`, `unused`, and `hotspots` in help output. Affected: `ConsoleUi.cs`.
 - **Kind hint shows all valid kinds, not just in-index kinds** — `--kind` validation now uses a static list of all 10 valid symbol kinds instead of querying only kinds present in the current index. Invalid kinds get an "Available:" list; valid-but-absent kinds get a separate "no X symbols in the index" message with the indexed kinds. Affected: `QueryCommandRunner.cs`.
+- **Legacy removed-language edges no longer leak from graph readers, and impact paging is stable** — `references`, `callers`, `callees`, `impact`, and file dependency reads now share a graph-supported language predicate so pre-upgrade shell rows do not surface until reindexing runs. `impact` paging now uses SQL `OFFSET` with a deterministic order instead of replaying larger `LIMIT` windows, preventing skipped callers across BFS pages. Affected: `DbReader.cs`, `DbReaderTests.cs`.
 
 ### [1.7.0] - 2026-04-12
 
@@ -576,6 +577,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### 修正
 - **シェル補完とヘルプテキストに `validate`、`deps`、`unused`、`hotspots` が欠落** — シェル補完のコマンドリストに `validate` と `deps` を追加し、ヘルプ出力に `validate`、`deps`、`unused`、`hotspots` の usage 行とコマンド説明を追加。対象: `ConsoleUi.cs`。
 - **kind ヒントがインデックス内のみでなく全有効種別を表示** — `--kind` 検証が、現インデックス内の種別のみではなく全10種の有効シンボル種別の静的リストを使うようになった。無効な kind には "Available:" 一覧を、有効だがインデックスに存在しない kind には "no X symbols in the index" とインデックス内の種別を表示。対象: `QueryCommandRunner.cs`。
+- **削除済み言語の古いエッジがグラフ読取へ漏れず、impact のページングも安定化** — `references`、`callers`、`callees`、`impact`、ファイル依存の読取が共通の graph 対応言語フィルタを共有し、再インデックス前の古い shell 行が表に出ないようになった。`impact` のページングは大きい `LIMIT` の再実行ではなく、決定的な順序と SQL `OFFSET` を使うように変更し、BFS ページ境界で caller を取りこぼさないようにした。対象: `DbReader.cs`、`DbReaderTests.cs`。
 
 ### [1.7.0] - 2026-04-12
 
