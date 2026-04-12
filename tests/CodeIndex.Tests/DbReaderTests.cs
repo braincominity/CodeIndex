@@ -800,33 +800,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetUnusedSymbols_HandlesNullStartAndEndLine()
+    public void GetUnusedSymbols_NullStartEndLine_DoesNotCrash()
     {
-        // Regression for #58 — older DBs migrated in place can have NULL start_line/end_line.
-        // `cdidx unused` previously crashed with "The data is NULL at ordinal 5".
-        // #58の回帰 — その場移行された古いDBはstart_line/end_lineがNULLになりうる。
-        // 以前は`cdidx unused`が「ordinal 5でNULL」でクラッシュしていた。
+        // Regression: #49 — legacy indexes can have NULL start_line/end_line on symbol rows.
+        // cdidx unused crashed with "The data is NULL at ordinal 5" before the COALESCE fix.
+        // リグレッション: #49 — 古いインデックスは symbols 行の start_line/end_line が NULL になりうる。
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/legacy.cs", Lang = "csharp", Size = 50, Lines = 10,
+            Path = "src/unused_null.cs", Lang = "csharp", Size = 100, Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
-        _writer.InsertChunks([new ChunkRecord
-        {
-            FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 10,
-            Content = "class Legacy {}",
-        }]);
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = @"INSERT INTO symbols (file_id, kind, name, line, start_line, end_line)
-                            VALUES (@fid, 'class', 'OrphanedClass', 7, NULL, NULL)";
+                            VALUES (@fid, 'function', 'Orphan', 7, NULL, NULL)";
         cmd.Parameters.AddWithValue("@fid", fileId);
         cmd.ExecuteNonQuery();
 
-        var results = _reader.GetUnusedSymbols(limit: 50, kind: null, lang: "csharp", pathPattern: null, excludePathPatterns: null, excludeTests: false);
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: null,
+            pathPattern: null, excludePathPatterns: null, excludeTests: false);
 
-        var orphan = Assert.Single(results, s => s.Name == "OrphanedClass");
-        Assert.Equal(7, orphan.Line);
-        Assert.Equal(7, orphan.StartLine);
-        Assert.Equal(7, orphan.EndLine);
+        var sym = Assert.Single(unused, s => s.Name == "Orphan");
+        Assert.Equal(7, sym.Line);
+        Assert.Equal(7, sym.StartLine);
+        Assert.Equal(7, sym.EndLine);
     }
 }

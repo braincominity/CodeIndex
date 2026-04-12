@@ -9,8 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **Release checklist: triage every unmerged branch and open PR before version bump** — The "Releasing a new version" section now opens with a step 0 requiring maintainers to list *all* `git branch --no-merged main` entries and *all* `gh pr list --state open` entries and decide, per entry, to merge or explicitly defer — without pre-filtering by branch name, so a release-relevant fix on a differently named branch cannot silently slip through. Closes the process gap that caused v1.8.1 to ship without the `fix/unused-null-ordinal-58` fix (re-reported as #60). Affected: `README.md`.
+
 #### Fixed
-- **`unused` no longer crashes on older indexes with NULL `start_line`/`end_line`** — Symbols indexed before those columns existed can retain NULL `start_line` / `end_line` even after in-place migration. `GetUnusedSymbols` read ordinals 5 and 6 as non-nullable, so `cdidx unused` threw `SqliteException: The data is NULL at ordinal 5` on otherwise healthy DBs. Fall back to `line` when either column is NULL, matching the guards already in the symbols/definition read paths. Affected: `DbSymbolReader.cs`, `DbReaderTests.cs`.
+- **`unused` no longer crashes with "data is NULL at ordinal 5" on legacy indexes (#49)** — When older cdidx binaries added the `start_line` / `end_line` symbol columns but left existing rows with NULL, `cdidx unused` crashed because `GetUnusedSymbols` called `GetInt32` on those NULL ordinals. The symbol-column SQL helper now wraps fallback-aware reads in `COALESCE(s.<col>, <fallback>)`, and `GetUnusedSymbols` additionally defends each read with `IsDBNull` so a fully-legacy row falls back to `s.line`. Affected: `DbReader.cs`, `DbSymbolReader.cs`, `DbReaderTests.cs`.
 
 ### [1.8.1] - 2026-04-13
 
@@ -576,8 +579,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### 追加
+- **リリース前チェックリスト: 未マージブランチと open PR を全件トリアージ** — 「新バージョンのリリース」手順の冒頭に、`git branch --no-merged main` の全エントリと `gh pr list --state open` の全エントリを列挙し、各件を「マージする」「PR 説明で明示的に見送る」のどちらかに必ず振り分ける step 0 を追加。ブランチ名で事前フィルタしないため、命名が異なるブランチに載った release-relevant な修正も素通りできない。v1.8.1 が `fix/unused-null-ordinal-58` を取り込まず公開され #60 として再報告されたプロセスギャップを塞ぐためのチェック。対象: `README.md`。
+
 #### 修正
-- **古いインデックスで `start_line`/`end_line` が NULL のときに `unused` がクラッシュしなくなった** — これらのカラムが存在しなかった頃にインデックスされたシンボルは、その場移行後も `start_line` / `end_line` が NULL のまま残ることがある。`GetUnusedSymbols` は ordinal 5 と 6 を非 NULL 前提で読んでいたため、正常な DB でも `cdidx unused` が `SqliteException: The data is NULL at ordinal 5` を投げていた。既に symbols/definition 経路で入っているガードに合わせ、NULL のときは `line` にフォールバックするよう修正。対象: `DbSymbolReader.cs`、`DbReaderTests.cs`。
+- **`unused` がレガシーインデックスで「data is NULL at ordinal 5」でクラッシュしなくなった (#49)** — 古い cdidx バイナリが symbols の `start_line` / `end_line` カラムを追加しただけで既存行を NULL のまま残していた場合、`cdidx unused` は `GetInt32` が NULL を読めずクラッシュしていた。シンボルカラム SQL ヘルパーを `COALESCE(s.<col>, <fallback>)` で包み、さらに `GetUnusedSymbols` の読み出しも `IsDBNull` でガードして、完全にレガシーな行は `s.line` にフォールバックするようにした。対象: `DbReader.cs`、`DbSymbolReader.cs`、`DbReaderTests.cs`。
 
 ### [1.8.1] - 2026-04-13
 
