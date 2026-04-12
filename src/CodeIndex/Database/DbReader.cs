@@ -320,17 +320,122 @@ public partial class DbReader
     }
 
     /// <summary>
-    /// Compute transitive callers of a symbol using BFS.
-    /// Returns each unique caller in the call chain with its depth from the root symbol.
-    /// BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
+    /// Resolve a user-provided symbol name to its actual indexed casing via definition lookup.
+    /// Prefers exact-case match, then falls back to case-insensitive. Only considers
+    /// graph-supported languages. Returns the original input if no match is found.
+    /// ユーザ入力のシンボル名を定義検索で実際のインデックス済みケーシングに解決する。
+    /// 完全一致を優先し、なければ大文字小文字無視でフォールバック。graph 対応言語のみ対象。
+    /// 見つからなければ元の入力をそのまま返す。
     /// </summary>
-    public List<ImpactResult> GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    private string ResolveSymbolName(string symbolName, string? lang)
     {
+        // Simple case-insensitive lookup preferring exact-case match.
+        // No path/test filters — definitions outside caller scope must still be found.
+        // Only considers graph-supported languages to avoid resolving to unsupported ones.
+        // シンプルな case-insensitive 検索で完全一致を優先。graph 対応言語のみ対象。
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id
+                            WHERE lower(s.name) = lower(@name) ORDER BY CASE WHEN s.name = @name THEN 0 ELSE 1 END LIMIT 1";
+        cmd.Parameters.AddWithValue("@name", symbolName);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? reader.GetString(0) : symbolName;
+    }
+
+    /// <summary>
+    /// Find exact-match callers for BFS traversal. Uses per-row case sensitivity
+    /// and filters to graph-supported languages only (preventing stale edges from
+    /// unsupported languages leaking into results on pre-upgrade databases).
+    /// BFS 走査用の完全一致 caller 検索。行ごとの case sensitivity 判定、
+    /// かつ graph 対応言語のみにフィルタ（アップグレード前 DB の古いエッジ漏れを防止）。
+    /// </summary>
+    private List<CallerResult> GetCallersExact(string symbolName, int limit, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        // Build IN clause for graph-supported languages / graph 対応言語の IN 句を構築
+        var supportedLangs = ReferenceExtractor.GetSupportedLanguages();
+        var langParams = new List<string>();
+        var idx = 0;
+        foreach (var sl in supportedLangs)
+        {
+            var p = $"@sl{idx++}";
+            langParams.Add(p);
+            cmd.Parameters.AddWithValue(p, sl);
+        }
+        var supportedLangFilter = $"f.lang IN ({string.Join(", ", langParams)})";
+
+        // Case-insensitive exact match via lower() — prevents substring expansion while
+        // handling both case-insensitive languages (SQL, VB, PowerShell) and user queries
+        // that don't match the indexed casing. The symbol is pre-resolved through definitions
+        // via ResolveSymbolName, so this primarily catches references stored with different
+        // casing than the definition (e.g. constructor calls vs class names).
+        // lower() による case-insensitive 完全一致 — 部分文字列展開を防ぎつつ、
+        // case-insensitive 言語とケース違いのユーザクエリの両方に対応。
+        var nameCondition = @"
+              AND lower(r.symbol_name) = lower(@symbolName)";
+
+        var sql = $@"
+            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                   MIN(r.line) AS first_line, COUNT(*) AS reference_count
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL
+              AND r.reference_kind IN ('call', 'instantiate')
+              AND {supportedLangFilter}
+              {nameCondition}";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, reference_count DESC, f.path, first_line LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<CallerResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new CallerResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                CallerKind = reader.IsDBNull(2) ? null : reader.GetString(2),
+                CallerName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                CalleeName = reader.GetString(4),
+                FirstLine = reader.GetInt32(5),
+                ReferenceCount = reader.GetInt32(6),
+            });
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Compute transitive callers of a symbol using BFS with exact matching.
+    /// Returns each unique caller in the call chain with its depth from the root symbol.
+    /// Truncation is signaled via the Truncated property in results.
+    /// 完全一致の BFS でシンボルの推移的呼び出し元を算出。各呼び出し元とルートシンボルからの深さを返す。
+    /// 結果が切り詰められた場合は Truncated フラグで通知する。
+    /// </summary>
+    public (List<ImpactResult> Results, bool Truncated) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        // Resolve the symbol name through definitions first so case-mismatched queries
+        // like "run" find the actual "Run" symbol. Falls back to user input if not found.
+        // 定義を通じてシンボル名を解決し、"run" → "Run" のようなケース違いを補正する。
+        // 見つからなければユーザ入力をフォールバック使用。
+        var resolvedName = ResolveSymbolName(symbolName, lang);
+
         var results = new List<ImpactResult>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var queue = new Queue<(string Symbol, int Depth)>();
-        queue.Enqueue((symbolName, 0));
-        visited.Add(symbolName);
+        queue.Enqueue((resolvedName, 0));
+        visited.Add(resolvedName);
+        var truncated = false;
+        // Safety cap to prevent infinite loops on pathological graphs / 病的グラフでの無限ループ防止
+        const int maxFetchIterations = 1000;
 
         while (queue.Count > 0 && results.Count < limit)
         {
@@ -338,40 +443,83 @@ public partial class DbReader
             if (depth > maxDepth)
                 break;
 
-            // Find direct callers of this symbol / このシンボルの直接の呼び出し元を探す
-            var callers = GetCallers(currentSymbol, limit: 100, lang: lang, pathPattern: pathPattern,
-                excludePathPatterns: excludePathPatterns, excludeTests: excludeTests);
+            // Fetch callers in pages, filtering out already-visited before counting toward limit.
+            // This prevents diamond graphs from hiding reachable callers behind visited duplicates.
+            // ページングで caller を取得し、visited フィルタ後にカウント。
+            // ダイヤモンド型グラフで到達可能な caller が visited 重複に隠れるのを防止。
+            var needed = limit - results.Count;
+            var offset = 0;
+            const int pageSize = 200;
+            var fetchIterations = 0;
 
-            foreach (var caller in callers)
+            while (results.Count < limit && fetchIterations < maxFetchIterations)
             {
-                if (results.Count >= limit)
-                    break;
+                fetchIterations++;
+                var page = GetCallersExact(currentSymbol, pageSize, lang, pathPattern, excludePathPatterns, excludeTests);
 
-                var callerName = caller.CallerName ?? "<top-level>";
-                var key = $"{caller.Path}:{callerName}";
-
-                if (!visited.Add(key))
-                    continue;
-
-                results.Add(new ImpactResult
+                // Skip already-fetched rows via offset — we re-query with a higher LIMIT
+                // offset 分をスキップ — より大きい LIMIT で再クエリ
+                // Note: GetCallersExact uses SQL LIMIT, so we increase it each page
+                if (offset > 0)
                 {
-                    Path = caller.Path,
-                    Lang = caller.Lang,
-                    CallerKind = caller.CallerKind,
-                    CallerName = caller.CallerName,
-                    CalleeName = caller.CalleeName,
-                    Depth = depth + 1,
-                    FirstLine = caller.FirstLine,
-                    ReferenceCount = caller.ReferenceCount,
-                });
+                    // Re-fetch with increased limit to get past offset / offset 以降を取得するため LIMIT 増加
+                    page = GetCallersExact(currentSymbol, offset + pageSize, lang, pathPattern, excludePathPatterns, excludeTests);
+                    page = page.Skip(offset).ToList();
+                }
 
-                // Enqueue for further BFS if within depth limit / 深さ制限内ならさらにBFS
-                if (caller.CallerName != null && depth + 1 < maxDepth)
-                    queue.Enqueue((caller.CallerName, depth + 1));
+                if (page.Count == 0)
+                    break; // No more callers for this symbol / このシンボルの caller は尽きた
+
+                foreach (var caller in page)
+                {
+                    if (results.Count >= limit)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
+                    var callerName = caller.CallerName ?? "<top-level>";
+                    var key = $"{caller.Path}:{callerName}";
+
+                    if (!visited.Add(key))
+                    {
+                        offset++;
+                        continue;
+                    }
+
+                    results.Add(new ImpactResult
+                    {
+                        Path = caller.Path,
+                        Lang = caller.Lang,
+                        CallerKind = caller.CallerKind,
+                        CallerName = caller.CallerName,
+                        CalleeName = caller.CalleeName,
+                        Depth = depth + 1,
+                        FirstLine = caller.FirstLine,
+                        ReferenceCount = caller.ReferenceCount,
+                    });
+
+                    offset++;
+
+                    if (caller.CallerName != null && depth + 1 < maxDepth)
+                        queue.Enqueue((caller.CallerName, depth + 1));
+                }
+
+                // If this page was full, there might be more — continue paging
+                // ページが満杯なら、まだある可能性 — ページングを継続
+                if (page.Count < pageSize)
+                    break;
             }
+
+            // If fetch iteration cap was hit, mark as truncated / フェッチ反復上限に達した場合も truncated
+            if (fetchIterations >= maxFetchIterations)
+                truncated = true;
         }
 
-        return results;
+        if (queue.Count > 0 && results.Count >= limit)
+            truncated = true;
+
+        return (results, truncated);
     }
 
     /// <summary>

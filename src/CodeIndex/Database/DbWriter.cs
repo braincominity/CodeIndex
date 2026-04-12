@@ -518,6 +518,39 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Delete symbol_references for files whose language is no longer graph-supported.
+    /// Prevents stale call edges from surviving after a language is removed from graph support.
+    /// グラフ非対応になった言語のファイルから symbol_references を削除する。
+    /// グラフ対応が外された言語の古いコールエッジが残存するのを防止する。
+    /// </summary>
+    /// <param name="supportedLanguages">Currently supported languages / 現在対応している言語</param>
+    /// <returns>Number of stale reference rows deleted / 削除された古い参照行数</returns>
+    public int PurgeUnsupportedReferences(IReadOnlyCollection<string> supportedLanguages)
+    {
+        if (supportedLanguages.Count == 0)
+            return 0;
+
+        using var cmd = _conn.CreateCommand();
+        // Build an IN clause for supported languages / 対応言語の IN 句を構築
+        var inParams = new List<string>();
+        for (int i = 0; i < supportedLanguages.Count; i++)
+        {
+            var paramName = $"@lang{i}";
+            inParams.Add(paramName);
+            cmd.Parameters.AddWithValue(paramName, supportedLanguages.ElementAt(i));
+        }
+
+        cmd.CommandText = $@"
+            DELETE FROM symbol_references
+            WHERE file_id IN (
+                SELECT f.id FROM files f
+                WHERE f.lang IS NOT NULL
+                  AND f.lang NOT IN ({string.Join(", ", inParams)})
+            )";
+        return cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Get total counts for the summary output.
     /// サマリー出力用の合計件数を取得する。
     /// </summary>

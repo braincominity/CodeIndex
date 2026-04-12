@@ -682,7 +682,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
-            var results = reader.GetTransitiveCallers(options.Query, maxDepth, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var (results, truncated) = reader.GetTransitiveCallers(options.Query, maxDepth, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -706,7 +706,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { query = options.Query, count = results.Count, max_depth = maxDepth, callers = results }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { query = options.Query, count = results.Count, max_depth = maxDepth, truncated, callers = results }, jsonOptions));
             }
             else
             {
@@ -721,7 +721,8 @@ public static class QueryCommandRunner
                     }
                 }
                 var fileCount = results.Select(r => r.Path).Distinct().Count();
-                Console.Error.WriteLine($"\n({results.Count} callers across {fileCount} files, max depth {maxDepth})");
+                var truncNote = truncated ? " [TRUNCATED]" : "";
+                Console.Error.WriteLine($"\n({results.Count} callers across {fileCount} files, max depth {maxDepth}{truncNote})");
             }
             return CommandExitCodes.Success;
         });

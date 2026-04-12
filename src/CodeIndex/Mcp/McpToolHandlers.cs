@@ -674,7 +674,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.GetTransitiveCallers(query, maxDepth, limit, lang, pathPattern, excludePaths, excludeTests);
+            var (results, truncated) = reader.GetTransitiveCallers(query, maxDepth, limit, lang, pathPattern, excludePaths, excludeTests);
             var fileCount = results.Select(r => r.Path).Distinct().Count();
             var maxActualDepth = results.Count > 0 ? results.Max(r => r.Depth) : 0;
             var payload = new JsonObject
@@ -684,10 +684,12 @@ public partial class McpServer
                 ["file_count"] = fileCount,
                 ["max_depth"] = maxDepth,
                 ["actual_depth"] = maxActualDepth,
+                ["truncated"] = truncated,
                 ["callers"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             var summary = results.Count > 0
                 ? $"Found {results.Count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
+                  + (truncated ? " Results truncated — increase limit for more." : "")
                 : "No transitive callers found.";
             if (results.Count == 0)
             {
@@ -873,6 +875,9 @@ public partial class McpServer
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
+
+        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
+        writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
         var files = indexer.ScanFiles();
