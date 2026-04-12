@@ -118,9 +118,9 @@ public partial class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
-        var symbols = SearchSymbols(query, limit, kind, lang, pathPattern, excludePathPatterns, excludeTests);
+        var symbols = SearchSymbols(query, limit, kind, lang, pathPattern, excludePathPatterns, excludeTests, since);
         var results = new List<DefinitionResult>();
 
         foreach (var symbol in symbols)

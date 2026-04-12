@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **R, PowerShell, Haskell reference extraction** — R, PowerShell, and Haskell now support call-graph queries (`references`, `callers`, `callees`). R uses `#` for comments with standard parenthesized call detection. PowerShell uses `#` for comments; cmdlet hyphenated names are split at hyphens. Haskell uses `--` for comments; only parenthesized calls are captured (space-separated calls are a known limitation). Language-specific keywords added to the ignore list. Affected: `ReferenceExtractor.cs`.
 
 #### Changed
-- **`--since` filter for `symbols` command** — `symbols` now accepts `--since <datetime>` to filter to symbols in recently modified files, matching the existing `files --since` pattern. Useful for AI agents tracking recent code changes. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`.
+- **`--since` filter for `symbols` and `definition` commands** — Both `symbols` and `definition` now accept `--since <datetime>` to filter to recently modified files, matching the existing `files --since` pattern. MCP `symbols` tool also exposes the `since` parameter. Useful for AI agents tracking recent code changes. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `McpToolHandlers.cs`, `McpToolDefinitions.cs`.
 - **Consistent `--lang` validation hints on zero-result commands** — `references`, `callers`, and `callees` now show a `WriteLangHint` when `--lang` produces zero results, matching the pattern used by `symbols`, `unused`, and `hotspots`. Affected: `QueryCommandRunner.cs`.
 
 #### Fixed
@@ -560,7 +560,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **R、PowerShell、Haskell 参照抽出** — R、PowerShell、Haskell でコールグラフクエリ（`references`、`callers`、`callees`）が利用可能に。R は `#` コメントと標準的な括弧付き呼び出し検出。PowerShell は `#` コメント; コマンドレットのハイフン名はハイフンで分割。Haskell は `--` コメント; 括弧付き呼び出しのみ（スペース区切り呼び出しは既知の制限）。各言語のキーワードを除外リストに追加。対象: `ReferenceExtractor.cs`。
 
 #### 変更
-- **`symbols` コマンドに `--since` フィルタ** — `symbols` が `--since <datetime>` を受け付け、最近変更されたファイルのシンボルだけに絞り込めるようになった。既存の `files --since` と同じパターン。AI エージェントが最近のコード変更を追跡するのに有用。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`。
+- **`symbols` と `definition` コマンドに `--since` フィルタ** — 両コマンドが `--since <datetime>` を受け付け、最近変更されたファイルのシンボル/定義だけに絞り込めるようになった。MCP `symbols` ツールも `since` パラメータを公開。対象: `DbSymbolReader.cs`、`QueryCommandRunner.cs`、`McpToolHandlers.cs`、`McpToolDefinitions.cs`。
 - **ゼロ結果コマンドでの一貫した `--lang` 検証ヒント** — `references`、`callers`、`callees` が `--lang` でゼロ結果のとき `WriteLangHint` を表示するようになり、`symbols`、`unused`、`hotspots` と同じパターンに統一。対象: `QueryCommandRunner.cs`。
 
 #### 修正
