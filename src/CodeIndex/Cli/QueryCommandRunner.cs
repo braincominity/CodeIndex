@@ -162,6 +162,7 @@ public static class QueryCommandRunner
                 {
                     Console.Error.WriteLine("No references found.");
                     WriteGraphSupportHint(options.Lang);
+                    WriteLangHint(options.Lang, reader);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -216,6 +217,7 @@ public static class QueryCommandRunner
                 {
                     Console.Error.WriteLine("No callers found.");
                     WriteGraphSupportHint(options.Lang);
+                    WriteLangHint(options.Lang, reader);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -266,6 +268,7 @@ public static class QueryCommandRunner
                 {
                     Console.Error.WriteLine("No callees found.");
                     WriteGraphSupportHint(options.Lang);
+                    WriteLangHint(options.Lang, reader);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }

@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`impact` CLI command and `impact_analysis` MCP tool** — Compute transitive callers of a symbol using BFS — the ripple effect of changing it. Shows callers at each depth level with file paths and reference counts. `--depth` controls max BFS depth (default: 5). Available as both `cdidx impact <symbol>` CLI command and `impact_analysis` MCP tool. Affected: `DbReader.cs`, `QueryCommandRunner.cs`, `Program.cs`, `ConsoleUi.cs`, `McpToolDefinitions.cs`, `McpToolHandlers.cs`, `McpServer.cs`, `QueryResults.cs`.
 - **R, PowerShell, Haskell reference extraction** — R, PowerShell, and Haskell now support call-graph queries (`references`, `callers`, `callees`). R uses `#` for comments with standard parenthesized call detection. PowerShell uses `#` for comments; cmdlet hyphenated names are split at hyphens. Haskell uses `--` for comments; only parenthesized calls are captured (space-separated calls are a known limitation). Language-specific keywords added to the ignore list. Affected: `ReferenceExtractor.cs`.
 
+#### Changed
+- **Consistent `--lang` validation hints on zero-result commands** — `references`, `callers`, and `callees` now show a `WriteLangHint` when `--lang` produces zero results, matching the pattern used by `symbols`, `unused`, and `hotspots`. Affected: `QueryCommandRunner.cs`.
+
 #### Fixed
 - **Shell completions and help text missing `validate`, `deps`, `unused`, `hotspots`** — Added `validate` and `deps` to the shell completions command list and added usage lines and command descriptions for `validate`, `deps`, `unused`, and `hotspots` in help output. Affected: `ConsoleUi.cs`.
 - **Kind hint shows all valid kinds, not just in-index kinds** — `--kind` validation now uses a static list of all 10 valid symbol kinds instead of querying only kinds present in the current index. Invalid kinds get an "Available:" list; valid-but-absent kinds get a separate "no X symbols in the index" message with the indexed kinds. Affected: `QueryCommandRunner.cs`.
@@ -552,6 +555,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`files` 出力に `reference_count`** — `files --json` と MCP の `files` が、既存の `symbol_count` に加えて `reference_count` を含むようになった。参照が多いホットファイルを AI エージェントが特定しやすくなる。対象: `DbReader.cs`、`QueryResults.cs`。
 - **`impact` CLI コマンドと `impact_analysis` MCP ツール** — BFS でシンボルの推移的呼び出し元（変更の波及効果）を算出。各深さレベルの呼び出し元をファイルパスと参照カウント付きで表示。`--depth` で最大 BFS 深さを制御（デフォルト: 5）。CLI の `cdidx impact <symbol>` と MCP の `impact_analysis` の両方で利用可能。対象: `DbReader.cs`、`QueryCommandRunner.cs`、`Program.cs`、`ConsoleUi.cs`、`McpToolDefinitions.cs`、`McpToolHandlers.cs`、`McpServer.cs`、`QueryResults.cs`。
 - **R、PowerShell、Haskell 参照抽出** — R、PowerShell、Haskell でコールグラフクエリ（`references`、`callers`、`callees`）が利用可能に。R は `#` コメントと標準的な括弧付き呼び出し検出。PowerShell は `#` コメント; コマンドレットのハイフン名はハイフンで分割。Haskell は `--` コメント; 括弧付き呼び出しのみ（スペース区切り呼び出しは既知の制限）。各言語のキーワードを除外リストに追加。対象: `ReferenceExtractor.cs`。
+
+#### 変更
+- **ゼロ結果コマンドでの一貫した `--lang` 検証ヒント** — `references`、`callers`、`callees` が `--lang` でゼロ結果のとき `WriteLangHint` を表示するようになり、`symbols`、`unused`、`hotspots` と同じパターンに統一。対象: `QueryCommandRunner.cs`。
 
 #### 修正
 - **シェル補完とヘルプテキストに `validate`、`deps`、`unused`、`hotspots` が欠落** — シェル補完のコマンドリストに `validate` と `deps` を追加し、ヘルプ出力に `validate`、`deps`、`unused`、`hotspots` の usage 行とコマンド説明を追加。対象: `ConsoleUi.cs`。
