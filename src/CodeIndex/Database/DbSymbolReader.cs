@@ -47,7 +47,7 @@ public partial class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
         using var cmd = _conn.CreateCommand();
 
@@ -74,7 +74,7 @@ public partial class DbReader
             sql += " AND f.lang = @lang";
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -86,7 +86,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<SymbolResult>();
@@ -118,9 +118,9 @@ public partial class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
-        var symbols = SearchSymbols(query, limit, kind, lang, pathPattern, excludePathPatterns, excludeTests, since);
+        var symbols = SearchSymbols(query, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since);
         var results = new List<DefinitionResult>();
 
         foreach (var symbol in symbols)
@@ -228,9 +228,9 @@ public partial class DbReader
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, string? pathPattern = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
-        var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPattern, excludePathPatterns, excludeTests);
+        var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests);
         var primaryDefinition = definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
@@ -251,9 +251,9 @@ public partial class DbReader
             GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
-            References = SearchReferences(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
-            Callers = GetCallers(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
-            Callees = GetCallees(query, limit, lang, null, pathPattern, excludePathPatterns, excludeTests),
+            References = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
+            Callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
+            Callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
             GraphTableAvailable = _hasReferencesTable,
         };
     }
@@ -338,7 +338,7 @@ public partial class DbReader
     /// ファイルスコープ JOIN を使用: シンボルが定義されたファイル内の参照と、
     /// コンテナ名が一致するクロスファイル参照をカウントし、名前衝突を軽減する。
     /// </summary>
-    public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
         // Count references where the symbol name matches AND either:
@@ -368,7 +368,7 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
 
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
@@ -383,7 +383,7 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
         }
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<(SymbolResult, int)>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -409,7 +409,7 @@ public partial class DbReader
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
     /// グラフ対応言語でのみ意味がある — 未対応言語はデフォルトで除外。
     /// </summary>
-    public List<SymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<SymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
         // which is a meaningless signal. Return empty rather than drowning the caller in noise.
@@ -452,7 +452,7 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
 
-        AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " ORDER BY f.path, s.line LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
@@ -467,7 +467,7 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
         }
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
-        AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<SymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();

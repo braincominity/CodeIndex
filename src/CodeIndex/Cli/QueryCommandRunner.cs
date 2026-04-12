@@ -28,7 +28,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPattern, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, options.Exact);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, options.Exact);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -84,7 +84,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPattern, options.ExcludePaths, options.ExcludeTests, options.Since);
+            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -153,7 +153,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -211,7 +211,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -265,7 +265,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -313,7 +313,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests, options.Since);
+            var results = reader.SearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -368,7 +368,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests, options.Since);
+            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -457,13 +457,13 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath);
 
             // Return not-found only when a narrowing filter is active and produces zero files.
             // Unfiltered empty indexes return success (valid state for health probes).
             // フィルタ指定時に該当0件なら未検出を返す。フィルタなしの空DBは正常（ヘルスチェック用途）。
-            var hasFilter = options.PathPattern != null || options.ExcludePaths.Count > 0
+            var hasFilter = options.PathPatterns.Count > 0 || options.ExcludePaths.Count > 0
                 || options.ExcludeTests || options.Lang != null;
             if (map.FileCount == 0 && hasFilter)
             {
@@ -527,7 +527,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
             if (options.Json)
             {
@@ -700,7 +700,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
-            var (results, truncated) = reader.GetTransitiveCallers(options.Query, maxDepth, options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var (results, truncated) = reader.GetTransitiveCallers(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -756,7 +756,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var reverse = cmdArgs.Any(a => a == "--reverse");
-            var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests, reverse);
+            var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
@@ -794,7 +794,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -849,7 +849,7 @@ public static class QueryCommandRunner
             if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
                 Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Results may contain false positives.");
 
-            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPattern, options.ExcludePaths, options.ExcludeTests);
+            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -900,7 +900,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var issues = reader.GetIssues(options.Kind, options.PathPattern);
+            var issues = reader.GetIssues(options.Kind, options.PathPatterns);
             var issuesAvailable = reader._hasIssuesTable;
             if (issues.Count == 0)
             {
@@ -999,7 +999,7 @@ public static class QueryCommandRunner
         int contextBefore = 0;
         int contextAfter = 0;
         int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
-        string? pathPattern = null;
+        var pathPatterns = new List<string>();
         var excludePaths = new List<string>();
         bool excludeTests = false;
         DateTime? since = null;
@@ -1055,7 +1055,8 @@ public static class QueryCommandRunner
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
                 case "--path" when i + 1 < args.Length:
-                    pathPattern = args[++i];
+                    // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
+                    pathPatterns.Add(args[++i]);
                     break;
                 case "--exclude-path" when i + 1 < args.Length:
                     excludePaths.Add(args[++i]);
@@ -1115,7 +1116,7 @@ public static class QueryCommandRunner
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
             SnippetLines = snippetLines,
-            PathPattern = pathPattern,
+            PathPatterns = pathPatterns,
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
             CountOnly = countOnly,
@@ -1194,7 +1195,7 @@ public static class QueryCommandRunner
             return;
         }
 
-        if (options.Lang != null || options.PathPattern != null || options.ExcludeTests || options.ExcludePaths.Count > 0)
+        if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludePaths.Count > 0)
             Console.Error.WriteLine("Hint: try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search.");
 
         if (alternativeHint != null)
@@ -1347,7 +1348,7 @@ public sealed class QueryCommandOptions
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
     public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
-    public string? PathPattern { get; init; }
+    public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
     public bool CountOnly { get; init; }

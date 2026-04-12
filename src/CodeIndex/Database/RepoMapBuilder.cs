@@ -75,7 +75,7 @@ internal sealed class RepoMapBuilder
     /// Build a repo-level overview to help AI clients orient before deep queries.
     /// 深掘り前の把握に使うリポジトリ俯瞰情報を構築する。
     /// </summary>
-    public RepoMapResult Build(int limit, string? lang, string? pathPattern,
+    public RepoMapResult Build(int limit, string? lang, IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness)
     {
@@ -85,7 +85,7 @@ internal sealed class RepoMapBuilder
         // ファイル統計を先に取得し、その後にワークスペース鮮度を取得 — 元の順序を
         // 維持し、並行インデックス時にワークスペースのタイムスタンプがスコープ付き
         // タイムスタンプより古くならないようにする。
-        var fileStats = GetFileStats(lang, pathPattern, excludePathPatterns, excludeTests);
+        var fileStats = GetFileStats(lang, pathPatterns, excludePathPatterns, excludeTests);
         var freshness = getFreshness();
         return new RepoMapResult
         {
@@ -159,12 +159,12 @@ internal sealed class RepoMapBuilder
                 .Take(limit)
                 .Select(CreateUnscoredFileSummary)
                 .ToList(),
-            Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPattern, excludePathPatterns, excludeTests),
+            Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPatterns, excludePathPatterns, excludeTests),
             GraphTableAvailable = _hasReferencesTable,
         };
     }
 
-    private List<RepoFileStat> GetFileStats(string? lang, string? pathPattern,
+    private List<RepoFileStat> GetFileStats(string? lang, IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         using var cmd = _conn.CreateCommand();
@@ -183,13 +183,13 @@ internal sealed class RepoMapBuilder
 
         if (lang != null)
             sql += " AND f.lang = @lang";
-        DbReader.AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        DbReader.AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " ORDER BY f.path";
 
         cmd.CommandText = sql;
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        DbReader.AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<RepoFileStat>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -213,7 +213,7 @@ internal sealed class RepoMapBuilder
     }
 
     private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoFileStat> fileStats, int limit,
-        string? lang, string? pathPattern, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+        string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         using var cmd = _conn.CreateCommand();
         var sql = @"
@@ -224,13 +224,13 @@ internal sealed class RepoMapBuilder
 
         if (lang != null)
             sql += " AND f.lang = @lang";
-        DbReader.AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
+        DbReader.AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " ORDER BY f.path, s.line";
 
         cmd.CommandText = sql;
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        DbReader.AddPathFilterParameters(cmd, pathPattern, excludePathPatterns);
+        DbReader.AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<RepoEntrypointResult>();
         using var reader = cmd.ExecuteTrackedReader();

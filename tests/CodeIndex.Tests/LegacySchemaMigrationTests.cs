@@ -152,7 +152,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // migration で空の symbol_references を作っただけの DB で Alpha を「未使用」と
         // 報告してはいけない。populate されるまでは縮退扱いで空を返すのが正しい。
         var unused = reader.GetUnusedSymbols(limit: 10, kind: null, lang: null,
-            pathPattern: null, excludePathPatterns: null, excludeTests: false);
+            pathPatterns: null, excludePathPatterns: null, excludeTests: false);
         Assert.Empty(unused);
 
         // AnalyzeSymbol — bundled inspect path exercises definitions + nearby + references.
@@ -233,7 +233,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // 追加カラムと symbol_references テーブルの両方が欠けていてもクラッシュしないこと。
         // 参照が無い環境では全シンボルが未使用に見えるため、空リストへ縮退するのが正しい。
         var unused = reader.GetUnusedSymbols(limit: 10, kind: null, lang: null,
-            pathPattern: null, excludePathPatterns: null, excludeTests: false);
+            pathPatterns: null, excludePathPatterns: null, excludeTests: false);
         Assert.Empty(unused);
 
         // AnalyzeSymbol still resolves definitions/nearby from the symbols table, but
