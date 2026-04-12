@@ -254,6 +254,7 @@ public partial class DbReader
             References = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
             Callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
             Callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
+            GraphTableAvailable = _hasReferencesTable,
         };
     }
 
@@ -339,6 +340,7 @@ public partial class DbReader
     /// </summary>
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
         // Count references where the symbol name matches AND either:
         // 1. The reference is in the same file as the definition, OR
         // 2. The reference's container/context mentions the symbol's container (cross-file usage)
@@ -347,10 +349,11 @@ public partial class DbReader
         // 1. 参照がシンボル定義と同じファイル内にある、または
         // 2. 参照のコンテキストがシンボルのコンテナに言及している（クロスファイル使用）
         // 無関係な同名シンボルによる水増しを軽減する。
-        var sql = @"
+        var sql = $@"
             SELECT s.name, COUNT(DISTINCT sr.id) as ref_count,
                    s.kind, f.path, f.lang, s.line,
-                   s.visibility, s.container_name
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("container_name")} AS container_name
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             JOIN symbol_references sr ON sr.symbol_name = s.name
@@ -366,7 +369,7 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += " GROUP BY s.name, s.container_name, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
+        sql += $" GROUP BY s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
@@ -408,6 +411,11 @@ public partial class DbReader
     /// </summary>
     public List<SymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        // Without symbol_references (legacy read-only DB), every symbol would appear unused,
+        // which is a meaningless signal. Return empty rather than drowning the caller in noise.
+        // symbol_references が無いレガシー read-only DB では全シンボルが未使用扱いになってしまうため、
+        // ノイズを返すより空を返す。
+        if (!_hasReferencesTable) return new List<SymbolResult>();
         // Restrict to graph-supported languages to avoid false positives
         // (unsupported languages have no references indexed, so all symbols appear unused)
         // グラフ対応言語に制限して偽陽性を防ぐ

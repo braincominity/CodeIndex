@@ -25,6 +25,10 @@ public class McpServerTests : IDisposable
 
         // Seed test data / テストデータを投入
         var writer = new DbWriter(_db.Connection);
+        // Stamp graph + issues ready so reads trust the seeded references like a completed index run.
+        // seed したデータを完了 index と同等に扱うため readiness を stamp しておく。
+        writer.MarkGraphReady();
+        writer.MarkIssuesReady();
         var fileId = writer.UpsertFile(new FileRecord
         {
             Path = "src/app.cs",

@@ -129,6 +129,16 @@ public class StatusResult
     /// クイックオリエンテーション用の1行サマリー。
     /// </summary>
     public string? Summary { get; set; }
+    /// <summary>
+    /// True when the index exposes the full reference / validation tables. False signals a
+    /// degraded read (legacy or read-only DB where TryMigrateForRead could not create
+    /// symbol_references / file_issues), so a zero reference or issue count must not be
+    /// trusted as a real "no callers" or "clean" signal.
+    /// インデックスに参照／検証テーブルが揃っているかの信頼シグナル。false の場合、references
+    /// や issues の 0 件は「本当に 0 件」なのか「テーブルが無いから 0 件」なのか区別できない。
+    /// </summary>
+    public bool GraphTableAvailable { get; set; } = true;
+    public bool IssuesTableAvailable { get; set; } = true;
 }
 
 public class RepoMapResult
@@ -151,6 +161,14 @@ public class RepoMapResult
     public List<RepoFileSummaryResult> SymbolRichFiles { get; set; } = [];
     public List<RepoFileSummaryResult> ReferenceRichFiles { get; set; } = [];
     public List<RepoEntrypointResult> Entrypoints { get; set; } = [];
+    /// <summary>
+    /// False when reference-derived aggregates (TotalReferences, per-file / per-module /
+    /// per-language reference counts, ReferenceRichFiles) were synthesized as 0 because the
+    /// graph table was missing (legacy / read-only DB). Callers must not rank or prioritize
+    /// based on reference counts when this is false — the repo may actually be reference-rich.
+    /// 参照系集計が欠損テーブルによりゼロ合成されている場合 false。ランキングに使わないこと。
+    /// </summary>
+    public bool GraphTableAvailable { get; set; } = true;
 }
 
 public class RepoLanguageResult
@@ -209,6 +227,12 @@ public class SymbolAnalysisResult
     public List<ReferenceResult> References { get; set; } = [];
     public List<CallerResult> Callers { get; set; } = [];
     public List<CalleeResult> Callees { get; set; } = [];
+    /// <summary>
+    /// False when the index does not contain the reference table (legacy / read-only DB),
+    /// meaning empty References / Callers / Callees are degraded — not a true "no callers".
+    /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
+    /// </summary>
+    public bool GraphTableAvailable { get; set; } = true;
 }
 
 /// <summary>

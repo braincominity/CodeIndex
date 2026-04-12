@@ -572,6 +572,28 @@ public class DbWriter
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
     }
 
+    // End-of-successful-index trust markers. The ready bits live in PRAGMA user_version so
+    // that a reader can tell which subset of the index has been fully populated:
+    //   bit 0 (GraphReadyFlag)  — symbol_references fully backfilled
+    //   bit 1 (IssuesReadyFlag) — file_issues produced by ValidateContent
+    // CLI indexing sets both on success; MCP indexing (no validation pass) sets graph only,
+    // leaving validate output correctly flagged degraded. The index runner ClearReadyFlags()
+    // first so partial / aborted runs demote trust until a successful end-of-run commit.
+    // CLI は graph+issues、MCP は graph のみ。開始時に ClearReadyFlags() でリセットし、
+    // 成功した末尾のみで該当ビットを立てる。
+    public void MarkGraphReady()    => SetReadyBit(DbContext.GraphReadyFlag);
+    public void MarkIssuesReady()   => SetReadyBit(DbContext.IssuesReadyFlag);
+    public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
+
+    private void SetReadyBit(int flag)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version";
+        var raw = cmd.ExecuteScalar();
+        int current = raw is long l ? (int)l : (raw is int i ? i : 0);
+        Execute($"PRAGMA user_version = {current | flag}");
+    }
+
     private bool IsInTransaction() => _transactionDepth > 0;
 
     private long ExecuteScalar(string sql)

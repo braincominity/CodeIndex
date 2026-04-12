@@ -218,7 +218,13 @@ public partial class McpServer
 
     private JsonNode WithDbReader(JsonNode? id, Func<DbReader, JsonNode> action)
     {
-        if (!File.Exists(_dbPath))
+        // Accept SQLite file: URIs the same way the CLI does (QueryCommandRunner.WithDb),
+        // so AI agents on read-only mounts can pass `--db file:///abs/path?immutable=1` and
+        // reach the read-only escape hatch in DbContext. File.Exists is skipped for URI-
+        // shaped values because they may carry query params meaningless to the filesystem.
+        // CLI と同じく file: URI を受け付け、サンドボックス用の escape hatch に到達できるようにする。
+        var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+        if (!isUri && !File.Exists(_dbPath))
             return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
 
         using var db = new DbContext(_dbPath);

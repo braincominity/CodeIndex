@@ -33,6 +33,8 @@ The test project mirrors the production areas closely.
   File scanning, language detection, and record-building behavior.
 - `DatabaseTests.cs`, `DbReaderTests.cs`
   SQLite schema, write paths, migrations, and query behavior.
+- `LegacySchemaMigrationTests.cs`
+  End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
 - `IndexCommandRunnerTests.cs`, `QueryCommandRunnerTests.cs`
   CLI parsing and command execution behavior.
 - `McpServerTests.cs`
@@ -175,6 +177,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ファイル走査、言語判定、レコード構築のテスト。
 - `DatabaseTests.cs`、`DbReaderTests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。
+- `LegacySchemaMigrationTests.cs`
+  エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
 - `IndexCommandRunnerTests.cs`、`QueryCommandRunnerTests.cs`
   CLI の引数解析とコマンド実行のテスト。
 - `McpServerTests.cs`

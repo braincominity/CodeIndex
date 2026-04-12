@@ -12,6 +12,8 @@ public partial class DbReader
     private readonly SqliteConnection _conn;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
+    internal readonly bool _hasReferencesTable;
+    internal readonly bool _hasIssuesTable;
     internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
@@ -36,8 +38,8 @@ public partial class DbReader
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
     /// 可視性ランキング: public を最優先、次に protected、internal、private、不明は最後。
     /// </summary>
-    internal const string VisibilityOrder = @"
-        CASE lower(s.visibility)
+    internal string VisibilityOrder => $@"
+        CASE lower({GetSymbolColumnSql("visibility")})
             WHEN 'public' THEN 0
             WHEN 'open' THEN 0
             WHEN 'pub' THEN 0
@@ -85,6 +87,37 @@ public partial class DbReader
         _conn = connection;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
+        int userVersion;
+        using (var v = _conn.CreateCommand())
+        {
+            v.CommandText = "PRAGMA user_version";
+            var raw = v.ExecuteScalar();
+            userVersion = raw is long l ? (int)l : (raw is int i ? i : 0);
+        }
+        _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
+        _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
+        // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
+        // interrupted first-time / partial backfill can have one row while the rest of the
+        // repo is untouched, which would flip trust on prematurely. Only an explicit
+        // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
+        // get stamped — degradation is safer than silent false-clean zeroes.
+        // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+    }
+
+    // Reference-count subquery that gracefully degrades to 0 when symbol_references is absent
+    // (legacy read-only DBs where TryMigrateForRead could not create the table).
+    // symbol_references が無いレガシー read-only DB では 0 にフォールバックする。
+    private string ReferenceCountByFileSubquery =>
+        _hasReferencesTable
+            ? "(SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id)"
+            : "0";
+
+    private bool HasTable(string tableName)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=@name";
+        cmd.Parameters.AddWithValue("@name", tableName);
+        return cmd.ExecuteScalar() != null;
     }
 
     internal static string EscapeLikeQuery(string input)
@@ -119,13 +152,13 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
 
-        var sql = @"
+        var sql = $@"
             SELECT f.path, f.lang, f.size, f.lines,
                    (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
-                   (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) AS reference_count,
-                   " + GetFileColumnSql("checksum") + @" AS checksum,
-                   " + GetFileColumnSql("modified") + @" AS modified,
-                   " + GetFileColumnSql("indexed_at") + @" AS indexed_at
+                   {ReferenceCountByFileSubquery} AS reference_count,
+                   {GetFileColumnSql("checksum")} AS checksum,
+                   {GetFileColumnSql("modified")} AS modified,
+                   {GetFileColumnSql("indexed_at")} AS indexed_at
             FROM files f
             WHERE 1=1";
 
@@ -174,6 +207,7 @@ public partial class DbReader
     /// </summary>
     public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
+        if (!_hasReferencesTable) return new List<ReferenceResult>();
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -238,6 +272,7 @@ public partial class DbReader
     /// </summary>
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
+        if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -292,6 +327,7 @@ public partial class DbReader
     /// </summary>
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
+        if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -375,6 +411,7 @@ public partial class DbReader
     /// </summary>
     private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
+        if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "callerLang");
@@ -618,7 +655,7 @@ public partial class DbReader
         cmd.CommandText = $@"
             SELECT f.path, f.lang, f.size, f.lines,
                    (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
-                   (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) AS reference_count,
+                   {ReferenceCountByFileSubquery} AS reference_count,
                    {GetFileColumnSql("checksum")} AS checksum,
                    {GetFileColumnSql("modified")} AS modified,
                    {GetFileColumnSql("indexed_at")} AS indexed_at
@@ -653,7 +690,7 @@ public partial class DbReader
         var files = ExecuteScalar("SELECT COUNT(*) FROM files");
         var chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
-        var references = ExecuteScalar("SELECT COUNT(*) FROM symbol_references");
+        var references = _hasReferencesTable ? ExecuteScalar("SELECT COUNT(*) FROM symbol_references") : 0L;
         var freshness = GetWorkspaceFreshness();
 
         // Language breakdown / 言語別内訳
@@ -673,6 +710,8 @@ public partial class DbReader
             IndexedAt = freshness.IndexedAt,
             LatestModified = freshness.LatestModified,
             Languages = langs,
+            GraphTableAvailable = _hasReferencesTable,
+            IssuesTableAvailable = _hasIssuesTable,
         };
     }
 
@@ -682,7 +721,7 @@ public partial class DbReader
     /// </summary>
     public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
-        var builder = new RepoMapBuilder(_conn, _fileColumns);
+        var builder = new RepoMapBuilder(_conn, _fileColumns, _hasReferencesTable);
         return builder.Build(limit, lang, pathPatterns, excludePathPatterns, excludeTests, GetWorkspaceFreshness);
     }
 
@@ -776,6 +815,7 @@ public partial class DbReader
     /// </summary>
     public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
     {
+        if (!_hasReferencesTable) return new List<FileDependencyResult>();
         using var cmd = _conn.CreateCommand();
         // Use a subquery to find distinct (reference_file, definition_file, symbol) triples,
         // avoiding inflated counts from same-name symbols across multiple files.
@@ -906,6 +946,7 @@ public partial class DbReader
     /// </summary>
     public List<Models.FileIssue> GetIssues(string? kind = null, IReadOnlyList<string>? pathPatterns = null)
     {
+        if (!_hasIssuesTable) return new List<Models.FileIssue>();
         using var cmd = _conn.CreateCommand();
         var sql = @"
             SELECT f.path, i.kind, i.line, i.message

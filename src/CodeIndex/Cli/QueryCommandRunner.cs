@@ -157,12 +157,15 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
+                    WriteDegradedGraphZeroResult("references", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -212,12 +215,15 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
+                    WriteDegradedGraphZeroResult("callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -263,12 +269,15 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
                     WriteGraphSupportHint(options.Lang);
                     WriteLangHint(options.Lang, reader);
+                    WriteDegradedGraphZeroResult("callees", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -491,6 +500,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git HEAD   : {map.GitHead}");
                 if (map.GitIsDirty != null)
                     Console.WriteLine($"Git Dirty  : {map.GitIsDirty}");
+                if (!map.GraphTableAvailable)
+                    Console.WriteLine("WARN       : symbol_references table missing — reference counts are synthesized 0. Do not use ReferenceRich / reference-derived ranking as authoritative.");
                 WriteRepoMapSection("Languages", map.Languages.Select(item => $"{item.Lang,-12} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Modules", map.Modules.Select(item => $"{item.Module,-24} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
                 WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
@@ -541,6 +552,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Graph Supported      : {analysis.GraphSupported}");
                 if (analysis.GraphSupportReason != null)
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
+                if (!analysis.GraphTableAvailable)
+                    Console.WriteLine("Graph Table          : MISSING — empty References/Callers/Callees are degraded, NOT real zero-hit results.");
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
@@ -622,7 +635,8 @@ public static class QueryCommandRunner
                 ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
                 : "unknown";
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}";
+            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable) ? ", DEGRADED" : "";
+            status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
 
             if (options.Json)
             {
@@ -661,6 +675,10 @@ public static class QueryCommandRunner
                 }
                 if (status.GraphSupportedLanguages is { Count: > 0 })
                     Console.WriteLine($"Graph   : {status.GraphSupportedLanguages.Count} languages ({string.Join(", ", status.GraphSupportedLanguages)})");
+                if (!status.GraphTableAvailable)
+                    Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
+                if (!status.IssuesTableAvailable)
+                    Console.WriteLine("WARN    : file_issues table missing — validate output is degraded to empty.");
                 var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
                 Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");
@@ -686,11 +704,14 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No impact found.");
                     WriteGraphSupportHint(options.Lang);
+                    WriteDegradedGraphZeroResult("callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -738,8 +759,15 @@ public static class QueryCommandRunner
             var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
             if (results.Count == 0)
             {
-                if (!options.Json)
+                if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("edges", json: true, graphAvailable: false, jsonOptions);
+                else if (options.Json)
+                    Console.WriteLine(JsonSerializer.Serialize(new { count = 0, edges = Array.Empty<object>(), graph_table_available = true, degraded = false }, jsonOptions));
+                else
+                {
                     Console.Error.WriteLine("No file dependencies found.");
+                    WriteDegradedGraphZeroResult("edges", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                }
                 return CommandExitCodes.NotFound;
             }
 
@@ -770,13 +798,16 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("hotspots", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No symbol hotspots found.");
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
+                    WriteDegradedGraphZeroResult("hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -822,13 +853,16 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("unused", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No unused symbols found.");
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
+                    WriteDegradedGraphZeroResult("unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -867,10 +901,13 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var issues = reader.GetIssues(options.Kind, options.PathPatterns);
+            var issuesAvailable = reader._hasIssuesTable;
             if (issues.Count == 0)
             {
                 if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(new { count = 0, issues = Array.Empty<object>() }, jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(new { count = 0, issues = Array.Empty<object>(), issues_table_available = issuesAvailable, degraded = !issuesAvailable }, jsonOptions));
+                else if (!issuesAvailable)
+                    Console.Error.WriteLine("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
                 else
                     Console.Error.WriteLine("No encoding issues found.");
                 return CommandExitCodes.Success;
@@ -1092,7 +1129,14 @@ public static class QueryCommandRunner
 
     private static int WithDb(string dbPath, Func<DbReader, int> action)
     {
-        if (!File.Exists(dbPath))
+        // Allow SQLite URI forms (file:///abs/path?immutable=1 etc.) so users and AI agents
+        // on read-only mounts / sandboxes can opt into the immutable read-only escape hatch
+        // explicitly when the automatic DbContext fallback cannot recover. File.Exists is
+        // skipped for URI-shaped inputs because they may carry query params and schemes that
+        // are meaningless to the filesystem API but are understood by SQLite.
+        // URI 形式の --db を受け入れるため、file: で始まる値は File.Exists チェックをスキップ。
+        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+        if (!isUri && !File.Exists(dbPath))
         {
             Console.Error.WriteLine($"Error: database not found at {Path.GetFullPath(dbPath)}");
             Console.Error.WriteLine("Run 'cdidx index <projectPath>' first to create the index.");
@@ -1200,6 +1244,31 @@ public static class QueryCommandRunner
     {
         if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
             Console.Error.WriteLine($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
+    }
+
+    // Emit a zero-result payload that distinguishes "real 0 hits" from "graph table missing
+    // (degraded)". Without this, AI agents and humans cannot tell the index from a legacy /
+    // read-only DB apart from a DB that genuinely has no callers for the query.
+    // graph テーブル欠損による 0 と本物の 0 を JSON で区別できるようにする。
+    private static void WriteDegradedGraphZeroResult(string resultsKey, bool json, bool graphAvailable, JsonSerializerOptions jsonOptions)
+    {
+        if (graphAvailable) return;
+        if (json)
+        {
+            var payload = new Dictionary<string, object?>
+            {
+                ["count"] = 0,
+                [resultsKey] = Array.Empty<object>(),
+                ["graph_table_available"] = false,
+                ["degraded"] = true,
+                ["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.",
+            };
+            Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+        }
+        else
+        {
+            Console.Error.WriteLine("WARN: symbol_references table missing — this 0-result is degraded, not authoritative.");
+        }
     }
 
     private static int? ParsePositiveInt(string rawValue, string optionName)
