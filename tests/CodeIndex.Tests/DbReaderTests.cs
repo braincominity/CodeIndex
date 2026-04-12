@@ -523,9 +523,22 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ListFiles_MultiplePathPatterns_AreOred()
+    {
+        // Two --path values should match any file whose path matches either pattern.
+        // 2つの --path 値は、どちらかのパターンにマッチするファイルを返す。
+        var results = _reader.ListFiles(pathPatterns: new[] { "auth", "docs/" });
+
+        Assert.Equal(2, results.Count);
+        var paths = results.Select(r => r.Path).ToHashSet();
+        Assert.Contains("src/auth.py", paths);
+        Assert.Contains("docs/notes.md", paths);
+    }
+
+    [Fact]
     public void ListFiles_PathFiltersAndExcludePaths_WorkTogether()
     {
-        var results = _reader.ListFiles(pathPattern: "src/", excludePathPatterns: ["api"]);
+        var results = _reader.ListFiles(pathPatterns: new[] { "src/" }, excludePathPatterns: ["api"]);
 
         Assert.Single(results);
         Assert.Equal("src/auth.py", results[0].Path);
@@ -608,7 +621,7 @@ public class DbReaderTests : IDisposable
     {
         InsertIndexedFile("src/Program.cs", "csharp", "var client = new ApiClient();\nConsole.WriteLine(client);\n");
 
-        var map = _reader.GetRepoMap(limit: 5, pathPattern: "src/Program.cs");
+        var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { "src/Program.cs" });
 
         Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
     }
@@ -636,7 +649,7 @@ public class DbReaderTests : IDisposable
             """;
         cmd.ExecuteNonQuery();
 
-        var map = _reader.GetRepoMap(limit: 5, pathPattern: "src/Program.cs");
+        var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { "src/Program.cs" });
 
         Assert.Equal(new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc), map.IndexedAt);
         Assert.Equal(new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc), map.LatestModified);
@@ -817,7 +830,7 @@ public class DbReaderTests : IDisposable
         cmd.ExecuteNonQuery();
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: null,
-            pathPattern: null, excludePathPatterns: null, excludeTests: false);
+            pathPatterns: null, excludePathPatterns: null, excludeTests: false);
 
         var sym = Assert.Single(unused, s => s.Name == "Orphan");
         Assert.Equal(7, sym.Line);
