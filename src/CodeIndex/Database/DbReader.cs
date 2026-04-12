@@ -102,12 +102,12 @@ public partial class DbReader
 
         var sql = @"
             SELECT f.path, f.lang, f.size, f.lines,
-                   COUNT(s.id) as symbol_count,
+                   (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
+                   (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) AS reference_count,
                    " + GetFileColumnSql("checksum") + @" AS checksum,
                    " + GetFileColumnSql("modified") + @" AS modified,
                    " + GetFileColumnSql("indexed_at") + @" AS indexed_at
             FROM files f
-            LEFT JOIN symbols s ON s.file_id = f.id
             WHERE 1=1";
 
         if (query != null)
@@ -117,7 +117,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPattern, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.id ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
+        sql += $" ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -140,9 +140,10 @@ public partial class DbReader
                 Size = reader.GetInt64(2),
                 Lines = reader.GetInt32(3),
                 SymbolCount = reader.GetInt32(4),
-                Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
-                Modified = GetNullableDateTime(reader, 6),
-                IndexedAt = GetNullableDateTime(reader, 7),
+                ReferenceCount = reader.GetInt32(5),
+                Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Modified = GetNullableDateTime(reader, 7),
+                IndexedAt = GetNullableDateTime(reader, 8),
             });
         }
         return results;
@@ -465,14 +466,13 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
             SELECT f.path, f.lang, f.size, f.lines,
-                   COUNT(s.id) AS symbol_count,
+                   (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
+                   (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) AS reference_count,
                    {GetFileColumnSql("checksum")} AS checksum,
                    {GetFileColumnSql("modified")} AS modified,
                    {GetFileColumnSql("indexed_at")} AS indexed_at
             FROM files f
-            LEFT JOIN symbols s ON s.file_id = f.id
-            WHERE f.path = @path
-            GROUP BY f.id";
+            WHERE f.path = @path";
         cmd.Parameters.AddWithValue("@path", path);
 
         using var reader = cmd.ExecuteReader();
@@ -486,9 +486,10 @@ public partial class DbReader
             Size = reader.GetInt64(2),
             Lines = reader.GetInt32(3),
             SymbolCount = reader.GetInt32(4),
-            Checksum = reader.IsDBNull(5) ? null : reader.GetString(5),
-            Modified = GetNullableDateTime(reader, 6),
-            IndexedAt = GetNullableDateTime(reader, 7),
+            ReferenceCount = reader.GetInt32(5),
+            Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+            Modified = GetNullableDateTime(reader, 7),
+            IndexedAt = GetNullableDateTime(reader, 8),
         };
     }
 

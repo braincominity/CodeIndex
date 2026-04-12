@@ -39,6 +39,7 @@ public class FileResult
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }
+    public int ReferenceCount { get; set; }
     public string? Checksum { get; set; }
     public DateTime? Modified { get; set; }
     public DateTime? IndexedAt { get; set; }
