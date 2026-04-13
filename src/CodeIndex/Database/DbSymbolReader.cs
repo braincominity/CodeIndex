@@ -526,20 +526,15 @@ public partial class DbReader
                 OR {pathSql} LIKE '%/settings/%'
                 OR {pathSql} LIKE 'options/%'
                 OR {pathSql} LIKE '%/options/%'
-                OR {signatureSql} LIKE '%configuration%'
                 OR {signatureSql} LIKE '%iconfiguration%'
+                OR {signatureSql} LIKE '%configurationsection%'
                 OR {signatureSql} LIKE '%ioptions%'
                 OR {signatureSql} LIKE '%options<%'
             )";
         var isReflectionOrConfigSuspectSql = $@"(
                 {isPublicOrExportedSql}
-                AND (
-                    ({hasConfigContextSql} AND s.kind = 'property')
-                    OR {signatureSql} LIKE '%configuration%'
-                    OR {signatureSql} LIKE '%iconfiguration%'
-                    OR {signatureSql} LIKE '%ioptions%'
-                    OR {signatureSql} LIKE '%options<%'
-                )
+                AND s.kind = 'property'
+                AND {hasConfigContextSql}
             )";
         var unusedBucketOrderSql = $@"
             CASE
@@ -550,6 +545,7 @@ public partial class DbReader
             END";
 
         var sql = $@"
+            WITH unused_candidates AS (
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                    {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
@@ -558,6 +554,7 @@ public partial class DbReader
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
                    {GetSymbolColumnSql("container_name")} AS container_name,
+                   {unusedBucketOrderSql} AS unused_bucket_order,
                    CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
                    CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect
             FROM symbols s
@@ -582,7 +579,24 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {unusedBucketOrderSql}, f.path, s.line LIMIT @limit";
+        sql += @"
+            ),
+            ranked_unused AS (
+                SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                       return_type, container_kind, container_name, is_public_or_exported,
+                       is_reflection_or_config_suspect, unused_bucket_order,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY unused_bucket_order
+                           ORDER BY path, line, name
+                       ) AS bucket_row_number
+                FROM unused_candidates
+            )
+            SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                   return_type, container_kind, container_name, is_public_or_exported,
+                   is_reflection_or_config_suspect
+            FROM ranked_unused
+            ORDER BY bucket_row_number, unused_bucket_order, path, line, name
+            LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;

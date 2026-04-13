@@ -204,22 +204,22 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(7, json.GetProperty("count").GetInt32());
+            Assert.Equal(9, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(4, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(6, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
             Assert.Equal("medium", symbols[0].GetProperty("unused_confidence").GetString());
             Assert.Equal("PathResolver", symbols[2].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[2].GetProperty("unused_bucket").GetString());
-            Assert.Equal("AdoptionService", symbols[3].GetProperty("name").GetString());
-            Assert.Equal("public_or_exported_no_refs", symbols[3].GetProperty("unused_bucket").GetString());
-            Assert.Equal("TokenService", symbols[4].GetProperty("name").GetString());
-            Assert.Equal("public_or_exported_no_refs", symbols[4].GetProperty("unused_bucket").GetString());
-            Assert.Equal("ConnectionString", symbols[6].GetProperty("name").GetString());
-            Assert.Equal("reflection_or_config_suspect", symbols[6].GetProperty("unused_bucket").GetString());
+            Assert.Equal("ConnectionString", symbols[3].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
+            Assert.Equal("ApplyConfiguration", symbols[7].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
+            Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
         }
         finally
         {
@@ -257,6 +257,34 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonDiversifiesBucketsBeforeLimit()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "4"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_HumanOutputGroupsByConfidenceBucket()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
@@ -269,7 +297,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("Likely unused private (1)", stdout);
             Assert.Contains("Maybe unused non-public (1)", stdout);
-            Assert.Contains("Public/exported with no refs (4)", stdout);
+            Assert.Contains("Public/exported with no refs (6)", stdout);
             Assert.Contains("Reflection/config suspects (1)", stdout);
             Assert.Contains("confidence=medium", stdout);
             Assert.Contains("confidence=low", stdout);
@@ -954,6 +982,32 @@ public class QueryCommandRunnerTests
                 EndLine = 11,
                 Signature = "public class AppSettings",
                 Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "ApplyConfiguration",
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
+                Signature = "public void ApplyConfiguration()",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "AppSettings",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "UseIOptions",
+                Line = 13,
+                StartLine = 13,
+                EndLine = 13,
+                Signature = "public void UseIOptions()",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "AppSettings",
             },
             new SymbolRecord
             {

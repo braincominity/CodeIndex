@@ -988,6 +988,32 @@ public class McpServerTests : IDisposable
             new SymbolRecord
             {
                 FileId = fileId,
+                Kind = "function",
+                Name = "ApplyConfiguration",
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
+                Signature = "public void ApplyConfiguration()",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "AppSettings",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "UseIOptions",
+                Line = 13,
+                StartLine = 13,
+                EndLine = 13,
+                Signature = "public void UseIOptions()",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "AppSettings",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
                 Kind = "property",
                 Name = "ConnectionString",
                 Line = 10,
@@ -1006,22 +1032,22 @@ public class McpServerTests : IDisposable
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
         var structured = response["result"]!["structuredContent"]!;
         var symbols = structured["symbols"]!.AsArray();
-        Assert.Equal(7, structured["count"]!.GetValue<int>());
+        Assert.Equal(9, structured["count"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["likely_unused_private"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
-        Assert.Equal(4, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
+        Assert.Equal(6, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
         Assert.Equal("Hidden", symbols[0]!["name"]!.GetValue<string>());
         Assert.Equal("likely_unused_private", symbols[0]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("medium", symbols[0]!["unusedConfidence"]!.GetValue<string>());
         Assert.Equal("PathResolver", symbols[2]!["name"]!.GetValue<string>());
         Assert.Equal("public_or_exported_no_refs", symbols[2]!["unusedBucket"]!.GetValue<string>());
-        Assert.Equal("AdoptionService", symbols[3]!["name"]!.GetValue<string>());
-        Assert.Equal("public_or_exported_no_refs", symbols[3]!["unusedBucket"]!.GetValue<string>());
-        Assert.Equal("TokenService", symbols[4]!["name"]!.GetValue<string>());
-        Assert.Equal("public_or_exported_no_refs", symbols[4]!["unusedBucket"]!.GetValue<string>());
-        Assert.Equal("ConnectionString", symbols[6]!["name"]!.GetValue<string>());
-        Assert.Equal("reflection_or_config_suspect", symbols[6]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("ConnectionString", symbols[3]!["name"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols[3]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("ApplyConfiguration", symbols[7]!["name"]!.GetValue<string>());
+        Assert.Equal("public_or_exported_no_refs", symbols[7]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("UseIOptions", symbols[8]!["name"]!.GetValue<string>());
+        Assert.Equal("public_or_exported_no_refs", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned bucket(s)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
