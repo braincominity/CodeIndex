@@ -324,12 +324,14 @@ public class DbWriter
                 INSERT INTO symbols (
                     file_id, kind, name, line, start_line, end_line,
                     body_start_line, body_end_line, signature,
-                    container_kind, container_name, visibility, return_type
+                    container_kind, container_name, visibility, return_type,
+                    name_folded
                 )
                 VALUES (
                     @fid, @kind, @name, @line, @startLine, @endLine,
                     @bodyStartLine, @bodyEndLine, @signature,
-                    @containerKind, @containerName, @visibility, @returnType
+                    @containerKind, @containerName, @visibility, @returnType,
+                    @nameFolded
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
             var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
@@ -344,6 +346,7 @@ public class DbWriter
             var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
             var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
             var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
+            var pNameFolded = cmd.Parameters.Add("@nameFolded", SqliteType.Text);
             cmd.Prepare();
 
             for (int j = i; j < end; j++)
@@ -364,6 +367,7 @@ public class DbWriter
                 pContainerName.Value = (object?)symbol.ContainerName ?? DBNull.Value;
                 pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
                 pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
+                pNameFolded.Value = (object?)NameFold.Fold(symbol.Name) ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
             }
 
@@ -388,11 +392,13 @@ public class DbWriter
             cmd.CommandText = @"
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number,
-                    context, container_kind, container_name
+                    context, container_kind, container_name,
+                    symbol_name_folded, container_name_folded
                 )
                 VALUES (
                     @fid, @symbolName, @referenceKind, @line, @columnNumber,
-                    @context, @containerKind, @containerName
+                    @context, @containerKind, @containerName,
+                    @symbolNameFolded, @containerNameFolded
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
             var pSymbolName = cmd.Parameters.Add("@symbolName", SqliteType.Text);
@@ -402,6 +408,8 @@ public class DbWriter
             var pContext = cmd.Parameters.Add("@context", SqliteType.Text);
             var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
             var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
+            var pSymbolNameFolded = cmd.Parameters.Add("@symbolNameFolded", SqliteType.Text);
+            var pContainerNameFolded = cmd.Parameters.Add("@containerNameFolded", SqliteType.Text);
             cmd.Prepare();
 
             for (int j = i; j < end; j++)
@@ -415,6 +423,8 @@ public class DbWriter
                 pContext.Value = reference.Context;
                 pContainerKind.Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
+                pSymbolNameFolded.Value = (object?)NameFold.Fold(reference.SymbolName) ?? DBNull.Value;
+                pContainerNameFolded.Value = (object?)NameFold.Fold(reference.ContainerName) ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
             }
 
@@ -576,14 +586,67 @@ public class DbWriter
     // that a reader can tell which subset of the index has been fully populated:
     //   bit 0 (GraphReadyFlag)  — symbol_references fully backfilled
     //   bit 1 (IssuesReadyFlag) — file_issues produced by ValidateContent
-    // CLI indexing sets both on success; MCP indexing (no validation pass) sets graph only,
-    // leaving validate output correctly flagged degraded. The index runner ClearReadyFlags()
-    // first so partial / aborted runs demote trust until a successful end-of-run commit.
-    // CLI は graph+issues、MCP は graph のみ。開始時に ClearReadyFlags() でリセットし、
-    // 成功した末尾のみで該当ビットを立てる。
+    //   bit 2 (FoldReadyFlag)   — name_folded columns populated for Unicode --exact (#86)
+    // CLI and MCP full-scan indexing set graph + fold; CLI additionally sets issues (MCP
+    // now persists file_issues too after bdbb2bd, so both can stamp it). The index runner
+    // ClearReadyFlags() first so partial / aborted runs demote trust until a successful
+    // end-of-run commit. Fold is only stamped after a full scan because a partial update
+    // leaves legacy rows without folded values.
+    // CLI / MCP 共に full-scan で graph + fold を立てる。fold は部分更新では立てない。
     public void MarkGraphReady()    => SetReadyBit(DbContext.GraphReadyFlag);
     public void MarkIssuesReady()   => SetReadyBit(DbContext.IssuesReadyFlag);
+
+    /// <summary>
+    /// Stamp FoldReadyFlag AND write the current <see cref="NameFold.Version"/> into
+    /// `codeindex_meta`. Readers require both the bit and an exact version match before
+    /// trusting folded columns, so when #96 (or any future tweak) changes the fold
+    /// algorithm and bumps `NameFold.Version`, existing DBs will not silently query new
+    /// code against stale keys — they automatically fall back to the NOCASE path until
+    /// `--rebuild` regenerates the folded columns. Codex #86 third-pass review.
+    /// FoldReady bit + fold_key_version の両方を書く。アルゴリズム変更時の silent mismatch を防ぐ。
+    /// </summary>
+    public void MarkFoldReady()
+    {
+        SetReadyBit(DbContext.FoldReadyFlag);
+        SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Upsert a metadata key/value into `codeindex_meta`.
+    /// codeindex_meta への key/value の upsert。
+    /// </summary>
+    public void SetMeta(string key, string? value)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
+                            ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        cmd.Parameters.AddWithValue("@key", key);
+        cmd.Parameters.AddWithValue("@value", (object?)value ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
+
+    /// <summary>
+    /// True only when every existing row in symbols / symbol_references has a populated folded
+    /// value for each source name that is itself non-NULL. Callers use this before stamping
+    /// `FoldReadyFlag` on a full scan because the default incremental path skips unchanged files
+    /// — their pre-#86 rows still carry NULL folded columns, so a naive stamp would flip readers
+    /// onto the folded equality path and silently miss those legacy rows. Codex #86 review.
+    /// full scan 成功時でも、incremental で skip された legacy 行が NULL のまま残っていれば
+    /// fold-ready にしてはならない。stamp 前にこの実検証を通す。
+    /// </summary>
+    public bool AllFoldedColumnsBackfilled()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                (SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL)
+              + (SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
+              + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
+        var raw = cmd.ExecuteScalar();
+        long missing = raw is long l ? l : (raw is int i ? i : 0);
+        return missing == 0;
+    }
 
     private void SetReadyBit(int flag)
     {

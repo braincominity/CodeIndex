@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -223,6 +224,194 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotStampFoldReadyWhenLegacyRowsRemain()
+    {
+        // Codex #86 review regression: on a legacy DB (pre-#86) opened by a new binary, the
+        // incremental default of `cdidx index .` skips unchanged files via GetUnchangedFileId.
+        // Their old rows stay NULL in name_folded. Stamping FoldReady would flip readers onto
+        // the folded-equality path and silently miss those rows. Verify the stamp is withheld.
+        // Legacy 行が残っているときに FoldReady が stamp されないことを確認する回帰テスト。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+
+            // Initial index — writes every row with name_folded populated, stamps FoldReady.
+            // 初回 index: 全行 folded 付き、FoldReady stamp される。
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            // Simulate pre-#86 legacy state: wipe folded columns + FoldReady bit on the existing
+            // row to model an upgrade from a binary that did not populate name_folded yet.
+            // pre-#86 を模擬: folded 列を NULL に戻し、FoldReady bit も落とす。
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL; UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL; PRAGMA user_version = 3";
+                cmd.ExecuteNonQuery();
+            }
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+            // Incremental re-run skips the unchanged file — legacy rows with NULL folded columns
+            // still exist, so FoldReady MUST NOT be restamped.
+            // 再 index は unchanged file を skip するため legacy 行が残る → FoldReady は立てない。
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var verifyCmd = verify.CreateCommand();
+            verifyCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)verifyCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_PreservesGraphAndIssuesOnPre86Db_WithoutStampingFold()
+    {
+        // Codex #86 second-pass regression: pre-#86 DB has user_version=3 (Graph|Issues).
+        // Before this fix, `wasFullyReady = user_version == CurrentSchemaVersion (=7)` returned
+        // false, so update mode cleared all 3 bits and restamped none — silently breaking
+        // references/callers/callees/impact for the whole workspace even though only the
+        // Fold bit was missing. After the fix, Graph/Issues must survive a partial update on
+        // a pre-#86 DB; only Fold stays off (needs full rebuild).
+        // pre-#86 DB (user_version=3) に対する partial update で Graph/Issues が落ちず、
+        // Fold だけが未 stamp のまま残ることを確認する回帰テスト。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            // Initial full scan stamps user_version = CurrentSchemaVersion (7 = Graph|Issues|Fold).
+            // 初回 full scan で user_version = 7（全 bit stamp）。
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            // Simulate a pre-#86 DB by stripping the Fold bit (and wiping name_folded rows to
+            // reflect a pre-#86 writer that did not populate them). User_version = 3.
+            // pre-#86 DB を模擬: Fold bit を落とし、name_folded も NULL に戻す。
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL; UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL; PRAGMA user_version = 3";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Partial update via --files. Must NOT strip Graph/Issues trust just because Fold
+            // was missing. After run: Graph+Issues still stamped, Fold stays off.
+            // --files で partial update。Graph/Issues は維持、Fold は未 stamp のまま。
+            var targetFile = Path.Combine(projectRoot, "app.cs");
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var verifyCmd = verify.CreateCommand();
+            verifyCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)verifyCmd.ExecuteScalar()!;
+            Assert.NotEqual(0, userVersion & DbContext.GraphReadyFlag);
+            Assert.NotEqual(0, userVersion & DbContext.IssuesReadyFlag);
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
+    {
+        // Codex #86 fourth-pass regression: when a future NameFold.Version bump ships, the
+        // stored fold_key_version on existing DBs becomes stale. A partial --files / --commits
+        // update can only re-fold touched rows with the new version; untouched rows keep the
+        // OLD folded keys. Restamping FoldReady + overwriting fold_key_version to the new
+        // version would let the reader advertise full Unicode-exact readiness while silently
+        // mismatching on untouched rows. The correct behavior is to leave FoldReady off until
+        // a full --rebuild regenerates every row at the current version.
+        // Simulate by writing an older fold_key_version into codeindex_meta before the update.
+        // 将来の version bump 後の partial update で FoldReady を restamp しないことを確認する。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            // Initial index stamps current version (1).
+            // 初回 index で現在の version (1) が stamp される。
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            // Simulate a future version bump: the DB was stamped by a binary that wrote
+            // fold_key_version=0 (pretend old). The current binary expects NameFold.Version=1
+            // so the reader sees a mismatch and falls back to NOCASE. A partial update must
+            // preserve that state, not silently restamp version=1 on mixed-state rows.
+            // version 不一致を模擬: codeindex_meta の fold_key_version を 0 に書き換え。
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Run a partial update. FoldReady bit AND version must NOT advance to the new state
+            // because untouched rows still carry the old version's fold keys.
+            // partial update 実行。FoldReady bit も version も新状態に進めてはいけない。
+            var targetFile = Path.Combine(projectRoot, "app.cs");
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            // Stored version may stay at "0" (what we wrote) or be unset; critically it must
+            // NOT have advanced to "1" (the current NameFold.Version) because that would let
+            // the reader treat mixed-state rows as fully version-1 fold-ready.
+            // version は "0" のままで OK。現在の NameFold.Version (="1") に昇格してはいけない。
+            Assert.NotEqual("1", storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }

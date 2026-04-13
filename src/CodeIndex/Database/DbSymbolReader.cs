@@ -117,16 +117,16 @@ public partial class DbReader
         var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
-            // --exact: case-insensitive equality so AI clients passing a resolved candidate list
-            // get exactly those rows instead of LIKE %name% expansion (Run vs RunAsync / RunImpact).
-            // Uses `= ... COLLATE NOCASE` (not `lower(col) = lower(@q)`) so SQLite can pick
-            // idx_symbols_name_nocase instead of falling back to a full scan per query name.
-            // --exact: 既に解決済みの候補リストを渡した AI クライアントが、Run で RunAsync などを
-            // 引き込まずに本当に同名だけを取得できるよう、大文字小文字無視の完全一致にする。
-            // `lower(col)` ラップだと idx_symbols_name_nocase が効かずフルスキャンに落ちるため、
-            // SQLite が index を選べる `= ... COLLATE NOCASE` を使う。
+            // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
+            // Fold path: `s.name_folded = @qFolded` (indexed by idx_symbols_name_folded), query
+            // value is pre-folded in .NET with NameFold.Fold so Ä vs ä / 全角 vs 半角 match.
+            // Fallback: `s.name = @q COLLATE NOCASE` (indexed by idx_symbols_name_nocase). Both
+            // paths stay SARGable. Using `lower(col)` would force a full scan per name.
+            // --exact: FoldReady なら Unicode 折り畳み経路、未 ready ならレガシー NOCASE 経路へ fallback。
+            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
+            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
             var orClauses = exact
-                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name = @query{idx} COLLATE NOCASE"))
+                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"{exactColumn} = @query{idx}{exactSuffix}"))
                 : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
             sql += $" AND ({orClauses})";
         }
@@ -143,7 +143,16 @@ public partial class DbReader
         if (effectiveQueries != null)
         {
             for (int idx = 0; idx < effectiveQueries.Count; idx++)
-                cmd.Parameters.AddWithValue($"@query{idx}", exact ? effectiveQueries[idx] : $"%{EscapeLikeQuery(effectiveQueries[idx])}%");
+            {
+                string paramValue;
+                if (!exact)
+                    paramValue = $"%{EscapeLikeQuery(effectiveQueries[idx])}%";
+                else if (_foldReady)
+                    paramValue = NameFold.Fold(effectiveQueries[idx]) ?? effectiveQueries[idx];
+                else
+                    paramValue = effectiveQueries[idx];
+                cmd.Parameters.AddWithValue($"@query{idx}", paramValue);
+            }
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);

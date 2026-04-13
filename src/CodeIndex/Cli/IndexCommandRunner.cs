@@ -123,12 +123,24 @@ public static class IndexCommandRunner
         using var db = new DbContext(dbPath);
 
         // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
-        // touches a subset of files, so stamping readiness after a partial pass on a
-        // previously-degraded DB would falsely bless untouched files as authoritative. Only
-        // a DB that was already fully ready may be restamped after a partial update.
-        // update モードは一部ファイルしか再インデックスしないため、元々縮退状態だった DB を
-        // partial pass の後に trusted 扱いに昇格させてはいけない。元の readiness を捕獲しておく。
-        var wasFullyReady = db.GetUserVersion() == DbContext.CurrentSchemaVersion;
+        // touches a subset of files, so trust bits the DB did NOT previously carry must not
+        // be fabricated after a partial pass. But bits the DB DID carry should survive —
+        // independently, not as a single all-or-nothing gate. Codex #86 review flagged that
+        // gating all three bits on `user_version == CurrentSchemaVersion` regressed pre-#86
+        // DBs (user_version=3): a `--files` refresh on such a DB would silently drop Graph/
+        // Issues trust too, breaking references/callers/callees/impact for the whole repo.
+        // update モードは元々立っていた readiness bit のみを個別に復元する。pre-#86 DB
+        // (user_version=3) でも Graph/Issues を巻き込んで落とさないように、単一フラグではなく
+        // 事前 bit をそのまま保持する。Codex #86 第 2 pass レビュー対応。
+        var priorReadiness = db.GetUserVersion();
+        // Also snapshot the stored fold-key version BEFORE ClearReadyFlags wipes trust. When
+        // a future `NameFold.Version` bump (e.g. #96) lands, a partial update must NOT restamp
+        // FoldReady on a DB whose untouched rows still carry the old-version fold keys — we
+        // can't re-fold those rows without re-reading them, so the only safe state is to leave
+        // fold degraded until `--rebuild`. Codex #86 fourth-pass review.
+        // fold_key_version も事前 snapshot する。将来の version bump 時に partial update で
+        // untouched 行（旧 key）を新 version で宣伝してしまう silent miss を防ぐ。
+        var priorFoldVersion = db.GetMetaString("fold_key_version");
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -150,15 +162,9 @@ public static class IndexCommandRunner
         var indexer = new FileIndexer(options.ProjectPath);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
-        // Full-scan covers the whole repo, so it may always stamp on success. Update mode
-        // only stamps when the DB was already fully ready, preventing a partial pass from
-        // promoting a legacy / degraded DB to trusted.
-        // full-scan は常に stamp 可。update は元々 trusted だった場合のみ再 stamp 可。
-        var canStampReadiness = !isUpdateMode || wasFullyReady;
-
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, canStampReadiness)
-            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, canStampReadiness);
+            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion)
+            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions);
     }
 
 
@@ -260,7 +266,8 @@ public static class IndexCommandRunner
         Stopwatch stopwatch,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
-        bool canStampReadiness)
+        int priorReadiness,
+        string? priorFoldVersion)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -411,10 +418,40 @@ public static class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        if (errors == 0 && canStampReadiness)
+        var foldReadyAfter = false;
+        if (errors == 0)
         {
-            writer.MarkGraphReady();
-            writer.MarkIssuesReady();
+            // Restore each readiness bit independently based on what the DB carried BEFORE
+            // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
+            // no Fold) must keep Graph+Issues after a successful partial update, even though
+            // FoldReady can't be restamped. Codex #86 second-pass review: the old single-flag
+            // `wasFullyReady` gate silently dropped Graph/Issues for the whole workspace on
+            // such DBs, breaking references/callers/callees/impact.
+            // Fold is the only bit that needs the runtime verify: the other two only require
+            // that the DB previously reached end-of-run for those subsystems. Fold also
+            // requires name_folded to be populated for every row, but the invariant holds
+            // when the prior bit was set AND this update rewrote its touched rows with
+            // name_folded populated, so no extra scan is needed here.
+            // update mode は事前 bit を個別に復元。Graph/Issues は prior bit があれば復元、
+            // Fold も prior bit があれば invariant を信じて restamp（codex 2nd review 対応）。
+            if ((priorReadiness & DbContext.GraphReadyFlag) != 0)
+                writer.MarkGraphReady();
+            if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
+                writer.MarkIssuesReady();
+            // FoldReady restamp needs an additional check: the prior stored fold_key_version
+            // must match the current binary's NameFold.Version. Otherwise a partial update
+            // after a NameFold.Version bump would leave untouched rows at the OLD version
+            // while the restamp advertises the NEW version, silently mismatching on --exact.
+            // Only a full rebuild can safely re-fold every row to the new version.
+            // Codex #86 fourth-pass review.
+            // fold は version 一致時のみ restamp。version skew 下では untouched 行の
+            // 旧 key を新 version で誤認識させないため、fold_ready=false のまま残す。
+            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if ((priorReadiness & DbContext.FoldReadyFlag) != 0 && priorFoldVersion == currentFoldVersion)
+            {
+                writer.MarkFoldReady();
+                foldReadyAfter = true;
+            }
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -436,6 +473,10 @@ public static class IndexCommandRunner
                     skipped,
                     errors,
                 },
+                // #86 codex review: expose fold-readiness so AI clients can decide whether
+                // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
+                // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
+                fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));
@@ -480,8 +521,7 @@ public static class IndexCommandRunner
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
-        JsonSerializerOptions jsonOptions,
-        bool canStampReadiness)
+        JsonSerializerOptions jsonOptions)
     {
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
@@ -600,10 +640,34 @@ public static class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        if (errors == 0 && canStampReadiness)
+        var foldReadyAfter = false;
+        if (errors == 0)
         {
+            // Full-scan covers the whole repo, so it may always stamp Graph / Issues on
+            // success regardless of what the DB carried before. Fold still gates on the
+            // backfill verification below because incremental-by-default full scans skip
+            // unchanged legacy files whose folded columns remain NULL.
+            // full-scan は全repo をカバーするため、Graph / Issues は常に stamp。Fold のみ条件付き。
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
+            // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
+            // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip
+            // readers onto the folded-equality path and silently miss those rows. Verify
+            // every existing row has its folded column populated before stamping, and tell
+            // the user how to upgrade when not (only --rebuild / a truly-fresh index can
+            // guarantee 100% backfill on a legacy DB).
+            // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
+            // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
+            if (writer.AllFoldedColumnsBackfilled())
+            {
+                writer.MarkFoldReady();
+                foldReadyAfter = true;
+            }
+            else if (!options.Json)
+            {
+                ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: legacy rows without name_folded remain. Run `cdidx index . --rebuild` to upgrade the whole DB.");
+            }
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -625,6 +689,10 @@ public static class IndexCommandRunner
                     files_purged = purged,
                     errors,
                 },
+                // #86 codex review: expose fold-readiness so AI clients can decide whether
+                // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
+                // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
+                fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));

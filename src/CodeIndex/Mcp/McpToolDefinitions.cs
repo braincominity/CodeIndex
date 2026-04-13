@@ -57,7 +57,7 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact name match (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to resolve a precise candidate list without LIKE substring expansion — e.g. `Run` no longer also returns `RunAsync`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + invariant-lower exact name match (NFKC + invariant lowercase, so `Ä`/`ä` and fullwidth/halfwidth collapse). Legacy DBs indexed before #86 silently fall back to ASCII COLLATE NOCASE. Use to resolve a precise candidate list without LIKE substring expansion — e.g. `Run` no longer also returns `RunAsync`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -77,7 +77,7 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact match on the referenced symbol name (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to avoid LIKE substring expansion (e.g. `Run` matching `RunAsync`).", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + invariant-lower exact match on the referenced symbol name (NFKC + invariant lowercase). Legacy DBs fall back to ASCII COLLATE NOCASE. Use to avoid LIKE substring expansion (e.g. `Run` matching `RunAsync`).", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -97,7 +97,7 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact match on the callee symbol name (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to avoid LIKE substring expansion.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + invariant-lower exact match on the callee symbol name (NFKC + invariant lowercase). Legacy DBs fall back to ASCII COLLATE NOCASE. Use to avoid LIKE substring expansion.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -117,7 +117,7 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact match on the caller/container name (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to avoid LIKE substring expansion.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + invariant-lower exact match on the caller/container name (NFKC + invariant lowercase). Legacy DBs fall back to ASCII COLLATE NOCASE. Use to avoid LIKE substring expansion.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -139,7 +139,7 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact name match instead of substring (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use when resolving a precise candidate list (e.g. names returned from an earlier search/inspect call) so `Run` no longer matches `RunAsync`/`RunImpact`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + invariant-lower exact name match instead of substring (NFKC + invariant lowercase, so `Ä`/`ä` and fullwidth/halfwidth collapse). Legacy DBs fall back to ASCII COLLATE NOCASE. Use when resolving a precise candidate list (e.g. names returned from an earlier search/inspect call) so `Run` no longer matches `RunAsync`/`RunImpact`.", ["default"] = false }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -209,7 +209,7 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact name match across the bundle (definitions, references, callers, callees). Propagates to every sub-query so `Run` no longer pulls in `RunAsync` / `RunImpact`. Same NOCASE limitation as the leaf commands (non-ASCII casing not folded).", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + invariant-lower exact name match across the bundle (definitions, references, callers, callees), propagated into every sub-query so `Run` no longer pulls in `RunAsync` / `RunImpact`. NFKC + invariant lowercase folding; legacy DBs fall back to ASCII COLLATE NOCASE until reindex.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
