@@ -205,7 +205,7 @@ public partial class DbReader
     /// Search indexed references such as call sites.
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
-    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
         if (!_hasReferencesTable) return new List<ReferenceResult>();
         using var cmd = _conn.CreateCommand();
@@ -219,7 +219,15 @@ public partial class DbReader
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (query != null)
-            sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        {
+            // --exact: ASCII case-insensitive equality, backed by idx_symbol_refs_name_nocase.
+            // Uses `= ... COLLATE NOCASE` (not `lower(col) = lower(@q)`) so SQLite can pick the index.
+            // Unicode fold is tracked in #86 (same limitation as symbols --exact).
+            // --exact: ASCII NOCASE の完全一致。idx_symbol_refs_name_nocase を利用。
+            sql += exact
+                ? " AND r.symbol_name = @query COLLATE NOCASE"
+                : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
         if (lang != null)
@@ -230,7 +238,7 @@ public partial class DbReader
         cmd.CommandText = sql;
         if (query != null)
         {
-            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+            cmd.Parameters.AddWithValue("@query", exact ? query : $"%{EscapeLikeQuery(query)}%");
             cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
             cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
         }
@@ -270,7 +278,7 @@ public partial class DbReader
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
-    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -287,14 +295,16 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += " AND r.reference_kind IN ('call', 'instantiate')";
-        sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        sql += exact
+            ? " AND r.symbol_name = @query COLLATE NOCASE"
+            : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        cmd.Parameters.AddWithValue("@query", exact ? query : $"%{EscapeLikeQuery(query)}%");
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -325,7 +335,7 @@ public partial class DbReader
     /// Find callees used by a caller/container symbol.
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
     /// </summary>
-    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
@@ -342,14 +352,16 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += " AND r.reference_kind IN ('call', 'instantiate')";
-        sql += " AND r.container_name LIKE @query ESCAPE '\\'";
+        sql += exact
+            ? " AND r.container_name = @query COLLATE NOCASE"
+            : " AND r.container_name LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        cmd.Parameters.AddWithValue("@query", exact ? query : $"%{EscapeLikeQuery(query)}%");
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);

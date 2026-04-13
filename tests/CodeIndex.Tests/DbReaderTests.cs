@@ -466,6 +466,126 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphReaders_ExactMatchesNameEquality()
+    {
+        // Seed content where `authenticate_v2` is both CALLED (so it appears as a reference
+        // `symbol_name`) and calls `authenticate` (so it appears as a `container_name`). Substring
+        // mode for `authenticate` matches both rows; exact mode returns only `authenticate`.
+        // Mirrors the semantics codex nailed in #81 — case-insensitive equality, no substring expansion.
+        // authenticate_v2 を呼び出しもし、中から authenticate も呼び出す内容を仕込む。
+        InsertIndexedFile("src/auth_v2.py", "python",
+            "def authenticate_v2(user, password):\n    authenticate(user, password)\n    return True\n\n" +
+            "def wrapper(u, p):\n    return authenticate_v2(u, p)\n");
+
+        // references
+        var refsSub = _reader.SearchReferences("authenticate", exact: false)
+            .Select(r => r.SymbolName).Distinct().OrderBy(n => n).ToList();
+        Assert.Contains("authenticate", refsSub);
+        Assert.Contains("authenticate_v2", refsSub);
+
+        var refsExact = _reader.SearchReferences("authenticate", exact: true)
+            .Select(r => r.SymbolName).Distinct().ToList();
+        Assert.Equal(new[] { "authenticate" }, refsExact);
+
+        // callers (filter on callee / symbol_name)
+        var callersSub = _reader.GetCallers("authenticate", exact: false)
+            .Select(r => r.CalleeName).Distinct().OrderBy(n => n).ToList();
+        Assert.Contains("authenticate", callersSub);
+        Assert.Contains("authenticate_v2", callersSub);
+
+        var callersExact = _reader.GetCallers("authenticate", exact: true)
+            .Select(r => r.CalleeName).Distinct().ToList();
+        Assert.Equal(new[] { "authenticate" }, callersExact);
+
+        // callees (filter on container_name)
+        var calleesSub = _reader.GetCallees("authenticate", exact: false)
+            .Select(r => r.CallerName).Distinct().OrderBy(n => n ?? "").ToList();
+        Assert.Contains("authenticate_v2", calleesSub);
+
+        var calleesExact = _reader.GetCallees("authenticate", exact: true)
+            .Select(r => r.CallerName).Distinct().ToList();
+        Assert.DoesNotContain("authenticate_v2", calleesExact);
+
+        // Case-insensitive equality across all three.
+        Assert.Single(_reader.SearchReferences("AUTHENTICATE", exact: true));
+        Assert.Single(_reader.GetCallers("AUTHENTICATE", exact: true));
+    }
+
+    [Fact]
+    public void GetDefinitions_ExactMatchesNameEquality()
+    {
+        var extraFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/auth_v2.py", Lang = "python", Size = 80, Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = extraFileId, ChunkIndex = 0, StartLine = 1, EndLine = 1,
+            Content = "def authenticate_v2(user, password): pass",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "authenticate_v2", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+
+        var substring = _reader.GetDefinitions("authenticate", exact: false)
+            .Select(r => r.Name).Distinct().OrderBy(n => n).ToList();
+        Assert.Contains("authenticate", substring);
+        Assert.Contains("authenticate_v2", substring);
+
+        var exact = _reader.GetDefinitions("authenticate", exact: true)
+            .Select(r => r.Name).Distinct().ToList();
+        Assert.Equal(new[] { "authenticate" }, exact);
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_ExactPropagatesToBundledSubQueries()
+    {
+        // The bundled one-round-trip path (`inspect` / MCP `analyze_symbol`) must propagate
+        // `exact` into every sub-query — otherwise the bundle keeps returning RunAsync/RunImpact
+        // spillover even when the caller asked for precision. Codex adversarial review of #83.
+        // bundle 側も `exact` を尊重すること（definitions / references / callers / callees）。
+        InsertIndexedFile("src/auth_v2.py", "python",
+            "def authenticate_v2(user, password):\n    authenticate(user, password)\n    return True\n\n" +
+            "def wrapper(u, p):\n    return authenticate_v2(u, p)\n");
+
+        var exactBundle = _reader.AnalyzeSymbol("authenticate", exact: true);
+        Assert.All(exactBundle.Definitions, d => Assert.Equal("authenticate", d.Name));
+        Assert.All(exactBundle.References, r => Assert.Equal("authenticate", r.SymbolName));
+        Assert.All(exactBundle.Callers, c => Assert.Equal("authenticate", c.CalleeName));
+        // Callees are filtered on container_name, so exact must reject `authenticate_v2` as a container.
+        // callees は container_name で絞るため、authenticate_v2 を含んではいけない。
+        Assert.DoesNotContain(exactBundle.Callees, c => c.CallerName == "authenticate_v2");
+
+        var substringBundle = _reader.AnalyzeSymbol("authenticate", exact: false);
+        Assert.Contains(substringBundle.Definitions, d => d.Name == "authenticate_v2");
+    }
+
+    [Fact]
+    public void GraphReaders_ExactPredicatesAreIndexable()
+    {
+        // Guard: `references / callers / callees --exact` must stay SARGable so SQLite can
+        // pick the new NOCASE covering indexes on symbol_references(symbol_name / container_name).
+        // Mirrors SearchSymbols_ExactPredicateIsIndexable from #81.
+        // references / callers / callees --exact 用の NOCASE index 使用を固定する回帰テスト。
+        using var cmdRef = _db.Connection.CreateCommand();
+        cmdRef.CommandText = "EXPLAIN QUERY PLAN SELECT r.line FROM symbol_references r WHERE r.symbol_name = @q COLLATE NOCASE";
+        cmdRef.Parameters.AddWithValue("@q", "authenticate");
+        var refPlan = new System.Text.StringBuilder();
+        using (var rr = cmdRef.ExecuteReader())
+            while (rr.Read()) refPlan.AppendLine(rr.GetString(3));
+        Assert.Contains("idx_symbol_refs_name_nocase", refPlan.ToString());
+
+        using var cmdCon = _db.Connection.CreateCommand();
+        cmdCon.CommandText = "EXPLAIN QUERY PLAN SELECT r.line FROM symbol_references r WHERE r.container_name = @q COLLATE NOCASE";
+        cmdCon.Parameters.AddWithValue("@q", "login");
+        var conPlan = new System.Text.StringBuilder();
+        using (var cr = cmdCon.ExecuteReader())
+            while (cr.Read()) conPlan.AppendLine(cr.GetString(3));
+        Assert.Contains("idx_symbol_refs_container_nocase", conPlan.ToString());
+    }
+
+    [Fact]
     public void GraphReaders_IgnoreLegacyReferencesFromUnsupportedLanguages()
     {
         var pythonFileId = _writer.UpsertFile(new FileRecord

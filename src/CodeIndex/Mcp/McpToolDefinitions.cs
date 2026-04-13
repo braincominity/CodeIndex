@@ -56,7 +56,8 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" }
+                        ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact name match (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to resolve a precise candidate list without LIKE substring expansion — e.g. `Run` no longer also returns `RunAsync`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -75,7 +76,8 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact match on the referenced symbol name (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to avoid LIKE substring expansion (e.g. `Run` matching `RunAsync`).", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -94,7 +96,8 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact match on the callee symbol name (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to avoid LIKE substring expansion.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -113,7 +116,8 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact match on the caller/container name (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use to avoid LIKE substring expansion.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -204,7 +208,8 @@ public partial class McpServer
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content in definitions when available", ["default"] = false },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact name match across the bundle (definitions, references, callers, callees). Propagates to every sub-query so `Run` no longer pulls in `RunAsync` / `RunImpact`. Same NOCASE limitation as the leaf commands (non-ASCII casing not folded).", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
