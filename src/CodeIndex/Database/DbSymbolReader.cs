@@ -514,29 +514,31 @@ public partial class DbReader
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
         var containerNameSql = $"lower({GetSymbolColumnSql("container_name", "''")})";
         var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
-        const string nameSql = "lower(s.name)";
         const string pathSql = "lower(f.path)";
         var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
+        var hasConfigContextSql = $@"(
+                {containerNameSql} LIKE '%config%'
+                OR {containerNameSql} LIKE '%settings%'
+                OR {containerNameSql} LIKE '%options%'
+                OR {pathSql} LIKE 'config/%'
+                OR {pathSql} LIKE '%/config/%'
+                OR {pathSql} LIKE 'settings/%'
+                OR {pathSql} LIKE '%/settings/%'
+                OR {pathSql} LIKE 'options/%'
+                OR {pathSql} LIKE '%/options/%'
+                OR {signatureSql} LIKE '%configuration%'
+                OR {signatureSql} LIKE '%iconfiguration%'
+                OR {signatureSql} LIKE '%ioptions%'
+                OR {signatureSql} LIKE '%options<%'
+            )";
         var isReflectionOrConfigSuspectSql = $@"(
                 {isPublicOrExportedSql}
                 AND (
-                    s.kind = 'property'
-                    OR {nameSql} LIKE '%config%'
-                    OR {nameSql} LIKE '%setting%'
-                    OR {nameSql} LIKE '%option%'
-                    OR {nameSql} LIKE '%path%'
-                    OR {nameSql} LIKE '%connectionstring%'
-                    OR {nameSql} LIKE '%secret%'
-                    OR {nameSql} LIKE '%token%'
-                    OR {containerNameSql} LIKE '%config%'
-                    OR {containerNameSql} LIKE '%setting%'
-                    OR {containerNameSql} LIKE '%option%'
-                    OR {containerNameSql} LIKE '%path%'
-                    OR {pathSql} LIKE '%config%'
-                    OR {pathSql} LIKE '%settings%'
-                    OR {pathSql} LIKE '%options%'
+                    ({hasConfigContextSql} AND s.kind = 'property')
                     OR {signatureSql} LIKE '%configuration%'
-                    OR {signatureSql} LIKE '%options%'
+                    OR {signatureSql} LIKE '%iconfiguration%'
+                    OR {signatureSql} LIKE '%ioptions%'
+                    OR {signatureSql} LIKE '%options<%'
                 )
             )";
         var unusedBucketOrderSql = $@"

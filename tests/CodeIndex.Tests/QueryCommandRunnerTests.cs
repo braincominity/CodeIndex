@@ -204,16 +204,22 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(4, json.GetProperty("count").GetInt32());
+            Assert.Equal(7, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(4, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
             Assert.Equal("medium", symbols[0].GetProperty("unused_confidence").GetString());
-            Assert.Equal("ConfigPath", symbols[3].GetProperty("name").GetString());
-            Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
+            Assert.Equal("PathResolver", symbols[2].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[2].GetProperty("unused_bucket").GetString());
+            Assert.Equal("AdoptionService", symbols[3].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[3].GetProperty("unused_bucket").GetString());
+            Assert.Equal("TokenService", symbols[4].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[4].GetProperty("unused_bucket").GetString());
+            Assert.Equal("ConnectionString", symbols[6].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[6].GetProperty("unused_bucket").GetString());
         }
         finally
         {
@@ -263,7 +269,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("Likely unused private (1)", stdout);
             Assert.Contains("Maybe unused non-public (1)", stdout);
-            Assert.Contains("Public/exported with no refs (1)", stdout);
+            Assert.Contains("Public/exported with no refs (4)", stdout);
             Assert.Contains("Reflection/config suspects (1)", stdout);
             Assert.Contains("confidence=medium", stdout);
             Assert.Contains("confidence=low", stdout);
@@ -909,25 +915,58 @@ public class QueryCommandRunnerTests
             {
                 FileId = fileId,
                 Kind = "class",
-                Name = "ExportedApi",
+                Name = "PathResolver",
                 Line = 1,
                 StartLine = 1,
+                EndLine = 1,
+                Signature = "public class PathResolver",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "AdoptionService",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public class AdoptionService",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "TokenService",
+                Line = 8,
+                StartLine = 8,
                 EndLine = 8,
-                Signature = "public class ExportedApi",
+                Signature = "public class TokenService",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "AppSettings",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 11,
+                Signature = "public class AppSettings",
                 Visibility = "public",
             },
             new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "property",
-                Name = "ConfigPath",
-                Line = 2,
-                StartLine = 2,
-                EndLine = 2,
-                Signature = "public string ConfigPath { get; set; }",
+                Name = "ConnectionString",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string ConnectionString { get; set; }",
                 Visibility = "public",
                 ContainerKind = "class",
-                ContainerName = "ExportedApi",
+                ContainerName = "AppSettings",
             },
         ]);
         writer.MarkGraphReady();

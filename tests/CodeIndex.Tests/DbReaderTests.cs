@@ -1392,7 +1392,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetUnusedSymbols_ClassifiesConfidenceBucketsAndSortsHighConfidenceFirst()
+    public void GetUnusedSymbols_ClassifiesConfidenceBucketsAndSortsPrivateFirst()
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
@@ -1434,39 +1434,78 @@ public class DbReaderTests : IDisposable
             {
                 FileId = fileId,
                 Kind = "class",
-                Name = "ExportedApi",
+                Name = "PathResolver",
                 Line = 1,
                 StartLine = 1,
+                EndLine = 1,
+                Signature = "public class PathResolver",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "AdoptionService",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public class AdoptionService",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "TokenService",
+                Line = 8,
+                StartLine = 8,
                 EndLine = 8,
-                Signature = "public class ExportedApi",
+                Signature = "public class TokenService",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "AppSettings",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 11,
+                Signature = "public class AppSettings",
                 Visibility = "public",
             },
             new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "property",
-                Name = "ConfigPath",
-                Line = 2,
-                StartLine = 2,
-                EndLine = 2,
-                Signature = "public string ConfigPath { get; set; }",
+                Name = "ConnectionString",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string ConnectionString { get; set; }",
                 Visibility = "public",
                 ContainerKind = "class",
-                ContainerName = "ExportedApi",
+                ContainerName = "AppSettings",
             },
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
             pathPatterns: ["unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
-        Assert.Equal(["Hidden", "InternalOnly", "ExportedApi", "ConfigPath"], unused.Select(symbol => symbol.Name).ToArray());
+        Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "AdoptionService", "TokenService", "AppSettings", "ConnectionString"], unused.Select(symbol => symbol.Name).ToArray());
         Assert.Equal("likely_unused_private", unused[0].UnusedBucket);
         Assert.Equal("medium", unused[0].UnusedConfidence);
         Assert.Equal("maybe_unused_nonpublic", unused[1].UnusedBucket);
         Assert.Equal("low", unused[1].UnusedConfidence);
         Assert.Equal("public_or_exported_no_refs", unused[2].UnusedBucket);
-        Assert.Equal("reflection_or_config_suspect", unused[3].UnusedBucket);
-        Assert.Contains("config-style", unused[3].UnusedReason);
+        Assert.Equal("public_or_exported_no_refs", unused[3].UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", unused[4].UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", unused[5].UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", unused[6].UnusedBucket);
+        Assert.Contains("config-style", unused[6].UnusedReason);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "PathResolver").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "AdoptionService").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "TokenService").UnusedBucket);
     }
 
     [Fact]
