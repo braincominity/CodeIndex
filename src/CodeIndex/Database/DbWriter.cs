@@ -597,18 +597,19 @@ public class DbWriter
     public void MarkIssuesReady()   => SetReadyBit(DbContext.IssuesReadyFlag);
 
     /// <summary>
-    /// Stamp FoldReadyFlag AND write the current <see cref="NameFold.Version"/> into
-    /// `codeindex_meta`. Readers require both the bit and an exact version match before
-    /// trusting folded columns, so when #96 (or any future tweak) changes the fold
-    /// algorithm and bumps `NameFold.Version`, existing DBs will not silently query new
-    /// code against stale keys — they automatically fall back to the NOCASE path until
-    /// `--rebuild` regenerates the folded columns. Codex #86 third-pass review.
-    /// FoldReady bit + fold_key_version の両方を書く。アルゴリズム変更時の silent mismatch を防ぐ。
+    /// Stamp FoldReadyFlag AND write the current <see cref="NameFold.Version"/> plus the
+    /// runtime-sensitive <see cref="NameFold.Fingerprint"/> into `codeindex_meta`.
+    /// Readers require the bit, a version match, and a fingerprint match before trusting
+    /// folded columns, so both intentional fold changes and runtime ICU / invariant-casing
+    /// drift degrade safely to NOCASE until `--rebuild`. Issue #97.
+    /// FoldReady bit + fold_key_version + fold_key_fingerprint を書く。runtime drift を含む
+    /// silent mismatch を防ぎ、ズレた場合は `--rebuild` まで NOCASE fallback に降格する。
     /// </summary>
     public void MarkFoldReady()
     {
         SetReadyBit(DbContext.FoldReadyFlag);
         SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
     }
 
     /// <summary>

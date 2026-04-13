@@ -484,6 +484,45 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_ExactFallsBackToNocaseWhenFoldFingerprintMismatches()
+    {
+        // #97: runtime casing tables can drift across .NET upgrades even when
+        // NameFold.Version stays constant. The persisted canary fingerprint must still
+        // match the current runtime's observable fold output before folded keys are trusted.
+        // #97: version が同じでも runtime drift はあり得るため、fingerprint 不一致時は
+        // fold trusted を外して NOCASE fallback に降格する。
+        var mismatchPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_fingerprint_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(mismatchPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            writer.MarkGraphReady();
+            writer.MarkIssuesReady();
+            writer.MarkFoldReady();
+
+            writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+
+            var reader = new DbReader(db.Connection);
+            Assert.False(reader._foldReady);
+            Assert.Single(reader.SearchSymbols(new[] { "AUTHENTICATE" }, limit: 10, exact: true));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(mismatchPath)) File.Delete(mismatchPath);
+        }
+    }
+
+    [Fact]
     public void SearchSymbols_ExactFallsBackToNocaseWhenFoldNotReady()
     {
         // Legacy / partial-backfill DBs do not set FoldReadyFlag; the reader must silently
