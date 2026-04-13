@@ -139,6 +139,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("search", instructions);
         // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
         Assert.Contains("index", instructions);
+        Assert.Contains("backfill_fold", instructions);
         // Verify language list comes from ReferenceExtractor / 言語リストがReferenceExtractorから来ることを検証
         foreach (var lang in ReferenceExtractor.GetSupportedLanguages())
         {
@@ -205,13 +206,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns19Tools()
+    public void ToolsList_Returns23Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(22, tools.Count);
+        Assert.Equal(23, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -233,6 +234,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("deps", names);
         Assert.Contains("languages", names);
         Assert.Contains("index", names);
+        Assert.Contains("backfill_fold", names);
         Assert.Contains("suggest_improvement", names);
     }
 
@@ -457,6 +459,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_ExactOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_ReturnsCallerSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -502,6 +518,59 @@ public class McpServerTests : IDisposable
         Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_IncludesCombinedExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_container_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_NonExactOnReadOnlyLegacyDb_OmitsExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run"}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Null(structured["exactIndexAvailable"]);
+        Assert.Null(structured["degradedReason"]);
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ExactZeroHintWhenWholeBundleIsEmpty()
+    {
+        InsertIndexedFile("src/handler.cs", "csharp",
+            """
+            public class Handler
+            {
+                public void HandleRequest() { }
+                public void HandleRequestAsync() { HandleRequest(); }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"HandleRe","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+
+        Assert.NotNull(structured["exact_zero_hint"]);
+        Assert.Equal(2, structured["exact_zero_hint"]!["relaxed_count"]!.GetValue<int>());
+        Assert.Contains("HandleRequest", structured["exact_zero_hint"]!["sample_names"]!.ToJsonString());
+        Assert.Contains("Substring would return 2", text);
     }
 
     [Fact]
@@ -623,6 +692,54 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Definition_ExactZeroHint_RespectsRequestedLimitForRelaxedCount()
+    {
+        InsertIndexedFile(
+            "src/extra_limit.cs",
+            "csharp",
+            """
+            public class ExtraLimit
+            {
+                public void HandleRequest1() { }
+                public void HandleRequest2() { }
+                public void HandleRequest3() { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"Handle","exact":true,"limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["exact_zero_hint"]!["relaxed_count"]!.GetValue<int>());
+        Assert.Single(structured["exact_zero_hint"]!["sample_names"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_MultiNameExactZeroHint_OmitsRelaxedCountButReturnsSamples()
+    {
+        InsertIndexedFile(
+            "src/extra_multi.cs",
+            "csharp",
+            """
+            public class ExtraMulti
+            {
+                public void AlphaWorker() { }
+                public void BetaWorker() { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"names":["Alpha","Beta"],"exact":true,"limit":999}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.NotNull(structured["exact_zero_hint"]);
+        Assert.Null(structured["exact_zero_hint"]!["relaxed_count"]);
+        Assert.Contains("AlphaWorker", structured["exact_zero_hint"]!["sample_names"]!.AsArray().Select(node => node!?.GetValue<string>()));
+    }
+
+    [Fact]
     public void ToolsCall_Files_ReturnsResults()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{}}}""")!;
@@ -709,6 +826,16 @@ public class McpServerTests : IDisposable
     public void ToolsCall_BatchQuery_BlocksIndexInBatch()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"."}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Contains("not allowed", results[0]!["error"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_BlocksBackfillFoldInBatch()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"backfill_fold","arguments":{}}]}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
@@ -820,6 +947,28 @@ public class McpServerTests : IDisposable
             if (Directory.Exists(fixtureDir))
                 Directory.Delete(fixtureDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_StampsFoldReady()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
+        Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.True(structured["verified"]!.GetValue<bool>());
+        Assert.Equal(3, structured["user_version_before"]!.GetValue<int>());
+        Assert.Equal(7, structured["user_version_after"]!.GetValue<int>());
+        Assert.True(structured["fold_ready"]!.GetValue<bool>());
+
+        using var verifyDb = new DbContext(_dbPath);
+        verifyDb.TryMigrateForRead();
+        var reader = new DbReader(verifyDb.Connection);
+        Assert.True(reader._foldReady);
     }
 
     [Fact]
@@ -1222,5 +1371,17 @@ public class McpServerTests : IDisposable
             if (File.Exists(_dbPath))
                 File.Delete(_dbPath);
         }
+    }
+
+    private void DropGraphExactFallbackIndexes()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
+            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
     }
 }

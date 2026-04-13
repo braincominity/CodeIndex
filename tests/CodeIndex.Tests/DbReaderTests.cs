@@ -375,6 +375,39 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_ExactPrefersExactCaseOverFoldSibling()
+    {
+        InsertIndexedFile("src/a_case.py", "python",
+            "def apiTwin():\n    return authenticate('a', 'b')\n");
+        InsertIndexedFile("tests/z_case.py", "python",
+            "def ApiTwin():\n    return authenticate('a', 'b')\n");
+
+        var symbols = _reader.SearchSymbols(new[] { "ApiTwin" }, limit: 10, exact: true)
+            .Where(r => r.Name is "ApiTwin" or "apiTwin")
+            .Select(r => r.Name)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, symbols);
+
+        var definitions = _reader.GetDefinitions("ApiTwin", limit: 10, exact: true)
+            .Where(r => r.Name is "ApiTwin" or "apiTwin")
+            .Select(r => r.Name)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, definitions);
+
+        var topSymbol = Assert.Single(_reader.SearchSymbols(new[] { "ApiTwin" }, limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topSymbol.Name);
+        Assert.Equal("tests/z_case.py", topSymbol.Path);
+
+        var topDefinition = Assert.Single(_reader.GetDefinitions("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topDefinition.Name);
+        Assert.Equal("tests/z_case.py", topDefinition.Path);
+    }
+
+    [Fact]
     public void AllFoldedColumnsBackfilled_DetectsLegacyRowsWithNullFoldedValues()
     {
         // Regression for codex #86 review: the upgrade path must not stamp FoldReady when
@@ -454,6 +487,45 @@ public class DbReaderTests : IDisposable
             var reader = new DbReader(db.Connection);
             Assert.False(reader._foldReady);
             // ASCII equality still works via the NOCASE fallback path.
+            Assert.Single(reader.SearchSymbols(new[] { "AUTHENTICATE" }, limit: 10, exact: true));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(mismatchPath)) File.Delete(mismatchPath);
+        }
+    }
+
+    [Fact]
+    public void SearchSymbols_ExactFallsBackToNocaseWhenFoldFingerprintMismatches()
+    {
+        // #97: runtime casing tables can drift across .NET upgrades even when
+        // NameFold.Version stays constant. The persisted canary fingerprint must still
+        // match the current runtime's observable fold output before folded keys are trusted.
+        // #97: version が同じでも runtime drift はあり得るため、fingerprint 不一致時は
+        // fold trusted を外して NOCASE fallback に降格する。
+        var mismatchPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_fingerprint_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(mismatchPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            writer.MarkGraphReady();
+            writer.MarkIssuesReady();
+            writer.MarkFoldReady();
+
+            writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+
+            var reader = new DbReader(db.Connection);
+            Assert.False(reader._foldReady);
             Assert.Single(reader.SearchSymbols(new[] { "AUTHENTICATE" }, limit: 10, exact: true));
         }
         finally
@@ -684,6 +756,53 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphReaders_ExactPrefersExactCaseOverFoldSibling()
+    {
+        InsertIndexedFile("src/a_case.py", "python",
+            "def apiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
+            "def lower_wrapper():\n    return apiTwin()\n");
+        InsertIndexedFile("tests/z_case.py", "python",
+            "def ApiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
+            "def upper_wrapper():\n    return ApiTwin()\n");
+
+        var references = _reader.SearchReferences("ApiTwin", exact: true)
+            .Where(r => r.SymbolName is "ApiTwin" or "apiTwin")
+            .Select(r => r.SymbolName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, references);
+
+        var callers = _reader.GetCallers("ApiTwin", exact: true)
+            .Where(r => r.CalleeName is "ApiTwin" or "apiTwin")
+            .Select(r => r.CalleeName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, callers);
+
+        var callees = _reader.GetCallees("ApiTwin", exact: true)
+            .Where(r => r.CallerName is "ApiTwin" or "apiTwin")
+            .Select(r => r.CallerName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, callees);
+
+        var topReference = Assert.Single(_reader.SearchReferences("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topReference.SymbolName);
+        Assert.Equal("tests/z_case.py", topReference.Path);
+
+        var topCaller = Assert.Single(_reader.GetCallers("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCaller.CalleeName);
+        Assert.Equal("tests/z_case.py", topCaller.Path);
+
+        var topCallee = Assert.Single(_reader.GetCallees("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCallee.CallerName);
+        Assert.Equal("tests/z_case.py", topCallee.Path);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_ExactUsesUnicodeFoldForResolutionAndCallerMatch()
     {
         // Regression for #93: impact BFS used ASCII-only equality in both ResolveSymbolName()
@@ -824,6 +943,28 @@ public class DbReaderTests : IDisposable
 
         var substringBundle = _reader.AnalyzeSymbol("authenticate", exact: false);
         Assert.Contains(substringBundle.Definitions, d => d.Name == "authenticate_v2");
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_ExactZeroHint_OnlyWhenWholeBundleIsEmpty()
+    {
+        InsertIndexedFile("src/handlers.cs", "csharp",
+            """
+            public class Handler
+            {
+                public void HandleRequest() { }
+                public void HandleRequestAsync() { HandleRequest(); }
+            }
+            """);
+
+        var exactMiss = _reader.AnalyzeSymbol("HandleRe", exact: true);
+        Assert.NotNull(exactMiss.ExactZeroHint);
+        Assert.Equal(2, exactMiss.ExactZeroHint!.RelaxedCount);
+        Assert.Contains("HandleRequest", exactMiss.ExactZeroHint.SampleNames);
+        Assert.Contains("HandleRequestAsync", exactMiss.ExactZeroHint.SampleNames);
+
+        var exactHit = _reader.AnalyzeSymbol("HandleRequest", exact: true);
+        Assert.Null(exactHit.ExactZeroHint);
     }
 
     [Fact]

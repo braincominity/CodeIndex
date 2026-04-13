@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 
 namespace CodeIndex.Database;
@@ -38,6 +39,17 @@ namespace CodeIndex.Database;
 /// </summary>
 public static class NameFold
 {
+    private static readonly string[] FingerprintCanaries =
+    [
+        "Ä",
+        "İ",
+        "ﬁ",
+        "Ｒｕｎ",
+        "\u00DF",
+        "Σ",
+        "ς",
+    ];
+
     /// <summary>
     /// Algorithm version for the persisted `name_folded` / `*_folded` keys. Bumped whenever
     /// <see cref="Fold"/> changes semantics so an upgraded reader can detect that a previously
@@ -49,6 +61,27 @@ public static class NameFold
     /// NOCASE fallback に降格させる（fold table 更新などに備えるメタデータ）。
     /// </summary>
     public const int Version = 2;
+
+    /// <summary>
+    /// Runtime-sensitive canary fingerprint for the current observable fold output.
+    /// Folded keys are trusted only when both <see cref="Version"/> and this fingerprint
+    /// match the runtime that produced them. This catches invariant casing / ICU drift
+    /// across .NET upgrades even when the logical fold algorithm version stays constant.
+    /// runtime 依存の fold 出力差分を拾う canary fingerprint。Version に加えてこれも一致
+    /// したときだけ folded key を trusted とみなす（.NET / ICU drift 対策）。
+    /// </summary>
+    public static string Fingerprint()
+    {
+        var buffer = new StringBuilder();
+        foreach (var canary in FingerprintCanaries)
+        {
+            buffer.Append(Fold(canary));
+            buffer.Append('|');
+        }
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(buffer.ToString()));
+        return Convert.ToHexString(hash[..8]);
+    }
 
 
     /// <summary>

@@ -196,6 +196,7 @@ public partial class McpServer
                 "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                 "ping" => ExecutePing(id),
                 "index" => ExecuteIndex(id, args),
+                "backfill_fold" => ExecuteBackfillFold(id),
                 "suggest_improvement" => ExecuteSuggestImprovement(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
             };
@@ -229,7 +230,7 @@ public partial class McpServer
 
         using var db = new DbContext(_dbPath);
         db.TryMigrateForRead();
-        var reader = new DbReader(db.Connection);
+        var reader = new DbReader(db.Connection, db.IsReadOnly);
         return action(reader);
     }
 

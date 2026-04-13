@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -246,6 +247,26 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void BuildExactZeroHint_NoRelaxedMatch_DoesNotRunSampleQuery()
+    {
+        var sampleInvoked = false;
+
+        var result = QueryCommandRunner.BuildExactZeroHint(
+            shouldProbe: true,
+            anyRelaxedMatch: () => false,
+            relaxedCountQuery: () => throw new InvalidOperationException("count should not run"),
+            relaxedSampleQuery: () =>
+            {
+                sampleInvoked = true;
+                return new List<string> { "should_not_run" };
+            },
+            nameSelector: name => name);
+
+        Assert.Null(result);
+        Assert.False(sampleInvoked);
+    }
+
+    [Fact]
     public void RunDefinition_ExactZeroJson_EmitsExactZeroHintPayload()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero");
@@ -277,6 +298,249 @@ public class QueryCommandRunnerTests
             Assert.Equal(2, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
             Assert.Equal("HandleRequest", json.GetProperty("exact_zero_hint").GetProperty("sample_names")[0].GetString());
             Assert.Equal("drop --exact or use the exact indexed name", json.GetProperty("exact_zero_hint").GetProperty("suggestion").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_ExactZeroJson_PreservesRelaxedCountAndCapsSamplesToFive()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero_cap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void HandleRequest1() { }
+                    public void HandleRequest2() { }
+                    public void HandleRequest3() { }
+                    public void HandleRequest4() { }
+                    public void HandleRequest5() { }
+                    public void HandleRequest6() { }
+                    public void HandleRequest7() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Handle", "--db", dbPath, "--json", "--exact", "--limit", "99"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(7, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
+            Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_ExactZeroJson_RespectsRequestedLimitForRelaxedCount()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void HandleRequest1() { }
+                    public void HandleRequest2() { }
+                    public void HandleRequest3() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Handle", "--db", dbPath, "--json", "--exact", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_MultiNameExactZeroJson_OmitsRelaxedCountButReturnsSamples()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_symbols_multi_exact_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void AlphaWorker() { }
+                    public void BetaWorker() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Alpha", "Beta", "--db", dbPath, "--json", "--exact", "--limit", "999"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("exact_zero_hint").TryGetProperty("relaxed_count", out _));
+            Assert.Contains("AlphaWorker", json.GetProperty("exact_zero_hint").GetProperty("sample_names").EnumerateArray().Select(e => e.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactOnReadOnlyLegacyDb_WarnsAboutMissingIndex()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_exact_warn");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+            DropGraphExactFallbackIndexes(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", readOnlyUri, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/session.py:2:12", stdout);
+            Assert.Contains("WARN: --exact graph query ran without the supporting index", stderr);
+            Assert.Contains("idx_symbol_refs_name_nocase", stderr);
+            Assert.Contains("re-index with `cdidx index <projectPath>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_ExactJsonOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_exact_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+            DropGraphExactFallbackIndexes(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["login", "--db", readOnlyUri, "--exact", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", json.GetProperty("callee_name").GetString());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("idx_symbol_refs_container_nocase", json.GetProperty("degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_NonExactJsonOnReadOnlyLegacyDb_OmitsExactDegradedFields()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_nonexact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+            DropGraphExactFallbackIndexes(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.TryGetProperty("exact_index_available", out _));
+            Assert.False(json.TryGetProperty("degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactZeroHumanOutput_PrintsExactZeroHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_exact_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void HandleRequest() { }
+                    public void HandleRequestAsync() { HandleRequest(); }
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["HandleRe", "--db", dbPath, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("--exact found 0 matches, but substring matching would return 2", stderr);
+            Assert.Contains("`HandleRequest`", stderr);
         }
         finally
         {
@@ -317,6 +581,51 @@ public class QueryCommandRunnerTests
             Assert.Contains("--exact found 0 matches, but substring matching would return 1", stderr);
             Assert.Contains("`HandleRequest`", stderr);
             Assert.Contains("Drop --exact or use the exact indexed name.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactWithoutGraphTable_DoesNotClaimSlowButCorrect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_missing_graph");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.DoesNotContain("Results are correct but may be slow", stderr);
+            Assert.Contains("symbol_references table missing", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactCountWithoutGraphTable_WarnsCountIsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_missing_graph_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--exact", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.DoesNotContain("Results are correct but may be slow", stderr);
+            Assert.Contains("count result is degraded, not authoritative", stderr);
         }
         finally
         {
@@ -639,5 +948,20 @@ public class QueryCommandRunnerTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Last();
         return JsonDocument.Parse(jsonLine);
+    }
+
+    private static void DropGraphExactFallbackIndexes(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
+            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
     }
 }

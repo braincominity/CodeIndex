@@ -314,7 +314,7 @@ public partial class McpServer
                         ["queries"] = new JsonObject
                         {
                             ["type"] = "array",
-                            ["description"] = "Array of {tool, arguments} objects. Only read-only tools are allowed (not index).",
+                            ["description"] = "Array of {tool, arguments} objects. Only read-only tools are allowed (not index or backfill_fold).",
                             ["items"] = new JsonObject
                             {
                                 ["type"] = "object",
@@ -342,6 +342,15 @@ public partial class McpServer
                         ["rebuild"] = new JsonObject { ["type"] = "boolean", ["description"] = "Delete existing index and rebuild from scratch (default: false)", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "path" }
+                },
+                IndexAnnotations()),
+            CreateToolDefinition(
+                "backfill_fold",
+                "Upgrade folded-name keys in an existing DB without reparsing source files. Fills missing `name_folded` columns (or rewrites all keys after a fold-version mismatch) and stamps FoldReady on success. / ソース再解析なしで既存DBの folded-name key を更新する。欠損 `name_folded` 列を埋めるか、fold version 不一致時は全 key を再生成し、成功時に FoldReady を stamp する。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject()
                 },
                 IndexAnnotations()),
             CreateToolDefinition(

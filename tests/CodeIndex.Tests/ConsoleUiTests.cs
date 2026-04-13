@@ -26,6 +26,7 @@ public class ConsoleUiTests
         Assert.DoesNotContain("██████╗", output);
         Assert.Contains("Usage:", output);
         Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]", output);
+        Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
         Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
         Assert.Contains("cdidx references <query>", output);
         Assert.Contains("cdidx callers <query>", output);
@@ -35,6 +36,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
         Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
+        Assert.Contains("backfill-fold", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
         Assert.DoesNotContain("--random-spinner", output);

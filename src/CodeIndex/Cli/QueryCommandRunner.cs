@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 
@@ -16,8 +17,8 @@ public static class QueryCommandRunner
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
     // 大量バッチを SQLite 例外ではなく明確な usage error で早期に弾く。
     internal const int MaxSymbolQueryNames = 256;
-    internal const string ExactZeroSuggestion = "drop --exact or use the exact indexed name";
-
+    internal const int ExactZeroHintProbeLimit = 1;
+    internal const int ExactZeroHintSampleLimit = 5;
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -94,7 +95,9 @@ public static class QueryCommandRunner
             var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact,
-                () => reader.SearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                () => reader.CountSearchSymbols(options.Query, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
+                () => reader.CountSearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                () => reader.SearchSymbols(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                 r => r.Name);
             if (results.Count == 0)
             {
@@ -170,20 +173,24 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+            var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact && reader._hasReferencesTable,
-                () => reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.SymbolName);
+            WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json
-                        ? JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, includeFiles: true, graphTableAvailable: reader._hasReferencesTable, degraded: !reader._hasReferencesTable), jsonOptions)
-                        : "0");
+                    WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions);
+                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
                 else if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint), jsonOptions));
+                    WriteGraphZeroJsonResult("references", jsonOptions, reader._hasReferencesTable,
+                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
+                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
@@ -198,16 +205,19 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var fc = results.Select(r => r.Path).Distinct().Count();
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
-                    : $"{results.Count}");
+                WriteGraphCountResult(results.Count, fc, options, jsonOptions, reader._hasReferencesTable, exactSignal);
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                {
+                    if (options.Exact)
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                    else
+                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                }
             }
             else
             {
@@ -237,20 +247,24 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+            var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact && reader._hasReferencesTable,
-                () => reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CalleeName);
+            WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json
-                        ? JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, includeFiles: true, graphTableAvailable: reader._hasReferencesTable, degraded: !reader._hasReferencesTable), jsonOptions)
-                        : "0");
+                    WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
+                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
                 else if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint), jsonOptions));
+                    WriteGraphZeroJsonResult("callers", jsonOptions, reader._hasReferencesTable,
+                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
+                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
@@ -265,16 +279,19 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var fc = results.Select(r => r.Path).Distinct().Count();
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
-                    : $"{results.Count}");
+                WriteGraphCountResult(results.Count, fc, options, jsonOptions, reader._hasReferencesTable, exactSignal);
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                {
+                    if (options.Exact)
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                    else
+                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                }
             }
             else
             {
@@ -300,20 +317,24 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+            var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact && reader._hasReferencesTable,
-                () => reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CallerName);
+            WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json
-                        ? JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, includeFiles: true, graphTableAvailable: reader._hasReferencesTable, degraded: !reader._hasReferencesTable), jsonOptions)
-                        : "0");
+                    WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions);
+                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
                 else if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint), jsonOptions));
+                    WriteGraphZeroJsonResult("callees", jsonOptions, reader._hasReferencesTable,
+                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
+                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
@@ -328,16 +349,19 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var fc = results.Select(r => r.Path).Distinct().Count();
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
-                    : $"{results.Count}");
+                WriteGraphCountResult(results.Count, fc, options, jsonOptions, reader._hasReferencesTable, exactSignal);
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                {
+                    if (options.Exact)
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                    else
+                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                }
             }
             else
             {
@@ -396,10 +420,19 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
-            var exactZeroHint = BuildExactZeroHint(
-                options.Exact && symbolQueries != null && symbolQueries.Count > 0,
-                () => reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
-                r => r.Name);
+            var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
+            var exactZeroHint = multiNameExactHint
+                ? BuildExactZeroHint(
+                    options.Exact,
+                    () => reader.AnySearchSymbols(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    r => r.Name)
+                : BuildExactZeroHint(
+                    options.Exact && symbolQueries != null && symbolQueries.Count > 0,
+                    () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
+                    () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    r => r.Name);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -620,6 +653,8 @@ public static class QueryCommandRunner
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
+            WriteExactGraphWarningIfNeeded(options.Exact, options.Json,
+                (analysis.ExactIndexAvailable ?? true, analysis.DegradedReason));
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
@@ -645,6 +680,9 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
                 if (!analysis.GraphTableAvailable)
                     Console.WriteLine("Graph Table          : MISSING — empty References/Callers/Callees are degraded, NOT real zero-hit results.");
+                if (options.Exact && analysis.GraphTableAvailable && analysis.ExactIndexAvailable == false && analysis.DegradedReason != null)
+                    Console.WriteLine($"Exact Index          : DEGRADED — {analysis.DegradedReason}. Results are correct but may be slow.");
+                WriteExactZeroHint(analysis.ExactZeroHint);
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
@@ -773,7 +811,7 @@ public static class QueryCommandRunner
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)
-                    Console.WriteLine("WARN    : --exact falls back to ASCII COLLATE NOCASE. Non-ASCII casing (e.g. Ä/ä) won't match. Run `cdidx index . --rebuild` to upgrade.");
+                    Console.WriteLine("WARN    : --exact falls back to ASCII COLLATE NOCASE. Non-ASCII casing (e.g. Ä/ä) won't match. Run `cdidx backfill-fold` to upgrade without reparsing files, or `cdidx index . --rebuild` for a full rebuild.");
                 var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
                 Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");
@@ -1257,7 +1295,7 @@ public static class QueryCommandRunner
         {
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();
-            var reader = new DbReader(db.Connection);
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
             return action(reader);
         }
         catch (Exception ex)
@@ -1314,12 +1352,28 @@ public static class QueryCommandRunner
             Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
     }
 
-    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<List<T>> relaxedQuery, Func<T, string?> nameSelector)
+    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
+    {
+        return BuildExactZeroHint(shouldProbe, anyRelaxedMatch, relaxedCountQuery: null, relaxedSampleQuery, nameSelector);
+    }
+
+    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<int>? relaxedCountQuery, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
     {
         if (!shouldProbe)
             return null;
 
-        var relaxedResults = relaxedQuery();
+        if (!anyRelaxedMatch())
+            return null;
+
+        int? relaxedCount = null;
+        if (relaxedCountQuery != null)
+        {
+            relaxedCount = relaxedCountQuery();
+            if (relaxedCount == 0)
+                return null;
+        }
+
+        var relaxedResults = relaxedSampleQuery();
         if (relaxedResults.Count == 0)
             return null;
 
@@ -1333,9 +1387,9 @@ public static class QueryCommandRunner
 
         return new ExactZeroHintResult
         {
-            RelaxedCount = relaxedResults.Count,
+            RelaxedCount = relaxedCount,
             SampleNames = sampleNames,
-            Suggestion = ExactZeroSuggestion,
+            Suggestion = ExactZeroHintResult.DefaultSuggestion,
         };
     }
 
@@ -1366,7 +1420,10 @@ public static class QueryCommandRunner
         var examples = exactZeroHint.SampleNames.Count == 0
             ? string.Empty
             : $" (e.g. {string.Join(", ", exactZeroHint.SampleNames.Select(name => $"`{name}`"))})";
-        Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return {exactZeroHint.RelaxedCount}{examples}. Drop --exact or use the exact indexed name.");
+        if (exactZeroHint.RelaxedCount.HasValue)
+            Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return {exactZeroHint.RelaxedCount}{examples}. Drop --exact or use the exact indexed name.");
+        else
+            Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return results{examples}. Drop --exact or use the exact indexed name.");
     }
 
     /// <summary>
@@ -1414,7 +1471,8 @@ public static class QueryCommandRunner
     // (degraded)". Without this, AI agents and humans cannot tell the index from a legacy /
     // read-only DB apart from a DB that genuinely has no callers for the query.
     // graph テーブル欠損による 0 と本物の 0 を JSON で区別できるようにする。
-    private static void WriteDegradedGraphZeroResult(string resultsKey, bool json, bool graphAvailable, JsonSerializerOptions jsonOptions)
+    private static void WriteDegradedGraphZeroResult(string resultsKey, bool json, bool graphAvailable, JsonSerializerOptions jsonOptions,
+        (bool ExactIndexAvailable, string? DegradedReason)? exactSignal = null)
     {
         if (graphAvailable) return;
         if (json)
@@ -1427,12 +1485,85 @@ public static class QueryCommandRunner
                 ["degraded"] = true,
                 ["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.",
             };
+            if (exactSignal != null)
+            {
+                payload["exact_index_available"] = exactSignal.Value.ExactIndexAvailable;
+                if (exactSignal.Value.DegradedReason != null)
+                    payload["degraded_reason"] = exactSignal.Value.DegradedReason;
+            }
             Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
         }
         else
         {
             Console.Error.WriteLine("WARN: symbol_references table missing — this 0-result is degraded, not authoritative.");
         }
+    }
+
+    private static void WriteExactGraphWarningIfNeeded(bool exact, bool json, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    {
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
+            return;
+        if (signal.DegradedReason.Contains("table missing", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Console.Error.WriteLine($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
+        Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+    }
+
+    private static void WriteGraphCountResult(int count, int files, QueryCommandOptions options, JsonSerializerOptions jsonOptions,
+        bool graphAvailable, (bool ExactIndexAvailable, string? DegradedReason) exactSignal, ExactZeroHintResult? exactZeroHint = null)
+    {
+        if (!options.Json)
+        {
+            Console.WriteLine($"{count}");
+            if (!graphAvailable)
+                Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
+            return;
+        }
+
+        var payload = new JsonObject
+        {
+            ["count"] = count,
+            ["files"] = files,
+            ["graph_table_available"] = graphAvailable,
+        };
+        if (!graphAvailable)
+            payload["degraded"] = true;
+        if (options.Exact)
+            AddExactGraphJsonFields(payload, exactSignal);
+        if (exactZeroHint != null)
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void WriteGraphZeroJsonResult(string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
+        (bool ExactIndexAvailable, string? DegradedReason)? exactSignal, ExactZeroHintResult? exactZeroHint = null)
+    {
+        var payload = new JsonObject
+        {
+            ["count"] = 0,
+            [resultsKey] = new JsonArray(),
+            ["graph_table_available"] = graphAvailable,
+        };
+        if (exactSignal != null)
+            AddExactGraphJsonFields(payload, exactSignal.Value);
+        if (exactZeroHint != null)
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void WriteGraphJsonResult<T>(T result, (bool ExactIndexAvailable, string? DegradedReason) exactSignal, JsonSerializerOptions jsonOptions)
+    {
+        var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
+        AddExactGraphJsonFields(payload, exactSignal);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void AddExactGraphJsonFields(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) exactSignal)
+    {
+        payload["exact_index_available"] = exactSignal.ExactIndexAvailable;
+        if (exactSignal.DegradedReason != null)
+            payload["degraded_reason"] = exactSignal.DegradedReason;
     }
 
     private static int? ParsePositiveInt(string rawValue, string optionName)

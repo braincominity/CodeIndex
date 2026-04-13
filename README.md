@@ -24,7 +24,7 @@ cdidx deps --path src/           # File-level dependency graph
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-46 languages supported. 22 MCP tools. Incremental updates. Zero config.
+46 languages supported. 23 MCP tools. Incremental updates. Zero config.
 
 - **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, DB schema, FTS5 internals
 - **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
@@ -208,6 +208,14 @@ With `--verbose`, each file also shows a status tag so you can see exactly what 
 
 This is useful for debugging indexing issues or verifying which files were actually processed.
 
+If you only need to upgrade an older `.cdidx/codeindex.db` to Unicode-aware `--exact`, you do not need a full rebuild:
+
+```bash
+cdidx backfill-fold
+```
+
+This recomputes `name_folded` / `*_folded` columns from the existing DB rows and stamps `fold_ready` without reparsing source files.
+
 ### Search code
 
 ```bash
@@ -257,7 +265,7 @@ cdidx symbols --kind class             # all classes
 cdidx symbols --kind function --lang python
 ```
 
-Use `--exact` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact` composes with `--name`, positional names, and all existing filters. (Note: `--exact` on `search` has different semantics — case-sensitive exact substring, FTS5 bypassed.) The fold is NFKC + Unicode CaseFold: common non-ASCII pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, ligatures, sharp-S (`Straße` / `STRASSE`), and Greek final sigma (`Σ` / `ς` / `σ`) now collapse correctly. Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still folds to `i\u0307` rather than plain `i`. DBs indexed before the current fold-key version fall back to ASCII `COLLATE NOCASE` until the DB contains only current-version fold keys. A plain `cdidx index .` is enough if the scan rewrites or purges every stale row; otherwise use `cdidx index . --rebuild`. Use `status --json` → `fold_ready` to detect which path is active.
+Use `--exact` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact` composes with `--name`, positional names, and all existing filters. (Note: `--exact` on `search` has different semantics — case-sensitive exact substring, FTS5 bypassed.) The fold is NFKC + Unicode CaseFold: common non-ASCII pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, ligatures, sharp-S (`Straße` / `STRASSE`), and Greek final sigma (`Σ` / `ς` / `σ`) now collapse correctly. Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still folds to `i\u0307` rather than plain `i`. DBs with stale fold metadata fall back to ASCII `COLLATE NOCASE` until the DB contains only current folded keys. Prefer `cdidx backfill-fold` to refresh stored folded keys without reparsing. A plain `cdidx index .` is also enough if the scan rewrites or purges every stale row; otherwise use `cdidx index . --rebuild`. Use `status --json` → `fold_ready` to detect which path is active.
 
 Output:
 
@@ -385,7 +393,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
 | `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
-| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: case-sensitive exact substring (no FTS5). Symbol/graph commands (and `inspect` / MCP `analyze_symbol` — propagates to every bundled sub-query): NFKC + Unicode CaseFold exact name match (so `Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still stays distinct from plain `i`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold keys from an older version; a plain `cdidx index .` can recover if it rewrites or purges every stale row, otherwise use `--rebuild`. `status --json` exposes `fold_ready` so AI clients can tell which path is active. |
+| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: case-sensitive exact substring (no FTS5). Symbol/graph commands (and `inspect` / MCP `analyze_symbol` — propagates to every bundled sub-query): NFKC + Unicode CaseFold exact name match (so `Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still stays distinct from plain `i`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` so AI clients can tell which path is active. When a legacy graph DB is missing the fallback exact-match indexes, graph commands print a WARN line in human-readable mode and expose `exact_index_available` / `degraded_reason` in JSON/MCP output. |
 | `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/struct/interface/enum/property/event/delegate/namespace/import) |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files` | Return only the result count (with `--json`: `{"count": N, "files": M}`) |
@@ -506,7 +514,7 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 ## AI Integration
 
-cdidx is designed as an AI-friendly code search tool. All query commands support `--json` for JSON lines output, making them easy to parse programmatically. `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, and `inspect` share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`, so AI clients can cut noise before fetching excerpts. `inspect` plus MCP `analyze_symbol` bundle definition, nearby symbols, references, callers, callees, file metadata, whole-workspace trust signals, and call-graph support metadata into one round-trip, while `map` gives a repo-level overview for the first 30 seconds of investigation. `status --json` surfaces whole-workspace freshness metadata, `map --json` distinguishes filtered-scope freshness (`indexed_at`, `latest_modified`) from whole-workspace freshness (`workspace_indexed_at`, `workspace_latest_modified`), and `inspect --json` mirrors those whole-workspace timestamps plus `project_root`, `git_head`, `git_is_dirty`, `graph_language`, `graph_supported`, and `graph_support_reason`. `files --json` exposes per-file checksums plus modified/indexed timestamps. `search --json` plus MCP `search` emit compact match-centered snippets with explicit line metadata instead of whole chunks, and `--snippet-lines` lets callers cap snippet size up front. Call graph data remains language-aware: unsupported languages should use `search` instead of assuming `references`/`callers`/`callees` will be populated. Opening an older database with a newer cdidx version will auto-add missing file/symbol columns and create newer reference tables when possible. If the DB cannot be migrated in place, read paths fall back to the legacy layout instead of crashing.
+cdidx is designed as an AI-friendly code search tool. All query commands support `--json` for JSON lines output, making them easy to parse programmatically. `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, and `inspect` share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`, so AI clients can cut noise before fetching excerpts. `inspect` plus MCP `analyze_symbol` bundle definition, nearby symbols, references, callers, callees, file metadata, whole-workspace trust signals, and call-graph support metadata into one round-trip, while `map` gives a repo-level overview for the first 30 seconds of investigation. When an `--exact` inspect/analyze bundle comes back completely empty, they now also emit a bundle-level `exact_zero_hint` so clients can tell whether relaxed symbol matching would have found similarly named symbols without issuing a follow-up `symbols` call. `status --json` surfaces whole-workspace freshness metadata, `map --json` distinguishes filtered-scope freshness (`indexed_at`, `latest_modified`) from whole-workspace freshness (`workspace_indexed_at`, `workspace_latest_modified`), and `inspect --json` mirrors those whole-workspace timestamps plus `project_root`, `git_head`, `git_is_dirty`, `graph_language`, `graph_supported`, and `graph_support_reason`. Exact graph queries (`references` / `callers` / `callees` / `inspect --exact`, plus MCP `analyze_symbol`) also surface `exact_index_available` / `degraded_reason` when a legacy DB is missing the supporting graph indexes, so AI clients can distinguish "correct but potentially slow" from a normal indexed exact lookup. `files --json` exposes per-file checksums plus modified/indexed timestamps. `search --json` plus MCP `search` emit compact match-centered snippets with explicit line metadata instead of whole chunks, and `--snippet-lines` lets callers cap snippet size up front. Call graph data remains language-aware: unsupported languages should use `search` instead of assuming `references`/`callers`/`callees` will be populated. Opening an older database with a newer cdidx version will auto-add missing file/symbol columns and create newer reference tables when possible. If the DB cannot be migrated in place, read paths fall back to the legacy layout instead of crashing.
 
 ### Setup: Add to CLAUDE.md
 
@@ -752,6 +760,7 @@ Once configured, the AI can directly call these tools:
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
+| `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
@@ -1068,6 +1077,14 @@ Done.
 
 インデックスの問題をデバッグしたり、どのファイルが実際に処理されたかを確認するのに便利です。
 
+古い `.cdidx/codeindex.db` を Unicode-aware な `--exact` に上げたいだけなら、フル rebuild は不要です:
+
+```bash
+cdidx backfill-fold
+```
+
+これは既存 DB 行から `name_folded` / `*_folded` 列を再計算し、ソース再解析なしで `fold_ready` を stamp します。
+
 ### コード検索
 
 ```bash
@@ -1117,7 +1134,7 @@ cdidx symbols --kind class             # すべてのクラス
 cdidx symbols --kind function --lang python
 ```
 
-`--exact` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact` は `--name`、positional 名、他の全フィルタと組み合わせ可能。（注: `search` の `--exact` は意味が異なる — 大文字小文字を区別する完全部分一致で、FTS5 はバイパスされる。）fold は NFKC 正規化 + Unicode CaseFold で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S（`Straße` / `STRASSE`）、Greek final sigma（`Σ` / `ς` / `σ`）などの非 ASCII 差分も正しく一致する。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は依然 plain `i` ではなく `i\u0307` に fold される。現在の fold-key version より古い key を含む DB は、DB 内が current-version key のみになるまで ASCII `COLLATE NOCASE` に黙ってフォールバックする。scan が stale row をすべて rewrite / purge できるなら通常の `cdidx index .` で復帰でき、できない場合だけ `cdidx index . --rebuild` が必要。`status --json` の `fold_ready` で現在の経路を判定可能。
+`--exact` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact` は `--name`、positional 名、他の全フィルタと組み合わせ可能。（注: `search` の `--exact` は意味が異なる — 大文字小文字を区別する完全部分一致で、FTS5 はバイパスされる。）fold は NFKC 正規化 + Unicode CaseFold で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S（`Straße` / `STRASSE`）、Greek final sigma（`Σ` / `ς` / `σ`）などの非 ASCII 差分も正しく一致する。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は依然 plain `i` ではなく `i\u0307` に fold される。stale な fold metadata を含む DB は、DB 内が current folded key のみになるまで ASCII `COLLATE NOCASE` に黙ってフォールバックする。stored folded key を再解析なしで更新したいなら `cdidx backfill-fold` を優先し、scan が stale row をすべて rewrite / purge できるなら通常の `cdidx index .` でも復帰できる。stale row が残る場合だけ `cdidx index . --rebuild` が必要。`status --json` の `fold_ready` で現在の経路を判定可能。
 
 出力:
 
@@ -1245,7 +1262,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
-| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: 大文字小文字を区別する完全部分一致（FTS5 バイパス）。symbol / graph 系コマンドと `inspect` / MCP `analyze_symbol`（bundle 内の全 sub-query に伝播）: NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。stored fold key が現在版より古い DB は、その stale key が残る間だけ ASCII `COLLATE NOCASE` に fallback する。通常の `cdidx index .` で stale row を全置換できれば復帰でき、残る場合だけ `--rebuild` が必要（`status --json` の `fold_ready` で判定）。 |
+| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: 大文字小文字を区別する完全部分一致（FTS5 バイパス）。symbol / graph 系コマンドと `inspect` / MCP `analyze_symbol`（bundle 内の全 sub-query に伝播）: NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。DB に stale な fold metadata が残る間は ASCII `COLLATE NOCASE` に fallback するため、まず `cdidx backfill-fold`、または stale row を全置換できる通常の `cdidx index .`、それが無理なら `--rebuild` を使う（`status --json` の `fold_ready` で判定）。旧 graph DB に fallback exact-match index が無い場合は、人間向け出力で WARN を表示し、JSON/MCP には `exact_index_available` / `degraded_reason` を含める。 |
 | `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/struct/interface/enum/property/event/delegate/namespace/import） |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files` | 結果のカウントだけを返す（`--json` 併用: `{"count": N, "files": M}`） |
@@ -1366,7 +1383,7 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 
 ## AIとの連携
 
-cdidxはAI対応のコード検索ツールとして設計されています。すべてのクエリコマンドは `--json` でJSONライン出力に対応し、プログラムからのパースが容易です。`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`map`、`inspect` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` で共通に絞り込みできるため、AIクライアントは抜粋取得前にノイズを減らせます。`inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース全体の信頼シグナルと call graph 対応メタデータを1往復でまとめて返し、`map` は調査開始直後の俯瞰を返します。`status --json` はワークスペース全体の鮮度を返し、`map --json` はフィルタ後集合の鮮度 (`indexed_at`, `latest_modified`) とワークスペース全体の鮮度 (`workspace_indexed_at`, `workspace_latest_modified`) を区別して返します。`inspect --json` はそれと同じワークスペース鮮度に加えて `project_root`、`git_head`、`git_is_dirty`、`graph_language`、`graph_supported`、`graph_support_reason` も返します。`files --json` はファイルごとの checksum と modified/indexed timestamp を返します。`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットと明示的な行メタデータを返し、`--snippet-lines` でそのサイズを先に制限できます。call graph 系のデータは言語差分を考慮しており、未対応言語では `references` / `callers` / `callees` が空でも正常です。その場合は `search` を優先してください。古いDBを新しいcdidxで開いた場合も、可能なら不足する file/symbol 列を自動追加し、新しい参照テーブルも作成します。DBをその場で移行できない場合でも、読み取り経路は旧レイアウトへフォールバックし、クラッシュしません。
+cdidxはAI対応のコード検索ツールとして設計されています。すべてのクエリコマンドは `--json` でJSONライン出力に対応し、プログラムからのパースが容易です。`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`map`、`inspect` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` で共通に絞り込みできるため、AIクライアントは抜粋取得前にノイズを減らせます。`inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、さらにワークスペース全体の信頼シグナルと call graph 対応メタデータを1往復でまとめて返し、`map` は調査開始直後の俯瞰を返します。`--exact` 付きの inspect/analyze bundle 全体が空で返った場合は、追撃の `symbols` 呼び出しをせずに「緩和した symbol matching なら類似名が見つかるか」を判断できるよう、bundle-level の `exact_zero_hint` も返します。`status --json` はワークスペース全体の鮮度を返し、`map --json` はフィルタ後集合の鮮度 (`indexed_at`, `latest_modified`) とワークスペース全体の鮮度 (`workspace_indexed_at`, `workspace_latest_modified`) を区別して返します。`inspect --json` はそれと同じワークスペース鮮度に加えて `project_root`、`git_head`、`git_is_dirty`、`graph_language`、`graph_supported`、`graph_support_reason` も返します。さらに exact な graph クエリ（`references` / `callers` / `callees` / `inspect --exact` と MCP `analyze_symbol`）では、旧DBに fallback 用 exact-match index が無い場合に `exact_index_available` / `degraded_reason` も返すため、AIクライアントは「結果は正しいが遅い可能性がある」状態を判別できます。`files --json` はファイルごとの checksum と modified/indexed timestamp を返します。`search --json` と MCP の `search` は、チャンク全文ではなく一致中心の軽量スニペットと明示的な行メタデータを返し、`--snippet-lines` でそのサイズを先に制限できます。call graph 系のデータは言語差分を考慮しており、未対応言語では `references` / `callers` / `callees` が空でも正常です。その場合は `search` を優先してください。古いDBを新しいcdidxで開いた場合も、可能なら不足する file/symbol 列を自動追加し、新しい参照テーブルも作成します。DBをその場で移行できない場合でも、読み取り経路は旧レイアウトへフォールバックし、クラッシュしません。
 
 ### セットアップ: CLAUDE.mdに追加
 
@@ -1612,9 +1629,18 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
+| `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
+
+古い `.cdidx/codeindex.db` を Unicode `--exact` 対応へ上げたいだけなら、ソース再解析なしで次を実行できます:
+
+```bash
+cdidx backfill-fold
+```
+
+これは既存 DB 行から `name_folded` / `*_folded` 列を再計算し、`fold_ready` を stamp する。
 
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 
