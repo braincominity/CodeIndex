@@ -431,7 +431,7 @@ public class IndexCommandRunnerTests
             RunGit(projectRoot, "init");
             RunGit(projectRoot, "config", "user.email", "test@example.com");
             RunGit(projectRoot, "config", "user.name", "Test");
-            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Straße() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "intl.py"), "def Straße():\n    pass\n");
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "init");
 

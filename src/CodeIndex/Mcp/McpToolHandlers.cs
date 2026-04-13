@@ -1017,7 +1017,6 @@ public partial class McpServer
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
-        var hadExistingRows = writer.GetCounts().files > 0;
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -1084,7 +1083,7 @@ public partial class McpServer
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var foldVersionReady = rebuild || !hadExistingRows || priorFoldVersion == currentFoldVersion;
+            var foldVersionReady = rebuild || skipped == 0 || priorFoldVersion == currentFoldVersion;
             if (writer.AllFoldedColumnsBackfilled() && foldVersionReady)
             {
                 writer.MarkFoldReady();
