@@ -344,6 +344,79 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
+    {
+        // Codex #86 fourth-pass regression: when a future NameFold.Version bump ships, the
+        // stored fold_key_version on existing DBs becomes stale. A partial --files / --commits
+        // update can only re-fold touched rows with the new version; untouched rows keep the
+        // OLD folded keys. Restamping FoldReady + overwriting fold_key_version to the new
+        // version would let the reader advertise full Unicode-exact readiness while silently
+        // mismatching on untouched rows. The correct behavior is to leave FoldReady off until
+        // a full --rebuild regenerates every row at the current version.
+        // Simulate by writing an older fold_key_version into codeindex_meta before the update.
+        // 将来の version bump 後の partial update で FoldReady を restamp しないことを確認する。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            // Initial index stamps current version (1).
+            // 初回 index で現在の version (1) が stamp される。
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            // Simulate a future version bump: the DB was stamped by a binary that wrote
+            // fold_key_version=0 (pretend old). The current binary expects NameFold.Version=1
+            // so the reader sees a mismatch and falls back to NOCASE. A partial update must
+            // preserve that state, not silently restamp version=1 on mixed-state rows.
+            // version 不一致を模擬: codeindex_meta の fold_key_version を 0 に書き換え。
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Run a partial update. FoldReady bit AND version must NOT advance to the new state
+            // because untouched rows still carry the old version's fold keys.
+            // partial update 実行。FoldReady bit も version も新状態に進めてはいけない。
+            var targetFile = Path.Combine(projectRoot, "app.cs");
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            // Stored version may stay at "0" (what we wrote) or be unset; critically it must
+            // NOT have advanced to "1" (the current NameFold.Version) because that would let
+            // the reader treat mixed-state rows as fully version-1 fold-ready.
+            // version は "0" のままで OK。現在の NameFold.Version (="1") に昇格してはいけない。
+            Assert.NotEqual("1", storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_RebuildWithCommits_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();

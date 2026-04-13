@@ -133,6 +133,14 @@ public static class IndexCommandRunner
         // (user_version=3) でも Graph/Issues を巻き込んで落とさないように、単一フラグではなく
         // 事前 bit をそのまま保持する。Codex #86 第 2 pass レビュー対応。
         var priorReadiness = db.GetUserVersion();
+        // Also snapshot the stored fold-key version BEFORE ClearReadyFlags wipes trust. When
+        // a future `NameFold.Version` bump (e.g. #96) lands, a partial update must NOT restamp
+        // FoldReady on a DB whose untouched rows still carry the old-version fold keys — we
+        // can't re-fold those rows without re-reading them, so the only safe state is to leave
+        // fold degraded until `--rebuild`. Codex #86 fourth-pass review.
+        // fold_key_version も事前 snapshot する。将来の version bump 時に partial update で
+        // untouched 行（旧 key）を新 version で宣伝してしまう silent miss を防ぐ。
+        var priorFoldVersion = db.GetMetaString("fold_key_version");
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -155,7 +163,7 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness)
+            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion)
             : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions);
     }
 
@@ -258,7 +266,8 @@ public static class IndexCommandRunner
         Stopwatch stopwatch,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
-        int priorReadiness)
+        int priorReadiness,
+        string? priorFoldVersion)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -429,7 +438,16 @@ public static class IndexCommandRunner
                 writer.MarkGraphReady();
             if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
                 writer.MarkIssuesReady();
-            if ((priorReadiness & DbContext.FoldReadyFlag) != 0)
+            // FoldReady restamp needs an additional check: the prior stored fold_key_version
+            // must match the current binary's NameFold.Version. Otherwise a partial update
+            // after a NameFold.Version bump would leave untouched rows at the OLD version
+            // while the restamp advertises the NEW version, silently mismatching on --exact.
+            // Only a full rebuild can safely re-fold every row to the new version.
+            // Codex #86 fourth-pass review.
+            // fold は version 一致時のみ restamp。version skew 下では untouched 行の
+            // 旧 key を新 version で誤認識させないため、fold_ready=false のまま残す。
+            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if ((priorReadiness & DbContext.FoldReadyFlag) != 0 && priorFoldVersion == currentFoldVersion)
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
