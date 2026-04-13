@@ -92,6 +92,14 @@ public class ExactZeroHintResult
     }
 }
 
+public class FreshnessHintResult
+{
+    public long FileCount { get; set; }
+    public DateTime? IndexedAt { get; set; }
+    public bool FreshnessAvailable { get; set; }
+    public string? FreshnessDegradedReason { get; set; }
+}
+
 public class ReferenceResult
 {
     public string Path { get; set; } = string.Empty;

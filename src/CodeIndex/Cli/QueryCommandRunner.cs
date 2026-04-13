@@ -1371,8 +1371,8 @@ public static class QueryCommandRunner
     /// </summary>
     private static void WriteZeroResultHints(QueryCommandOptions options, DbReader reader, string? alternativeHint = null)
     {
-        var (fileCount, indexedAt) = reader.GetFreshnessHint();
-        if (fileCount == 0)
+        var freshness = reader.GetFreshnessHint();
+        if (freshness.FileCount == 0)
         {
             Console.Error.WriteLine("Hint: the index is empty. Run 'cdidx index <projectPath>' first.");
             return;
@@ -1384,7 +1384,7 @@ public static class QueryCommandRunner
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");
 
-        if (indexedAt.HasValue && (DateTime.UtcNow - indexedAt.Value).TotalHours > 24)
+        if (freshness.IndexedAt.HasValue && (DateTime.UtcNow - freshness.IndexedAt.Value).TotalHours > 24)
             Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
     }
 
@@ -1431,11 +1431,14 @@ public static class QueryCommandRunner
 
     private static void AddFreshnessHint(JsonObject payload, DbReader reader)
     {
-        var (fileCount, indexedAt) = reader.GetFreshnessHint();
-        payload["indexed_file_count"] = fileCount;
-        payload["indexed_at"] = indexedAt.HasValue
-            ? JsonSerializer.SerializeToNode(indexedAt.Value)
+        var freshness = reader.GetFreshnessHint();
+        payload["indexed_file_count"] = freshness.FileCount;
+        payload["indexed_at"] = freshness.IndexedAt.HasValue
+            ? JsonSerializer.SerializeToNode(freshness.IndexedAt.Value)
             : null;
+        payload["freshness_available"] = freshness.FreshnessAvailable;
+        if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
+            payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
     }
 
     private static JsonObject BuildJsonZeroResultPayload(

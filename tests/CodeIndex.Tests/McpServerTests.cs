@@ -349,6 +349,7 @@ public class McpServerTests : IDisposable
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         // Zero-result responses include freshness hint / 0件時に鮮度ヒントを含む
         Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.True(structured["freshness_available"]!.GetValue<bool>());
         Assert.NotNull(structured["indexed_at"]);
     }
 
@@ -369,6 +370,7 @@ public class McpServerTests : IDisposable
             Assert.Equal(0, structured.GetProperty("count").GetInt32());
             Assert.Equal(0, structured.GetProperty("results").GetArrayLength());
             Assert.Equal(0, structured.GetProperty("indexed_file_count").GetInt64());
+            Assert.True(structured.GetProperty("freshness_available").GetBoolean());
             Assert.True(structured.TryGetProperty("indexed_at", out var indexedAt));
             Assert.Equal(JsonValueKind.Null, indexedAt.ValueKind);
         }
@@ -681,7 +683,34 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0, $"{toolName} should include indexed_file_count");
+        Assert.True(structured["freshness_available"]!.GetValue<bool>());
         Assert.NotNull(structured["indexed_at"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Files_NoResults_OnLegacyReadOnlyDb_EmitsFreshnessDegradedSignal()
+    {
+        var dbPath = CreateLegacyDbWithoutIndexedAt();
+        try
+        {
+            var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
+            var response = readOnlyServer.HandleMessage(request)!;
+            using var document = JsonDocument.Parse(response.ToJsonString());
+            var structured = document.RootElement.GetProperty("result").GetProperty("structuredContent");
+
+            Assert.Equal(0, structured.GetProperty("count").GetInt32());
+            Assert.Equal(0, structured.GetProperty("results").GetArrayLength());
+            Assert.Equal(1, structured.GetProperty("indexed_file_count").GetInt64());
+            Assert.False(structured.GetProperty("freshness_available").GetBoolean());
+            Assert.Contains("files.indexed_at column missing", structured.GetProperty("freshness_degraded_reason").GetString());
+            Assert.Equal(JsonValueKind.Null, structured.GetProperty("indexed_at").ValueKind);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(dbPath);
+        }
     }
 
     [Theory]
@@ -1370,6 +1399,46 @@ public class McpServerTests : IDisposable
         var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
         Assert.Single(results);
         Assert.Contains("not allowed in batch_query", results[0]!["error"]!.GetValue<string>());
+    }
+
+    private static string CreateLegacyDbWithoutIndexedAt()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_legacy_{Guid.NewGuid():N}.db");
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        using var conn = new SqliteConnection(builder.ConnectionString);
+        conn.Open();
+
+        using (var create = conn.CreateCommand())
+        {
+            create.CommandText = """
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    lang TEXT,
+                    size INTEGER,
+                    lines INTEGER,
+                    modified DATETIME
+                );
+                CREATE TABLE symbols (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL,
+                    name TEXT NOT NULL
+                );
+                """;
+            create.ExecuteNonQuery();
+        }
+
+        using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO files (path, lang, size, lines, modified)
+                VALUES ('src/legacy.cs', 'csharp', 42, 3, '2026-01-01T00:00:00Z');
+                """;
+            insert.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+        return dbPath;
     }
 
     public void Dispose()
