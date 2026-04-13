@@ -692,6 +692,54 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Definition_ExactZeroHint_RespectsRequestedLimitForRelaxedCount()
+    {
+        InsertIndexedFile(
+            "src/extra_limit.cs",
+            "csharp",
+            """
+            public class ExtraLimit
+            {
+                public void HandleRequest1() { }
+                public void HandleRequest2() { }
+                public void HandleRequest3() { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"Handle","exact":true,"limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["exact_zero_hint"]!["relaxed_count"]!.GetValue<int>());
+        Assert.Single(structured["exact_zero_hint"]!["sample_names"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_MultiNameExactZeroHint_OmitsRelaxedCountButReturnsSamples()
+    {
+        InsertIndexedFile(
+            "src/extra_multi.cs",
+            "csharp",
+            """
+            public class ExtraMulti
+            {
+                public void AlphaWorker() { }
+                public void BetaWorker() { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"names":["Alpha","Beta"],"exact":true,"limit":999}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.NotNull(structured["exact_zero_hint"]);
+        Assert.Null(structured["exact_zero_hint"]!["relaxed_count"]);
+        Assert.Contains("AlphaWorker", structured["exact_zero_hint"]!["sample_names"]!.AsArray().Select(node => node!?.GetValue<string>()));
+    }
+
+    [Fact]
     public void ToolsCall_Files_ReturnsResults()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{}}}""")!;

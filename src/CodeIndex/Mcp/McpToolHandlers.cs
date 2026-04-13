@@ -71,10 +71,11 @@ public partial class McpServer
 
         payload["exact_zero_hint"] = new JsonObject
         {
-            ["relaxed_count"] = exactZeroHint.RelaxedCount,
             ["sample_names"] = sampleNames,
             ["suggestion"] = exactZeroHint.Suggestion,
         };
+        if (exactZeroHint.RelaxedCount.HasValue)
+            payload["exact_zero_hint"]!["relaxed_count"] = exactZeroHint.RelaxedCount.Value;
     }
 
     /// <summary>
@@ -264,10 +265,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
-            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
-                exact && effectiveQueries != null && effectiveQueries.Count > 0,
-                () => reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                r => r.Name);
+            var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
+            var exactZeroHint = multiNameExactHint
+                ? QueryCommandRunner.BuildExactZeroHint(
+                    exact,
+                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name)
+                : QueryCommandRunner.BuildExactZeroHint(
+                    exact && effectiveQueries != null && effectiveQueries.Count > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name);
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
@@ -328,7 +338,9 @@ public partial class McpServer
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
-                () => reader.SearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
+                () => reader.CountSearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.SearchSymbols(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
                 r => r.Name);
             var payload = new JsonObject
             {
@@ -374,7 +386,9 @@ public partial class McpServer
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -425,7 +439,9 @@ public partial class McpServer
             var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CalleeName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -476,7 +492,9 @@ public partial class McpServer
             var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CallerName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
