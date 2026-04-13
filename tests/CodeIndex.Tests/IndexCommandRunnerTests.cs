@@ -471,6 +471,60 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldFingerprintMismatchesAndFilesAreSkipped()
+    {
+        // #97 codex review: a normal `index .` run still skips unchanged files, so a stale
+        // fold_key_fingerprint must not be overwritten with the current runtime fingerprint
+        // unless every row was regenerated. Otherwise skipped rows keep old physical keys.
+        // #97: 通常の `index .` で unchanged 行が skip される場合、stale fingerprint を
+        // current 値へ再 stamp してはいけない。全件再生成できたときだけ trusted に戻せる。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = 'DEADBEEFDEADBEEF' WHERE key = 'fold_key_fingerprint'";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var fingerprintCmd = verify.CreateCommand();
+            fingerprintCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_fingerprint'";
+            var storedFingerprint = fingerprintCmd.ExecuteScalar() as string;
+            Assert.Equal("DEADBEEFDEADBEEF", storedFingerprint);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_RebuildWithCommits_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();

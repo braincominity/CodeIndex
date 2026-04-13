@@ -999,6 +999,9 @@ public partial class McpServer
         // Determine DB path — use the provided _dbPath or default
         // DBパスを決定 — 指定された_dbPathまたはデフォルトを使用
         using var db = new DbContext(_dbPath);
+        var priorReadiness = db.GetUserVersion();
+        var priorFoldVersion = db.GetMetaString("fold_key_version");
+        var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1081,7 +1084,12 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
-            if (writer.AllFoldedColumnsBackfilled())
+            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var currentFoldFingerprint = NameFold.Fingerprint();
+            var canRestampExistingFoldTrust = (priorReadiness & DbContext.FoldReadyFlag) != 0
+                && priorFoldVersion == currentFoldVersion
+                && priorFoldFingerprint == currentFoldFingerprint;
+            if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;

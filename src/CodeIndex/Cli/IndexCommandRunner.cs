@@ -167,7 +167,7 @@ public static class IndexCommandRunner
 
         return isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
-            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions);
+            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint);
     }
 
 
@@ -526,7 +526,10 @@ public static class IndexCommandRunner
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        int priorReadiness,
+        string? priorFoldVersion,
+        string? priorFoldFingerprint)
     {
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
@@ -664,14 +667,27 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            if (writer.AllFoldedColumnsBackfilled())
+            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var currentFoldFingerprint = NameFold.Fingerprint();
+            var canRestampExistingFoldTrust = (priorReadiness & DbContext.FoldReadyFlag) != 0
+                && priorFoldVersion == currentFoldVersion
+                && priorFoldFingerprint == currentFoldFingerprint;
+            // A normal `index .` run still skips unchanged files. If the prior fold metadata
+            // is stale, those skipped rows keep the old physical folded keys, so stamping the
+            // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
+            // every row was regenerated this run (skipped==0) or when the carried metadata is
+            // already known-good for the current runtime. Issue #97 codex review.
+            // 通常の `index .` は unchanged 行を skip するため、事前 metadata が stale なら
+            // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
+            // current と一致しているときだけ FoldReady を stamp する。
+            if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
             }
             else if (!options.Json)
             {
-                ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: legacy rows without name_folded remain. Run `cdidx index . --rebuild` to upgrade the whole DB.");
+                ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: current run did not regenerate every folded key under the current runtime. Run `cdidx index . --rebuild` to upgrade the whole DB.");
             }
         }
         stopwatch.Stop();
