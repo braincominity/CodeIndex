@@ -1013,9 +1013,11 @@ public partial class McpServer
         }
 
         db.InitializeSchema();
+        var priorFoldVersion = db.GetMetaString("fold_key_version");
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
+        var hadExistingRows = writer.GetCounts().files > 0;
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -1081,7 +1083,9 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
-            if (writer.AllFoldedColumnsBackfilled())
+            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var foldVersionReady = rebuild || !hadExistingRows || priorFoldVersion == currentFoldVersion;
+            if (writer.AllFoldedColumnsBackfilled() && foldVersionReady)
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;

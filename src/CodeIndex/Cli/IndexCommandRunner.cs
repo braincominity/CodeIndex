@@ -162,9 +162,11 @@ public static class IndexCommandRunner
         var indexer = new FileIndexer(options.ProjectPath);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
+        var hadExistingRows = writer.GetCounts().files > 0;
+
         return isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion)
-            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions);
+            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, hadExistingRows);
     }
 
 
@@ -521,7 +523,9 @@ public static class IndexCommandRunner
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        string? priorFoldVersion,
+        bool hadExistingRows)
     {
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
@@ -659,14 +663,23 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            if (writer.AllFoldedColumnsBackfilled())
+            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var foldVersionReady = options.Rebuild || !hadExistingRows || priorFoldVersion == currentFoldVersion;
+            if (writer.AllFoldedColumnsBackfilled() && foldVersionReady)
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
             }
             else if (!options.Json)
             {
-                ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: legacy rows without name_folded remain. Run `cdidx index . --rebuild` to upgrade the whole DB.");
+                if (!foldVersionReady)
+                {
+                    ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: existing rows were indexed with an older fold-key version. Run `cdidx index . --rebuild` to regenerate the whole DB.");
+                }
+                else
+                {
+                    ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: legacy rows without name_folded remain. Run `cdidx index . --rebuild` to upgrade the whole DB.");
+                }
             }
         }
         stopwatch.Stop();

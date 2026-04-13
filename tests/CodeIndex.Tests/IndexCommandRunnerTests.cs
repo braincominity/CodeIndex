@@ -418,6 +418,68 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
+    {
+        // Normal non-rebuild `cdidx index .` is still incremental: unchanged rows are skipped.
+        // If an existing DB carries old-version fold keys, a full scan must not advertise the
+        // new version unless every row is rewritten (that requires --rebuild).
+        // 通常の full scan も skip を使うため、旧 version key が残る DB では FoldReady を
+        // restamp してはいけない。安全に昇格できるのは --rebuild のみ。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Straße() { } }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = 'straße' WHERE name = 'Straße';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Add a new file so the next non-rebuild scan mixes freshly-written v2 rows with
+            // untouched v1-style rows. The run must leave FoldReady off.
+            // 新規ファイルを追加して mixed-state を作る。FoldReady は off のままであるべき。
+            File.WriteAllText(Path.Combine(projectRoot, "new.cs"), "public class NewFile { }");
+
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_RebuildWithCommits_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
