@@ -11,6 +11,12 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class QueryCommandRunner
 {
+    // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
+    // batches fail fast with a clear usage error instead of a confusing SQLite exception.
+    // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
+    // 大量バッチを SQLite 例外ではなく明確な usage error で早期に弾く。
+    internal const int MaxSymbolQueryNames = 256;
+
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -307,13 +313,52 @@ public static class QueryCommandRunner
         });
     }
 
+    /// <summary>
+    /// Build the OR-joined name list for `symbols`: first positional + extra positionals + --name values.
+    /// Pipe characters are treated as literal name characters so operator symbols like `operator |` remain searchable.
+    /// Multi-name queries must use repeated positional args or `--name` flags.
+    /// `symbols` コマンド用の名前リストを組み立て（最初の positional + 追加 positional + --name）。
+    /// `|` は名前文字として扱うので `operator |` などの演算子シンボルも検索可能。複数名指定は繰り返し positional か `--name` で行う。
+    /// </summary>
+    internal static (List<string>? Queries, bool HadExplicitInput) BuildSymbolQueryList(QueryCommandOptions options)
+    {
+        var raw = new List<string>();
+        if (options.Query != null)
+            raw.Add(options.Query);
+        raw.AddRange(options.ExtraNames);
+        var hadExplicitInput = raw.Count > 0;
+        if (!hadExplicitInput)
+            return (null, false);
+        var deduped = raw.Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+        return (deduped.Count == 0 ? null : deduped, hadExplicitInput);
+    }
+
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
+        var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
+        if (hadExplicitInput && symbolQueries == null)
+        {
+            // Fail closed: an explicit name/query was provided but normalized to empty (e.g. "|",
+            // --name ""). Returning null here would broaden into an unfiltered symbol dump. /
+            // 明示入力が正規化で空になった場合、null のまま検索すると全件検索に化けるので必ず拒否する。
+            Console.Error.WriteLine("Error: symbol name list is empty after normalization. Check for empty --name values or bare '|' separators. / シンボル名リストが正規化の結果空です。--name の空値や単独の '|' を確認してください。");
+            return CommandExitCodes.UsageError;
+        }
+        if (symbolQueries != null && symbolQueries.Count > MaxSymbolQueryNames)
+        {
+            Console.Error.WriteLine($"Error: too many symbol names ({symbolQueries.Count}); maximum is {MaxSymbolQueryNames}. Split the request into smaller batches. / シンボル名が多すぎます（{symbolQueries.Count}件、上限は {MaxSymbolQueryNames} 件）。分割してください。");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+            var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -1006,6 +1051,7 @@ public static class QueryCommandRunner
         bool noDedup = false;
         bool exact = false;
         string? parseError = null;
+        var extraNames = new List<string>();
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -1085,6 +1131,13 @@ public static class QueryCommandRunner
                 case "--after" when i + 1 < args.Length:
                     contextAfter = ParseNonNegativeInt(args[++i], "--after");
                     break;
+                case "--name" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
+                    // Repeatable; OR-joined with other --name values and extra positional names / 繰り返し可、他の --name や追加の positional 引数と OR 結合
+                    extraNames.Add(args[++i]);
+                    break;
+                case "--name":
+                    parseError = "Error: --name requires a value (symbol name pattern). / --name には値（シンボル名パターン）が必要です。";
+                    break;
                 case "--snippet-lines" when i + 1 < args.Length:
                     snippetLines = SearchSnippetFormatter.ClampSnippetLines(ParsePositiveInt(args[++i], "--snippet-lines") ?? SearchSnippetFormatter.DefaultSnippetLines);
                     break;
@@ -1096,6 +1149,11 @@ public static class QueryCommandRunner
                     else if (query == null)
                     {
                         query = args[i];
+                    }
+                    else
+                    {
+                        // Extra positional args become additional symbol names / 追加の positional 引数を追加の symbol name として扱う
+                        extraNames.Add(args[i]);
                     }
                     break;
             }
@@ -1123,6 +1181,7 @@ public static class QueryCommandRunner
             Since = since,
             NoDedup = noDedup,
             Exact = exact,
+            ExtraNames = extraNames,
             ParseError = parseError,
         };
     }
@@ -1355,5 +1414,6 @@ public sealed class QueryCommandOptions
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
     public bool Exact { get; init; }
+    public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }

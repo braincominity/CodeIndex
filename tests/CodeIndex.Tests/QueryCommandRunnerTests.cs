@@ -95,6 +95,97 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_NameFlagCollectsValuesAndRejectsMissingValue()
+    {
+        var ok = QueryCommandRunner.ParseArgs(
+            ["first", "--name", "Alpha", "--name", "Beta", "extraPositional"],
+            jsonDefault: false);
+        Assert.Null(ok.ParseError);
+        Assert.Equal("first", ok.Query);
+        Assert.Equal(new[] { "Alpha", "Beta", "extraPositional" }, ok.ExtraNames);
+
+        // --name swallowing a following flag as data is a silent trust failure; must be rejected.
+        // --name が直後のフラグを値として飲み込むのは暗黙の誤動作。拒否する。
+        var bad = QueryCommandRunner.ParseArgs(
+            ["--name", "--lang", "csharp"],
+            jsonDefault: false);
+        Assert.NotNull(bad.ParseError);
+        Assert.Contains("--name requires a value", bad.ParseError!);
+
+        var badTail = QueryCommandRunner.ParseArgs(["--name"], jsonDefault: false);
+        Assert.NotNull(badTail.ParseError);
+    }
+
+    [Fact]
+    public void BuildSymbolQueryList_TreatsPipeAsLiteralNameCharacter()
+    {
+        // `|` is a legitimate character in operator symbols (C# `operator |`, etc.); it must not
+        // be treated as OR syntax so those names stay searchable.
+        // `|` は `operator |` など演算子名に出現する有効な文字。OR 構文として分割してはならない。
+        var options = QueryCommandRunner.ParseArgs(["|"], jsonDefault: false);
+        var (queries, hadInput) = QueryCommandRunner.BuildSymbolQueryList(options);
+        Assert.True(hadInput);
+        Assert.NotNull(queries);
+        Assert.Equal(new[] { "|" }, queries!);
+
+        var compound = QueryCommandRunner.ParseArgs(["operator|"], jsonDefault: false);
+        var (compoundQueries, _) = QueryCommandRunner.BuildSymbolQueryList(compound);
+        Assert.Equal(new[] { "operator|" }, compoundQueries!);
+    }
+
+    [Fact]
+    public void BuildSymbolQueryList_FailsClosedOnlyWhenEveryInputIsEmptyString()
+    {
+        // --name "" is explicit input that normalizes to empty — must be flagged, not silently
+        // broadened into an all-symbols dump.
+        // --name "" は明示入力だが正規化で空になる。フラグを立てて全件ダンプを防ぐ。
+        var rejected = QueryCommandRunner.ParseArgs(["--name", ""], jsonDefault: false);
+        var (rejectedQueries, rejectedHadInput) = QueryCommandRunner.BuildSymbolQueryList(rejected);
+        Assert.Null(rejectedQueries);
+        Assert.True(rejectedHadInput);
+    }
+
+    [Fact]
+    public void RunSymbols_EmptyAfterNormalizationFailsClosed()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_empty_norm");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exit, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(["--name", "", "--db", dbPath], _jsonOptions));
+            Assert.Equal(1, exit);
+            Assert.Contains("empty after normalization", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_RejectsOversizedMultiNameBatches()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_oversize");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var names = Enumerable.Range(0, QueryCommandRunner.MaxSymbolQueryNames + 5)
+                .Select(i => $"Name{i}")
+                .ToArray();
+            var argv = names.Concat(new[] { "--db", dbPath }).ToArray();
+            int exit;
+            string stderr;
+            (exit, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(argv, _jsonOptions));
+            Assert.Equal(1, exit);
+            Assert.Contains("too many symbol names", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_WithJsonOutputsCompactSnippetMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search");

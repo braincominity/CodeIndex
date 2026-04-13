@@ -527,6 +527,23 @@ public class McpServerTests : IDisposable
         Assert.Equal("public class App { public void Run() { } }", response["result"]!["structuredContent"]!["results"]![0]!["signature"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("""{"names":""}""", "must be an array")]
+    [InlineData("""{"names":[]}""", "no usable entries")]
+    [InlineData("""{"names":[""]}""", "no usable entries")]
+    [InlineData("""{"names":["   "]}""", "no usable entries")]
+    public void ToolsCall_Symbols_RejectsMalformedOrEmptyNames(string argsJson, string expectedMessageFragment)
+    {
+        // Malformed or empty `names` must fail closed — falling through to an unfiltered full-symbol
+        // dump would mislead downstream automation about candidate resolution.
+        // 不正・空の `names` は必ずエラーで弾くこと。全件検索に化けると下流の判断を狂わせる。
+        var request = JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"symbols\",\"arguments\":" + argsJson + "}}")!;
+        var response = _server.HandleMessage(request)!;
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>(), $"expected isError for arguments {argsJson}");
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains(expectedMessageFragment, text);
+    }
+
     [Fact]
     public void ToolsCall_Symbols_FilterByKind()
     {

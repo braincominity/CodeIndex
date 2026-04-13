@@ -126,7 +126,8 @@ public partial class McpServer
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
-                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name pattern to search for" },
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name pattern to search for. Treated as a literal substring (no `|`-OR sugar), so operator symbols such as `operator |` remain searchable." },
+                        ["names"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Optional list of additional symbol name patterns, OR-joined with `query`. Use this to resolve multiple candidate names in one call." },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by symbol kind (function, class, interface, import, etc.)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },

@@ -273,6 +273,38 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_MultipleNamesAreOrJoined()
+    {
+        var results = _reader.SearchSymbols(new[] { "authenticate", "fetchData" });
+        var names = results.Select(r => r.Name).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "authenticate", "fetchData" }, names);
+    }
+
+    [Fact]
+    public void SearchSymbols_MultiNameLimitStaysGlobalCap()
+    {
+        // `limit` must remain the total-result cap, not a per-name cap, so MCP payload / CLI output
+        // size stays bounded. limit=1 with two requested names must return at most one row.
+        // `limit` は合計の上限を維持すること。limit=1 で2名要求した場合も 1 行以下に収める。
+        var capped = _reader.SearchSymbols(new[] { "authenticate", "fetchData" }, limit: 1);
+        Assert.True(capped.Count <= 1, $"limit=1 must return <=1 row, got {capped.Count}");
+
+        // Under a generous cap, round-robin merge must include every requested name at least once.
+        // 十分な上限の下では、round-robin マージですべての要求名が少なくとも 1 行含まれること。
+        var fair = _reader.SearchSymbols(new[] { "authenticate", "fetchData" }, limit: 10);
+        var names = fair.Select(r => r.Name).Distinct().OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "authenticate", "fetchData" }, names);
+    }
+
+    [Fact]
+    public void SearchSymbols_EmptyNameListBehavesLikeNoFilter()
+    {
+        var all = _reader.SearchSymbols((IReadOnlyList<string>?)null);
+        var empty = _reader.SearchSymbols(new string[0]);
+        Assert.Equal(all.Count, empty.Count);
+    }
+
+    [Fact]
     public void SearchSymbols_FiltersByKind()
     {
         var classes = _reader.SearchSymbols(kind: "class");
