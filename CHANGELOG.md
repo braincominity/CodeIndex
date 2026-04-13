@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **Read-only legacy `--exact` graph queries now surface degraded index signals (#89)** — `references`, `callers`, `callees`, `inspect --exact`, and MCP `analyze_symbol` now detect when a legacy DB is missing the supporting fallback exact-match graph indexes while running in the degraded read path. Human-readable CLI output prints a WARN + reindex hint, JSON/MCP responses expose `exact_index_available` / `degraded_reason`, and bundled symbol analysis carries the same signal so AI clients can distinguish "correct but potentially slow" exact queries from normal indexed lookups. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Models/QueryResults.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`. Closes #89.
+
 ### [1.9.0] - 2026-04-14
 
 #### Added
@@ -599,6 +602,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **read-only な旧DBでの `--exact` graph クエリが縮退 index シグナルを返すよう改善 (#89)** — `references`、`callers`、`callees`、`inspect --exact`、MCP `analyze_symbol` は、縮退 read path 上で fallback 用 exact-match graph index が欠けた旧DBを検出すると、人間向けCLIで WARN と再インデックスヒントを表示し、JSON/MCP では `exact_index_available` / `degraded_reason` を返すようになりました。bundle された symbol analysis も同じシグナルを持つため、AIクライアントは「結果は正しいが遅い可能性がある」exact クエリと通常の index 済み exact lookup を区別できます。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Models/QueryResults.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`。#89 をクローズ。
 
 ### [1.9.0] - 2026-04-14
 

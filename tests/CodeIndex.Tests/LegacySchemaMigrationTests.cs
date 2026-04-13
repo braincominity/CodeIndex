@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -101,6 +102,78 @@ public class LegacySchemaMigrationTests : IDisposable
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private static void SeedGraphDbWithoutExactFallbackIndexes(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/session.py",
+            Lang = "python",
+            Size = 48,
+            Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 2,
+                Content = "def login(user, password):\n    return Run(user)\n",
+            }
+        ]);
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "login",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+                Signature = "def login(user, password):",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = "Run(user)",
+            }
+        ]);
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 12,
+                Context = "return Run(user)",
+                ContainerKind = "function",
+                ContainerName = "login",
+            }
+        ]);
+        writer.MarkGraphReady();
+
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
+            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
     }
 
     [Fact]
@@ -437,6 +510,46 @@ public class LegacySchemaMigrationTests : IDisposable
         var outline = reader.GetOutline("src/Legacy.cs");
         Assert.NotNull(outline);
         Assert.Equal(3, outline!.Symbols.Count);
+    }
+
+    [Fact]
+    public void ReadOnlyDb_MissingExactGraphFallbackIndexes_SurfacesDegradedSignal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_exact_signal_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            SeedGraphDbWithoutExactFallbackIndexes(dbPath);
+
+            var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            using var db = new DbContext(fileUri);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+            var referencesSignal = reader.GetReferencesExactQuerySignal();
+            var callersSignal = reader.GetCallersExactQuerySignal();
+            var calleesSignal = reader.GetCalleesExactQuerySignal();
+            var bundle = reader.AnalyzeSymbol("Run", exact: true);
+
+            Assert.False(referencesSignal.ExactIndexAvailable);
+            Assert.Contains("idx_symbol_refs_name_nocase", referencesSignal.DegradedReason);
+            Assert.False(callersSignal.ExactIndexAvailable);
+            Assert.Contains("idx_symbol_refs_name_nocase", callersSignal.DegradedReason);
+            Assert.False(calleesSignal.ExactIndexAvailable);
+            Assert.Contains("idx_symbol_refs_container_nocase", calleesSignal.DegradedReason);
+            Assert.False(bundle.ExactIndexAvailable);
+            Assert.Contains("idx_symbol_refs_name_nocase", bundle.DegradedReason);
+            Assert.Contains("idx_symbol_refs_container_nocase", bundle.DegradedReason);
+            Assert.Single(bundle.References);
+            Assert.Single(bundle.Callers);
+            Assert.Empty(bundle.Callees);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
     }
 
     [Fact]

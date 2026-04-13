@@ -341,6 +341,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var exactSignal = reader.GetReferencesExactQuerySignal();
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
@@ -355,6 +356,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (exact)
+                AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
@@ -382,6 +385,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var exactSignal = reader.GetCallersExactQuerySignal();
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
@@ -396,6 +400,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (exact)
+                AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
@@ -423,6 +429,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var exactSignal = reader.GetCalleesExactQuerySignal();
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
@@ -437,6 +444,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (exact)
+                AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id,
@@ -549,6 +558,13 @@ public partial class McpServer
             structured["excludeTests"] = excludeTests;
             return CreateToolResult(id, "Symbol analysis returned.", structured);
         });
+    }
+
+    private static void AddExactGraphSignal(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    {
+        payload["exactIndexAvailable"] = signal.ExactIndexAvailable;
+        if (signal.DegradedReason != null)
+            payload["degradedReason"] = signal.DegradedReason;
     }
 
     private JsonNode ExecuteStatus(JsonNode? id)

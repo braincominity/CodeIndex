@@ -242,6 +242,14 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    /// <summary>
+    /// True when the active `--exact` graph predicates can use their supporting indexes.
+    /// False means the query still returns correct hits, but may be slow on a legacy DB
+    /// missing the relevant NOCASE / folded graph indexes.
+    /// `--exact` の graph predicate が対応 index を使えるか。false でも結果は正しいが遅くなりうる。
+    /// </summary>
+    public bool ExactIndexAvailable { get; set; } = true;
+    public string? DegradedReason { get; set; }
 }
 
 /// <summary>
