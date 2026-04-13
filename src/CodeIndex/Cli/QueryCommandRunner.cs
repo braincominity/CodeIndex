@@ -1387,6 +1387,8 @@ public static class QueryCommandRunner
         if (!options.Json)
         {
             Console.WriteLine($"{count}");
+            if (!graphAvailable)
+                Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
             return;
         }
 

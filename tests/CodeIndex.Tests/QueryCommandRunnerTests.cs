@@ -355,6 +355,29 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactCountWithoutGraphTable_WarnsCountIsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_missing_graph_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--exact", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.DoesNotContain("Results are correct but may be slow", stderr);
+            Assert.Contains("count result is degraded, not authoritative", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_RequiresStartLine()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
