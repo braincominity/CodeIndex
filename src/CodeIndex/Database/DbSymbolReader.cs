@@ -57,6 +57,21 @@ public partial class DbReader
         return CountSearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
+    public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    {
+        var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        if (validQueries == null || validQueries.Count == 0)
+            return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
+
+        foreach (var query in validQueries)
+        {
+            if (CountSearchSymbols([query], 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0)
+                return true;
+        }
+
+        return false;
+    }
+
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
         var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();

@@ -387,6 +387,44 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_MultiNameExactZeroJson_OmitsRelaxedCountButReturnsSamples()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_symbols_multi_exact_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void AlphaWorker() { }
+                    public void BetaWorker() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Alpha", "Beta", "--db", dbPath, "--json", "--exact", "--limit", "999"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("exact_zero_hint").TryGetProperty("relaxed_count", out _));
+            Assert.Contains("AlphaWorker", json.GetProperty("exact_zero_hint").GetProperty("sample_names").EnumerateArray().Select(e => e.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactOnReadOnlyLegacyDb_WarnsAboutMissingIndex()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_exact_warn");

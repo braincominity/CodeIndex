@@ -65,7 +65,8 @@ public class DefinitionResult : SymbolResult
 
 public class ExactZeroHintResult
 {
-    public int RelaxedCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RelaxedCount { get; set; }
     public List<string> SampleNames { get; set; } = [];
     public string Suggestion { get; set; } = string.Empty;
 }

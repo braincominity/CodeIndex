@@ -422,12 +422,19 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
-            var exactZeroHint = BuildExactZeroHint(
-                options.Exact && symbolQueries != null && symbolQueries.Count > 0,
-                () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
-                () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
-                () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
-                r => r.Name);
+            var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
+            var exactZeroHint = multiNameExactHint
+                ? BuildExactZeroHint(
+                    options.Exact,
+                    () => reader.AnySearchSymbols(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    r => r.Name)
+                : BuildExactZeroHint(
+                    options.Exact && symbolQueries != null && symbolQueries.Count > 0,
+                    () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
+                    () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    r => r.Name);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -1346,7 +1353,12 @@ public static class QueryCommandRunner
             Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
     }
 
-    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<int> relaxedCountQuery, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
+    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
+    {
+        return BuildExactZeroHint(shouldProbe, anyRelaxedMatch, relaxedCountQuery: null, relaxedSampleQuery, nameSelector);
+    }
+
+    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<int>? relaxedCountQuery, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
     {
         if (!shouldProbe)
             return null;
@@ -1354,9 +1366,13 @@ public static class QueryCommandRunner
         if (!anyRelaxedMatch())
             return null;
 
-        var relaxedCount = relaxedCountQuery();
-        if (relaxedCount == 0)
-            return null;
+        int? relaxedCount = null;
+        if (relaxedCountQuery != null)
+        {
+            relaxedCount = relaxedCountQuery();
+            if (relaxedCount == 0)
+                return null;
+        }
 
         var relaxedResults = relaxedSampleQuery();
         if (relaxedResults.Count == 0)
@@ -1405,7 +1421,10 @@ public static class QueryCommandRunner
         var examples = exactZeroHint.SampleNames.Count == 0
             ? string.Empty
             : $" (e.g. {string.Join(", ", exactZeroHint.SampleNames.Select(name => $"`{name}`"))})";
-        Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return {exactZeroHint.RelaxedCount}{examples}. Drop --exact or use the exact indexed name.");
+        if (exactZeroHint.RelaxedCount.HasValue)
+            Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return {exactZeroHint.RelaxedCount}{examples}. Drop --exact or use the exact indexed name.");
+        else
+            Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return results{examples}. Drop --exact or use the exact indexed name.");
     }
 
     /// <summary>

@@ -71,10 +71,11 @@ public partial class McpServer
 
         payload["exact_zero_hint"] = new JsonObject
         {
-            ["relaxed_count"] = exactZeroHint.RelaxedCount,
             ["sample_names"] = sampleNames,
             ["suggestion"] = exactZeroHint.Suggestion,
         };
+        if (exactZeroHint.RelaxedCount.HasValue)
+            payload["exact_zero_hint"]!["relaxed_count"] = exactZeroHint.RelaxedCount.Value;
     }
 
     /// <summary>
@@ -264,12 +265,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
-            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
-                exact && effectiveQueries != null && effectiveQueries.Count > 0,
-                () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
-                () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                r => r.Name);
+            var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
+            var exactZeroHint = multiNameExactHint
+                ? QueryCommandRunner.BuildExactZeroHint(
+                    exact,
+                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name)
+                : QueryCommandRunner.BuildExactZeroHint(
+                    exact && effectiveQueries != null && effectiveQueries.Count > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name);
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
