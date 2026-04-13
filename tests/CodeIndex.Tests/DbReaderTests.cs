@@ -329,6 +329,26 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_ExactPredicateIsIndexable()
+    {
+        // Guard: the exact-match predicate must stay SARGable so SQLite can pick
+        // idx_symbols_name_nocase instead of falling back to a full scan per query name.
+        // Regression for the codex review of #81. `lower(col) = lower(@q)` is NOT SARGable;
+        // `s.name = @q COLLATE NOCASE` is, given the COLLATE NOCASE index on symbols(name).
+        // exact パスがインデックス（idx_symbols_name_nocase）を使える形に保つための回帰テスト。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN SELECT s.name FROM symbols s WHERE s.name = @q COLLATE NOCASE";
+        cmd.Parameters.AddWithValue("@q", "authenticate");
+        using var reader = cmd.ExecuteReader();
+        var plan = new System.Text.StringBuilder();
+        while (reader.Read())
+            plan.AppendLine(reader.GetString(3));
+        var planText = plan.ToString();
+        Assert.Contains("idx_symbols_name_nocase", planText);
+        Assert.DoesNotContain("SCAN symbols", planText);
+    }
+
+    [Fact]
     public void SearchSymbols_EmptyNameListBehavesLikeNoFilter()
     {
         var all = _reader.SearchSymbols((IReadOnlyList<string>?)null);

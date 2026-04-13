@@ -119,10 +119,14 @@ public partial class DbReader
         {
             // --exact: case-insensitive equality so AI clients passing a resolved candidate list
             // get exactly those rows instead of LIKE %name% expansion (Run vs RunAsync / RunImpact).
+            // Uses `= ... COLLATE NOCASE` (not `lower(col) = lower(@q)`) so SQLite can pick
+            // idx_symbols_name_nocase instead of falling back to a full scan per query name.
             // --exact: 既に解決済みの候補リストを渡した AI クライアントが、Run で RunAsync などを
             // 引き込まずに本当に同名だけを取得できるよう、大文字小文字無視の完全一致にする。
+            // `lower(col)` ラップだと idx_symbols_name_nocase が効かずフルスキャンに落ちるため、
+            // SQLite が index を選べる `= ... COLLATE NOCASE` を使う。
             var orClauses = exact
-                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"lower(s.name) = lower(@query{idx})"))
+                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name = @query{idx} COLLATE NOCASE"))
                 : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
             sql += $" AND ({orClauses})";
         }
