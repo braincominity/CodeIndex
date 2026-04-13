@@ -458,16 +458,17 @@ public class IndexCommandRunnerTests
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "init");
 
-            // Initial index stamps current version (1).
-            // 初回 index で現在の version (1) が stamp される。
+            // Initial index stamps the current fold-key version.
+            // 初回 index で現在の fold-key version が stamp される。
             var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode1);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
 
             // Simulate a future version bump: the DB was stamped by a binary that wrote
-            // fold_key_version=0 (pretend old). The current binary expects NameFold.Version=1
+            // fold_key_version=0 (pretend old). The current binary expects the latest
+            // NameFold.Version
             // so the reader sees a mismatch and falls back to NOCASE. A partial update must
-            // preserve that state, not silently restamp version=1 on mixed-state rows.
+            // preserve that state, not silently restamp the current version on mixed-state rows.
             // version 不一致を模擬: codeindex_meta の fold_key_version を 0 に書き換え。
             SqliteConnection.ClearAllPools();
             using (var conn = new SqliteConnection($"Data Source={dbPath}"))
@@ -497,10 +498,72 @@ public class IndexCommandRunnerTests
             versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
             var storedVersion = versionCmd.ExecuteScalar() as string;
             // Stored version may stay at "0" (what we wrote) or be unset; critically it must
-            // NOT have advanced to "1" (the current NameFold.Version) because that would let
-            // the reader treat mixed-state rows as fully version-1 fold-ready.
-            // version は "0" のままで OK。現在の NameFold.Version (="1") に昇格してはいけない。
-            Assert.NotEqual("1", storedVersion);
+            // NOT have advanced to the current NameFold.Version because that would let the
+            // reader treat mixed-state rows as fully fold-ready.
+            // version は "0" のままで OK。現在の NameFold.Version に昇格してはいけない。
+            Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
+    {
+        // Normal non-rebuild `cdidx index .` is still incremental: unchanged rows are skipped.
+        // If an existing DB carries old-version fold keys, a full scan must not advertise the
+        // new version unless every row is rewritten (that requires --rebuild).
+        // 通常の full scan も skip を使うため、旧 version key が残る DB では FoldReady を
+        // restamp してはいけない。安全に昇格できるのは --rebuild のみ。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "intl.py"), "def Straße():\n    pass\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = 'straße' WHERE name = 'Straße';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Add a new file so the next non-rebuild scan mixes freshly-written v2 rows with
+            // untouched v1-style rows. The run must leave FoldReady off.
+            // 新規ファイルを追加して mixed-state を作る。FoldReady は off のままであるべき。
+            File.WriteAllText(Path.Combine(projectRoot, "new.cs"), "public class NewFile { }");
+
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
         }
         finally
         {

@@ -1119,6 +1119,7 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var foldReadyAfter = false;
+        string? foldReadyReason = null;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1128,14 +1129,28 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
+            var backfillReady = writer.AllFoldedColumnsBackfilled();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var canRestampExistingFoldTrust = priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint;
-            if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
+            var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
+            var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
+            var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
+            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
+            }
+            else if (!backfillReady)
+            {
+                foldReadyReason = "missing_fold_backfill";
+            }
+            else if (!foldVersionMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_version";
+            }
+            else if (!foldFingerprintMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_fingerprint";
             }
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -1157,12 +1172,18 @@ public partial class McpServer
             },
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
-            // run, prefer `backfill_fold`; full rebuild is the heavier fallback.
-            ["fold_ready"] = foldReadyAfter
+            ["fold_ready"] = foldReadyAfter,
+            ["fold_ready_reason"] = foldReadyReason
         };
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
-                ? "Indexing complete. Note: --exact Unicode fold path not active (legacy rows without name_folded remain). Run backfill_fold to upgrade without reparsing files, or do a full rebuild."
+                ? foldReadyReason switch
+                {
+                    "stale_fold_key_version" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "stale_fold_key_fingerprint" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry folded keys generated under an older runtime fingerprint. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "missing_fold_backfill" => "Indexing complete. Note: --exact Unicode fold path not active because legacy rows without name_folded remain. Run backfill_fold to upgrade without reparsing files, or do a full rebuild.",
+                    _ => "Indexing complete. Note: --exact Unicode fold path not active."
+                }
                 : "Indexing complete.",
             structured);
     }

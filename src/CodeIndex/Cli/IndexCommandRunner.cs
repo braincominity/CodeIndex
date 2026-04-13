@@ -134,7 +134,7 @@ public static class IndexCommandRunner
         // 事前 bit をそのまま保持する。Codex #86 第 2 pass レビュー対応。
         var priorReadiness = db.GetUserVersion();
         // Also snapshot the stored fold-key version BEFORE ClearReadyFlags wipes trust. When
-        // a future `NameFold.Version` bump (e.g. #96) lands, a partial update must NOT restamp
+        // a future `NameFold.Version` bump lands, a partial update must NOT restamp
         // FoldReady on a DB whose untouched rows still carry the old-version fold keys — we
         // can't re-fold those rows without re-reading them, so the only safe state is to leave
         // fold degraded until `--rebuild`. Snapshot both version and runtime fingerprint so
@@ -780,10 +780,13 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
+            var backfillReady = writer.AllFoldedColumnsBackfilled();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var canRestampExistingFoldTrust = priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint;
+            var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
+            var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
+            var canRestampExistingFoldTrust = foldVersionMatchesCurrent
+                && foldFingerprintMatchesCurrent;
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
@@ -794,14 +797,14 @@ public static class IndexCommandRunner
             // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
             // current と一致しているときだけ FoldReady を stamp する。途中中断で
             // user_version だけ落ちた current DB もここで回復させる。
-            if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
+            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
             }
             else if (!options.Json)
             {
-                ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` for legacy NULL folded columns, or `cdidx index . --rebuild` to regenerate every folded key.");
+                ConsoleUi.PrintWarning(GetFoldNotReadyWarning(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent));
             }
         }
         stopwatch.Stop();
@@ -849,6 +852,26 @@ public static class IndexCommandRunner
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static string GetFoldNotReadyWarning(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)
+    {
+        if (!backfillReady)
+        {
+            return "--exact Unicode fold path not stamped: legacy rows without name_folded remain. Run `cdidx backfill-fold` to upgrade without reparsing files, or use `cdidx index . --rebuild` to regenerate the whole DB.";
+        }
+
+        if (!foldVersionMatchesCurrent)
+        {
+            return "--exact Unicode fold path not stamped: unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun `cdidx index .`, run `cdidx backfill-fold`, or use `cdidx index . --rebuild` to regenerate the whole DB.";
+        }
+
+        if (!foldFingerprintMatchesCurrent)
+        {
+            return "--exact Unicode fold path not stamped: unchanged rows still carry folded keys generated under an older runtime fingerprint. Rewrite or purge those stale rows and rerun `cdidx index .`, run `cdidx backfill-fold`, or use `cdidx index . --rebuild` to regenerate the whole DB.";
+        }
+
+        return "--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` to rewrite folded keys in place, or use `cdidx index . --rebuild` to regenerate the whole DB.";
     }
 
     private static void AddToGitExclude(string projectPath, string dbPath)
