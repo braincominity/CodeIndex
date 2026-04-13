@@ -65,9 +65,30 @@ public class DefinitionResult : SymbolResult
 
 public class ExactZeroHintResult
 {
+    public const string DefaultSuggestion = "drop --exact or use the exact indexed name";
     public int RelaxedCount { get; set; }
     public List<string> SampleNames { get; set; } = [];
-    public string Suggestion { get; set; } = string.Empty;
+    public string Suggestion { get; set; } = DefaultSuggestion;
+
+    public static ExactZeroHintResult? FromRelaxedMatches(int relaxedCount, IEnumerable<string?> names, int sampleLimit = 5)
+    {
+        if (relaxedCount <= 0)
+            return null;
+
+        var sampleNames = names
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .Take(sampleLimit)
+            .Select(name => name!)
+            .ToList();
+
+        return new ExactZeroHintResult
+        {
+            RelaxedCount = relaxedCount,
+            SampleNames = sampleNames,
+            Suggestion = DefaultSuggestion,
+        };
+    }
 }
 
 public class ReferenceResult
@@ -251,6 +272,8 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExactZeroHintResult? ExactZeroHint { get; set; }
     /// <summary>
     /// True when the active `--exact` graph predicates can use their supporting indexes.
     /// False means the query still returns correct hits, but may be slow on a legacy DB

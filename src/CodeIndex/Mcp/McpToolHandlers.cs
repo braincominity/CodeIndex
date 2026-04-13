@@ -604,11 +604,21 @@ public partial class McpServer
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
+            structured.Remove("exactZeroHint");
+            AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
-            return CreateToolResult(id, "Symbol analysis returned.", structured);
+            return CreateToolResult(id, BuildAnalyzeSymbolSummary(analysis), structured);
         });
+    }
+
+    private static string BuildAnalyzeSymbolSummary(SymbolAnalysisResult analysis)
+    {
+        if (analysis.ExactZeroHint != null)
+            return $"Symbol analysis returned. Substring would return {analysis.ExactZeroHint.RelaxedCount} similarly named symbol(s).";
+
+        return "Symbol analysis returned.";
     }
 
     private static void AddExactGraphSignal(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) signal)
