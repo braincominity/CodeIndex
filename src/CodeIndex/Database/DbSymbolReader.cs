@@ -318,6 +318,7 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var graphLanguage = lang ?? file?.Lang;
         bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
+        var exactSignal = exact ? GetAnalyzeSymbolExactQuerySignal() : ((bool ExactIndexAvailable, string? DegradedReason)?)null;
         var nearbySymbols = primaryDefinition != null
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
@@ -337,6 +338,8 @@ public partial class DbReader
             Callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
             Callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
             GraphTableAvailable = _hasReferencesTable,
+            ExactIndexAvailable = exactSignal?.ExactIndexAvailable,
+            DegradedReason = exactSignal?.DegradedReason,
         };
     }
 
