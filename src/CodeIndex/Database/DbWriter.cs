@@ -599,8 +599,8 @@ public class DbWriter
     /// <summary>
     /// Stamp FoldReadyFlag AND write the current <see cref="NameFold.Version"/> into
     /// `codeindex_meta`. Readers require both the bit and an exact version match before
-    /// trusting folded columns, so when #96 (or any future tweak) changes the fold
-    /// algorithm and bumps `NameFold.Version`, existing DBs will not silently query new
+    /// trusting folded columns, so when a future tweak changes the fold algorithm and bumps
+    /// `NameFold.Version`, existing DBs will not silently query new
     /// code against stale keys — they automatically fall back to the NOCASE path until
     /// `--rebuild` regenerates the folded columns. Codex #86 third-pass review.
     /// FoldReady bit + fold_key_version の両方を書く。アルゴリズム変更時の silent mismatch を防ぐ。

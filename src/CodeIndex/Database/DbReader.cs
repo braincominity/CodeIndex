@@ -103,7 +103,7 @@ public partial class DbReader
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
         // #86 third-pass: require BOTH the FoldReady bit AND a matching NameFold.Version in
         // codeindex_meta. Without the version guard, a future NameFold.Fold semantic change
-        // (e.g. #96 true Unicode CaseFold) would silently mismatch against stale stored keys.
+        // would silently mismatch against stale stored keys.
         // Legacy DBs without the metadata row (or without the codeindex_meta table on read-only
         // sandboxes where TryMigrateForRead skipped it) read as null → treated as version
         // mismatch → NOCASE fallback. Rebuild (`cdidx index . --rebuild`) restamps to current.

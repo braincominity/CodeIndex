@@ -134,7 +134,7 @@ public static class IndexCommandRunner
         // 事前 bit をそのまま保持する。Codex #86 第 2 pass レビュー対応。
         var priorReadiness = db.GetUserVersion();
         // Also snapshot the stored fold-key version BEFORE ClearReadyFlags wipes trust. When
-        // a future `NameFold.Version` bump (e.g. #96) lands, a partial update must NOT restamp
+        // a future `NameFold.Version` bump lands, a partial update must NOT restamp
         // FoldReady on a DB whose untouched rows still carry the old-version fold keys — we
         // can't re-fold those rows without re-reading them, so the only safe state is to leave
         // fold degraded until `--rebuild`. Codex #86 fourth-pass review.
