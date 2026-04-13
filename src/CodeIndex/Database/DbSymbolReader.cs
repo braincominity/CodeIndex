@@ -49,6 +49,52 @@ public partial class DbReader
     /// </summary>
     public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
     {
+        return SearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since);
+    }
+
+    /// <summary>
+    /// Search symbols by one or more name patterns (OR-joined). Empty/null list returns all symbols matching other filters.
+    /// 複数名前パターン（OR結合）でシンボルを検索。空/null なら他フィルタに一致する全シンボルを返す。
+    /// </summary>
+    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    {
+        // Multi-name queries: run one search per name to guarantee per-name candidate coverage
+        // (a common/earlier-sorting name cannot starve others out of the candidate pool), then
+        // round-robin interleave the per-name results under a single global `limit` cap so the
+        // public `limit` contract stays "Max total results", not per-name.
+        // 複数名指定: 名前ごとに独立検索して候補プールを確保した上で、round-robin で統合し、
+        // 最終的に全体で `limit` 件に収める。`limit` は従来どおり「合計の上限」。
+        var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        if (validQueries != null && validQueries.Count > 1)
+        {
+            var perName = new List<List<SymbolResult>>(validQueries.Count);
+            foreach (var q in validQueries)
+                perName.Add(SearchSymbols(new[] { q }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since));
+
+            var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
+            var merged = new List<SymbolResult>();
+            var cursors = new int[perName.Count];
+            bool advanced;
+            do
+            {
+                advanced = false;
+                for (int i = 0; i < perName.Count && merged.Count < limit; i++)
+                {
+                    while (cursors[i] < perName[i].Count)
+                    {
+                        var r = perName[i][cursors[i]++];
+                        if (seen.Add((r.Path, r.Line, r.Name, r.Kind)))
+                        {
+                            merged.Add(r);
+                            advanced = true;
+                            break;
+                        }
+                    }
+                }
+            } while (advanced && merged.Count < limit);
+            return merged;
+        }
+
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
@@ -66,8 +112,12 @@ public partial class DbReader
             JOIN files f ON s.file_id = f.id
             WHERE 1=1";
 
-        if (query != null)
-            sql += " AND s.name LIKE @query ESCAPE '\\'";
+        var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        if (effectiveQueries != null && effectiveQueries.Count > 0)
+        {
+            var orClauses = string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
+            sql += $" AND ({orClauses})";
+        }
         if (kind != null)
             sql += " AND s.kind = @kind";
         if (lang != null)
@@ -78,8 +128,11 @@ public partial class DbReader
         sql += $" ORDER BY {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
-        if (query != null)
-            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        if (effectiveQueries != null)
+        {
+            for (int idx = 0; idx < effectiveQueries.Count; idx++)
+                cmd.Parameters.AddWithValue($"@query{idx}", $"%{EscapeLikeQuery(effectiveQueries[idx])}%");
+        }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)

@@ -250,6 +250,8 @@ Use `--json` for machine-readable output (AI agents):
 
 ```bash
 cdidx symbols UserService              # find by name
+cdidx symbols UserService OrderService AuthService   # multi-name OR (positional)
+cdidx symbols --name UserService --name OrderService # multi-name OR (--name)
 cdidx symbols --kind class             # all classes
 cdidx symbols --kind function --lang python
 ```
@@ -1104,6 +1106,8 @@ src/Auth/TokenService.cs:42-58
 
 ```bash
 cdidx symbols UserService              # 名前で検索
+cdidx symbols UserService OrderService AuthService   # 複数名を OR 結合（positional）
+cdidx symbols --name UserService --name OrderService # 複数名を OR 結合（--name）
 cdidx symbols --kind class             # すべてのクラス
 cdidx symbols --kind function --lang python
 ```

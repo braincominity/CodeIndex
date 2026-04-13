@@ -212,6 +212,25 @@ public partial class McpServer
         var query = args?["query"]?.GetValue<string>();
         if (query != null && query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        // Validate the raw `names` node before normalization so we can distinguish "property absent"
+        // from "property present but malformed/empty". ReadStringList alone silently drops both
+        // non-array shapes and blank entries, which would let invalid input fall through as an
+        // unfiltered full symbol dump.
+        // 生の `names` ノードを先に検証し、「未指定」と「指定ありだが不正/空」を区別する。
+        // ReadStringList は非配列や空文字列を暗黙に無視するため、不正入力が無条件の全件検索に落ちるのを防ぐ。
+        var namesNode = args?["names"];
+        var namesProvided = namesNode is not null;
+        if (namesProvided && namesNode is not JsonArray)
+            return CreateToolErrorResponse(id, "'names' must be an array of strings.");
+        var names = ReadStringList(args, "names");
+        foreach (var n in names)
+        {
+            if (n.Length > MaxQueryLength)
+                return CreateToolErrorResponse(id, $"names entry too long (max {MaxQueryLength} characters)");
+        }
+        if (namesProvided && names.Count == 0)
+            return CreateToolErrorResponse(id, "'names' is present but contains no usable entries (all were empty or whitespace).");
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
@@ -223,14 +242,31 @@ public partial class McpServer
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
             since = parsedSince;
 
+        // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
+        // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
+        // query と names を結合して重複排除。`|` は名前文字として扱い、`operator |` などを検索可能にする。
+        var rawInputs = new List<string>();
+        if (query != null)
+            rawInputs.Add(query);
+        rawInputs.AddRange(names);
+        var hadExplicitNameInput = rawInputs.Count > 0;
+        var queriesForSearch = rawInputs.Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+        if (hadExplicitNameInput && queriesForSearch.Count == 0)
+            return CreateToolErrorResponse(id, "Symbol name list is empty after normalization. Check for empty 'names' entries or bare '|' separators.");
+        if (queriesForSearch.Count > QueryCommandRunner.MaxSymbolQueryNames)
+            return CreateToolErrorResponse(id, $"Too many symbol names ({queriesForSearch.Count}); maximum is {QueryCommandRunner.MaxSymbolQueryNames}. Split the request into smaller batches.");
+        IReadOnlyList<string>? effectiveQueries = queriesForSearch.Count == 0 ? null : queriesForSearch;
+
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since);
+            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since);
+            JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
                 {
                     ["query"] = query,
+                    ["names"] = namesEcho,
                     ["kind"] = kind,
                     ["lang"] = lang,
                     ["path"] = PathEcho(pathPatterns),
@@ -245,6 +281,7 @@ public partial class McpServer
             var structured = new JsonObject
             {
                 ["query"] = query,
+                ["names"] = namesEcho,
                 ["kind"] = kind,
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
