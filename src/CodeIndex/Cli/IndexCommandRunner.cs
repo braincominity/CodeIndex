@@ -137,10 +137,13 @@ public static class IndexCommandRunner
         // a future `NameFold.Version` bump (e.g. #96) lands, a partial update must NOT restamp
         // FoldReady on a DB whose untouched rows still carry the old-version fold keys — we
         // can't re-fold those rows without re-reading them, so the only safe state is to leave
-        // fold degraded until `--rebuild`. Codex #86 fourth-pass review.
-        // fold_key_version も事前 snapshot する。将来の version bump 時に partial update で
-        // untouched 行（旧 key）を新 version で宣伝してしまう silent miss を防ぐ。
+        // fold degraded until `--rebuild`. Snapshot both version and runtime fingerprint so
+        // partial update does not restamp FoldReady across either algorithm drift or runtime
+        // casing-table drift. Issue #97.
+        // fold metadata を事前 snapshot する。version だけでなく fingerprint のズレでも
+        // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
+        var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -163,7 +166,7 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion)
+            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
             : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions);
     }
 
@@ -267,7 +270,8 @@ public static class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
-        string? priorFoldVersion)
+        string? priorFoldVersion,
+        string? priorFoldFingerprint)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -438,16 +442,17 @@ public static class IndexCommandRunner
                 writer.MarkGraphReady();
             if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
                 writer.MarkIssuesReady();
-            // FoldReady restamp needs an additional check: the prior stored fold_key_version
-            // must match the current binary's NameFold.Version. Otherwise a partial update
-            // after a NameFold.Version bump would leave untouched rows at the OLD version
-            // while the restamp advertises the NEW version, silently mismatching on --exact.
-            // Only a full rebuild can safely re-fold every row to the new version.
-            // Codex #86 fourth-pass review.
-            // fold は version 一致時のみ restamp。version skew 下では untouched 行の
-            // 旧 key を新 version で誤認識させないため、fold_ready=false のまま残す。
+            // FoldReady restamp requires both the prior stored version and fingerprint to
+            // match the current binary/runtime. Otherwise untouched rows still carry keys
+            // from an older fold implementation or runtime table set, and advertising
+            // FoldReady would silently mismatch on --exact. Only full rebuild can re-fold all rows.
+            // fold は version / fingerprint の両一致時のみ restamp。ズレた DB は rebuild まで
+            // fold_ready=false のまま残す。
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            if ((priorReadiness & DbContext.FoldReadyFlag) != 0 && priorFoldVersion == currentFoldVersion)
+            var currentFoldFingerprint = NameFold.Fingerprint();
+            if ((priorReadiness & DbContext.FoldReadyFlag) != 0
+                && priorFoldVersion == currentFoldVersion
+                && priorFoldFingerprint == currentFoldFingerprint)
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;

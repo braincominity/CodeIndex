@@ -417,6 +417,60 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_DoesNotRestampFoldReadyWhenFoldFingerprintMismatches()
+    {
+        // #97: partial update must not restamp FoldReady when the stored runtime canary
+        // fingerprint differs from the current binary/runtime, even if NameFold.Version is
+        // unchanged. Untouched rows still carry keys generated under the old runtime tables.
+        // #97: version が同じでも fingerprint がズレた DB は partial update で restamp しない。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = 'DEADBEEFDEADBEEF' WHERE key = 'fold_key_fingerprint'";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var targetFile = Path.Combine(projectRoot, "app.cs");
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var fingerprintCmd = verify.CreateCommand();
+            fingerprintCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_fingerprint'";
+            var storedFingerprint = fingerprintCmd.ExecuteScalar() as string;
+            Assert.NotEqual(NameFold.Fingerprint(), storedFingerprint);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_RebuildWithCommits_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
