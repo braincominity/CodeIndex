@@ -135,7 +135,7 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-insensitive exact name match instead of substring. Use when resolving a precise candidate list (e.g. names returned from an earlier search/inspect call) so `Run` no longer matches `RunAsync`/`RunImpact`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact name match instead of substring (SQLite COLLATE NOCASE; non-ASCII casing is not folded). Use when resolving a precise candidate list (e.g. names returned from an earlier search/inspect call) so `Run` no longer matches `RunAsync`/`RunImpact`.", ["default"] = false }
                     }
                 },
                 ReadOnlyAnnotations()),
