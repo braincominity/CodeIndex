@@ -968,7 +968,7 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, bucket_counts = new Dictionary<string, int>(), graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult("unused", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
@@ -985,29 +985,75 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var fc = results.Select(r => r.Path).Distinct().Count();
+                var bucketCounts = BuildUnusedBucketCounts(results);
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc, bucket_counts = bucketCounts }, jsonOptions)
                     : $"{results.Count}");
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, symbols = results }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, bucket_counts = BuildUnusedBucketCounts(results), symbols = results }, jsonOptions));
             }
             else
             {
-                foreach (var s in results)
+                var bucketCounts = BuildUnusedBucketCounts(results);
+                foreach (var bucket in OrderedUnusedBuckets)
                 {
-                    var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                    var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
-                    Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
+                    var bucketResults = results.Where(s => s.UnusedBucket == bucket).ToList();
+                    if (bucketResults.Count == 0)
+                        continue;
+
+                    Console.WriteLine($"{GetUnusedBucketHeading(bucket)} ({bucketResults.Count})");
+                    foreach (var s in bucketResults)
+                    {
+                        var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
+                        var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
+                        Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
+                        Console.WriteLine($"             confidence={s.UnusedConfidence} reason={s.UnusedReason}");
+                    }
+                    Console.WriteLine();
                 }
-                Console.Error.WriteLine($"({results.Count} potentially unused symbols)");
+                var summaryBuckets = OrderedUnusedBuckets
+                    .Where(bucketCounts.ContainsKey)
+                    .Select(bucket => $"{GetUnusedBucketHeading(bucket)}: {bucketCounts[bucket]}");
+                Console.Error.WriteLine($"({results.Count} potentially unused symbols; {string.Join(", ", summaryBuckets)})");
             }
             return CommandExitCodes.Success;
         });
     }
+
+    private static readonly string[] OrderedUnusedBuckets =
+    [
+        "likely_unused_private",
+        "maybe_unused_nonpublic",
+        "public_or_exported_no_refs",
+        "reflection_or_config_suspect",
+    ];
+
+    private static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            if (grouped.TryGetValue(bucket, out var count))
+                ordered[bucket] = count;
+        }
+        return ordered;
+    }
+
+    private static string GetUnusedBucketHeading(string bucket) => bucket switch
+    {
+        "likely_unused_private" => "Likely unused private",
+        "maybe_unused_nonpublic" => "Maybe unused non-public",
+        "public_or_exported_no_refs" => "Public/exported with no refs",
+        "reflection_or_config_suspect" => "Reflection/config suspects",
+        _ => bucket,
+    };
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {

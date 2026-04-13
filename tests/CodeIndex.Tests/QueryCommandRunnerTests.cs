@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -180,6 +181,64 @@ public class QueryCommandRunnerTests
             (exit, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(argv, _jsonOptions));
             Assert.Equal(1, exit);
             Assert.Contains("too many symbol names", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonIncludesConfidenceBuckets()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(4, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(1, json.GetProperty("bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, json.GetProperty("bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
+            Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
+            Assert.Equal("high", symbols[0].GetProperty("unused_confidence").GetString());
+            Assert.Equal("ConfigPath", symbols[3].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_HumanOutputGroupsByConfidenceBucket()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Likely unused private (1)", stdout);
+            Assert.Contains("Maybe unused non-public (1)", stdout);
+            Assert.Contains("Public/exported with no refs (1)", stdout);
+            Assert.Contains("Reflection/config suspects (1)", stdout);
+            Assert.Contains("confidence=high", stdout);
+            Assert.Contains("confidence=low", stdout);
+            Assert.Contains("potentially unused symbols;", stderr);
         }
         finally
         {
@@ -771,6 +830,79 @@ public class QueryCommandRunnerTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Last();
         return JsonDocument.Parse(jsonLine);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_confidence");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 20,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "ExportedApi",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 8,
+                Signature = "public class ExportedApi",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ConfigPath",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = "public string ConfigPath { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
     }
 
     private static void DropGraphExactFallbackIndexes(string dbPath)

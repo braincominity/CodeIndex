@@ -1392,6 +1392,83 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_ClassifiesConfidenceBucketsAndSortsHighConfidenceFirst()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 20,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "ExportedApi",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 8,
+                Signature = "public class ExportedApi",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ConfigPath",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = "public string ConfigPath { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal(["Hidden", "InternalOnly", "ExportedApi", "ConfigPath"], unused.Select(symbol => symbol.Name).ToArray());
+        Assert.Equal("likely_unused_private", unused[0].UnusedBucket);
+        Assert.Equal("high", unused[0].UnusedConfidence);
+        Assert.Equal("maybe_unused_nonpublic", unused[1].UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", unused[2].UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", unused[3].UnusedBucket);
+        Assert.Contains("config-style", unused[3].UnusedReason);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_NullStartEndLine_DoesNotCrash()
     {
         // Regression: #49 — legacy indexes can have NULL start_line/end_line on symbol rows.

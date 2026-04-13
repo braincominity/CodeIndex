@@ -9,6 +9,11 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    private const string UnusedBucketLikelyPrivate = "likely_unused_private";
+    private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
+    private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
+    private const string UnusedBucketReflectionOrConfig = "reflection_or_config_suspect";
+
     /// <summary>
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
     /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
@@ -494,18 +499,53 @@ public partial class DbReader
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
     /// グラフ対応言語でのみ意味がある — 未対応言語はデフォルトで除外。
     /// </summary>
-    public List<SymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<UnusedSymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
         // which is a meaningless signal. Return empty rather than drowning the caller in noise.
         // symbol_references が無いレガシー read-only DB では全シンボルが未使用扱いになってしまうため、
         // ノイズを返すより空を返す。
-        if (!_hasReferencesTable) return new List<SymbolResult>();
+        if (!_hasReferencesTable) return new List<UnusedSymbolResult>();
         // Restrict to graph-supported languages to avoid false positives
         // (unsupported languages have no references indexed, so all symbols appear unused)
         // グラフ対応言語に制限して偽陽性を防ぐ
         // （未対応言語は参照がインデックスされないため全シンボルが未使用に見える）
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
+        var containerNameSql = $"lower({GetSymbolColumnSql("container_name", "''")})";
+        var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
+        const string nameSql = "lower(s.name)";
+        const string pathSql = "lower(f.path)";
+        var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
+        var isReflectionOrConfigSuspectSql = $@"(
+                {isPublicOrExportedSql}
+                AND (
+                    s.kind = 'property'
+                    OR {nameSql} LIKE '%config%'
+                    OR {nameSql} LIKE '%setting%'
+                    OR {nameSql} LIKE '%option%'
+                    OR {nameSql} LIKE '%path%'
+                    OR {nameSql} LIKE '%connectionstring%'
+                    OR {nameSql} LIKE '%secret%'
+                    OR {nameSql} LIKE '%token%'
+                    OR {containerNameSql} LIKE '%config%'
+                    OR {containerNameSql} LIKE '%setting%'
+                    OR {containerNameSql} LIKE '%option%'
+                    OR {containerNameSql} LIKE '%path%'
+                    OR {pathSql} LIKE '%config%'
+                    OR {pathSql} LIKE '%settings%'
+                    OR {pathSql} LIKE '%options%'
+                    OR {signatureSql} LIKE '%configuration%'
+                    OR {signatureSql} LIKE '%options%'
+                )
+            )";
+        var unusedBucketOrderSql = $@"
+            CASE
+                WHEN {isReflectionOrConfigSuspectSql} THEN 3
+                WHEN {isPublicOrExportedSql} THEN 2
+                WHEN {visibilitySql} IN ('private', 'fileprivate') THEN 0
+                ELSE 1
+            END";
 
         var sql = $@"
             SELECT f.path, f.lang, s.kind, s.name, s.line,
@@ -515,7 +555,9 @@ public partial class DbReader
                    {GetSymbolColumnSql("visibility")} AS visibility,
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
+                   CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
@@ -538,7 +580,7 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += " ORDER BY f.path, s.line LIMIT @limit";
+        sql += $" ORDER BY {unusedBucketOrderSql}, f.path, s.line LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
@@ -554,11 +596,16 @@ public partial class DbReader
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        var results = new List<SymbolResult>();
+        var results = new List<UnusedSymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            results.Add(new SymbolResult
+            var visibility = GetNullableString(reader, 8);
+            var classification = ClassifyUnusedSymbol(
+                isPublicOrExported: reader.GetInt32(12) != 0,
+                isReflectionOrConfigSuspect: reader.GetInt32(13) != 0,
+                visibility: visibility);
+            results.Add(new UnusedSymbolResult
             {
                 Path = reader.GetString(0),
                 Lang = GetNullableString(reader, 1),
@@ -568,13 +615,54 @@ public partial class DbReader
                 StartLine = GetInt32OrFallback(reader, 5, 4),
                 EndLine = GetInt32OrFallback(reader, 6, 4),
                 Signature = GetNullableString(reader, 7),
-                Visibility = GetNullableString(reader, 8),
+                Visibility = visibility,
                 ReturnType = GetNullableString(reader, 9),
                 ContainerKind = GetNullableString(reader, 10),
                 ContainerName = GetNullableString(reader, 11),
+                UnusedBucket = classification.Bucket,
+                UnusedConfidence = classification.Confidence,
+                UnusedReason = classification.Reason,
             });
         }
         return results;
+    }
+
+    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    {
+        if (isReflectionOrConfigSuspect)
+        {
+            return (
+                UnusedBucketReflectionOrConfig,
+                "low",
+                "public/exported property or config-style surface with no indexed references");
+        }
+
+        if (isPublicOrExported)
+        {
+            return (
+                UnusedBucketPublicOrExported,
+                "low",
+                "public/exported symbol with no indexed references");
+        }
+
+        if (IsPrivateLikeVisibility(visibility))
+        {
+            return (
+                UnusedBucketLikelyPrivate,
+                "high",
+                "private/file-local symbol with no indexed references");
+        }
+
+        return (
+            UnusedBucketMaybeNonPublic,
+            "medium",
+            "non-public symbol with no indexed references");
+    }
+
+    private static bool IsPrivateLikeVisibility(string? visibility)
+    {
+        return string.Equals(visibility, "private", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(visibility, "fileprivate", StringComparison.OrdinalIgnoreCase);
     }
 
 }

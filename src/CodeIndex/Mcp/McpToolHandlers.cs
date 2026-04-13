@@ -926,14 +926,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var bucketCounts = results
+                .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+                .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
+                ["bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             var summary = results.Count > 0
-                ? $"Found {results.Count} potentially unused symbol(s). Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} bucket(s). High-confidence private hits are ranked first. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";

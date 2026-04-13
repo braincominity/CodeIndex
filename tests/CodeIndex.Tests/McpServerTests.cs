@@ -901,6 +901,91 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_IncludesConfidenceBuckets()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 20,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "ExportedApi",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 8,
+                Signature = "public class ExportedApi",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ConfigPath",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+                Signature = "public string ConfigPath { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        var symbols = structured["symbols"]!.AsArray();
+        Assert.Equal(4, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["bucket_counts"]!["likely_unused_private"]!.GetValue<int>());
+        Assert.Equal(1, structured["bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
+        Assert.Equal(1, structured["bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
+        Assert.Equal(1, structured["bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
+        Assert.Equal("Hidden", symbols[0]!["name"]!.GetValue<string>());
+        Assert.Equal("likely_unused_private", symbols[0]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("ConfigPath", symbols[3]!["name"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols[3]!["unusedBucket"]!.GetValue<string>());
+        Assert.Contains("High-confidence private hits are ranked first", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_UnknownTool_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}""")!;
