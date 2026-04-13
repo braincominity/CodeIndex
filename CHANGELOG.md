@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **`--exact` ranking now prefers exact-case siblings first** — When multiple symbols or graph rows collapse to the same folded exact-match key (for example `ApiClient` and `apiClient`), `symbols` / `definition` / `references` / `callers` / `callees` still return every case-insensitive exact match, but now rank the row whose stored name exactly matches the caller's casing first instead of letting path order win. This keeps the intended symbol at rank 0 for AI follow-up flows without hiding the fold-sibling rows. Added regression coverage for both symbol lookup and graph readers. Affected: `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`.
+
 ### [1.9.0] - 2026-04-14
 
 #### Added
@@ -599,6 +602,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **`--exact` の順位付けで完全一致 casing を先頭化** — `ApiClient` と `apiClient` のように folded exact-match key が同一になる複数行がある場合でも、`symbols` / `definition` / `references` / `callers` / `callees` は従来どおり大文字小文字を無視した完全一致の全行を返しつつ、呼び出し側の入力 casing と完全一致する行を path 順より優先して先頭に並べるようになった。fold sibling を隠さずに、AI の後続クエリで意図したシンボルを rank 0 に戻す。シンボル検索とグラフ reader の両方に回帰テストを追加。対象: `src/CodeIndex/Database/DbSymbolReader.cs`、`src/CodeIndex/Database/DbReader.cs`、`tests/CodeIndex.Tests/DbReaderTests.cs`。
 
 ### [1.9.0] - 2026-04-14
 
