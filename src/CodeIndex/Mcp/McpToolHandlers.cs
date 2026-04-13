@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -127,20 +126,6 @@ public partial class McpServer
             return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
 
         return $"No {label} found.";
-    }
-
-    /// <summary>
-    /// Best-effort invocation for optional readiness markers.
-    /// Works with older builds (method absent) and newer split-readiness builds.
-    /// 任意のreadinessマーカーをベストエフォートで呼び出す。
-    /// 旧ビルド（メソッド未定義）と新split-readinessビルドの両方で動作。
-    /// </summary>
-    private static void TryInvokeDbWriterMarker(DbWriter writer, string methodName)
-    {
-        var method = typeof(DbWriter).GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public);
-        if (method is null || method.GetParameters().Length != 0)
-            return;
-        method.Invoke(writer, null);
     }
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
@@ -1030,22 +1015,17 @@ public partial class McpServer
             processed++;
         }
 
+        writer.OptimizeFts();
+        // MCP index now runs ValidateContent + InsertIssues per file (bdbb2bd) on par with CLI
+        // index, so stamp both graph-ready and issues-ready on clean runs — the old "graph only"
+        // path is no longer accurate. Bits are only stamped when every file committed without
+        // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
+        // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         if (errors == 0)
         {
-            // Forward-compatible with split readiness flags introduced in #75 lineage.
-            // #75系で導入される分離readinessフラグにも前方互換で対応する。
-            TryInvokeDbWriterMarker(writer, "MarkGraphReady");
-            TryInvokeDbWriterMarker(writer, "MarkIssuesReady");
-        }
-
-        writer.OptimizeFts();
-        // MCP indexing populates graph data but does NOT run ValidateContent / file_issues,
-        // so mark graph-ready only on success. Issues trust stays degraded, which correctly
-        // drives `validate` to warn "file_issues table missing" on MCP-built DBs rather
-        // than silently reporting a false clean result.
-        // MCP は graph のみ。validate の縮退シグナルを正しく残す。
-        if (errors == 0)
             writer.MarkGraphReady();
+            writer.MarkIssuesReady();
+        }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
         var structured = new JsonObject
