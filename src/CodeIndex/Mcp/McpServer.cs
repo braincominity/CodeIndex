@@ -196,6 +196,7 @@ public partial class McpServer
                 "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                 "ping" => ExecutePing(id),
                 "index" => ExecuteIndex(id, args),
+                "backfill_fold" => ExecuteBackfillFold(id),
                 "suggest_improvement" => ExecuteSuggestImprovement(id, args),
                 _ => CreateErrorResponse(id, -32602, $"Unknown tool: {toolName}"),
             };

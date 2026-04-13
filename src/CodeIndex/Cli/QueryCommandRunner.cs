@@ -793,7 +793,7 @@ public static class QueryCommandRunner
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)
-                    Console.WriteLine("WARN    : --exact falls back to ASCII COLLATE NOCASE. Non-ASCII casing (e.g. Ä/ä) won't match. Run `cdidx index . --rebuild` to upgrade.");
+                    Console.WriteLine("WARN    : --exact falls back to ASCII COLLATE NOCASE. Non-ASCII casing (e.g. Ä/ä) won't match. Run `cdidx backfill-fold` to upgrade without reparsing files, or `cdidx index . --rebuild` for a full rebuild.");
                 var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
                 Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");

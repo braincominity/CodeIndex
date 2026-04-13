@@ -108,6 +108,14 @@ Use `cdidx` as your primary navigation tool. Prefer structured and low-token que
 
 Do not only exercise the obvious happy-path commands. Regularly touch newer features and less-common options as well, because this exploration phase also serves as opportunistic regression and monkey testing for the freshly built binary.
 
+If `status --json` reports `fold_ready: false` and you only need Unicode-aware `--exact` semantics on an older DB, prefer upgrading in place with:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --json
+```
+
+Use a full `cdidx . --json` rebuild only when you also need a fresh source scan.
+
 Typical sequence:
 
 ```bash
@@ -381,6 +389,14 @@ dotnet run --project src/CodeIndex -- . --json
 主なナビゲーション手段は `cdidx` にしてください。まずは構造化された、低トークンの問い合わせを優先します。
 
 分かりやすい happy path のコマンドだけをなぞらないこと。ここでの探索は、ビルドしたばかりのバイナリに対する日和見的なリグレッションテスト兼モンキーテストでもあります。
+
+`status --json` が `fold_ready: false` を返し、古い DB に対して Unicode-aware な `--exact` だけを有効化したい場合は、まず次で in-place upgrade することを優先してください:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --json
+```
+
+ソース再走査も必要なときだけ、`cdidx . --json` のフル更新を使います。
 
 典型例:
 
