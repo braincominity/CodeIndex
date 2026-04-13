@@ -1433,8 +1433,9 @@ public static class QueryCommandRunner
     {
         var (fileCount, indexedAt) = reader.GetFreshnessHint();
         payload["indexed_file_count"] = fileCount;
-        if (indexedAt.HasValue)
-            payload["indexed_at"] = JsonSerializer.SerializeToNode(indexedAt.Value);
+        payload["indexed_at"] = indexedAt.HasValue
+            ? JsonSerializer.SerializeToNode(indexedAt.Value)
+            : null;
     }
 
     private static JsonObject BuildJsonZeroResultPayload(

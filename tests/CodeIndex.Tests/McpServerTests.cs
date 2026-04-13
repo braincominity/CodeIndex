@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -349,6 +350,33 @@ public class McpServerTests : IDisposable
         // Zero-result responses include freshness hint / 0件時に鮮度ヒントを含む
         Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
         Assert.NotNull(structured["indexed_at"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Files_NoResults_OnEmptyIndex_EmitsNullIndexedAt()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+        try
+        {
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            using var document = JsonDocument.Parse(response.ToJsonString());
+            var structured = document.RootElement.GetProperty("result").GetProperty("structuredContent");
+
+            Assert.Equal(0, structured.GetProperty("count").GetInt32());
+            Assert.Equal(0, structured.GetProperty("results").GetArrayLength());
+            Assert.Equal(0, structured.GetProperty("indexed_file_count").GetInt64());
+            Assert.True(structured.TryGetProperty("indexed_at", out var indexedAt));
+            Assert.Equal(JsonValueKind.Null, indexedAt.ValueKind);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(dbPath);
+        }
     }
 
     [Fact]

@@ -331,6 +331,34 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_ZeroJson_OnEmptyIndex_EmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_empty_index");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["definitely-missing-path", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt64());
+            Assert.True(json.TryGetProperty("indexed_at", out var indexedAt));
+            Assert.Equal(JsonValueKind.Null, indexedAt.ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_UnsupportedLanguageWithoutMatches_PrintsGraphSupportHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_refs");
@@ -1107,6 +1135,7 @@ public class QueryCommandRunnerTests
         Assert.True(json.TryGetProperty("indexed_file_count", out var indexedFileCount));
         Assert.True(indexedFileCount.GetInt64() > 0);
         Assert.True(json.TryGetProperty("indexed_at", out var indexedAt));
+        Assert.Equal(JsonValueKind.String, indexedAt.ValueKind);
         Assert.False(string.IsNullOrWhiteSpace(indexedAt.GetString()));
     }
 
