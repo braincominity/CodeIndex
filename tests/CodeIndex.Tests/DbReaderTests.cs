@@ -297,6 +297,58 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_ExactMatchesNameEqualityAcrossMultipleNames()
+    {
+        // Seed a sibling symbol whose name contains `authenticate` as a substring so substring
+        // mode returns both but exact mode returns only the exact-name rows per OR name.
+        // exact=false は substring なので `authenticate_v2` も引き当てるが、exact=true は名前一致のみ。
+        var extraFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/auth_v2.py", Lang = "python", Size = 80, Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "authenticate_v2", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+
+        var substring = _reader.SearchSymbols(new[] { "authenticate", "fetchData" }, limit: 10, exact: false)
+            .Select(r => r.Name).Distinct().OrderBy(n => n).ToList();
+        Assert.Contains("authenticate", substring);
+        Assert.Contains("authenticate_v2", substring);
+        Assert.Contains("fetchData", substring);
+
+        var exact = _reader.SearchSymbols(new[] { "authenticate", "fetchData" }, limit: 10, exact: true)
+            .Select(r => r.Name).Distinct().OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "authenticate", "fetchData" }, exact);
+
+        // Case-insensitive equality: the request's casing should not matter.
+        // 大文字小文字を無視した完全一致であることを確認。
+        var exactMixedCase = _reader.SearchSymbols(new[] { "AUTHENTICATE" }, limit: 10, exact: true)
+            .Select(r => r.Name).Distinct().ToList();
+        Assert.Equal(new[] { "authenticate" }, exactMixedCase);
+    }
+
+    [Fact]
+    public void SearchSymbols_ExactPredicateIsIndexable()
+    {
+        // Guard: the exact-match predicate must stay SARGable so SQLite can pick
+        // idx_symbols_name_nocase instead of falling back to a full scan per query name.
+        // Regression for the codex review of #81. `lower(col) = lower(@q)` is NOT SARGable;
+        // `s.name = @q COLLATE NOCASE` is, given the COLLATE NOCASE index on symbols(name).
+        // exact パスがインデックス（idx_symbols_name_nocase）を使える形に保つための回帰テスト。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN SELECT s.name FROM symbols s WHERE s.name = @q COLLATE NOCASE";
+        cmd.Parameters.AddWithValue("@q", "authenticate");
+        using var reader = cmd.ExecuteReader();
+        var plan = new System.Text.StringBuilder();
+        while (reader.Read())
+            plan.AppendLine(reader.GetString(3));
+        var planText = plan.ToString();
+        Assert.Contains("idx_symbols_name_nocase", planText);
+        Assert.DoesNotContain("SCAN symbols", planText);
+    }
+
+    [Fact]
     public void SearchSymbols_EmptyNameListBehavesLikeNoFilter()
     {
         var all = _reader.SearchSymbols((IReadOnlyList<string>?)null);

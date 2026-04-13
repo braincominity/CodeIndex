@@ -47,16 +47,18 @@ public partial class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        return SearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since);
+        return SearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     /// <summary>
     /// Search symbols by one or more name patterns (OR-joined). Empty/null list returns all symbols matching other filters.
+    /// When <paramref name="exact"/> is true, names are matched case-insensitively for equality instead of substring.
     /// 複数名前パターン（OR結合）でシンボルを検索。空/null なら他フィルタに一致する全シンボルを返す。
+    /// <paramref name="exact"/> が true の場合、部分一致ではなく大文字小文字を無視した完全一致になる。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
         // Multi-name queries: run one search per name to guarantee per-name candidate coverage
         // (a common/earlier-sorting name cannot starve others out of the candidate pool), then
@@ -69,7 +71,7 @@ public partial class DbReader
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
             foreach (var q in validQueries)
-                perName.Add(SearchSymbols(new[] { q }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since));
+                perName.Add(SearchSymbols(new[] { q }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact));
 
             var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
             var merged = new List<SymbolResult>();
@@ -115,7 +117,17 @@ public partial class DbReader
         var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
-            var orClauses = string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
+            // --exact: case-insensitive equality so AI clients passing a resolved candidate list
+            // get exactly those rows instead of LIKE %name% expansion (Run vs RunAsync / RunImpact).
+            // Uses `= ... COLLATE NOCASE` (not `lower(col) = lower(@q)`) so SQLite can pick
+            // idx_symbols_name_nocase instead of falling back to a full scan per query name.
+            // --exact: 既に解決済みの候補リストを渡した AI クライアントが、Run で RunAsync などを
+            // 引き込まずに本当に同名だけを取得できるよう、大文字小文字無視の完全一致にする。
+            // `lower(col)` ラップだと idx_symbols_name_nocase が効かずフルスキャンに落ちるため、
+            // SQLite が index を選べる `= ... COLLATE NOCASE` を使う。
+            var orClauses = exact
+                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name = @query{idx} COLLATE NOCASE"))
+                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
             sql += $" AND ({orClauses})";
         }
         if (kind != null)
@@ -131,7 +143,7 @@ public partial class DbReader
         if (effectiveQueries != null)
         {
             for (int idx = 0; idx < effectiveQueries.Count; idx++)
-                cmd.Parameters.AddWithValue($"@query{idx}", $"%{EscapeLikeQuery(effectiveQueries[idx])}%");
+                cmd.Parameters.AddWithValue($"@query{idx}", exact ? effectiveQueries[idx] : $"%{EscapeLikeQuery(effectiveQueries[idx])}%");
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);

@@ -307,6 +307,11 @@ public class DbContext : IDisposable
         // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
         Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
+        // Case-insensitive exact-match index for `symbols --exact` (and MCP `symbols` exact=true).
+        // Without this, `name = @q COLLATE NOCASE` falls back to a full symbols scan per query name,
+        // which on multi-name exact lookups becomes O(names × symbols).
+        // `symbols --exact` 用の大文字小文字無視 index。無いと multi-name exact でフルスキャンが N 回走る。
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_start  ON symbols(start_line)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
