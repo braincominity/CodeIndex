@@ -13,6 +13,21 @@ public partial class DbReader
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
     private const string UnusedBucketReflectionOrConfig = "reflection_or_config_suspect";
+    private static readonly string[] ReflectionAttributeMarkers =
+    [
+        "[jsonpropertyname(",
+        "[jsonproperty(",
+        "[jsoninclude",
+        "[jsonignore",
+        "[datamember",
+        "[ignoredatamember",
+        "[bsonelement",
+        "[bsonid",
+        "[xmlelement",
+        "[xmlattribute",
+        "[yamlmember",
+        "[column(",
+    ];
 
     /// <summary>
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
@@ -616,19 +631,27 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var path = reader.GetString(0);
+            var kindValue = reader.GetString(2);
+            var startLine = GetInt32OrFallback(reader, 5, 4);
+            var isPublicOrExported = reader.GetInt32(12) != 0;
+            var isReflectionOrConfigSuspect = reader.GetInt32(13) != 0;
+            if (!isReflectionOrConfigSuspect && isPublicOrExported && kindValue == "property")
+                isReflectionOrConfigSuspect = HasReflectionAttributeContext(path, startLine);
+
             var visibility = GetNullableString(reader, 8);
             var classification = ClassifyUnusedSymbol(
-                isPublicOrExported: reader.GetInt32(12) != 0,
-                isReflectionOrConfigSuspect: reader.GetInt32(13) != 0,
+                isPublicOrExported: isPublicOrExported,
+                isReflectionOrConfigSuspect: isReflectionOrConfigSuspect,
                 visibility: visibility);
             results.Add(new UnusedSymbolResult
             {
-                Path = reader.GetString(0),
+                Path = path,
                 Lang = GetNullableString(reader, 1),
-                Kind = reader.GetString(2),
+                Kind = kindValue,
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
-                StartLine = GetInt32OrFallback(reader, 5, 4),
+                StartLine = startLine,
                 EndLine = GetInt32OrFallback(reader, 6, 4),
                 Signature = GetNullableString(reader, 7),
                 Visibility = visibility,
@@ -643,6 +666,28 @@ public partial class DbReader
         return results;
     }
 
+    private bool HasReflectionAttributeContext(string path, int startLine)
+    {
+        var excerptStart = Math.Max(1, startLine - 3);
+        var excerpt = GetExcerpt(path, excerptStart, startLine);
+        if (excerpt == null)
+            return false;
+
+        var lines = excerpt.Content.Split('\n');
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith("[", StringComparison.Ordinal))
+                continue;
+
+            var lowered = trimmed.ToLowerInvariant();
+            if (ReflectionAttributeMarkers.Any(marker => lowered.Contains(marker, StringComparison.Ordinal)))
+                return true;
+        }
+
+        return false;
+    }
+
     private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
     {
         if (isReflectionOrConfigSuspect)
@@ -650,7 +695,7 @@ public partial class DbReader
             return (
                 UnusedBucketReflectionOrConfig,
                 "low",
-                "public/exported property or config-style surface with no indexed references");
+                "public/exported property with config or attribute-driven reflection surface and no indexed references");
         }
 
         if (isPublicOrExported)

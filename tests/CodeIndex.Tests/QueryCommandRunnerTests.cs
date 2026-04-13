@@ -285,6 +285,59 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonMarksReflectionAttributedPropertyAsSuspect()
+    {
+        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("UserDto", symbols[0].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[0].GetProperty("unused_bucket").GetString());
+            Assert.Equal("FullName", symbols[1].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[1].GetProperty("unused_bucket").GetString());
+            Assert.Contains("attribute-driven reflection surface", symbols[1].GetProperty("unused_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonIncludesGraphSupportMetadataForUnsupportedLanguage()
+    {
+        var (projectRoot, dbPath) = CreateUnsupportedLanguageUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "shell"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal("helper", json.GetProperty("symbols")[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_HumanOutputGroupsByConfidenceBucket()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
@@ -1021,6 +1074,105 @@ public class QueryCommandRunnerTests
                 Visibility = "public",
                 ContainerKind = "class",
                 ContainerName = "AppSettings",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateReflectionUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 10,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 8,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateUnsupportedLanguageUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_shell_json");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "script.sh",
+            Lang = "shell",
+            Size = 64,
+            Lines = 6,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "helper",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "helper() {",
             },
         ]);
         writer.MarkGraphReady();

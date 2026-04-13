@@ -1525,7 +1525,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal("low", unused[1].UnusedConfidence);
         Assert.Equal("public_or_exported_no_refs", unused[2].UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", unused[3].UnusedBucket);
-        Assert.Contains("config-style", unused[3].UnusedReason);
+        Assert.Contains("config or attribute-driven reflection", unused[3].UnusedReason);
         Assert.Equal("public_or_exported_no_refs", unused[4].UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", unused[5].UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", unused[6].UnusedBucket);
@@ -1603,6 +1603,73 @@ public class DbReaderTests : IDisposable
         Assert.Equal("likely_unused_private", hidden.UnusedBucket);
         Assert.Equal("medium", hidden.UnusedConfidence);
         Assert.Contains("same-file uses may still be missed", hidden.UnusedReason);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_ReflectionAttributedProperty_IsClassifiedAsSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 8,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "UserDto").UnusedBucket);
+        var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
+        Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+        Assert.Contains("attribute-driven reflection surface", property.UnusedReason);
     }
 
     [Fact]

@@ -376,9 +376,9 @@ public partial class McpServer
             CreateToolDefinition(
                 "unused_symbols",
                 "Find symbols that are defined but never referenced in the indexed codebase. "
-                + "Useful for dead code detection. Results include confidence buckets so private hits rank ahead of public/exported suspects. Only meaningful for languages with reference extraction support. "
+                + "Useful for dead code detection. Results include confidence buckets so private hits rank ahead of public/exported suspects, and the lowest-confidence bucket is reserved for config or attribute-driven reflection surfaces. Only meaningful for languages with reference extraction support. "
                 + "/ インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する。"
-                + "デッドコード検出に有用。private 高信頼候補を public/exported suspect より前に返す。参照抽出対応言語でのみ意味がある。",
+                + "デッドコード検出に有用。private 候補を public/exported suspect より前に返し、最低信頼 bucket は config または attribute 駆動の reflection surface 用に使う。参照抽出対応言語でのみ意味がある。",
                 new JsonObject
                 {
                     ["type"] = "object",

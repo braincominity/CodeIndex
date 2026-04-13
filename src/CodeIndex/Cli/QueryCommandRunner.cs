@@ -964,11 +964,22 @@ public static class QueryCommandRunner
             if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
                 Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Results may contain false positives.");
 
+            bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
+            var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, returned_bucket_counts = new Dictionary<string, int>(), graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new
+                    {
+                        count = 0,
+                        files = 0,
+                        returned_bucket_counts = new Dictionary<string, int>(),
+                        graph_supported = graphSupported,
+                        graph_support_reason = graphSupportReason,
+                        graph_table_available = reader._hasReferencesTable,
+                        degraded = !reader._hasReferencesTable
+                    }, jsonOptions) : "0");
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult("unused", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
@@ -987,14 +998,28 @@ public static class QueryCommandRunner
                 var fc = results.Select(r => r.Path).Distinct().Count();
                 var bucketCounts = BuildUnusedBucketCounts(results);
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc, returned_bucket_counts = bucketCounts }, jsonOptions)
+                    ? JsonSerializer.Serialize(new
+                    {
+                        count = results.Count,
+                        files = fc,
+                        graph_supported = graphSupported,
+                        graph_support_reason = graphSupportReason,
+                        returned_bucket_counts = bucketCounts
+                    }, jsonOptions)
                     : $"{results.Count}");
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, returned_bucket_counts = BuildUnusedBucketCounts(results), symbols = results }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    count = results.Count,
+                    graph_supported = graphSupported,
+                    graph_support_reason = graphSupportReason,
+                    returned_bucket_counts = BuildUnusedBucketCounts(results),
+                    symbols = results
+                }, jsonOptions));
             }
             else
             {
