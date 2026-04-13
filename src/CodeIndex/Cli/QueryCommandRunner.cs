@@ -1438,9 +1438,10 @@ public static class QueryCommandRunner
         if (degraded.HasValue)
             payload["degraded"] = degraded.Value;
         if (indexedFileCount.HasValue)
+        {
             payload["indexed_file_count"] = indexedFileCount.Value;
-        if (indexedAt.HasValue)
-            payload["indexed_at"] = indexedAt.Value;
+            payload["indexed_at"] = indexedAt;
+        }
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = exactZeroHint;
 

@@ -258,6 +258,34 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ZeroResultJson_EmptyIndexEmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_zero_json_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingTarget", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("results").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_UnsupportedLanguageWithoutMatches_PrintsGraphSupportHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_refs");
@@ -778,6 +806,34 @@ public class QueryCommandRunnerTests
             Assert.Equal(0, json.GetProperty("files").GetArrayLength());
             Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt32());
             Assert.True(json.TryGetProperty("indexed_at", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ZeroResultJson_EmptyIndexEmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_zero_json_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file-fragment", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
         }
         finally
         {
