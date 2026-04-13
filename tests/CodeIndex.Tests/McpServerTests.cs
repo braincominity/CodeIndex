@@ -138,6 +138,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("search", instructions);
         // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
         Assert.Contains("index", instructions);
+        Assert.Contains("backfill_fold", instructions);
         // Verify language list comes from ReferenceExtractor / 言語リストがReferenceExtractorから来ることを検証
         foreach (var lang in ReferenceExtractor.GetSupportedLanguages())
         {
@@ -204,13 +205,13 @@ public class McpServerTests : IDisposable
     // --- tools/list tests / ツール一覧テスト ---
 
     [Fact]
-    public void ToolsList_Returns19Tools()
+    public void ToolsList_Returns23Tools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(22, tools.Count);
+        Assert.Equal(23, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -232,6 +233,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("deps", names);
         Assert.Contains("languages", names);
         Assert.Contains("index", names);
+        Assert.Contains("backfill_fold", names);
         Assert.Contains("suggest_improvement", names);
     }
 
@@ -680,6 +682,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_BlocksBackfillFoldInBatch()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"backfill_fold","arguments":{}}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        Assert.Contains("not allowed", results[0]!["error"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Languages_ReturnsCapabilities()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
@@ -784,6 +796,28 @@ public class McpServerTests : IDisposable
             if (Directory.Exists(fixtureDir))
                 Directory.Delete(fixtureDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_StampsFoldReady()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
+        Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.True(structured["verified"]!.GetValue<bool>());
+        Assert.Equal(3, structured["user_version_before"]!.GetValue<int>());
+        Assert.Equal(7, structured["user_version_after"]!.GetValue<int>());
+        Assert.True(structured["fold_ready"]!.GetValue<bool>());
+
+        using var verifyDb = new DbContext(_dbPath);
+        verifyDb.TryMigrateForRead();
+        var reader = new DbReader(verifyDb.Connection);
+        Assert.True(reader._foldReady);
     }
 
     [Fact]

@@ -24,7 +24,7 @@ cdidx deps --path src/           # File-level dependency graph
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-46 languages supported. 22 MCP tools. Incremental updates. Zero config.
+46 languages supported. 23 MCP tools. Incremental updates. Zero config.
 
 - **Docs**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architecture, DB schema, FTS5 internals
 - **AI dev contract**: [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
@@ -208,6 +208,14 @@ With `--verbose`, each file also shows a status tag so you can see exactly what 
 
 This is useful for debugging indexing issues or verifying which files were actually processed.
 
+If you only need to upgrade an older `.cdidx/codeindex.db` to Unicode-aware `--exact`, you do not need a full rebuild:
+
+```bash
+cdidx backfill-fold
+```
+
+This recomputes `name_folded` / `*_folded` columns from the existing DB rows and stamps `fold_ready` without reparsing source files.
+
 ### Search code
 
 ```bash
@@ -257,7 +265,7 @@ cdidx symbols --kind class             # all classes
 cdidx symbols --kind function --lang python
 ```
 
-Use `--exact` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact` composes with `--name`, positional names, and all existing filters. (Note: `--exact` on `search` has different semantics — case-sensitive exact substring, FTS5 bypassed.) The fold is NFKC + invariant-lower: common non-ASCII casing pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, and ligatures collapse correctly. NOT full Unicode CaseFold — edge cases like Turkish `İ`/`i` and Greek final sigma still require exact casing (#96). Legacy DBs indexed before #86 silently fall back to ASCII `COLLATE NOCASE` until reindex (`cdidx index . --rebuild`); use `status --json` → `fold_ready` to detect this.
+Use `--exact` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact` composes with `--name`, positional names, and all existing filters. (Note: `--exact` on `search` has different semantics — case-sensitive exact substring, FTS5 bypassed.) The fold is NFKC + invariant-lower: common non-ASCII casing pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, and ligatures collapse correctly. NOT full Unicode CaseFold — edge cases like Turkish `İ`/`i` and Greek final sigma still require exact casing (#96). Legacy DBs indexed before #86 silently fall back to ASCII `COLLATE NOCASE` until upgrade; prefer `cdidx backfill-fold`, or use `cdidx index . --rebuild` if you want a full rescan. Use `status --json` → `fold_ready` to detect the current path.
 
 Output:
 
@@ -752,6 +760,7 @@ Once configured, the AI can directly call these tools:
 | `languages` | List all supported languages, file extensions, and capabilities |
 | `ping` | Lightweight connection check |
 | `index` | Index or re-index a project directory |
+| `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
@@ -1068,6 +1077,14 @@ Done.
 
 インデックスの問題をデバッグしたり、どのファイルが実際に処理されたかを確認するのに便利です。
 
+古い `.cdidx/codeindex.db` を Unicode-aware な `--exact` に上げたいだけなら、フル rebuild は不要です:
+
+```bash
+cdidx backfill-fold
+```
+
+これは既存 DB 行から `name_folded` / `*_folded` 列を再計算し、ソース再解析なしで `fold_ready` を stamp します。
+
 ### コード検索
 
 ```bash
@@ -1117,7 +1134,7 @@ cdidx symbols --kind class             # すべてのクラス
 cdidx symbols --kind function --lang python
 ```
 
-`--exact` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact` は `--name`、positional 名、他の全フィルタと組み合わせ可能。（注: `search` の `--exact` は意味が異なる — 大文字小文字を区別する完全部分一致で、FTS5 はバイパスされる。）fold は NFKC 正規化 + invariant lowercase で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字などよくある非 ASCII の casing は正しく一致する。ただし完全な Unicode CaseFold ではない — トルコ語の `İ`/`i` やギリシャ語 final sigma などのエッジケースは依然 exact casing が必要（#96）。#86 より前にインデックスした旧 DB は ASCII `COLLATE NOCASE` に黙ってフォールバックするため、Unicode fold が必要なら `cdidx index . --rebuild` で再インデックスする。`status --json` の `fold_ready` で現在の経路を判定可能。
+`--exact` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact` は `--name`、positional 名、他の全フィルタと組み合わせ可能。（注: `search` の `--exact` は意味が異なる — 大文字小文字を区別する完全部分一致で、FTS5 はバイパスされる。）fold は NFKC 正規化 + invariant lowercase で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字などよくある非 ASCII の casing は正しく一致する。ただし完全な Unicode CaseFold ではない — トルコ語の `İ`/`i` やギリシャ語 final sigma などのエッジケースは依然 exact casing が必要（#96）。#86 より前にインデックスした旧 DB は ASCII `COLLATE NOCASE` に黙ってフォールバックするため、Unicode fold が必要ならまず `cdidx backfill-fold` を使い、フル再走査も必要なら `cdidx index . --rebuild` を使う。`status --json` の `fold_ready` で現在の経路を判定可能。
 
 出力:
 
@@ -1612,9 +1629,18 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `languages` | 対応言語一覧を拡張子・機能付きで表示 |
 | `ping` | 軽量な接続確認 |
 | `index` | プロジェクトのインデックス作成・更新 |
+| `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
+
+古い `.cdidx/codeindex.db` を Unicode `--exact` 対応へ上げたいだけなら、ソース再解析なしで次を実行できます:
+
+```bash
+cdidx backfill-fold
+```
+
+これは既存 DB 行から `name_folded` / `*_folded` 列を再計算し、`fold_ready` を stamp する。
 
 `references`、`callers`、`callees` などの graph 系 MCP ツールも、言語フィルタが指定されている場合は `graph_language`、`graph_supported`、`graph_support_reason` を返し、未対応言語と単なる 0 件ヒットを区別できるようにしています。
 

@@ -81,6 +81,7 @@ return args[0] switch
     "unused" => QueryCommandRunner.RunUnused(args[1..], jsonOptions),
     "hotspots" => QueryCommandRunner.RunHotspots(args[1..], jsonOptions),
     "index" => IndexCommandRunner.Run(args[1..], jsonOptions),
+    "backfill-fold" => IndexCommandRunner.RunBackfillFold(args[1..], jsonOptions),
     _ when IsProjectPathArg(args[0])
         => IndexCommandRunner.Run(args, jsonOptions),
     _ => ShowError($"Unknown command: {args[0]}"),

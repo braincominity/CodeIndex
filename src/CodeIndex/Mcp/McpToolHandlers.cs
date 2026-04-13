@@ -36,6 +36,7 @@ public partial class McpServer
             + "Check 'status' to verify index freshness before trusting results. "
             + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
             + "Use 'search' with 'exact: true' for case-sensitive substring matching when FTS5 returns too many results. "
+            + "If 'status' reports fold_ready=false and Unicode exact-name matching matters, use 'backfill_fold' to upgrade folded keys without reparsing files. "
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
@@ -648,7 +649,7 @@ public partial class McpServer
             }
 
             // Block write operations in batch / バッチ内では書き込み操作をブロック
-            if (toolName == "index" || toolName == "suggest_improvement")
+            if (toolName == "index" || toolName == "backfill_fold" || toolName == "suggest_improvement")
             {
                 resultsArray.Add(new JsonObject { ["tool"] = toolName, ["error"] = $"{toolName} is not allowed in batch_query (write operation)" });
                 continue;
@@ -1056,14 +1057,59 @@ public partial class McpServer
             },
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
-            // run, the client should request `cdidx index . --rebuild` to upgrade the DB.
+            // run, prefer `backfill_fold`; full rebuild is the heavier fallback.
             ["fold_ready"] = foldReadyAfter
         };
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
-                ? "Indexing complete. Note: --exact Unicode fold path not active (legacy rows without name_folded remain). Run a full rebuild to upgrade."
+                ? "Indexing complete. Note: --exact Unicode fold path not active (legacy rows without name_folded remain). Run backfill_fold to upgrade without reparsing files, or do a full rebuild."
                 : "Indexing complete.",
             structured);
+    }
+
+    private JsonNode ExecuteBackfillFold(JsonNode? id)
+    {
+        var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+        if (!isUri && !File.Exists(_dbPath))
+            return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
+
+        try
+        {
+            using var db = new DbContext(_dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var userVersionBefore = db.GetUserVersion();
+            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var storedFoldVersion = db.GetMetaString("fold_key_version");
+            var rewriteAll = storedFoldVersion != currentFoldVersion;
+            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
+            var verified = writer.AllFoldedColumnsBackfilled();
+            if (!verified)
+                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values.");
+
+            writer.MarkFoldReady();
+            var userVersionAfter = db.GetUserVersion();
+
+            var payload = new JsonObject
+            {
+                ["symbols"] = symbols,
+                ["symbol_references"] = symbolReferences,
+                ["rewrite_all"] = rewriteAll,
+                ["verified"] = verified,
+                ["user_version_before"] = userVersionBefore,
+                ["user_version_after"] = userVersionAfter,
+                ["fold_ready"] = true,
+            };
+
+            var summary = rewriteAll
+                ? "Folded-name keys refreshed and FoldReady stamped."
+                : "Missing folded-name keys backfilled and FoldReady stamped.";
+            return CreateToolResult(id, summary, payload);
+        }
+        catch (Exception ex)
+        {
+            return CreateToolErrorResponse(id, $"Failed to backfill folded-name columns: {ex.Message}");
+        }
     }
 
     /// <summary>

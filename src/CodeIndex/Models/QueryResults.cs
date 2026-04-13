@@ -143,8 +143,8 @@ public class StatusResult
     /// True when every row in symbols / symbol_references has its name_folded column
     /// populated AND the FoldReadyFlag bit is set on the DB. False means `--exact` still
     /// falls back to ASCII `COLLATE NOCASE` (non-ASCII casing pairs like Ä/ä won't match).
-    /// AI clients should trigger `cdidx index . --rebuild` when this is false and Unicode
-    /// `--exact` matching is required.
+    /// AI clients should prefer `cdidx backfill-fold` to upgrade an older DB without
+    /// reparsing files; `cdidx index . --rebuild` remains the full-rescan fallback.
     /// true のとき --exact は Unicode fold 経路、false のとき ASCII NOCASE fallback。
     /// </summary>
     public bool FoldReady { get; set; }
