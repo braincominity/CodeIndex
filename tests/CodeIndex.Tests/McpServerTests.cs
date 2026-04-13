@@ -882,6 +882,9 @@ public class McpServerTests : IDisposable
             var secondResponse = server.HandleMessage(secondIndex)!;
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.False(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
+            Assert.Equal("stale_fold_key_version", secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]!.GetValue<string>());
+            var text = secondResponse["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("older fold-key version", text);
 
             using var verify = new SqliteConnection($"Data Source={dbPath}");
             verify.Open();
@@ -966,6 +969,7 @@ public class McpServerTests : IDisposable
             var secondResponse = server.HandleMessage(secondIndex)!;
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.True(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
+            Assert.Null(secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]);
 
             using var verify = new SqliteConnection($"Data Source={dbPath}");
             verify.Open();
