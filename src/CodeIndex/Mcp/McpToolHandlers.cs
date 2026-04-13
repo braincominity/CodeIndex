@@ -999,7 +999,6 @@ public partial class McpServer
         // Determine DB path — use the provided _dbPath or default
         // DBパスを決定 — 指定された_dbPathまたはデフォルトを使用
         using var db = new DbContext(_dbPath);
-        var priorReadiness = db.GetUserVersion();
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
 
@@ -1086,8 +1085,7 @@ public partial class McpServer
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var canRestampExistingFoldTrust = (priorReadiness & DbContext.FoldReadyFlag) != 0
-                && priorFoldVersion == currentFoldVersion
+            var canRestampExistingFoldTrust = priorFoldVersion == currentFoldVersion
                 && priorFoldFingerprint == currentFoldFingerprint;
             if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
             {

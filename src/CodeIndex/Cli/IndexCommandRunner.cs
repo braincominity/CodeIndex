@@ -167,7 +167,7 @@ public static class IndexCommandRunner
 
         return isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
-            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint);
+            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
     }
 
 
@@ -527,7 +527,6 @@ public static class IndexCommandRunner
         Stopwatch stopwatch,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
-        int priorReadiness,
         string? priorFoldVersion,
         string? priorFoldFingerprint)
     {
@@ -669,17 +668,18 @@ public static class IndexCommandRunner
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var canRestampExistingFoldTrust = (priorReadiness & DbContext.FoldReadyFlag) != 0
-                && priorFoldVersion == currentFoldVersion
+            var canRestampExistingFoldTrust = priorFoldVersion == currentFoldVersion
                 && priorFoldFingerprint == currentFoldFingerprint;
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
             // every row was regenerated this run (skipped==0) or when the carried metadata is
-            // already known-good for the current runtime. Issue #97 codex review.
+            // already known-good for the current runtime, even if user_version was cleared by
+            // an interrupted refresh before MarkFoldReady ran. Issue #97 codex review.
             // 通常の `index .` は unchanged 行を skip するため、事前 metadata が stale なら
             // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
-            // current と一致しているときだけ FoldReady を stamp する。
+            // current と一致しているときだけ FoldReady を stamp する。途中中断で
+            // user_version だけ落ちた current DB もここで回復させる。
             if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
