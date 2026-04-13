@@ -240,6 +240,32 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_AndDeps_DoNotTreatNamedArgumentLabelsAsLocalFunctions()
+    {
+        InsertIndexedFile("src/platform.cs", "csharp",
+            """
+            public class PlatformState
+            {
+                public static bool Detect() =>
+                    new Options(
+                        isWindows: OperatingSystem.IsWindows(),
+                        isMacCatalyst: OperatingSystem.IsMacCatalyst()).Ready;
+            }
+            """);
+        InsertIndexedFile("src/app.cs", "csharp",
+            """
+            public class App
+            {
+                public bool Read() => OperatingSystem.IsWindows() || OperatingSystem.IsMacCatalyst();
+            }
+            """);
+
+        Assert.Empty(_reader.SearchSymbols("IsWindows", lang: "csharp"));
+        Assert.Empty(_reader.SearchSymbols("IsMacCatalyst", lang: "csharp"));
+        Assert.Empty(_reader.GetFileDependencies(lang: "csharp"));
+    }
+
+    [Fact]
     public void SearchSymbols_ReturnsRichMetadataWhenAvailable()
     {
         var results = _reader.SearchSymbols("fetchData");
