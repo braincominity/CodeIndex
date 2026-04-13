@@ -247,6 +247,45 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDefinition_ExactZeroJson_EmitsExactZeroHintPayload()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void HandleRequest() { }
+                    public void HandleRequestAsync() { HandleRequest(); }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Handle", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
+            Assert.Equal("HandleRequest", json.GetProperty("exact_zero_hint").GetProperty("sample_names")[0].GetString());
+            Assert.Equal("drop --exact or use the exact indexed name", json.GetProperty("exact_zero_hint").GetProperty("suggestion").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactOnReadOnlyLegacyDb_WarnsAboutMissingIndex()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_exact_warn");
@@ -325,6 +364,46 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.TryGetProperty("exact_index_available", out _));
             Assert.False(json.TryGetProperty("degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactZeroHumanOutput_PrintsExactZeroHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_refs_exact_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void HandleRequest() { }
+                    public void HandleRequestAsync() { HandleRequest(); }
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Handle", "--db", dbPath, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No references found.", stderr);
+            Assert.Contains("--exact found 0 matches, but substring matching would return 1", stderr);
+            Assert.Contains("`HandleRequest`", stderr);
+            Assert.Contains("Drop --exact or use the exact indexed name.", stderr);
         }
         finally
         {

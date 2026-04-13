@@ -362,6 +362,39 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_ExactPrefersExactCaseOverFoldSibling()
+    {
+        InsertIndexedFile("src/a_case.py", "python",
+            "def apiTwin():\n    return authenticate('a', 'b')\n");
+        InsertIndexedFile("tests/z_case.py", "python",
+            "def ApiTwin():\n    return authenticate('a', 'b')\n");
+
+        var symbols = _reader.SearchSymbols(new[] { "ApiTwin" }, limit: 10, exact: true)
+            .Where(r => r.Name is "ApiTwin" or "apiTwin")
+            .Select(r => r.Name)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, symbols);
+
+        var definitions = _reader.GetDefinitions("ApiTwin", limit: 10, exact: true)
+            .Where(r => r.Name is "ApiTwin" or "apiTwin")
+            .Select(r => r.Name)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, definitions);
+
+        var topSymbol = Assert.Single(_reader.SearchSymbols(new[] { "ApiTwin" }, limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topSymbol.Name);
+        Assert.Equal("tests/z_case.py", topSymbol.Path);
+
+        var topDefinition = Assert.Single(_reader.GetDefinitions("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topDefinition.Name);
+        Assert.Equal("tests/z_case.py", topDefinition.Path);
+    }
+
+    [Fact]
     public void AllFoldedColumnsBackfilled_DetectsLegacyRowsWithNullFoldedValues()
     {
         // Regression for codex #86 review: the upgrade path must not stamp FoldReady when
@@ -668,6 +701,146 @@ public class DbReaderTests : IDisposable
         // Case-insensitive equality across all three.
         Assert.Single(_reader.SearchReferences("AUTHENTICATE", exact: true));
         Assert.Single(_reader.GetCallers("AUTHENTICATE", exact: true));
+    }
+
+    [Fact]
+    public void GraphReaders_ExactPrefersExactCaseOverFoldSibling()
+    {
+        InsertIndexedFile("src/a_case.py", "python",
+            "def apiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
+            "def lower_wrapper():\n    return apiTwin()\n");
+        InsertIndexedFile("tests/z_case.py", "python",
+            "def ApiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
+            "def upper_wrapper():\n    return ApiTwin()\n");
+
+        var references = _reader.SearchReferences("ApiTwin", exact: true)
+            .Where(r => r.SymbolName is "ApiTwin" or "apiTwin")
+            .Select(r => r.SymbolName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, references);
+
+        var callers = _reader.GetCallers("ApiTwin", exact: true)
+            .Where(r => r.CalleeName is "ApiTwin" or "apiTwin")
+            .Select(r => r.CalleeName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, callers);
+
+        var callees = _reader.GetCallees("ApiTwin", exact: true)
+            .Where(r => r.CallerName is "ApiTwin" or "apiTwin")
+            .Select(r => r.CallerName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, callees);
+
+        var topReference = Assert.Single(_reader.SearchReferences("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topReference.SymbolName);
+        Assert.Equal("tests/z_case.py", topReference.Path);
+
+        var topCaller = Assert.Single(_reader.GetCallers("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCaller.CalleeName);
+        Assert.Equal("tests/z_case.py", topCaller.Path);
+
+        var topCallee = Assert.Single(_reader.GetCallees("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCallee.CallerName);
+        Assert.Equal("tests/z_case.py", topCallee.Path);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_ExactUsesUnicodeFoldForResolutionAndCallerMatch()
+    {
+        // Regression for #93: impact BFS used ASCII-only equality in both ResolveSymbolName()
+        // and GetCallersExact(), so a mixed fullwidth/non-ASCII query could miss even when
+        // the definition and caller rows were both present and fold-equivalent.
+        // #93 回帰: impact BFS の 2 箇所が ASCII-only 比較だったため、fullwidth と
+        // 非 ASCII 大文字を含むクエリで definition / caller が両方揃っていても取りこぼした。
+        var symbolFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/intl.py",
+            Lang = "python",
+            Size = 48,
+            Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = symbolFileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 2,
+            Content = "def café_init():\n    return True\n",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = symbolFileId,
+                Kind = "function",
+                Name = "café_init",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+                BodyStartLine = 2,
+                BodyEndLine = 2,
+                Signature = "def café_init():",
+            },
+        ]);
+
+        var callerFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/bootstrap.py",
+            Lang = "python",
+            Size = 58,
+            Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = callerFileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 2,
+            Content = "def bootstrap():\n    return CAFÉ_INIT()\n",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = callerFileId,
+                Kind = "function",
+                Name = "bootstrap",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+                BodyStartLine = 2,
+                BodyEndLine = 2,
+                Signature = "def bootstrap():",
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "CAFÉ_INIT",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 12,
+                Context = "return CAFÉ_INIT()",
+                ContainerKind = "function",
+                ContainerName = "bootstrap",
+            },
+        ]);
+
+        var (results, truncated) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(results);
+        Assert.Equal("src/bootstrap.py", caller.Path);
+        Assert.Equal("bootstrap", caller.CallerName);
+        Assert.Equal("CAFÉ_INIT", caller.CalleeName);
+        Assert.Equal(1, caller.Depth);
     }
 
     [Fact]

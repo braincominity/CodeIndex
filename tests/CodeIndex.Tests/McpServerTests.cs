@@ -631,6 +631,41 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["indexed_at"]);
     }
 
+    [Theory]
+    [InlineData("definition", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("symbols", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("references", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("callers", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("callees", """{"query":"Runn","exact":true}""", "Runner")]
+    public void ToolsCall_ExactZeroResults_IncludeExactZeroHint(string toolName, string argsJson, string expectedSampleName)
+    {
+        InsertIndexedFile(
+            "src/extra.cs",
+            "csharp",
+            """
+            public class Extra
+            {
+                public void Runner()
+                {
+                    Run();
+                }
+
+                public void Run() { }
+            }
+            """);
+
+        var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.NotNull(structured["exact_zero_hint"]);
+        Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.True(structured["exact_zero_hint"]!["relaxed_count"]!.GetValue<int>() > 0);
+        Assert.Contains(expectedSampleName, structured["exact_zero_hint"]!["sample_names"]!.AsArray().Select(node => node!?.GetValue<string>()));
+        Assert.Equal("drop --exact or use the exact indexed name", structured["exact_zero_hint"]!["suggestion"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_Files_ReturnsResults()
     {

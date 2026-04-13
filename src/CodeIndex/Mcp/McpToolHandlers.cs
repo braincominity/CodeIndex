@@ -59,6 +59,23 @@ public partial class McpServer
             payload["indexed_at"] = JsonSerializer.SerializeToNode(indexedAt.Value);
     }
 
+    private static void AddExactZeroHint(JsonObject payload, ExactZeroHintResult? exactZeroHint)
+    {
+        if (exactZeroHint == null)
+            return;
+
+        var sampleNames = new JsonArray();
+        foreach (var name in exactZeroHint.SampleNames)
+            sampleNames.Add(name);
+
+        payload["exact_zero_hint"] = new JsonObject
+        {
+            ["relaxed_count"] = exactZeroHint.RelaxedCount,
+            ["sample_names"] = sampleNames,
+            ["suggestion"] = exactZeroHint.Suggestion,
+        };
+    }
+
     /// <summary>
     /// Clamp limit to a safe range to prevent resource exhaustion.
     /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
@@ -246,6 +263,10 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
+            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
+                exact && effectiveQueries != null && effectiveQueries.Count > 0,
+                () => reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                r => r.Name);
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
@@ -260,6 +281,7 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No symbols found.", payload);
             }
@@ -303,6 +325,10 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
+                exact,
+                () => reader.SearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                r => r.Name);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -315,7 +341,10 @@ public partial class McpServer
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             if (results.Count == 0)
+            {
+                AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id,
                 results.Count == 0 ? "No definitions found." : $"Found {results.Count} definition(s).",
                 payload);
@@ -342,6 +371,10 @@ public partial class McpServer
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             var exactSignal = reader.GetReferencesExactQuerySignal();
+            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
+                exact && reader._hasReferencesTable,
+                () => reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                r => r.SymbolName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
@@ -359,7 +392,10 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
+            {
+                AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id,
                 BuildGraphSummary("references", results.Count, lang, graphSupported),
                 payload);
@@ -386,6 +422,10 @@ public partial class McpServer
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             var exactSignal = reader.GetCallersExactQuerySignal();
+            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
+                exact && reader._hasReferencesTable,
+                () => reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                r => r.CalleeName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
@@ -403,7 +443,10 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
+            {
+                AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id,
                 BuildGraphSummary("callers", results.Count, lang, graphSupported),
                 payload);
@@ -430,6 +473,10 @@ public partial class McpServer
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             var exactSignal = reader.GetCalleesExactQuerySignal();
+            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
+                exact && reader._hasReferencesTable,
+                () => reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                r => r.CallerName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
             {
@@ -447,7 +494,10 @@ public partial class McpServer
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
+            {
+                AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id,
                 BuildGraphSummary("callees", results.Count, lang, graphSupported),
                 payload);
