@@ -273,7 +273,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -294,6 +294,8 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@rankingQuery", "");
             cmd.Parameters.AddWithValue("@rankingQueryPrefix", "%");
         }
+        cmd.Parameters.AddWithValue("@preferExactCase", exact && query != null ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", exact && query != null ? query : string.Empty);
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -351,7 +353,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -362,6 +364,8 @@ public partial class DbReader
         else
             callersQueryParam = query;
         cmd.Parameters.AddWithValue("@query", callersQueryParam);
+        cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -418,7 +422,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -429,6 +433,8 @@ public partial class DbReader
         else
             calleesQueryParam = query;
         cmd.Parameters.AddWithValue("@query", calleesQueryParam);
+        cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
