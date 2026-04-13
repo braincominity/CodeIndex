@@ -538,12 +538,16 @@ public class LegacySchemaMigrationTests : IDisposable
             Assert.Contains("idx_symbol_refs_name_nocase", callersSignal.DegradedReason);
             Assert.False(calleesSignal.ExactIndexAvailable);
             Assert.Contains("idx_symbol_refs_container_nocase", calleesSignal.DegradedReason);
-            Assert.False(bundle.ExactIndexAvailable);
+            Assert.False(bundle.ExactIndexAvailable ?? true);
             Assert.Contains("idx_symbol_refs_name_nocase", bundle.DegradedReason);
             Assert.Contains("idx_symbol_refs_container_nocase", bundle.DegradedReason);
             Assert.Single(bundle.References);
             Assert.Single(bundle.Callers);
             Assert.Empty(bundle.Callees);
+
+            var nonExactBundle = reader.AnalyzeSymbol("Run", exact: false);
+            Assert.Null(nonExactBundle.ExactIndexAvailable);
+            Assert.Null(nonExactBundle.DegradedReason);
         }
         finally
         {

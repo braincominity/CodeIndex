@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CodeIndex.Database;
 
 // Result DTOs for query operations / クエリ操作用の結果DTO
@@ -248,7 +250,9 @@ public class SymbolAnalysisResult
     /// missing the relevant NOCASE / folded graph indexes.
     /// `--exact` の graph predicate が対応 index を使えるか。false でも結果は正しいが遅くなりうる。
     /// </summary>
-    public bool ExactIndexAvailable { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ExactIndexAvailable { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DegradedReason { get; set; }
 }
 

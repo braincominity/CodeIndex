@@ -600,7 +600,7 @@ public static class QueryCommandRunner
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
             WriteExactGraphWarningIfNeeded(options.Exact, options.Json,
-                (analysis.ExactIndexAvailable, analysis.DegradedReason));
+                (analysis.ExactIndexAvailable ?? true, analysis.DegradedReason));
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
@@ -626,7 +626,7 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
                 if (!analysis.GraphTableAvailable)
                     Console.WriteLine("Graph Table          : MISSING — empty References/Callers/Callees are degraded, NOT real zero-hit results.");
-                if (options.Exact && !analysis.ExactIndexAvailable && analysis.DegradedReason != null)
+                if (options.Exact && analysis.GraphTableAvailable && analysis.ExactIndexAvailable == false && analysis.DegradedReason != null)
                     Console.WriteLine($"Exact Index          : DEGRADED — {analysis.DegradedReason}. Results are correct but may be slow.");
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
@@ -1373,6 +1373,8 @@ public static class QueryCommandRunner
     private static void WriteExactGraphWarningIfNeeded(bool exact, bool json, (bool ExactIndexAvailable, string? DegradedReason) signal)
     {
         if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
+            return;
+        if (signal.DegradedReason.Contains("table missing", StringComparison.OrdinalIgnoreCase))
             return;
 
         Console.Error.WriteLine($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");

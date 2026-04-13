@@ -304,6 +304,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_NonExactJsonOnReadOnlyLegacyDb_OmitsExactDegradedFields()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_nonexact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+            DropGraphExactFallbackIndexes(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.TryGetProperty("exact_index_available", out _));
+            Assert.False(json.TryGetProperty("degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactWithoutGraphTable_DoesNotClaimSlowButCorrect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_missing_graph");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.DoesNotContain("Results are correct but may be slow", stderr);
+            Assert.Contains("symbol_references table missing", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_RequiresStartLine()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(

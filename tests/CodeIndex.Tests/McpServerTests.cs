@@ -534,6 +534,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_AnalyzeSymbol_NonExactOnReadOnlyLegacyDb_OmitsExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run"}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Null(structured["exactIndexAvailable"]);
+        Assert.Null(structured["degradedReason"]);
+    }
+
+    [Fact]
     public void ToolsCall_Search_MissingQuery_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{}}}""")!;
