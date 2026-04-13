@@ -834,12 +834,13 @@ public static class QueryCommandRunner
         {
             var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var count = analysis.ImpactMode == "file_dependencies" ? analysis.FileImpacts.Count : analysis.Callers.Count;
-            var fileCount = analysis.ImpactMode == "file_dependencies"
-                ? analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count()
-                : analysis.Callers.Select(r => r.Path).Distinct().Count();
+            var confirmedCount = analysis.Callers.Count;
+            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
+            var hintCount = analysis.FileImpacts.Count;
+            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+            var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints";
 
-            if (count == 0)
+            if (confirmedCount == 0 && !hasHeuristicHints)
             {
                 if (options.CountOnly)
                 {
@@ -852,6 +853,8 @@ public static class QueryCommandRunner
                             count = 0,
                             files = 0,
                             impact_mode = analysis.ImpactMode,
+                            heuristic = analysis.Heuristic,
+                            hint_count = analysis.HintCount,
                             definition_count = analysis.DefinitionCount,
                             definition_file_count = analysis.DefinitionFileCount,
                             has_class_like_definitions = analysis.HasClassLikeDefinitions,
@@ -875,10 +878,12 @@ public static class QueryCommandRunner
                         ["resolved_name"] = analysis.ResolvedName,
                         ["count"] = 0,
                         ["file_count"] = 0,
+                        ["hint_count"] = 0,
                         ["max_depth"] = maxDepth,
                         ["actual_depth"] = 0,
                         ["truncated"] = analysis.Truncated,
                         ["impact_mode"] = analysis.ImpactMode,
+                        ["heuristic"] = analysis.Heuristic,
                         ["callers"] = Array.Empty<object>(),
                         ["file_impacts"] = Array.Empty<object>(),
                         ["definition_count"] = analysis.DefinitionCount,
@@ -914,12 +919,15 @@ public static class QueryCommandRunner
                     {
                         query = options.Query,
                         resolved_name = analysis.ResolvedName,
-                        count,
-                        files = fileCount,
+                        count = confirmedCount,
+                        files = confirmedFileCount,
                         impact_mode = analysis.ImpactMode,
+                        heuristic = analysis.Heuristic,
+                        hint_count = hintCount,
+                        hint_files = hintFileCount,
                     }, jsonOptions)
-                    : $"{count}");
-                return CommandExitCodes.Success;
+                    : $"{confirmedCount}");
+                return hasHeuristicHints ? CommandExitCodes.NotFound : CommandExitCodes.Success;
             }
 
             if (options.Json)
@@ -928,12 +936,15 @@ public static class QueryCommandRunner
                 {
                     query = options.Query,
                     resolved_name = analysis.ResolvedName,
-                    count,
-                    file_count = fileCount,
+                    count = confirmedCount,
+                    file_count = confirmedFileCount,
+                    hint_count = hintCount,
+                    hint_file_count = hintFileCount,
                     max_depth = maxDepth,
                     actual_depth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0,
                     truncated = analysis.Truncated,
                     impact_mode = analysis.ImpactMode,
+                    heuristic = analysis.Heuristic,
                     callers = analysis.Callers,
                     file_impacts = analysis.FileImpacts,
                     definition_count = analysis.DefinitionCount,
@@ -946,10 +957,11 @@ public static class QueryCommandRunner
             }
             else
             {
-                if (analysis.ImpactMode == "file_dependencies")
+                if (hasHeuristicHints)
                 {
-                    Console.Error.WriteLine($"No symbol-level callers found for '{analysis.ResolvedName}'. Showing file-level dependents instead.");
+                    Console.Error.WriteLine($"No symbol-level callers found for '{analysis.ResolvedName}'. Possible file-level dependents follow.");
                     WriteImpactResolutionHint(analysis);
+                    Console.Error.WriteLine("WARN: these file-level dependents are heuristic only; the current graph does not record resolved target file/type for each call.");
                     foreach (var edge in analysis.FileImpacts)
                         Console.WriteLine($"  {edge.SourcePath,-40} -> {edge.TargetPath} ({edge.ReferenceCount} refs: {edge.Symbols})");
                 }
@@ -968,12 +980,12 @@ public static class QueryCommandRunner
                 }
 
                 var truncNote = analysis.Truncated ? " [TRUNCATED]" : "";
-                if (analysis.ImpactMode == "file_dependencies")
-                    Console.Error.WriteLine($"\n({count} dependency edges across {fileCount} files{truncNote})");
+                if (hasHeuristicHints)
+                    Console.Error.WriteLine($"\n({hintCount} heuristic dependency hints across {hintFileCount} files{truncNote})");
                 else
-                    Console.Error.WriteLine($"\n({count} callers across {fileCount} files, max depth {maxDepth}{truncNote})");
+                    Console.Error.WriteLine($"\n({confirmedCount} callers across {confirmedFileCount} files, max depth {maxDepth}{truncNote})");
             }
-            return CommandExitCodes.Success;
+            return hasHeuristicHints ? CommandExitCodes.NotFound : CommandExitCodes.Success;
         });
     }
 

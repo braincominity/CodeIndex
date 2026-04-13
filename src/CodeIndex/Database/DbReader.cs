@@ -915,6 +915,7 @@ public partial class DbReader
         var fileImpacts = new List<FileDependencyResult>();
         string? zeroResultReason = null;
         string? suggestion = null;
+        var heuristic = false;
 
         if (callers.Count == 0)
         {
@@ -934,11 +935,13 @@ public partial class DbReader
                 }
                 else if (fallbackDefinitions.Count == 1)
                 {
-                    var safeFallbackNames = ResolveSafeImpactFallbackNames(fallbackDefinitions[0]);
-                    fileImpacts = GetFileDependenciesToResolvedType(fallbackDefinitions[0], safeFallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    var fallbackNames = ResolveImpactFallbackNames(fallbackDefinitions[0]);
+                    fileImpacts = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
                     if (fileImpacts.Count > 0)
                     {
-                        impactMode = "file_dependencies";
+                        impactMode = "file_dependency_hints";
+                        heuristic = true;
+                        suggestion = "These file-level dependents are heuristic only; confirm with `cdidx deps --path <definition-path> --reverse` and a member-level `impact` query.";
                     }
                     else
                     {
@@ -959,9 +962,11 @@ public partial class DbReader
             Query = symbolName,
             ResolvedName = resolvedName,
             ImpactMode = impactMode,
+            Heuristic = heuristic,
             MaxDepth = maxDepth,
             DefinitionCount = definitions.Count,
             DefinitionFileCount = definitionPaths.Count,
+            HintCount = fileImpacts.Count,
             HasClassLikeDefinitions = hasClassLikeDefinitions,
             HasMultipleDefinitionFiles = definitionPaths.Count > 1,
             Definitions = definitions,
@@ -981,14 +986,13 @@ public partial class DbReader
             .ToList();
     }
 
-    private List<string> ResolveSafeImpactFallbackNames(SymbolResult definition)
+    private List<string> ResolveImpactFallbackNames(SymbolResult definition)
     {
         if (string.IsNullOrWhiteSpace(definition.Path) || string.IsNullOrWhiteSpace(definition.Name))
             return new List<string>();
 
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactSafeNameLang");
-        var otherSupportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f2", "impactSafeNameOtherLang");
         cmd.CommandText = @"
             SELECT DISTINCT s.name
             FROM symbols s
@@ -999,20 +1003,6 @@ public partial class DbReader
                     (s.name = @containerName AND s.kind = @containerKind)
                     OR s.container_name = @containerName
                   )
-              AND NOT EXISTS (
-                    SELECT 1
-                    FROM symbols s2
-                    JOIN files f2 ON s2.file_id = f2.id
-                    WHERE s2.name = s.name
-                      AND " + otherSupportedLangFilter + @"
-                      AND NOT (
-                            f2.path = @targetPath
-                            AND (
-                                (s2.name = @containerName AND s2.kind = @containerKind)
-                                OR s2.container_name = @containerName
-                            )
-                      )
-              )
             ORDER BY s.name";
         cmd.Parameters.AddWithValue("@targetPath", definition.Path);
         cmd.Parameters.AddWithValue("@containerName", definition.Name);
@@ -1025,9 +1015,9 @@ public partial class DbReader
         return results;
     }
 
-    private List<FileDependencyResult> GetFileDependenciesToResolvedType(SymbolResult definition, IReadOnlyList<string> safeFallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    private List<FileDependencyResult> GetFileDependencyHintsToResolvedType(SymbolResult definition, IReadOnlyList<string> fallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
-        if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || safeFallbackNames.Count == 0)
+        if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || fallbackNames.Count == 0)
             return new List<FileDependencyResult>();
 
         using var cmd = _conn.CreateCommand();
@@ -1040,10 +1030,10 @@ public partial class DbReader
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
-        var safeNameClauses = new List<string>(safeFallbackNames.Count);
-        for (int i = 0; i < safeFallbackNames.Count; i++)
-            safeNameClauses.Add($"r.symbol_name = @impactSafeName{i}");
-        innerSql += " AND (" + string.Join(" OR ", safeNameClauses) + ")";
+        var nameClauses = new List<string>(fallbackNames.Count);
+        for (int i = 0; i < fallbackNames.Count; i++)
+            nameClauses.Add($"r.symbol_name = @impactFallbackName{i}");
+        innerSql += " AND (" + string.Join(" OR ", nameClauses) + ")";
 
         if (pathPatterns is { Count: > 0 })
         {
@@ -1071,8 +1061,8 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         cmd.Parameters.AddWithValue("@impactTargetPath", definition.Path);
-        for (int i = 0; i < safeFallbackNames.Count; i++)
-            cmd.Parameters.AddWithValue($"@impactSafeName{i}", safeFallbackNames[i]);
+        for (int i = 0; i < fallbackNames.Count; i++)
+            cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 

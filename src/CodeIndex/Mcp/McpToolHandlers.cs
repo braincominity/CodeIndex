@@ -855,10 +855,10 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
-            var count = analysis.ImpactMode == "file_dependencies" ? analysis.FileImpacts.Count : analysis.Callers.Count;
-            var fileCount = analysis.ImpactMode == "file_dependencies"
-                ? analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count()
-                : analysis.Callers.Select(r => r.Path).Distinct().Count();
+            var count = analysis.Callers.Count;
+            var fileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
+            var hintCount = analysis.FileImpacts.Count;
+            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
             var maxActualDepth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0;
             var payload = new JsonObject
             {
@@ -866,10 +866,13 @@ public partial class McpServer
                 ["resolved_name"] = analysis.ResolvedName,
                 ["count"] = count,
                 ["file_count"] = fileCount,
+                ["hint_count"] = hintCount,
+                ["hint_file_count"] = hintFileCount,
                 ["max_depth"] = maxDepth,
                 ["actual_depth"] = maxActualDepth,
                 ["truncated"] = analysis.Truncated,
                 ["impact_mode"] = analysis.ImpactMode,
+                ["heuristic"] = analysis.Heuristic,
                 ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, _jsonOptions),
                 ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, _jsonOptions),
                 ["definition_count"] = analysis.DefinitionCount,
@@ -886,7 +889,7 @@ public partial class McpServer
 
             var summary = analysis.ImpactMode switch
             {
-                "file_dependencies" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {count} file-level dependency edge(s) across {fileCount} files instead.",
+                "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {hintCount} possible file-level dependent(s) across {hintFileCount} files. These hints are heuristic only.",
                 _ when count > 0 => $"Found {count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
                     + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
                 _ => "No impact found.",
@@ -900,6 +903,8 @@ public partial class McpServer
                     payload["graph_support_reason"] = graphReason;
                 if (!analysis.GraphTableAvailable)
                     payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                else if (analysis.Heuristic)
+                    payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
             }
             return CreateToolResult(id, summary, payload);
         });

@@ -1101,7 +1101,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void AnalyzeImpact_ClassSymbolFallsBackToFileDependencies()
+    public void AnalyzeImpact_ClassSymbolReturnsHeuristicFileDependencyHints()
     {
         InsertIndexedFile("src/FolderDiffService.cs", "csharp",
             """
@@ -1123,10 +1123,12 @@ public class DbReaderTests : IDisposable
 
         var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
 
-        Assert.Equal("file_dependencies", analysis.ImpactMode);
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
         Assert.Empty(analysis.Callers);
         Assert.True(analysis.HasClassLikeDefinitions);
         Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(1, analysis.HintCount);
         var edge = Assert.Single(analysis.FileImpacts);
         Assert.Equal("src/App.cs", edge.SourcePath);
         Assert.Equal("src/FolderDiffService.cs", edge.TargetPath);
@@ -1163,7 +1165,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void AnalyzeImpact_ClassFallbackIgnoresCollidingMembersFromOtherTypes()
+    public void AnalyzeImpact_ClassCollisionReturnsHeuristicHintsInsteadOfAuthoritativeImpact()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
             """
@@ -1192,10 +1194,13 @@ public class DbReaderTests : IDisposable
 
         var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
 
-        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
         Assert.Empty(analysis.Callers);
-        Assert.Empty(analysis.FileImpacts);
-        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+        var edge = Assert.Single(analysis.FileImpacts);
+        Assert.Equal("src/App.cs", edge.SourcePath);
+        Assert.Equal("src/FooService.cs", edge.TargetPath);
+        Assert.Equal(1, analysis.HintCount);
     }
 
     [Fact]
@@ -1229,6 +1234,37 @@ public class DbReaderTests : IDisposable
         Assert.Empty(analysis.Callers);
         Assert.Empty(analysis.FileImpacts);
         Assert.Equal("non_callable_symbol_kind", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_UnresolvedExternalCallOnlyReturnsHeuristicHints()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/ExternalConsumer.cs", "csharp",
+            """
+            public class ExternalConsumer
+            {
+                public void Boot()
+                {
+                    ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.Empty(analysis.Callers);
+        Assert.Equal(1, analysis.HintCount);
+        var edge = Assert.Single(analysis.FileImpacts);
+        Assert.Equal("src/ExternalConsumer.cs", edge.SourcePath);
     }
 
     [Fact]

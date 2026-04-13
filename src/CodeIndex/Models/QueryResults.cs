@@ -145,9 +145,11 @@ public class ImpactAnalysisResult
     public string Query { get; set; } = string.Empty;
     public string ResolvedName { get; set; } = string.Empty;
     public string ImpactMode { get; set; } = "callers";
+    public bool Heuristic { get; set; }
     public int MaxDepth { get; set; }
     public int DefinitionCount { get; set; }
     public int DefinitionFileCount { get; set; }
+    public int HintCount { get; set; }
     public bool HasClassLikeDefinitions { get; set; }
     public bool HasMultipleDefinitionFiles { get; set; }
     public List<SymbolResult> Definitions { get; set; } = [];

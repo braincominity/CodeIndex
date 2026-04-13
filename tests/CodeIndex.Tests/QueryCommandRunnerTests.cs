@@ -247,7 +247,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunImpact_ClassSymbolJsonFallsBackToFileDependencies()
+    public void RunImpact_ClassSymbolJsonReturnsHeuristicFileDependencyHints()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_class_fallback");
         try
@@ -279,11 +279,13 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("file_dependencies", json.GetProperty("impact_mode").GetString());
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("heuristic").GetBoolean());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
             Assert.True(json.GetProperty("has_class_like_definitions").GetBoolean());
             Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
             Assert.Equal("src/FolderDiffService.cs", json.GetProperty("file_impacts")[0].GetProperty("target_path").GetString());
@@ -340,7 +342,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunImpact_ClassCollisionJsonStaysZero()
+    public void RunImpact_ClassCollisionJsonReturnsHeuristicHints()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_collision");
         try
@@ -381,10 +383,11 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("heuristic").GetBoolean());
             Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
-            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
         }
         finally
         {

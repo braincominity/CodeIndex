@@ -521,7 +521,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_ImpactAnalysis_ClassSymbolFallsBackToFileDependencies()
+    public void ToolsCall_ImpactAnalysis_ClassSymbolReturnsHeuristicFileDependencyHints()
     {
         InsertIndexedFile("src/FolderDiffService.cs", "csharp",
             """
@@ -546,16 +546,18 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         var fileImpacts = structured["file_impacts"]!.AsArray();
 
-        Assert.Equal("file_dependencies", structured["impact_mode"]!.GetValue<string>());
-        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
         Assert.Equal("src/App.cs", fileImpacts[0]!["sourcePath"]!.GetValue<string>());
         Assert.Equal("src/FolderDiffService.cs", fileImpacts[0]!["targetPath"]!.GetValue<string>());
         Assert.True(structured["has_class_like_definitions"]!.GetValue<bool>());
-        Assert.Contains("file-level dependency", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Contains("heuristic only", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
-    public void ToolsCall_ImpactAnalysis_ClassCollisionStaysZero()
+    public void ToolsCall_ImpactAnalysis_ClassCollisionReturnsHeuristicHints()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
             """
@@ -586,10 +588,11 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
         Assert.Equal(0, structured["count"]!.GetValue<int>());
-        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
-        Assert.Empty(structured["file_impacts"]!.AsArray());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
     }
 
     [Fact]
