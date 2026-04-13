@@ -1268,6 +1268,82 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_ExcludeTestsIgnoresOutOfScopeDuplicateDefinitions()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("tests/FooServiceTests.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10, excludeTests: true);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(1, analysis.DefinitionFileCount);
+        Assert.Equal(1, analysis.HintCount);
+        Assert.Equal("src/FooService.cs", Assert.Single(analysis.Definitions).Path);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_IgnoresUnsupportedLanguageDuplicates()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/tools.sh", "shell",
+            """
+            FooService() {
+              :
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(1, analysis.DefinitionFileCount);
+        Assert.Equal("src/FooService.cs", Assert.Single(analysis.Definitions).Path);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
     public void ListFiles_ReturnsAllFiles()
     {
         var results = _reader.ListFiles();

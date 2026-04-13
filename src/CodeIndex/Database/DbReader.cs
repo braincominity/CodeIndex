@@ -900,7 +900,7 @@ public partial class DbReader
     public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         var resolvedName = ResolveSymbolName(symbolName, lang);
-        var definitions = ResolveImpactDefinitions(resolvedName, lang);
+        var definitions = ResolveImpactDefinitions(resolvedName, lang, pathPatterns, excludePathPatterns, excludeTests);
         var definitionPaths = definitions
             .Select(d => d.Path)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -979,10 +979,11 @@ public partial class DbReader
         };
     }
 
-    private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang)
+    private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
-        return SearchSymbols(resolvedName, limit: 50, kind: null, lang, pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null, exact: true)
-            .Where(symbol => string.Equals(symbol.Name, resolvedName, StringComparison.OrdinalIgnoreCase))
+        return SearchSymbols(resolvedName, limit: 50, kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
+            .Where(symbol => string.Equals(symbol.Name, resolvedName, StringComparison.OrdinalIgnoreCase)
+                && ReferenceExtractor.SupportsLanguage(symbol.Lang))
             .ToList();
     }
 
