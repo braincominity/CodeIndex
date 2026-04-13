@@ -247,6 +247,25 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void BuildExactZeroHint_NoRelaxedMatch_DoesNotRunSampleQuery()
+    {
+        var sampleInvoked = false;
+
+        var result = QueryCommandRunner.BuildExactZeroHint(
+            shouldProbe: true,
+            anyRelaxedMatch: () => false,
+            relaxedSampleQuery: () =>
+            {
+                sampleInvoked = true;
+                return new List<string> { "should_not_run" };
+            },
+            nameSelector: name => name);
+
+        Assert.Null(result);
+        Assert.False(sampleInvoked);
+    }
+
+    [Fact]
     public void RunDefinition_ExactZeroJson_EmitsExactZeroHintPayload()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero");
@@ -278,6 +297,49 @@ public class QueryCommandRunnerTests
             Assert.Equal(2, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
             Assert.Equal("HandleRequest", json.GetProperty("exact_zero_hint").GetProperty("sample_names")[0].GetString());
             Assert.Equal("drop --exact or use the exact indexed name", json.GetProperty("exact_zero_hint").GetProperty("suggestion").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_ExactZeroJson_CapsRelaxedSampleToFive()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero_cap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void HandleRequest1() { }
+                    public void HandleRequest2() { }
+                    public void HandleRequest3() { }
+                    public void HandleRequest4() { }
+                    public void HandleRequest5() { }
+                    public void HandleRequest6() { }
+                    public void HandleRequest7() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Handle", "--db", dbPath, "--json", "--exact", "--limit", "99"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
+            Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
         }
         finally
         {
