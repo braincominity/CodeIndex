@@ -208,7 +208,8 @@ public partial class McpServer
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content in definitions when available", ["default"] = false },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "ASCII-case-insensitive exact name match across the bundle (definitions, references, callers, callees). Propagates to every sub-query so `Run` no longer pulls in `RunAsync` / `RunImpact`. Same NOCASE limitation as the leaf commands (non-ASCII casing not folded).", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },

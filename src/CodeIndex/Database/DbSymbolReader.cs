@@ -293,9 +293,14 @@ public partial class DbReader
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests);
+        // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
+        // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
+        // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
+        // into references / callers / callees. See codex review of #83.
+        // `exact` は bundle 内のすべての sub-query に伝播させ、leaf コマンドと precision を揃える。
+        var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
         var primaryDefinition = definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
@@ -316,9 +321,9 @@ public partial class DbReader
             GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
-            References = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
-            Callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
-            Callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests),
+            References = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
+            Callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
+            Callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
             GraphTableAvailable = _hasReferencesTable,
         };
     }

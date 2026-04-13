@@ -539,6 +539,29 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_ExactPropagatesToBundledSubQueries()
+    {
+        // The bundled one-round-trip path (`inspect` / MCP `analyze_symbol`) must propagate
+        // `exact` into every sub-query — otherwise the bundle keeps returning RunAsync/RunImpact
+        // spillover even when the caller asked for precision. Codex adversarial review of #83.
+        // bundle 側も `exact` を尊重すること（definitions / references / callers / callees）。
+        InsertIndexedFile("src/auth_v2.py", "python",
+            "def authenticate_v2(user, password):\n    authenticate(user, password)\n    return True\n\n" +
+            "def wrapper(u, p):\n    return authenticate_v2(u, p)\n");
+
+        var exactBundle = _reader.AnalyzeSymbol("authenticate", exact: true);
+        Assert.All(exactBundle.Definitions, d => Assert.Equal("authenticate", d.Name));
+        Assert.All(exactBundle.References, r => Assert.Equal("authenticate", r.SymbolName));
+        Assert.All(exactBundle.Callers, c => Assert.Equal("authenticate", c.CalleeName));
+        // Callees are filtered on container_name, so exact must reject `authenticate_v2` as a container.
+        // callees は container_name で絞るため、authenticate_v2 を含んではいけない。
+        Assert.DoesNotContain(exactBundle.Callees, c => c.CallerName == "authenticate_v2");
+
+        var substringBundle = _reader.AnalyzeSymbol("authenticate", exact: false);
+        Assert.Contains(substringBundle.Definitions, d => d.Name == "authenticate_v2");
+    }
+
+    [Fact]
     public void GraphReaders_ExactPredicatesAreIndexable()
     {
         // Guard: `references / callers / callees --exact` must stay SARGable so SQLite can

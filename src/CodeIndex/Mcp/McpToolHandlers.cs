@@ -552,10 +552,11 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests);
+            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             structured["lang"] = lang;
