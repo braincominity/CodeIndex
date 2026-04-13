@@ -358,7 +358,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+            var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
             if (results.Count == 0)
             {
                 if (options.CountOnly)

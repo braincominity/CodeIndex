@@ -241,6 +241,7 @@ public partial class McpServer
         DateTime? since = null;
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
             since = parsedSince;
+        var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
         // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
         // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
@@ -259,7 +260,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since);
+            var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
