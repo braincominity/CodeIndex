@@ -257,7 +257,7 @@ cdidx symbols --kind class             # all classes
 cdidx symbols --kind function --lang python
 ```
 
-Use `--exact` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact` composes with `--name`, positional names, and all existing filters. (Note: `--exact` on `search` has different semantics — case-sensitive exact substring, FTS5 bypassed.) Case folding is Unicode-aware (NFKC normalization + invariant lowercase), so non-ASCII pairs such as `Ä` / `ä` and fullwidth `Ｒｕｎ` / `Run` collapse correctly. Legacy DBs indexed before #86 silently fall back to ASCII `COLLATE NOCASE` until reindex (`cdidx index .`).
+Use `--exact` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact` composes with `--name`, positional names, and all existing filters. (Note: `--exact` on `search` has different semantics — case-sensitive exact substring, FTS5 bypassed.) The fold is NFKC + invariant-lower: common non-ASCII casing pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, and ligatures collapse correctly. NOT full Unicode CaseFold — edge cases like Turkish `İ`/`i` and Greek final sigma still require exact casing (#96). Legacy DBs indexed before #86 silently fall back to ASCII `COLLATE NOCASE` until reindex (`cdidx index . --rebuild`); use `status --json` → `fold_ready` to detect this.
 
 Output:
 
@@ -385,7 +385,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
 | `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
-| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: case-sensitive exact substring (no FTS5). Symbol/graph commands (and `inspect` / MCP `analyze_symbol` — propagates to every bundled sub-query): Unicode-aware exact name match via NFKC + invariant-lower fold (so `Ä` / `ä`, `Ｒｕｎ` / `Run` collapse). Falls back to ASCII `COLLATE NOCASE` on legacy DBs that have not been reindexed since #86. Pairs cleanly with a resolved candidate list from a prior `map` / `search` call so `Run` no longer also pulls in `RunAsync`, `RunImpact`, etc. |
+| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: case-sensitive exact substring (no FTS5). Symbol/graph commands (and `inspect` / MCP `analyze_symbol` — propagates to every bundled sub-query): NFKC + invariant-lower fold for exact name match (so `Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures collapse). NOT full Unicode CaseFold — a few edge cases like Turkish `İ`/`i` and Greek final sigma still require exact casing (tracked in #96). Falls back to ASCII `COLLATE NOCASE` on legacy DBs that have not been reindexed since #86; `status --json` exposes `fold_ready` so AI clients can tell which path is active. |
 | `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/struct/interface/enum/property/event/delegate/namespace/import) |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files` | Return only the result count (with `--json`: `{"count": N, "files": M}`) |
@@ -1117,7 +1117,7 @@ cdidx symbols --kind class             # すべてのクラス
 cdidx symbols --kind function --lang python
 ```
 
-`--exact` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact` は `--name`、positional 名、他の全フィルタと組み合わせ可能。（注: `search` の `--exact` は意味が異なる — 大文字小文字を区別する完全部分一致で、FTS5 はバイパスされる。）大文字小文字の畳み込みは Unicode 対応（NFKC 正規化 + invariant lowercase）で、`Ä` / `ä` や全角 `Ｒｕｎ` / `Run` のような非 ASCII の casing 差分も正しく一致する。#86 より前にインデックスした旧 DB は ASCII `COLLATE NOCASE` に黙ってフォールバックするため、Unicode fold が必要なら `cdidx index .` で再インデックスする。
+`--exact` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact` は `--name`、positional 名、他の全フィルタと組み合わせ可能。（注: `search` の `--exact` は意味が異なる — 大文字小文字を区別する完全部分一致で、FTS5 はバイパスされる。）fold は NFKC 正規化 + invariant lowercase で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字などよくある非 ASCII の casing は正しく一致する。ただし完全な Unicode CaseFold ではない — トルコ語の `İ`/`i` やギリシャ語 final sigma などのエッジケースは依然 exact casing が必要（#96）。#86 より前にインデックスした旧 DB は ASCII `COLLATE NOCASE` に黙ってフォールバックするため、Unicode fold が必要なら `cdidx index . --rebuild` で再インデックスする。`status --json` の `fold_ready` で現在の経路を判定可能。
 
 出力:
 
@@ -1245,7 +1245,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
-| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: 大文字小文字を区別する完全部分一致（FTS5 バイパス）。symbol / graph 系コマンドと `inspect` / MCP `analyze_symbol`（bundle 内の全 sub-query に伝播）: NFKC + invariant-lower による Unicode 対応の完全一致（`Ä` / `ä` や全角 `Ｒｕｎ` / `Run` も畳み込まれる）。#86 より前にインデックスした旧 DB は ASCII `COLLATE NOCASE` に fallback。`map` / `search` 等で解決済みの候補名をそのまま渡せば `Run` が `RunAsync` / `RunImpact` 等に広がらない。 |
+| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: 大文字小文字を区別する完全部分一致（FTS5 バイパス）。symbol / graph 系コマンドと `inspect` / MCP `analyze_symbol`（bundle 内の全 sub-query に伝播）: NFKC + invariant-lower による完全一致（`Ä` / `ä` や全角 `Ｒｕｎ` / `Run`、合字は畳み込まれる）。完全な Unicode CaseFold ではなく、トルコ語の `İ`/`i` やギリシャ語 final sigma は #96 で対応予定。#86 より前にインデックスした旧 DB は ASCII `COLLATE NOCASE` に fallback（`status --json` の `fold_ready` で判定）。 |
 | `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/struct/interface/enum/property/event/delegate/namespace/import） |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files` | 結果のカウントだけを返す（`--json` 併用: `{"count": N, "files": M}`） |

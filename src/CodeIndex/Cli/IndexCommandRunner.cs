@@ -411,20 +411,21 @@ public static class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        var foldReadyAfter = false;
         if (errors == 0 && canStampReadiness)
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
-            // Update mode: ClearReadyFlags() wiped all 3 bits at the start, so fold-ready
-            // must be explicitly restored. `canStampReadiness` already requires the DB was
-            // at `CurrentSchemaVersion` (which includes FoldReadyFlag) before the update —
-            // i.e. every pre-existing row already had name_folded populated. Rows the update
-            // just rewrote also have name_folded populated (DbWriter does it on every insert).
-            // So the fold invariant still holds; restamp unconditionally when canStampReadiness.
-            // As a defensive check, also verify no NULL folded columns leaked in. Codex #86 review.
-            // update mode は canStampReadiness なら fold も復元する。Clear で落ちた bit を戻す。
-            if (writer.AllFoldedColumnsBackfilled())
-                writer.MarkFoldReady();
+            // Update mode: restamp FoldReady without a whole-index backfill scan. The
+            // invariant already holds here — `canStampReadiness` requires the DB was at
+            // `CurrentSchemaVersion` (which includes FoldReadyFlag), so every pre-existing
+            // row was fold-populated before ClearReadyFlags() wiped the bits, and every row
+            // the update just rewrote is also fold-populated (writer populates name_folded
+            // on every insert). Running `AllFoldedColumnsBackfilled()` here would turn an
+            // `--files a.cs` refresh into O(total symbols + references) — codex #86 review.
+            // update mode: invariant は既に保たれているので、全表 scan を走らせない（O(N)回避）。
+            writer.MarkFoldReady();
+            foldReadyAfter = true;
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -446,6 +447,10 @@ public static class IndexCommandRunner
                     skipped,
                     errors,
                 },
+                // #86 codex review: expose fold-readiness so AI clients can decide whether
+                // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
+                // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
+                fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));
@@ -610,6 +615,7 @@ public static class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        var foldReadyAfter = false;
         if (errors == 0 && canStampReadiness)
         {
             writer.MarkGraphReady();
@@ -626,6 +632,7 @@ public static class IndexCommandRunner
             if (writer.AllFoldedColumnsBackfilled())
             {
                 writer.MarkFoldReady();
+                foldReadyAfter = true;
             }
             else if (!options.Json)
             {
@@ -652,6 +659,10 @@ public static class IndexCommandRunner
                     files_purged = purged,
                     errors,
                 },
+                // #86 codex review: expose fold-readiness so AI clients can decide whether
+                // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
+                // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
+                fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));

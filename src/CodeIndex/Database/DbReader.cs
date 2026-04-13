@@ -761,6 +761,7 @@ public partial class DbReader
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesTable,
+            FoldReady = _foldReady,
         };
     }
 

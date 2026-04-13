@@ -1021,6 +1021,7 @@ public partial class McpServer
         // path is no longer accurate. Bits are only stamped when every file committed without
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
+        var foldReadyAfter = false;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1031,7 +1032,10 @@ public partial class McpServer
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
             if (writer.AllFoldedColumnsBackfilled())
+            {
                 writer.MarkFoldReady();
+                foldReadyAfter = true;
+            }
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
@@ -1049,9 +1053,17 @@ public partial class McpServer
                 ["skipped"] = skipped,
                 ["purged"] = purged,
                 ["errors"] = errors
-            }
+            },
+            // #86 codex review: AI clients use this to tell whether --exact will use the
+            // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
+            // run, the client should request `cdidx index . --rebuild` to upgrade the DB.
+            ["fold_ready"] = foldReadyAfter
         };
-        return CreateToolResult(id, "Indexing complete.", structured);
+        return CreateToolResult(id,
+            errors == 0 && !foldReadyAfter
+                ? "Indexing complete. Note: --exact Unicode fold path not active (legacy rows without name_folded remain). Run a full rebuild to upgrade."
+                : "Indexing complete.",
+            structured);
     }
 
     /// <summary>
