@@ -981,7 +981,19 @@ public static class QueryCommandRunner
                         degraded = !reader._hasReferencesTable
                     }, jsonOptions) : "0");
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("unused", json: true, graphAvailable: false, jsonOptions);
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(new
+                    {
+                        count = 0,
+                        graph_supported = graphSupported,
+                        graph_support_reason = graphSupportReason,
+                        returned_bucket_counts = new Dictionary<string, int>(),
+                        symbols = Array.Empty<object>(),
+                        graph_table_available = false,
+                        degraded = true,
+                        note = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative."
+                    }, jsonOptions));
+                }
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No unused symbols found.");

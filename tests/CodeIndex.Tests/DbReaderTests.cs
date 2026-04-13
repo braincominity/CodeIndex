@@ -1763,6 +1763,113 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_SmallLimitIncludesReflectionAttributedSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_diversified_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                    public void Run() { Hidden(); }
+                    private void Hidden() { }
+                    internal void InternalOnly() { }
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public void Run() { Hidden(); }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 4, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_diversified_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], unused.Select(symbol => symbol.Name).ToArray());
+        Assert.Equal(["likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect"], unused.Select(symbol => symbol.UnusedBucket).ToArray());
+    }
+
+    [Fact]
     public void GetUnusedSymbols_NullStartEndLine_DoesNotCrash()
     {
         // Regression: #49 — legacy indexes can have NULL start_line/end_line on symbol rows.

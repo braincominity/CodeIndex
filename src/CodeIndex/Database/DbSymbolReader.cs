@@ -551,16 +551,7 @@ public partial class DbReader
                 AND s.kind = 'property'
                 AND {hasConfigContextSql}
             )";
-        var unusedBucketOrderSql = $@"
-            CASE
-                WHEN {isReflectionOrConfigSuspectSql} THEN 3
-                WHEN {isPublicOrExportedSql} THEN 2
-                WHEN {visibilitySql} IN ('private', 'fileprivate') THEN 0
-                ELSE 1
-            END";
-
         var sql = $@"
-            WITH unused_candidates AS (
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                    {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
@@ -569,7 +560,6 @@ public partial class DbReader
                    {GetSymbolColumnSql("return_type")} AS return_type,
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
                    {GetSymbolColumnSql("container_name")} AS container_name,
-                   {unusedBucketOrderSql} AS unused_bucket_order,
                    CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
                    CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect
             FROM symbols s
@@ -594,28 +584,10 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += @"
-            ),
-            ranked_unused AS (
-                SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
-                       return_type, container_kind, container_name, is_public_or_exported,
-                       is_reflection_or_config_suspect, unused_bucket_order,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY unused_bucket_order
-                           ORDER BY path, line, name
-                       ) AS bucket_row_number
-                FROM unused_candidates
-            )
-            SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
-                   return_type, container_kind, container_name, is_public_or_exported,
-                   is_reflection_or_config_suspect
-            FROM ranked_unused
-            ORDER BY bucket_row_number, unused_bucket_order, path, line, name
-            LIMIT @limit";
+        sql += " ORDER BY f.path, s.line, s.name";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         else
@@ -663,7 +635,40 @@ public partial class DbReader
                 UnusedReason = classification.Reason,
             });
         }
-        return results;
+        return DiversifyUnusedResults(results, limit);
+    }
+
+    private static List<UnusedSymbolResult> DiversifyUnusedResults(List<UnusedSymbolResult> results, int limit)
+    {
+        if (results.Count == 0 || limit <= 0)
+            return results;
+
+        var targetCount = Math.Min(limit, results.Count);
+        var buckets = OrderedUnusedBuckets
+            .ToDictionary(
+                bucket => bucket,
+                bucket => new Queue<UnusedSymbolResult>(results.Where(result => result.UnusedBucket == bucket)),
+                StringComparer.Ordinal);
+
+        var limited = new List<UnusedSymbolResult>(targetCount);
+        bool advanced;
+        do
+        {
+            advanced = false;
+            foreach (var bucket in OrderedUnusedBuckets)
+            {
+                var queue = buckets[bucket];
+                if (queue.Count == 0)
+                    continue;
+
+                limited.Add(queue.Dequeue());
+                advanced = true;
+                if (limited.Count >= targetCount)
+                    return limited;
+            }
+        } while (advanced);
+
+        return limited;
     }
 
     private bool HasReflectionAttributeContext(string path, int startLine)
@@ -725,5 +730,13 @@ public partial class DbReader
         return string.Equals(visibility, "private", StringComparison.OrdinalIgnoreCase)
             || string.Equals(visibility, "fileprivate", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static readonly string[] OrderedUnusedBuckets =
+    [
+        UnusedBucketLikelyPrivate,
+        UnusedBucketMaybeNonPublic,
+        UnusedBucketPublicOrExported,
+        UnusedBucketReflectionOrConfig,
+    ];
 
 }

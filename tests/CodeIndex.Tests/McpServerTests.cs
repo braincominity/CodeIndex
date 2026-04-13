@@ -1123,6 +1123,117 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_DiversifiesReflectionSuspectBeforeLimit()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_diversified_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 12,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                    public void Run() { Hidden(); }
+                    private void Hidden() { }
+                    internal void InternalOnly() { }
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public void Run() { Hidden(); }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_diversified_unused_fixture.cs","limit":4}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var symbols = response["result"]!["structuredContent"]!["symbols"]!.AsArray();
+        Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], symbols.Select(symbol => symbol!["name"]!.GetValue<string>()).ToArray());
+        Assert.Equal("reflection_or_config_suspect", symbols[3]!["unusedBucket"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_UnknownTool_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}""")!;

@@ -313,6 +313,34 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonDiversifiesReflectionSuspectBeforeLimit()
+    {
+        var (projectRoot, dbPath) = CreateReflectionDiversifiedUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "4"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonIncludesGraphSupportMetadataForUnsupportedLanguage()
     {
         var (projectRoot, dbPath) = CreateUnsupportedLanguageUnusedFixtureDb();
@@ -330,6 +358,38 @@ public class QueryCommandRunnerTests
             Assert.False(json.GetProperty("graph_supported").GetBoolean());
             Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
             Assert.Equal("helper", json.GetProperty("symbols")[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMissingGraphTable_UsesUnusedSchema()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.TryGetProperty("symbols", out var symbols));
+            Assert.Equal(0, symbols.GetArrayLength());
+            Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
+            Assert.Empty(bucketCounts.EnumerateObject());
+            Assert.False(json.TryGetProperty("unused", out _));
         }
         finally
         {
@@ -1138,6 +1198,114 @@ public class QueryCommandRunnerTests
                 EndLine = 5,
                 Signature = "public string FullName { get; set; } = string.Empty;",
                 Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateReflectionDiversifiedUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_diversified");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_diversified_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 12,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                    public void Run() { Hidden(); }
+                    private void Hidden() { }
+                    internal void InternalOnly() { }
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public void Run() { Hidden(); }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
                 ContainerKind = "class",
                 ContainerName = "UserDto",
             },
