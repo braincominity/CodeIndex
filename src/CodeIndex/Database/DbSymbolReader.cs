@@ -319,6 +319,17 @@ public partial class DbReader
         var graphLanguage = lang ?? file?.Lang;
         bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
         var exactSignal = exact ? GetAnalyzeSymbolExactQuerySignal() : ((bool ExactIndexAvailable, string? DegradedReason)?)null;
+        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
+            ? SearchSymbols(query, Math.Max(limit, 5), kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: false)
+            : null;
+        var exactZeroHint = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
+            ? ExactZeroHintResult.FromRelaxedMatches(
+                relaxedSymbols!.Count,
+                relaxedSymbols.Select(result => result.Name))
+            : null;
         var nearbySymbols = primaryDefinition != null
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
@@ -334,10 +345,11 @@ public partial class DbReader
             GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
-            References = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
-            Callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
-            Callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
+            References = references,
+            Callers = callers,
+            Callees = callees,
             GraphTableAvailable = _hasReferencesTable,
+            ExactZeroHint = exactZeroHint,
             ExactIndexAvailable = exactSignal?.ExactIndexAvailable,
             DegradedReason = exactSignal?.DegradedReason,
         };

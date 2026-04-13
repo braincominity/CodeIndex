@@ -933,6 +933,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_ExactZeroHint_OnlyWhenWholeBundleIsEmpty()
+    {
+        InsertIndexedFile("src/handlers.cs", "csharp",
+            """
+            public class Handler
+            {
+                public void HandleRequest() { }
+                public void HandleRequestAsync() { HandleRequest(); }
+            }
+            """);
+
+        var exactMiss = _reader.AnalyzeSymbol("HandleRe", exact: true);
+        Assert.NotNull(exactMiss.ExactZeroHint);
+        Assert.Equal(2, exactMiss.ExactZeroHint!.RelaxedCount);
+        Assert.Contains("HandleRequest", exactMiss.ExactZeroHint.SampleNames);
+        Assert.Contains("HandleRequestAsync", exactMiss.ExactZeroHint.SampleNames);
+
+        var exactHit = _reader.AnalyzeSymbol("HandleRequest", exact: true);
+        Assert.Null(exactHit.ExactZeroHint);
+    }
+
+    [Fact]
     public void GraphReaders_ExactPredicatesAreIndexable()
     {
         // Guard: `references / callers / callees --exact` must stay SARGable so SQLite can

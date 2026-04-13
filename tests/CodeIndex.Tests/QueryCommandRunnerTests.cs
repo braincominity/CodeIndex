@@ -372,6 +372,44 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ExactZeroHumanOutput_PrintsExactZeroHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_exact_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class App
+                {
+                    public void HandleRequest() { }
+                    public void HandleRequestAsync() { HandleRequest(); }
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["HandleRe", "--db", dbPath, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("--exact found 0 matches, but substring matching would return 2", stderr);
+            Assert.Contains("`HandleRequest`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactZeroHumanOutput_PrintsExactZeroHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_refs_exact_zero");
