@@ -418,6 +418,55 @@ public partial class DbReader
         return results;
     }
 
+    public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT 1
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE 1=1";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (query != null)
+        {
+            if (exact && _foldReady)
+                innerSql += " AND r.symbol_name_folded = @query";
+            else if (exact)
+                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            else
+                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        }
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        innerSql += " LIMIT @limit";
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        if (query != null)
+        {
+            var value = !exact
+                ? $"%{EscapeLikeQuery(query)}%"
+                : _foldReady
+                    ? NameFold.Fold(query) ?? query
+                    : query;
+            cmd.Parameters.AddWithValue("@query", value);
+        }
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : Convert.ToInt32(raw);
+    }
+
     /// <summary>
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
@@ -485,6 +534,51 @@ public partial class DbReader
             });
         }
         return results;
+    }
+
+    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT 1
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        else
+            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+        if (exact && _foldReady)
+            innerSql += " AND r.symbol_name_folded = @query";
+        else if (exact)
+            innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+        else
+            innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name LIMIT @limit";
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
     /// <summary>
@@ -555,6 +649,51 @@ public partial class DbReader
             });
         }
         return results;
+    }
+
+    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT 1
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        else
+            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+        if (exact && _foldReady)
+            innerSql += " AND r.container_name_folded = @query";
+        else if (exact)
+            innerSql += " AND r.container_name = @query COLLATE NOCASE";
+        else
+            innerSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit";
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
     /// <summary>

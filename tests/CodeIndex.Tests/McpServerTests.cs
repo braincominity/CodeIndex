@@ -692,6 +692,54 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Definition_ExactZeroHint_RespectsRequestedLimitForRelaxedCount()
+    {
+        InsertIndexedFile(
+            "src/extra_limit.cs",
+            "csharp",
+            """
+            public class ExtraLimit
+            {
+                public void HandleRequest1() { }
+                public void HandleRequest2() { }
+                public void HandleRequest3() { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"Handle","exact":true,"limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["exact_zero_hint"]!["relaxed_count"]!.GetValue<int>());
+        Assert.Single(structured["exact_zero_hint"]!["sample_names"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_MultiNameExactZeroHint_OmitsRelaxedCountButReturnsSamples()
+    {
+        InsertIndexedFile(
+            "src/extra_multi.cs",
+            "csharp",
+            """
+            public class ExtraMulti
+            {
+                public void AlphaWorker() { }
+                public void BetaWorker() { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"names":["Alpha","Beta"],"exact":true,"limit":999}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.NotNull(structured["exact_zero_hint"]);
+        Assert.Null(structured["exact_zero_hint"]!["relaxed_count"]);
+        Assert.Contains("AlphaWorker", structured["exact_zero_hint"]!["sample_names"]!.AsArray().Select(node => node!?.GetValue<string>()));
+    }
+
+    [Fact]
     public void ToolsCall_Files_ReturnsResults()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{}}}""")!;
@@ -921,6 +969,179 @@ public class McpServerTests : IDisposable
         verifyDb.TryMigrateForRead();
         var reader = new DbReader(verifyDb.Connection);
         Assert.True(reader._foldReady);
+    }
+
+    [Fact]
+    public void ToolsCall_Index_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_version_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_version_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Straße() { } }");
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(firstIndex)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = 'straße' WHERE name = 'Straße';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(Path.Combine(fixtureDir, "new.cs"), "public class NewFile { }");
+
+            var secondIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 2,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var secondResponse = server.HandleMessage(secondIndex)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
+            Assert.Equal("stale_fold_key_version", secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]!.GetValue<string>());
+            var text = secondResponse["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("older fold-key version", text);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RestampsFoldReadyWhenFoldKeyVersionMismatchesButAllRowsAreRewritten()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_version_rewrite_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_version_rewrite_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "intl.py"), "def Straße():\n    pass\n");
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(firstIndex)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = 'straße' WHERE name = 'Straße';
+                    UPDATE files SET modified = '2000-01-01T00:00:00.0000000Z' WHERE path = 'intl.py';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var rewrittenPath = Path.Combine(fixtureDir, "intl.py");
+            File.WriteAllText(rewrittenPath, "def Straße():\n    return 1\n");
+
+            var secondIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 2,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var secondResponse = server.HandleMessage(secondIndex)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
+            Assert.Null(secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.NotEqual(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.Equal(NameFold.Version.ToString(), storedVersion);
+
+            var reader = new DbReader(verify);
+            Assert.Single(reader.SearchSymbols(new[] { "STRASSE" }, limit: 10, exact: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
     }
 
     [Fact]

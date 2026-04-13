@@ -71,10 +71,11 @@ public partial class McpServer
 
         payload["exact_zero_hint"] = new JsonObject
         {
-            ["relaxed_count"] = exactZeroHint.RelaxedCount,
             ["sample_names"] = sampleNames,
             ["suggestion"] = exactZeroHint.Suggestion,
         };
+        if (exactZeroHint.RelaxedCount.HasValue)
+            payload["exact_zero_hint"]!["relaxed_count"] = exactZeroHint.RelaxedCount.Value;
     }
 
     /// <summary>
@@ -264,10 +265,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
-            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
-                exact && effectiveQueries != null && effectiveQueries.Count > 0,
-                () => reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                r => r.Name);
+            var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
+            var exactZeroHint = multiNameExactHint
+                ? QueryCommandRunner.BuildExactZeroHint(
+                    exact,
+                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name)
+                : QueryCommandRunner.BuildExactZeroHint(
+                    exact && effectiveQueries != null && effectiveQueries.Count > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name);
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
@@ -328,7 +338,9 @@ public partial class McpServer
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
-                () => reader.SearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
+                () => reader.CountSearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.SearchSymbols(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
                 r => r.Name);
             var payload = new JsonObject
             {
@@ -374,7 +386,9 @@ public partial class McpServer
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -425,7 +439,9 @@ public partial class McpServer
             var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CalleeName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -476,7 +492,9 @@ public partial class McpServer
             var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CallerName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -1101,6 +1119,7 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var foldReadyAfter = false;
+        string? foldReadyReason = null;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1110,14 +1129,28 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
+            var backfillReady = writer.AllFoldedColumnsBackfilled();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var canRestampExistingFoldTrust = priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint;
-            if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
+            var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
+            var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
+            var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
+            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
+            }
+            else if (!backfillReady)
+            {
+                foldReadyReason = "missing_fold_backfill";
+            }
+            else if (!foldVersionMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_version";
+            }
+            else if (!foldFingerprintMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_fingerprint";
             }
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -1139,12 +1172,18 @@ public partial class McpServer
             },
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
-            // run, prefer `backfill_fold`; full rebuild is the heavier fallback.
-            ["fold_ready"] = foldReadyAfter
+            ["fold_ready"] = foldReadyAfter,
+            ["fold_ready_reason"] = foldReadyReason
         };
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
-                ? "Indexing complete. Note: --exact Unicode fold path not active (legacy rows without name_folded remain). Run backfill_fold to upgrade without reparsing files, or do a full rebuild."
+                ? foldReadyReason switch
+                {
+                    "stale_fold_key_version" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "stale_fold_key_fingerprint" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry folded keys generated under an older runtime fingerprint. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "missing_fold_backfill" => "Indexing complete. Note: --exact Unicode fold path not active because legacy rows without name_folded remain. Run backfill_fold to upgrade without reparsing files, or do a full rebuild.",
+                    _ => "Indexing complete. Note: --exact Unicode fold path not active."
+                }
                 : "Indexing complete.",
             structured);
     }

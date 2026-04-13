@@ -65,8 +65,9 @@ public class DefinitionResult : SymbolResult
 
 public class ExactZeroHintResult
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RelaxedCount { get; set; }
     public const string DefaultSuggestion = "drop --exact or use the exact indexed name";
-    public int RelaxedCount { get; set; }
     public List<string> SampleNames { get; set; } = [];
     public string Suggestion { get; set; } = DefaultSuggestion;
 
