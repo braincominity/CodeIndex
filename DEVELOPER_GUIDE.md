@@ -366,7 +366,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, arrow, methods | class | -- | -- | -- | -- | -- | import...from | yes |
 | TypeScript | function, arrow, methods | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
-| C# | methods, ctors, operators, indexers, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
+| C# | methods, ctors, explicit-interface impls (guards named-argument labels), operators, indexers, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
 | Go | func, methods | type alias | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
 | Java | methods, static final, enum members | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
@@ -1286,7 +1286,7 @@ LIMIT 20;
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, アロー, メソッド | class | -- | -- | -- | -- | -- | import...from | yes |
 | TypeScript | function, アロー, メソッド | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
-| C# | メソッド, コンストラクタ, 演算子, インデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
+| C# | メソッド, コンストラクタ, explicit-interface 実装（named-argument label は除外）, 演算子, インデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
 | Go | func, メソッド | 型エイリアス | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
 | Java | メソッド, static final, enum メンバー | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
