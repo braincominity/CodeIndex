@@ -657,6 +657,36 @@ public class McpServerTests : IDisposable
     }
 
     [Theory]
+    [InlineData("search", """{"query":"nonexistent_xyz_123"}""", "results")]
+    [InlineData("files", """{"query":"nonexistent_xyz_123"}""", "results")]
+    public void ToolsCall_ZeroResults_EmptyIndexIncludesNullFreshnessTimestamp(string toolName, string argsJson, string resultsKey)
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Equal(0, structured["indexed_file_count"]!.GetValue<long>());
+            Assert.True(structured.AsObject().ContainsKey("indexed_at"));
+            Assert.Null(structured["indexed_at"]);
+            Assert.Empty(structured[resultsKey]!.AsArray());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Theory]
     [InlineData("definition", """{"query":"Ru","exact":true}""", "Run")]
     [InlineData("symbols", """{"query":"Ru","exact":true}""", "Run")]
     [InlineData("references", """{"query":"Ru","exact":true}""", "Run")]
