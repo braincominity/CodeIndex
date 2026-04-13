@@ -10,8 +10,10 @@ namespace CodeIndex.Database;
 public partial class DbReader
 {
     private readonly SqliteConnection _conn;
+    private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
+    private readonly HashSet<string> _referenceIndexes;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     // #86: True when every symbols / symbol_references row has name_folded populated and
@@ -87,9 +89,10 @@ public partial class DbReader
             WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
             ELSE 1
         END";
-    public DbReader(SqliteConnection connection)
+    public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
+        _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
         int userVersion;
@@ -101,6 +104,7 @@ public partial class DbReader
         }
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
+        _referenceIndexes = LoadIndexes("symbol_references");
         // #86 third-pass: require BOTH the FoldReady bit AND a matching NameFold.Version in
         // codeindex_meta. Without the version guard, a future NameFold.Fold semantic change
         // (e.g. #96 true Unicode CaseFold) would silently mismatch against stale stored keys.
@@ -119,6 +123,23 @@ public partial class DbReader
         // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
         // get stamped — degradation is safer than silent false-clean zeroes.
         // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+    }
+
+    private HashSet<string> LoadIndexes(string tableName)
+    {
+        var indexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!HasTable(tableName))
+            return indexes;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA index_list('{tableName.Replace("'", "''")}')";
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (!reader.IsDBNull(1))
+                indexes.Add(reader.GetString(1));
+        }
+        return indexes;
     }
 
     private static int ParseFoldVersion(SqliteConnection conn)
@@ -155,6 +176,67 @@ public partial class DbReader
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=@name";
         cmd.Parameters.AddWithValue("@name", tableName);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private bool HasReferenceIndex(string indexName) => _referenceIndexes.Contains(indexName);
+
+    private bool SymbolNameExactGraphIndexAvailable =>
+        _foldReady
+            ? HasReferenceIndex("idx_symbol_refs_symbol_name_folded")
+            : HasReferenceIndex("idx_symbol_refs_name_nocase");
+
+    private bool ContainerNameExactGraphIndexAvailable =>
+        _foldReady
+            ? HasReferenceIndex("idx_symbol_refs_container_name_folded")
+            : HasReferenceIndex("idx_symbol_refs_container_nocase");
+
+    private string BuildExactGraphIndexReason(IEnumerable<string> missingIndexes)
+    {
+        var missing = missingIndexes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (missing.Count == 0)
+            return string.Empty;
+
+        var scope = _isReadOnly ? "read-only legacy index" : "legacy index";
+        return missing.Count == 1
+            ? $"{missing[0]} missing on {scope}"
+            : $"{string.Join(", ", missing)} missing on {scope}";
+    }
+
+    private (bool ExactIndexAvailable, string? DegradedReason) BuildExactGraphSignal(bool available, params string[] missingIndexes)
+    {
+        if (!_hasReferencesTable)
+            return (false, "symbol_references table missing in this index");
+        if (available)
+            return (true, null);
+        return (false, BuildExactGraphIndexReason(missingIndexes));
+    }
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetReferencesExactQuerySignal() =>
+        BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
+            _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetCallersExactQuerySignal() =>
+        BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
+            _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetCalleesExactQuerySignal() =>
+        BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
+            _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetAnalyzeSymbolExactQuerySignal()
+    {
+        if (!_hasReferencesTable)
+            return (false, "symbol_references table missing in this index");
+
+        var missing = new List<string>();
+        if (!SymbolNameExactGraphIndexAvailable)
+            missing.Add(_foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+        if (!ContainerNameExactGraphIndexAvailable)
+            missing.Add(_foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
+
+        return missing.Count == 0
+            ? (true, null)
+            : (false, BuildExactGraphIndexReason(missing));
     }
 
     internal static string EscapeLikeQuery(string input)
@@ -273,7 +355,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -294,6 +376,8 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@rankingQuery", "");
             cmd.Parameters.AddWithValue("@rankingQueryPrefix", "%");
         }
+        cmd.Parameters.AddWithValue("@preferExactCase", exact && query != null ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", exact && query != null ? query : string.Empty);
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -351,7 +435,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -362,6 +446,8 @@ public partial class DbReader
         else
             callersQueryParam = query;
         cmd.Parameters.AddWithValue("@query", callersQueryParam);
+        cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -418,7 +504,7 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -429,6 +515,8 @@ public partial class DbReader
         else
             calleesQueryParam = query;
         cmd.Parameters.AddWithValue("@query", calleesQueryParam);
+        cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);

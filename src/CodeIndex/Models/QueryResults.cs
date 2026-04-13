@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CodeIndex.Database;
 
 // Result DTOs for query operations / クエリ操作用の結果DTO
@@ -59,6 +61,13 @@ public class DefinitionResult : SymbolResult
     public string Content { get; set; } = string.Empty;
     public string? BodyContent { get; set; }
     public int? Complexity { get; set; }
+}
+
+public class ExactZeroHintResult
+{
+    public int RelaxedCount { get; set; }
+    public List<string> SampleNames { get; set; } = [];
+    public string Suggestion { get; set; } = string.Empty;
 }
 
 public class ReferenceResult
@@ -242,6 +251,16 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    /// <summary>
+    /// True when the active `--exact` graph predicates can use their supporting indexes.
+    /// False means the query still returns correct hits, but may be slow on a legacy DB
+    /// missing the relevant NOCASE / folded graph indexes.
+    /// `--exact` の graph predicate が対応 index を使えるか。false でも結果は正しいが遅くなりうる。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ExactIndexAvailable { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DegradedReason { get; set; }
 }
 
 /// <summary>

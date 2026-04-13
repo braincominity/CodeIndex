@@ -230,7 +230,7 @@ public partial class McpServer
 
         using var db = new DbContext(_dbPath);
         db.TryMigrateForRead();
-        var reader = new DbReader(db.Connection);
+        var reader = new DbReader(db.Connection, db.IsReadOnly);
         return action(reader);
     }
 

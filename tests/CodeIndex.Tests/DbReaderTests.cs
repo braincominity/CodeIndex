@@ -362,6 +362,39 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_ExactPrefersExactCaseOverFoldSibling()
+    {
+        InsertIndexedFile("src/a_case.py", "python",
+            "def apiTwin():\n    return authenticate('a', 'b')\n");
+        InsertIndexedFile("tests/z_case.py", "python",
+            "def ApiTwin():\n    return authenticate('a', 'b')\n");
+
+        var symbols = _reader.SearchSymbols(new[] { "ApiTwin" }, limit: 10, exact: true)
+            .Where(r => r.Name is "ApiTwin" or "apiTwin")
+            .Select(r => r.Name)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, symbols);
+
+        var definitions = _reader.GetDefinitions("ApiTwin", limit: 10, exact: true)
+            .Where(r => r.Name is "ApiTwin" or "apiTwin")
+            .Select(r => r.Name)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, definitions);
+
+        var topSymbol = Assert.Single(_reader.SearchSymbols(new[] { "ApiTwin" }, limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topSymbol.Name);
+        Assert.Equal("tests/z_case.py", topSymbol.Path);
+
+        var topDefinition = Assert.Single(_reader.GetDefinitions("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topDefinition.Name);
+        Assert.Equal("tests/z_case.py", topDefinition.Path);
+    }
+
+    [Fact]
     public void AllFoldedColumnsBackfilled_DetectsLegacyRowsWithNullFoldedValues()
     {
         // Regression for codex #86 review: the upgrade path must not stamp FoldReady when
@@ -668,6 +701,53 @@ public class DbReaderTests : IDisposable
         // Case-insensitive equality across all three.
         Assert.Single(_reader.SearchReferences("AUTHENTICATE", exact: true));
         Assert.Single(_reader.GetCallers("AUTHENTICATE", exact: true));
+    }
+
+    [Fact]
+    public void GraphReaders_ExactPrefersExactCaseOverFoldSibling()
+    {
+        InsertIndexedFile("src/a_case.py", "python",
+            "def apiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
+            "def lower_wrapper():\n    return apiTwin()\n");
+        InsertIndexedFile("tests/z_case.py", "python",
+            "def ApiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
+            "def upper_wrapper():\n    return ApiTwin()\n");
+
+        var references = _reader.SearchReferences("ApiTwin", exact: true)
+            .Where(r => r.SymbolName is "ApiTwin" or "apiTwin")
+            .Select(r => r.SymbolName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, references);
+
+        var callers = _reader.GetCallers("ApiTwin", exact: true)
+            .Where(r => r.CalleeName is "ApiTwin" or "apiTwin")
+            .Select(r => r.CalleeName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, callers);
+
+        var callees = _reader.GetCallees("ApiTwin", exact: true)
+            .Where(r => r.CallerName is "ApiTwin" or "apiTwin")
+            .Select(r => r.CallerName)
+            .Distinct()
+            .Take(2)
+            .ToList();
+        Assert.Equal(new[] { "ApiTwin", "apiTwin" }, callees);
+
+        var topReference = Assert.Single(_reader.SearchReferences("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topReference.SymbolName);
+        Assert.Equal("tests/z_case.py", topReference.Path);
+
+        var topCaller = Assert.Single(_reader.GetCallers("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCaller.CalleeName);
+        Assert.Equal("tests/z_case.py", topCaller.Path);
+
+        var topCallee = Assert.Single(_reader.GetCallees("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCallee.CallerName);
+        Assert.Equal("tests/z_case.py", topCallee.Path);
     }
 
     [Fact]

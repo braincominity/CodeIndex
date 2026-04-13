@@ -4,6 +4,7 @@ using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -458,6 +459,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_ExactOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_ReturnsCallerSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -503,6 +518,36 @@ public class McpServerTests : IDisposable
         Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_IncludesCombinedExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_container_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_NonExactOnReadOnlyLegacyDb_OmitsExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run"}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Null(structured["exactIndexAvailable"]);
+        Assert.Null(structured["degradedReason"]);
     }
 
     [Fact]
@@ -586,6 +631,41 @@ public class McpServerTests : IDisposable
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0, $"{toolName} should include indexed_file_count");
         Assert.NotNull(structured["indexed_at"]);
+    }
+
+    [Theory]
+    [InlineData("definition", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("symbols", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("references", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("callers", """{"query":"Ru","exact":true}""", "Run")]
+    [InlineData("callees", """{"query":"Runn","exact":true}""", "Runner")]
+    public void ToolsCall_ExactZeroResults_IncludeExactZeroHint(string toolName, string argsJson, string expectedSampleName)
+    {
+        InsertIndexedFile(
+            "src/extra.cs",
+            "csharp",
+            """
+            public class Extra
+            {
+                public void Runner()
+                {
+                    Run();
+                }
+
+                public void Run() { }
+            }
+            """);
+
+        var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.NotNull(structured["exact_zero_hint"]);
+        Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.True(structured["exact_zero_hint"]!["relaxed_count"]!.GetValue<int>() > 0);
+        Assert.Contains(expectedSampleName, structured["exact_zero_hint"]!["sample_names"]!.AsArray().Select(node => node!?.GetValue<string>()));
+        Assert.Equal("drop --exact or use the exact indexed name", structured["exact_zero_hint"]!["suggestion"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1047,5 +1127,17 @@ public class McpServerTests : IDisposable
             if (File.Exists(_dbPath))
                 File.Delete(_dbPath);
         }
+    }
+
+    private void DropGraphExactFallbackIndexes()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
+            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
     }
 }
