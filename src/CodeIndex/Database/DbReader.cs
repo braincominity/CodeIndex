@@ -905,7 +905,10 @@ public partial class DbReader
             .Select(d => d.Path)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var hasClassLikeDefinitions = definitions.Any(d => IsClassLikeImpactKind(d.Kind));
+        var fallbackDefinitions = definitions
+            .Where(d => IsPreciseImpactFallbackKind(d.Kind))
+            .ToList();
+        var hasClassLikeDefinitions = fallbackDefinitions.Count > 0;
         var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
 
         var impactMode = "callers";
@@ -919,25 +922,29 @@ public partial class DbReader
 
             if (_hasReferencesTable)
             {
-                if (hasClassLikeDefinitions && definitionPaths.Count > 0)
+                if (definitions.Count > 0 && definitions.All(d => d.Kind == "namespace"))
                 {
-                    fileImpacts = GetFileDependenciesToTargets(definitionPaths, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    zeroResultReason = "non_callable_symbol_kind";
+                    suggestion = "Try `cdidx definition <symbol>` and then run `impact` on a specific callable member instead.";
+                }
+                else if (definitionPaths.Count > 1)
+                {
+                    zeroResultReason = "multiple_definition_files";
+                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitionFiles: true);
+                }
+                else if (fallbackDefinitions.Count == 1)
+                {
+                    var safeFallbackNames = ResolveSafeImpactFallbackNames(fallbackDefinitions[0]);
+                    fileImpacts = GetFileDependenciesToResolvedType(fallbackDefinitions[0], safeFallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
                     if (fileImpacts.Count > 0)
                     {
                         impactMode = "file_dependencies";
                     }
                     else
                     {
-                        zeroResultReason = definitionPaths.Count > 1
-                            ? "multiple_definition_files"
-                            : "class_symbol_no_symbol_callers";
-                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, definitionPaths.Count > 1);
+                        zeroResultReason = "class_symbol_no_symbol_callers";
+                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitionFiles: false);
                     }
-                }
-                else if (definitionPaths.Count > 1)
-                {
-                    zeroResultReason = "multiple_definition_files";
-                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions: false, hasMultipleDefinitionFiles: true);
                 }
                 else if (definitions.Count == 0)
                 {
@@ -974,28 +981,69 @@ public partial class DbReader
             .ToList();
     }
 
-    private List<FileDependencyResult> GetFileDependenciesToTargets(IReadOnlyList<string> targetPaths, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    private List<string> ResolveSafeImpactFallbackNames(SymbolResult definition)
     {
-        if (!_hasReferencesTable || targetPaths.Count == 0)
+        if (string.IsNullOrWhiteSpace(definition.Path) || string.IsNullOrWhiteSpace(definition.Name))
+            return new List<string>();
+
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactSafeNameLang");
+        var otherSupportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f2", "impactSafeNameOtherLang");
+        cmd.CommandText = @"
+            SELECT DISTINCT s.name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @targetPath
+              AND " + supportedLangFilter + @"
+              AND (
+                    (s.name = @containerName AND s.kind = @containerKind)
+                    OR s.container_name = @containerName
+                  )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM symbols s2
+                    JOIN files f2 ON s2.file_id = f2.id
+                    WHERE s2.name = s.name
+                      AND " + otherSupportedLangFilter + @"
+                      AND NOT (
+                            f2.path = @targetPath
+                            AND (
+                                (s2.name = @containerName AND s2.kind = @containerKind)
+                                OR s2.container_name = @containerName
+                            )
+                      )
+              )
+            ORDER BY s.name";
+        cmd.Parameters.AddWithValue("@targetPath", definition.Path);
+        cmd.Parameters.AddWithValue("@containerName", definition.Name);
+        cmd.Parameters.AddWithValue("@containerKind", definition.Kind);
+
+        var results = new List<string>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            results.Add(reader.GetString(0));
+        return results;
+    }
+
+    private List<FileDependencyResult> GetFileDependenciesToResolvedType(SymbolResult definition, IReadOnlyList<string> safeFallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || safeFallbackNames.Count == 0)
             return new List<FileDependencyResult>();
 
         using var cmd = _conn.CreateCommand();
         var innerSql = @"
-                SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
+                SELECT DISTINCT src.path AS source_path, @impactTargetPath AS target_path,
                        r.symbol_name AS symbol_name
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
-                JOIN files dst ON s.file_id = dst.id
-                WHERE src.path != dst.path";
+                WHERE src.path != @impactTargetPath";
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
-
-        var targetPathClauses = new List<string>(targetPaths.Count);
-        for (int i = 0; i < targetPaths.Count; i++)
-            targetPathClauses.Add($"dst.path = @impactTargetPath{i}");
-        innerSql += " AND (" + string.Join(" OR ", targetPathClauses) + ")";
+        var safeNameClauses = new List<string>(safeFallbackNames.Count);
+        for (int i = 0; i < safeFallbackNames.Count; i++)
+            safeNameClauses.Add($"r.symbol_name = @impactSafeName{i}");
+        innerSql += " AND (" + string.Join(" OR ", safeNameClauses) + ")";
 
         if (pathPatterns is { Count: > 0 })
         {
@@ -1022,8 +1070,9 @@ public partial class DbReader
             LIMIT @limit";
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
-        for (int i = 0; i < targetPaths.Count; i++)
-            cmd.Parameters.AddWithValue($"@impactTargetPath{i}", targetPaths[i]);
+        cmd.Parameters.AddWithValue("@impactTargetPath", definition.Path);
+        for (int i = 0; i < safeFallbackNames.Count; i++)
+            cmd.Parameters.AddWithValue($"@impactSafeName{i}", safeFallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
@@ -1043,9 +1092,9 @@ public partial class DbReader
         return results;
     }
 
-    private static bool IsClassLikeImpactKind(string? kind)
+    private static bool IsPreciseImpactFallbackKind(string? kind)
     {
-        return kind is "class" or "struct" or "interface" or "enum" or "namespace";
+        return kind is "class" or "struct" or "interface";
     }
 
     private static string BuildImpactSuggestion(IReadOnlyList<string> definitionPaths, bool hasClassLikeDefinitions, bool hasMultipleDefinitionFiles)

@@ -555,6 +555,79 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_ClassCollisionStaysZero()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/BarService.cs", "csharp",
+            """
+            public class BarService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(BarService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_NamespaceStaysZero()
+    {
+        InsertIndexedFile("src/Services.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Acme"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal("non_callable_symbol_kind", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_IncludesCombinedExactIndexSignal()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");

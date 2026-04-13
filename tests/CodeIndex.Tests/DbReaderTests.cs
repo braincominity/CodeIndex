@@ -1163,6 +1163,75 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_ClassFallbackIgnoresCollidingMembersFromOtherTypes()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/BarService.cs", "csharp",
+            """
+            public class BarService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(BarService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_NamespaceDoesNotFallbackToFileDependencies()
+    {
+        InsertIndexedFile("src/Services.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Acme", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal("non_callable_symbol_kind", analysis.ZeroResultReason);
+    }
+
+    [Fact]
     public void ListFiles_ReturnsAllFiles()
     {
         var results = _reader.ListFiles();

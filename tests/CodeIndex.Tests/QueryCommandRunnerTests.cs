@@ -340,6 +340,109 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ClassCollisionJsonStaysZero()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/BarService.cs", "csharp",
+                """
+                public class BarService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(BarService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_NamespaceJsonDoesNotFallbackToFileDependencies()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_namespace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Services.cs", "csharp",
+                """
+                namespace Acme;
+
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                namespace Acme;
+
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Acme", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void BuildExactZeroHint_NoRelaxedMatch_DoesNotRunSampleQuery()
     {
         var sampleInvoked = false;
