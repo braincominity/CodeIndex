@@ -974,15 +974,16 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         var symbols = structured["symbols"]!.AsArray();
         Assert.Equal(4, structured["count"]!.GetValue<int>());
-        Assert.Equal(1, structured["bucket_counts"]!["likely_unused_private"]!.GetValue<int>());
-        Assert.Equal(1, structured["bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
-        Assert.Equal(1, structured["bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
-        Assert.Equal(1, structured["bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
+        Assert.Equal(1, structured["returned_bucket_counts"]!["likely_unused_private"]!.GetValue<int>());
+        Assert.Equal(1, structured["returned_bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
+        Assert.Equal(1, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
+        Assert.Equal(1, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
         Assert.Equal("Hidden", symbols[0]!["name"]!.GetValue<string>());
         Assert.Equal("likely_unused_private", symbols[0]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("medium", symbols[0]!["unusedConfidence"]!.GetValue<string>());
         Assert.Equal("ConfigPath", symbols[3]!["name"]!.GetValue<string>());
         Assert.Equal("reflection_or_config_suspect", symbols[3]!["unusedBucket"]!.GetValue<string>());
-        Assert.Contains("High-confidence private hits are ranked first", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Contains("returned bucket(s)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]

@@ -1461,11 +1461,79 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal(["Hidden", "InternalOnly", "ExportedApi", "ConfigPath"], unused.Select(symbol => symbol.Name).ToArray());
         Assert.Equal("likely_unused_private", unused[0].UnusedBucket);
-        Assert.Equal("high", unused[0].UnusedConfidence);
+        Assert.Equal("medium", unused[0].UnusedConfidence);
         Assert.Equal("maybe_unused_nonpublic", unused[1].UnusedBucket);
+        Assert.Equal("low", unused[1].UnusedConfidence);
         Assert.Equal("public_or_exported_no_refs", unused[2].UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", unused[3].UnusedBucket);
         Assert.Contains("config-style", unused[3].UnusedReason);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_PrivateHelperWithSameFileUse_IsNotLabeledHighConfidence()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/local_use_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 20,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 8,
+                Content = """
+                public class LocalUseFixture
+                {
+                    public void Run() { Hidden(); }
+                    private void Hidden() { }
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public void Run() { Hidden(); }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["local_use_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var hidden = Assert.Single(unused, symbol => symbol.Name == "Hidden");
+        Assert.Equal("likely_unused_private", hidden.UnusedBucket);
+        Assert.Equal("medium", hidden.UnusedConfidence);
+        Assert.Contains("same-file uses may still be missed", hidden.UnusedReason);
     }
 
     [Fact]

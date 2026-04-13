@@ -934,11 +934,11 @@ public partial class McpServer
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
-                ["bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
+                ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             var summary = results.Count > 0
-                ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} bucket(s). High-confidence private hits are ranked first. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";

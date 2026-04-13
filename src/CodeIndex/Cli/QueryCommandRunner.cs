@@ -968,7 +968,7 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, bucket_counts = new Dictionary<string, int>(), graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
+                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, returned_bucket_counts = new Dictionary<string, int>(), graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult("unused", json: true, graphAvailable: false, jsonOptions);
                 else if (!options.Json)
@@ -987,14 +987,14 @@ public static class QueryCommandRunner
                 var fc = results.Select(r => r.Path).Distinct().Count();
                 var bucketCounts = BuildUnusedBucketCounts(results);
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc, bucket_counts = bucketCounts }, jsonOptions)
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc, returned_bucket_counts = bucketCounts }, jsonOptions)
                     : $"{results.Count}");
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, bucket_counts = BuildUnusedBucketCounts(results), symbols = results }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, returned_bucket_counts = BuildUnusedBucketCounts(results), symbols = results }, jsonOptions));
             }
             else
             {
@@ -1018,7 +1018,7 @@ public static class QueryCommandRunner
                 var summaryBuckets = OrderedUnusedBuckets
                     .Where(bucketCounts.ContainsKey)
                     .Select(bucket => $"{GetUnusedBucketHeading(bucket)}: {bucketCounts[bucket]}");
-                Console.Error.WriteLine($"({results.Count} potentially unused symbols; {string.Join(", ", summaryBuckets)})");
+                Console.Error.WriteLine($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
             }
             return CommandExitCodes.Success;
         });

@@ -649,13 +649,13 @@ public partial class DbReader
         {
             return (
                 UnusedBucketLikelyPrivate,
-                "high",
-                "private/file-local symbol with no indexed references");
+                "medium",
+                "private/file-local symbol with no indexed references; same-file uses may still be missed");
         }
 
         return (
             UnusedBucketMaybeNonPublic,
-            "medium",
+            "low",
             "non-public symbol with no indexed references");
     }
 
