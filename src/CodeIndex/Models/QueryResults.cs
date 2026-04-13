@@ -61,6 +61,13 @@ public class DefinitionResult : SymbolResult
     public int? Complexity { get; set; }
 }
 
+public class ExactZeroHintResult
+{
+    public int RelaxedCount { get; set; }
+    public List<string> SampleNames { get; set; } = [];
+    public string Suggestion { get; set; } = string.Empty;
+}
+
 public class ReferenceResult
 {
     public string Path { get; set; } = string.Empty;
