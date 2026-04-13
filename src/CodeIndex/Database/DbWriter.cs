@@ -649,6 +649,105 @@ public class DbWriter
         return missing == 0;
     }
 
+    /// <summary>
+    /// Recompute persisted folded-name keys from existing symbol / reference rows without
+    /// reparsing source files. This is used to upgrade legacy DBs (NULL folded columns) and
+    /// to refresh stored keys after a future <see cref="NameFold.Version"/> bump.
+    /// ソース再解析なしで既存行から folded key を再計算する。legacy DB の NULL 埋めと、
+    /// 将来の <see cref="NameFold.Version"/> 変更時の key 再生成に使う。
+    /// </summary>
+    /// <param name="rewriteAll">
+    /// When true, rewrite every non-null source name even if the folded column is already
+    /// populated. Needed when the stored fold_key_version does not match the current binary.
+    /// true のとき、既に埋まっている folded 列も含めて全行再計算する。
+    /// </param>
+    /// <returns>Counts of symbol rows and reference rows rewritten.</returns>
+    public (int Symbols, int SymbolReferences) BackfillFoldedColumns(bool rewriteAll = false)
+    {
+        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        var symbols = BackfillSymbolFoldedRows(rewriteAll);
+        var symbolReferences = BackfillReferenceFoldedRows(rewriteAll);
+        txn?.Commit();
+        return (symbols, symbolReferences);
+    }
+
+    private int BackfillSymbolFoldedRows(bool rewriteAll)
+    {
+        var rows = new List<(long Id, string Name)>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = rewriteAll
+                ? "SELECT id, name FROM symbols WHERE name IS NOT NULL"
+                : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                rows.Add((reader.GetInt64(0), reader.GetString(1)));
+        }
+
+        if (rows.Count == 0)
+            return 0;
+
+        using var update = _conn.CreateCommand();
+        update.CommandText = "UPDATE symbols SET name_folded = @folded WHERE id = @id";
+        var pFolded = update.Parameters.Add("@folded", SqliteType.Text);
+        var pId = update.Parameters.Add("@id", SqliteType.Integer);
+        update.Prepare();
+
+        foreach (var row in rows)
+        {
+            pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
+            pId.Value = row.Id;
+            update.ExecuteNonQuery();
+        }
+
+        return rows.Count;
+    }
+
+    private int BackfillReferenceFoldedRows(bool rewriteAll)
+    {
+        var rows = new List<(long Id, string? SymbolName, string? ContainerName)>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = rewriteAll
+                ? "SELECT id, symbol_name, container_name FROM symbol_references WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL"
+                : @"SELECT id, symbol_name, container_name
+                    FROM symbol_references
+                    WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
+                       OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                rows.Add((
+                    reader.GetInt64(0),
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+            }
+        }
+
+        if (rows.Count == 0)
+            return 0;
+
+        using var update = _conn.CreateCommand();
+        update.CommandText = @"UPDATE symbol_references
+                               SET symbol_name_folded = @symbolNameFolded,
+                                   container_name_folded = @containerNameFolded
+                               WHERE id = @id";
+        var pSymbolNameFolded = update.Parameters.Add("@symbolNameFolded", SqliteType.Text);
+        var pContainerNameFolded = update.Parameters.Add("@containerNameFolded", SqliteType.Text);
+        var pId = update.Parameters.Add("@id", SqliteType.Integer);
+        update.Prepare();
+
+        foreach (var row in rows)
+        {
+            pSymbolNameFolded.Value = (object?)NameFold.Fold(row.SymbolName) ?? DBNull.Value;
+            pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
+            pId.Value = row.Id;
+            update.ExecuteNonQuery();
+        }
+
+        return rows.Count;
+    }
+
     private void SetReadyBit(int flag)
     {
         using var cmd = _conn.CreateCommand();

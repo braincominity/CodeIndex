@@ -10,8 +10,10 @@ namespace CodeIndex.Database;
 public partial class DbReader
 {
     private readonly SqliteConnection _conn;
+    private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
+    private readonly HashSet<string> _referenceIndexes;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     // #86: True when every symbols / symbol_references row has name_folded populated and
@@ -87,9 +89,10 @@ public partial class DbReader
             WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
             ELSE 1
         END";
-    public DbReader(SqliteConnection connection)
+    public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
+        _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
         int userVersion;
@@ -101,11 +104,13 @@ public partial class DbReader
         }
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
+        _referenceIndexes = LoadIndexes("symbol_references");
         // #86/#97: require the FoldReady bit plus matching fold metadata before trusting
         // folded columns. version guards intentional NameFold changes; fingerprint guards
         // runtime ICU / invariant-casing drift across .NET upgrades. Missing metadata on
-        // legacy / read-only DBs degrades safely to NOCASE until rebuild restamps current.
+        // legacy / read-only DBs degrades safely to NOCASE until rebuild/backfill restamps current.
         // #86/#97: FoldReadyFlag に加え fold metadata 一致時のみ fold 経路を trusted とみなす。
+        // version mismatch や fingerprint mismatch、未記録は NOCASE fallback に降格させる。
         var foldBitSet = (userVersion & DbContext.FoldReadyFlag) != 0
                          && _symbolColumns.Contains("name_folded");
         var storedFoldVersion = foldBitSet ? ParseFoldVersion(connection) : -1;
@@ -119,6 +124,23 @@ public partial class DbReader
         // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
         // get stamped — degradation is safer than silent false-clean zeroes.
         // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+    }
+
+    private HashSet<string> LoadIndexes(string tableName)
+    {
+        var indexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!HasTable(tableName))
+            return indexes;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA index_list('{tableName.Replace("'", "''")}')";
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (!reader.IsDBNull(1))
+                indexes.Add(reader.GetString(1));
+        }
+        return indexes;
     }
 
     private static int ParseFoldVersion(SqliteConnection conn)
@@ -167,6 +189,67 @@ public partial class DbReader
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=@name";
         cmd.Parameters.AddWithValue("@name", tableName);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private bool HasReferenceIndex(string indexName) => _referenceIndexes.Contains(indexName);
+
+    private bool SymbolNameExactGraphIndexAvailable =>
+        _foldReady
+            ? HasReferenceIndex("idx_symbol_refs_symbol_name_folded")
+            : HasReferenceIndex("idx_symbol_refs_name_nocase");
+
+    private bool ContainerNameExactGraphIndexAvailable =>
+        _foldReady
+            ? HasReferenceIndex("idx_symbol_refs_container_name_folded")
+            : HasReferenceIndex("idx_symbol_refs_container_nocase");
+
+    private string BuildExactGraphIndexReason(IEnumerable<string> missingIndexes)
+    {
+        var missing = missingIndexes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (missing.Count == 0)
+            return string.Empty;
+
+        var scope = _isReadOnly ? "read-only legacy index" : "legacy index";
+        return missing.Count == 1
+            ? $"{missing[0]} missing on {scope}"
+            : $"{string.Join(", ", missing)} missing on {scope}";
+    }
+
+    private (bool ExactIndexAvailable, string? DegradedReason) BuildExactGraphSignal(bool available, params string[] missingIndexes)
+    {
+        if (!_hasReferencesTable)
+            return (false, "symbol_references table missing in this index");
+        if (available)
+            return (true, null);
+        return (false, BuildExactGraphIndexReason(missingIndexes));
+    }
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetReferencesExactQuerySignal() =>
+        BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
+            _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetCallersExactQuerySignal() =>
+        BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
+            _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetCalleesExactQuerySignal() =>
+        BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
+            _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetAnalyzeSymbolExactQuerySignal()
+    {
+        if (!_hasReferencesTable)
+            return (false, "symbol_references table missing in this index");
+
+        var missing = new List<string>();
+        if (!SymbolNameExactGraphIndexAvailable)
+            missing.Add(_foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+        if (!ContainerNameExactGraphIndexAvailable)
+            missing.Add(_foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
+
+        return missing.Count == 0
+            ? (true, null)
+            : (false, BuildExactGraphIndexReason(missing));
     }
 
     internal static string EscapeLikeQuery(string input)

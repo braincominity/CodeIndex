@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CodeIndex.Database;
 
 // Result DTOs for query operations / クエリ操作用の結果DTO
@@ -150,8 +152,8 @@ public class StatusResult
     /// True when every row in symbols / symbol_references has its name_folded column
     /// populated AND the FoldReadyFlag bit is set on the DB. False means `--exact` still
     /// falls back to ASCII `COLLATE NOCASE` (non-ASCII casing pairs like Ä/ä won't match).
-    /// AI clients should trigger `cdidx index . --rebuild` when this is false and Unicode
-    /// `--exact` matching is required.
+    /// AI clients should prefer `cdidx backfill-fold` to upgrade an older DB without
+    /// reparsing files; `cdidx index . --rebuild` remains the full-rescan fallback.
     /// true のとき --exact は Unicode fold 経路、false のとき ASCII NOCASE fallback。
     /// </summary>
     public bool FoldReady { get; set; }
@@ -249,6 +251,16 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    /// <summary>
+    /// True when the active `--exact` graph predicates can use their supporting indexes.
+    /// False means the query still returns correct hits, but may be slow on a legacy DB
+    /// missing the relevant NOCASE / folded graph indexes.
+    /// `--exact` の graph predicate が対応 index を使えるか。false でも結果は正しいが遅くなりうる。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ExactIndexAvailable { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DegradedReason { get; set; }
 }
 
 /// <summary>
