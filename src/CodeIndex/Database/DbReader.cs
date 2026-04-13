@@ -466,17 +466,23 @@ public partial class DbReader
     /// </summary>
     private string ResolveSymbolName(string symbolName, string? lang)
     {
-        // Simple case-insensitive lookup preferring exact-case match.
+        // Exact lookup mirrors the leaf `--exact` readers: folded equality when FoldReady,
+        // ASCII `COLLATE NOCASE` fallback on legacy / partial-backfill DBs.
         // No path/test filters — definitions outside caller scope must still be found.
         // Only considers graph-supported languages to avoid resolving to unsupported ones.
-        // シンプルな case-insensitive 検索で完全一致を優先。graph 対応言語のみ対象。
+        // FoldReady なら folded equality、legacy DB では ASCII `COLLATE NOCASE` にフォールバック。
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
+        var nameCondition = _foldReady
+            ? "s.name_folded = @nameFolded"
+            : "s.name = @name COLLATE NOCASE";
         cmd.CommandText = @"SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id
-                            WHERE lower(s.name) = lower(@name)
+                            WHERE " + nameCondition + @"
                               AND " + supportedLangFilter + @"
                             ORDER BY CASE WHEN s.name = @name THEN 0 ELSE 1 END LIMIT 1";
         cmd.Parameters.AddWithValue("@name", symbolName);
+        if (_foldReady)
+            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(symbolName) ?? symbolName);
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead() ? reader.GetString(0) : symbolName;
     }
@@ -495,15 +501,17 @@ public partial class DbReader
 
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "callerLang");
 
-        // Case-insensitive exact match via lower() — prevents substring expansion while
-        // handling both case-insensitive languages (SQL, VB, PowerShell) and user queries
-        // that don't match the indexed casing. The symbol is pre-resolved through definitions
-        // via ResolveSymbolName, so this primarily catches references stored with different
-        // casing than the definition (e.g. constructor calls vs class names).
-        // lower() による case-insensitive 完全一致 — 部分文字列展開を防ぎつつ、
-        // case-insensitive 言語とケース違いのユーザクエリの両方に対応。
-        var nameCondition = @"
-              AND lower(r.symbol_name) = lower(@symbolName)";
+        // Exact caller matching mirrors the leaf `--exact` readers: folded equality when
+        // FoldReady, ASCII `COLLATE NOCASE` fallback on legacy / partial-backfill DBs.
+        // ResolveSymbolName() already normalizes the root symbol first, so this catches
+        // caller rows whose stored callee casing differs from the resolved definition.
+        // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
+        // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
+        var nameCondition = _foldReady
+            ? @"
+              AND r.symbol_name_folded = @symbolNameFolded"
+            : @"
+              AND r.symbol_name = @symbolName COLLATE NOCASE";
 
         var sql = $@"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -521,6 +529,8 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        if (_foldReady)
+            cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);

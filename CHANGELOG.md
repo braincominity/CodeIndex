@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **Impact exact-match BFS now uses the Unicode fold path (#93)** — `GetTransitiveCallers` no longer leaves `ResolveSymbolName` and `GetCallersExact` on ASCII-only equality while the rest of the `--exact` surface uses `name_folded`. When `FoldReadyFlag` is set, both helpers now query `symbols.name_folded` / `symbol_references.symbol_name_folded`; legacy or partial-backfill DBs still fall back to `COLLATE NOCASE`, matching the existing exact-reader degradation path. This closes the gap where `impact` / MCP `impact_analysis` could silently miss non-ASCII casing and width variants even though `definition` / `references` / `callers` / `inspect` already matched them. Added a regression test that drives BFS with a mixed fullwidth + non-ASCII query and a differently cased caller edge. Affected: `src/CodeIndex/Database/DbReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`. Closes #93.
+
 ### [1.9.0] - 2026-04-14
 
 #### Added
@@ -599,6 +602,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **impact の完全一致 BFS が Unicode fold 経路を使うよう修正 (#93)** — `GetTransitiveCallers` の内部で使う `ResolveSymbolName` と `GetCallersExact` が、他の `--exact` 系が `name_folded` を使っているのに ASCII-only 比較のまま取り残されていた問題を解消。`FoldReadyFlag` が立っている DB では `symbols.name_folded` / `symbol_references.symbol_name_folded` を使って一致判定し、legacy / partial-backfill DB では既存の exact reader と同じく `COLLATE NOCASE` に黙ってフォールバックする。これで `impact` / MCP `impact_analysis` だけが非 ASCII の casing 差分や全角/半角差分を silent miss するズレが無くなる。mixed な全角 + 非 ASCII クエリと casing 差のある caller edge を使う BFS 回帰テストも追加。対象: `src/CodeIndex/Database/DbReader.cs`、`tests/CodeIndex.Tests/DbReaderTests.cs`。Closes #93.
 
 ### [1.9.0] - 2026-04-14
 
