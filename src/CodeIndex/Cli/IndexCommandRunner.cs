@@ -123,12 +123,16 @@ public static class IndexCommandRunner
         using var db = new DbContext(dbPath);
 
         // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
-        // touches a subset of files, so stamping readiness after a partial pass on a
-        // previously-degraded DB would falsely bless untouched files as authoritative. Only
-        // a DB that was already fully ready may be restamped after a partial update.
-        // update モードは一部ファイルしか再インデックスしないため、元々縮退状態だった DB を
-        // partial pass の後に trusted 扱いに昇格させてはいけない。元の readiness を捕獲しておく。
-        var wasFullyReady = db.GetUserVersion() == DbContext.CurrentSchemaVersion;
+        // touches a subset of files, so trust bits the DB did NOT previously carry must not
+        // be fabricated after a partial pass. But bits the DB DID carry should survive —
+        // independently, not as a single all-or-nothing gate. Codex #86 review flagged that
+        // gating all three bits on `user_version == CurrentSchemaVersion` regressed pre-#86
+        // DBs (user_version=3): a `--files` refresh on such a DB would silently drop Graph/
+        // Issues trust too, breaking references/callers/callees/impact for the whole repo.
+        // update モードは元々立っていた readiness bit のみを個別に復元する。pre-#86 DB
+        // (user_version=3) でも Graph/Issues を巻き込んで落とさないように、単一フラグではなく
+        // 事前 bit をそのまま保持する。Codex #86 第 2 pass レビュー対応。
+        var priorReadiness = db.GetUserVersion();
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -150,15 +154,9 @@ public static class IndexCommandRunner
         var indexer = new FileIndexer(options.ProjectPath);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
-        // Full-scan covers the whole repo, so it may always stamp on success. Update mode
-        // only stamps when the DB was already fully ready, preventing a partial pass from
-        // promoting a legacy / degraded DB to trusted.
-        // full-scan は常に stamp 可。update は元々 trusted だった場合のみ再 stamp 可。
-        var canStampReadiness = !isUpdateMode || wasFullyReady;
-
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, canStampReadiness)
-            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, canStampReadiness);
+            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness)
+            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions);
     }
 
 
@@ -260,7 +258,7 @@ public static class IndexCommandRunner
         Stopwatch stopwatch,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
-        bool canStampReadiness)
+        int priorReadiness)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -412,20 +410,30 @@ public static class IndexCommandRunner
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
         var foldReadyAfter = false;
-        if (errors == 0 && canStampReadiness)
+        if (errors == 0)
         {
-            writer.MarkGraphReady();
-            writer.MarkIssuesReady();
-            // Update mode: restamp FoldReady without a whole-index backfill scan. The
-            // invariant already holds here — `canStampReadiness` requires the DB was at
-            // `CurrentSchemaVersion` (which includes FoldReadyFlag), so every pre-existing
-            // row was fold-populated before ClearReadyFlags() wiped the bits, and every row
-            // the update just rewrote is also fold-populated (writer populates name_folded
-            // on every insert). Running `AllFoldedColumnsBackfilled()` here would turn an
-            // `--files a.cs` refresh into O(total symbols + references) — codex #86 review.
-            // update mode: invariant は既に保たれているので、全表 scan を走らせない（O(N)回避）。
-            writer.MarkFoldReady();
-            foldReadyAfter = true;
+            // Restore each readiness bit independently based on what the DB carried BEFORE
+            // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
+            // no Fold) must keep Graph+Issues after a successful partial update, even though
+            // FoldReady can't be restamped. Codex #86 second-pass review: the old single-flag
+            // `wasFullyReady` gate silently dropped Graph/Issues for the whole workspace on
+            // such DBs, breaking references/callers/callees/impact.
+            // Fold is the only bit that needs the runtime verify: the other two only require
+            // that the DB previously reached end-of-run for those subsystems. Fold also
+            // requires name_folded to be populated for every row, but the invariant holds
+            // when the prior bit was set AND this update rewrote its touched rows with
+            // name_folded populated, so no extra scan is needed here.
+            // update mode は事前 bit を個別に復元。Graph/Issues は prior bit があれば復元、
+            // Fold も prior bit があれば invariant を信じて restamp（codex 2nd review 対応）。
+            if ((priorReadiness & DbContext.GraphReadyFlag) != 0)
+                writer.MarkGraphReady();
+            if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
+                writer.MarkIssuesReady();
+            if ((priorReadiness & DbContext.FoldReadyFlag) != 0)
+            {
+                writer.MarkFoldReady();
+                foldReadyAfter = true;
+            }
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -495,8 +503,7 @@ public static class IndexCommandRunner
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
-        JsonSerializerOptions jsonOptions,
-        bool canStampReadiness)
+        JsonSerializerOptions jsonOptions)
     {
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
@@ -616,8 +623,13 @@ public static class IndexCommandRunner
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
         var foldReadyAfter = false;
-        if (errors == 0 && canStampReadiness)
+        if (errors == 0)
         {
+            // Full-scan covers the whole repo, so it may always stamp Graph / Issues on
+            // success regardless of what the DB carried before. Fold still gates on the
+            // backfill verification below because incremental-by-default full scans skip
+            // unchanged legacy files whose folded columns remain NULL.
+            // full-scan は全repo をカバーするため、Graph / Issues は常に stamp。Fold のみ条件付き。
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it

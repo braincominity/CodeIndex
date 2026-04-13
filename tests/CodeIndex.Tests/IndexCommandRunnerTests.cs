@@ -281,6 +281,69 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_PreservesGraphAndIssuesOnPre86Db_WithoutStampingFold()
+    {
+        // Codex #86 second-pass regression: pre-#86 DB has user_version=3 (Graph|Issues).
+        // Before this fix, `wasFullyReady = user_version == CurrentSchemaVersion (=7)` returned
+        // false, so update mode cleared all 3 bits and restamped none — silently breaking
+        // references/callers/callees/impact for the whole workspace even though only the
+        // Fold bit was missing. After the fix, Graph/Issues must survive a partial update on
+        // a pre-#86 DB; only Fold stays off (needs full rebuild).
+        // pre-#86 DB (user_version=3) に対する partial update で Graph/Issues が落ちず、
+        // Fold だけが未 stamp のまま残ることを確認する回帰テスト。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            // Initial full scan stamps user_version = CurrentSchemaVersion (7 = Graph|Issues|Fold).
+            // 初回 full scan で user_version = 7（全 bit stamp）。
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            // Simulate a pre-#86 DB by stripping the Fold bit (and wiping name_folded rows to
+            // reflect a pre-#86 writer that did not populate them). User_version = 3.
+            // pre-#86 DB を模擬: Fold bit を落とし、name_folded も NULL に戻す。
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL; UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL; PRAGMA user_version = 3";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Partial update via --files. Must NOT strip Graph/Issues trust just because Fold
+            // was missing. After run: Graph+Issues still stamped, Fold stays off.
+            // --files で partial update。Graph/Issues は維持、Fold は未 stamp のまま。
+            var targetFile = Path.Combine(projectRoot, "app.cs");
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var verifyCmd = verify.CreateCommand();
+            verifyCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)verifyCmd.ExecuteScalar()!;
+            Assert.NotEqual(0, userVersion & DbContext.GraphReadyFlag);
+            Assert.NotEqual(0, userVersion & DbContext.IssuesReadyFlag);
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_RebuildWithCommits_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
