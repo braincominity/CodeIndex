@@ -96,19 +96,19 @@ public partial class DbReader
             results.Add(new SymbolResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Lang = GetNullableString(reader, 1),
                 Kind = reader.GetString(2),
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
-                StartLine = reader.IsDBNull(5) ? reader.GetInt32(4) : reader.GetInt32(5),
-                EndLine = reader.IsDBNull(6) ? reader.GetInt32(4) : reader.GetInt32(6),
-                BodyStartLine = reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                BodyEndLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                Signature = reader.IsDBNull(9) ? null : reader.GetString(9),
-                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
-                Visibility = reader.IsDBNull(12) ? null : reader.GetString(12),
-                ReturnType = reader.IsDBNull(13) ? null : reader.GetString(13),
+                StartLine = GetInt32OrFallback(reader, 5, 4),
+                EndLine = GetInt32OrFallback(reader, 6, 4),
+                BodyStartLine = GetNullableInt32(reader, 7),
+                BodyEndLine = GetNullableInt32(reader, 8),
+                Signature = GetNullableString(reader, 9),
+                ContainerKind = GetNullableString(reader, 10),
+                ContainerName = GetNullableString(reader, 11),
+                Visibility = GetNullableString(reader, 12),
+                ReturnType = GetNullableString(reader, 13),
             });
         }
         return results;
@@ -205,19 +205,19 @@ public partial class DbReader
             results.Add(new SymbolResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Lang = GetNullableString(reader, 1),
                 Kind = reader.GetString(2),
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
-                StartLine = reader.IsDBNull(5) ? reader.GetInt32(4) : reader.GetInt32(5),
-                EndLine = reader.IsDBNull(6) ? reader.GetInt32(4) : reader.GetInt32(6),
-                BodyStartLine = reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                BodyEndLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                Signature = reader.IsDBNull(9) ? null : reader.GetString(9),
-                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
-                Visibility = reader.IsDBNull(12) ? null : reader.GetString(12),
-                ReturnType = reader.IsDBNull(13) ? null : reader.GetString(13),
+                StartLine = GetInt32OrFallback(reader, 5, 4),
+                EndLine = GetInt32OrFallback(reader, 6, 4),
+                BodyStartLine = GetNullableInt32(reader, 7),
+                BodyEndLine = GetNullableInt32(reader, 8),
+                Signature = GetNullableString(reader, 9),
+                ContainerKind = GetNullableString(reader, 10),
+                ContainerName = GetNullableString(reader, 11),
+                Visibility = GetNullableString(reader, 12),
+                ReturnType = GetNullableString(reader, 13),
             });
         }
 
@@ -276,7 +276,7 @@ public partial class DbReader
             if (!reader.TrackedRead())
                 return null;
             fileId = reader.GetInt64(0);
-            lang = reader.IsDBNull(2) ? null : reader.GetString(2);
+            lang = GetNullableString(reader, 2);
             totalLines = reader.GetInt32(3);
         }
 
@@ -307,15 +307,15 @@ public partial class DbReader
                     Kind = reader.GetString(0),
                     Name = reader.GetString(1),
                     Line = reader.GetInt32(2),
-                    StartLine = reader.IsDBNull(3) ? reader.GetInt32(2) : reader.GetInt32(3),
-                    EndLine = reader.IsDBNull(4) ? reader.GetInt32(2) : reader.GetInt32(4),
-                    BodyStartLine = reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                    BodyEndLine = reader.IsDBNull(6) ? null : reader.GetInt32(6),
-                    Signature = reader.IsDBNull(7) ? null : reader.GetString(7),
-                    ContainerKind = reader.IsDBNull(8) ? null : reader.GetString(8),
-                    ContainerName = reader.IsDBNull(9) ? null : reader.GetString(9),
-                    Visibility = reader.IsDBNull(10) ? null : reader.GetString(10),
-                    ReturnType = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    StartLine = GetInt32OrFallback(reader, 3, 2),
+                    EndLine = GetInt32OrFallback(reader, 4, 2),
+                    BodyStartLine = GetNullableInt32(reader, 5),
+                    BodyEndLine = GetNullableInt32(reader, 6),
+                    Signature = GetNullableString(reader, 7),
+                    ContainerKind = GetNullableString(reader, 8),
+                    ContainerName = GetNullableString(reader, 9),
+                    Visibility = GetNullableString(reader, 10),
+                    ReturnType = GetNullableString(reader, 11),
                 });
             }
         }
@@ -394,10 +394,10 @@ public partial class DbReader
                 Name = reader.GetString(0),
                 Kind = reader.GetString(2),
                 Path = reader.GetString(3),
-                Lang = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Lang = GetNullableString(reader, 4),
                 Line = reader.GetInt32(5),
-                Visibility = reader.IsDBNull(6) ? null : reader.GetString(6),
-                ContainerName = reader.IsDBNull(7) ? null : reader.GetString(7),
+                Visibility = GetNullableString(reader, 6),
+                ContainerName = GetNullableString(reader, 7),
             }, reader.GetInt32(1)));
         }
         return results;
@@ -476,17 +476,17 @@ public partial class DbReader
             results.Add(new SymbolResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Lang = GetNullableString(reader, 1),
                 Kind = reader.GetString(2),
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
-                StartLine = reader.IsDBNull(5) ? reader.GetInt32(4) : reader.GetInt32(5),
-                EndLine = reader.IsDBNull(6) ? reader.GetInt32(4) : reader.GetInt32(6),
-                Signature = reader.IsDBNull(7) ? null : reader.GetString(7),
-                Visibility = reader.IsDBNull(8) ? null : reader.GetString(8),
-                ReturnType = reader.IsDBNull(9) ? null : reader.GetString(9),
-                ContainerKind = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ContainerName = reader.IsDBNull(11) ? null : reader.GetString(11),
+                StartLine = GetInt32OrFallback(reader, 5, 4),
+                EndLine = GetInt32OrFallback(reader, 6, 4),
+                Signature = GetNullableString(reader, 7),
+                Visibility = GetNullableString(reader, 8),
+                ReturnType = GetNullableString(reader, 9),
+                ContainerKind = GetNullableString(reader, 10),
+                ContainerName = GetNullableString(reader, 11),
             });
         }
         return results;

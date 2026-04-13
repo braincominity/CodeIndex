@@ -188,12 +188,12 @@ public partial class DbReader
             results.Add(new FileResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Lang = GetNullableString(reader, 1),
                 Size = reader.GetInt64(2),
                 Lines = reader.GetInt32(3),
                 SymbolCount = reader.GetInt32(4),
                 ReferenceCount = reader.GetInt32(5),
-                Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Checksum = GetNullableString(reader, 6),
                 Modified = GetNullableDateTime(reader, 7),
                 IndexedAt = GetNullableDateTime(reader, 8),
             });
@@ -253,14 +253,14 @@ public partial class DbReader
             results.Add(new ReferenceResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Lang = GetNullableString(reader, 1),
                 SymbolName = reader.GetString(2),
                 ReferenceKind = reader.GetString(3),
                 Line = reader.GetInt32(4),
                 Column = reader.GetInt32(5),
                 Context = reader.GetString(6),
-                ContainerKind = reader.IsDBNull(7) ? null : reader.GetString(7),
-                ContainerName = reader.IsDBNull(8) ? null : reader.GetString(8),
+                ContainerKind = GetNullableString(reader, 7),
+                ContainerName = GetNullableString(reader, 8),
             });
         }
         return results;
@@ -310,9 +310,9 @@ public partial class DbReader
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
-                CallerKind = reader.IsDBNull(2) ? null : reader.GetString(2),
-                CallerName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                Lang = GetNullableString(reader, 1),
+                CallerKind = GetNullableString(reader, 2),
+                CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
                 FirstLine = reader.GetInt32(5),
                 ReferenceCount = reader.GetInt32(6),
@@ -365,9 +365,9 @@ public partial class DbReader
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
-                CallerKind = reader.IsDBNull(2) ? null : reader.GetString(2),
-                CallerName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                Lang = GetNullableString(reader, 1),
+                CallerKind = GetNullableString(reader, 2),
+                CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
                 ReferenceKind = reader.GetString(5),
                 FirstLine = reader.GetInt32(6),
@@ -455,9 +455,9 @@ public partial class DbReader
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
-                CallerKind = reader.IsDBNull(2) ? null : reader.GetString(2),
-                CallerName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                Lang = GetNullableString(reader, 1),
+                CallerKind = GetNullableString(reader, 2),
+                CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
                 FirstLine = reader.GetInt32(5),
                 ReferenceCount = reader.GetInt32(6),
@@ -588,7 +588,7 @@ public partial class DbReader
         if (!fileReader.TrackedRead())
             return null;
 
-        var lang = fileReader.IsDBNull(0) ? null : fileReader.GetString(0);
+        var lang = GetNullableString(fileReader, 0);
         var totalLines = fileReader.GetInt32(1);
         var requestedStart = Math.Max(1, startLine - before);
         var requestedEnd = Math.Min(totalLines, endLine + after);
@@ -670,12 +670,12 @@ public partial class DbReader
         return new FileResult
         {
             Path = reader.GetString(0),
-            Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+            Lang = GetNullableString(reader, 1),
             Size = reader.GetInt64(2),
             Lines = reader.GetInt32(3),
             SymbolCount = reader.GetInt32(4),
             ReferenceCount = reader.GetInt32(5),
-            Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+            Checksum = GetNullableString(reader, 6),
             Modified = GetNullableDateTime(reader, 7),
             IndexedAt = GetNullableDateTime(reader, 8),
         };
@@ -929,6 +929,20 @@ public partial class DbReader
 
         return ParseDateTimeValue(reader.GetValue(ordinal));
     }
+
+    // Nullable-column reader helpers. Older DBs migrated in place may leave some
+    // symbol columns nullable, so every read path has to guard. Centralizing this
+    // avoids the #58/#60 class of bug where a single missed IsDBNull crashes queries.
+    // 旧DBをその場移行すると一部カラムがNULL可のまま残るため、全読み取り経路でガードが必要。
+    // #58/#60 のような IsDBNull 漏れによるクラッシュを構造的に防ぐためヘルパーに集約する。
+    internal static string? GetNullableString(SqliteDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+
+    internal static int? GetNullableInt32(SqliteDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
+
+    internal static int GetInt32OrFallback(SqliteDataReader reader, int ordinal, int fallbackOrdinal)
+        => reader.IsDBNull(ordinal) ? reader.GetInt32(fallbackOrdinal) : reader.GetInt32(ordinal);
 
     private static DateTime? ParseDateTimeValue(object value)
     {

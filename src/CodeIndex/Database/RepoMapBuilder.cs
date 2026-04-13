@@ -198,12 +198,12 @@ internal sealed class RepoMapBuilder
             results.Add(new RepoFileStat
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Lang = DbReader.GetNullableString(reader, 1),
                 Size = reader.GetInt64(2),
                 Lines = reader.GetInt32(3),
                 SymbolCount = reader.GetInt32(4),
                 ReferenceCount = reader.GetInt32(5),
-                Checksum = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Checksum = DbReader.GetNullableString(reader, 6),
                 Modified = DbReader.GetNullableDateTime(reader, 7),
                 IndexedAt = DbReader.GetNullableDateTime(reader, 8),
             });
@@ -237,7 +237,7 @@ internal sealed class RepoMapBuilder
         while (reader.TrackedRead())
         {
             var path = reader.GetString(0);
-            var candidateLang = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var candidateLang = DbReader.GetNullableString(reader, 1);
             var kind = reader.GetString(2);
             var name = reader.GetString(3);
             var line = reader.GetInt32(4);

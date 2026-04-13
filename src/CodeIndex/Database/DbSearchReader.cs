@@ -89,7 +89,7 @@ public partial class DbReader
             raw.Add(new SearchResult
             {
                 Path = reader.GetString(0),
-                Lang = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Lang = GetNullableString(reader, 1),
                 StartLine = reader.GetInt32(2),
                 EndLine = reader.GetInt32(3),
                 Content = reader.GetString(4),
