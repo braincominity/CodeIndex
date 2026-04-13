@@ -28,6 +28,11 @@ public class DbReaderTests : IDisposable
         SeedData();
         _writer.MarkGraphReady();
         _writer.MarkIssuesReady();
+        // #86: post-indexing production DBs also stamp FoldReady after a full scan, so the
+        // reader exercises the Unicode fold path. Legacy fallback is covered by a separate
+        // test that opens a DB without this flag.
+        // #86: full scan 後の本番 DB は fold ready も立つため、reader は fold 経路を通す。
+        _writer.MarkFoldReady();
         _reader = new DbReader(_db.Connection);
     }
 
@@ -326,6 +331,71 @@ public class DbReaderTests : IDisposable
         var exactMixedCase = _reader.SearchSymbols(new[] { "AUTHENTICATE" }, limit: 10, exact: true)
             .Select(r => r.Name).Distinct().ToList();
         Assert.Equal(new[] { "authenticate" }, exactMixedCase);
+    }
+
+    [Fact]
+    public void SearchSymbols_ExactFoldsNonAsciiCasing()
+    {
+        // #86: FormKC + ToLowerInvariant fold must catch Ä/ä, İ/i, fullwidth/halfwidth, etc.
+        // Seed one symbol per class and assert both casings match through `--exact`.
+        // #86: ä/Ä、İ/i、全角/半角などを同じ folded 値に畳んで `--exact` で一致させる。
+        var extraFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/intl.py", Lang = "python", Size = 80, Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "Ｒｕｎ", Line = 2, StartLine = 2, EndLine = 2 }, // fullwidth
+        ]);
+
+        // Lowercase / uppercase Unicode should both land on the same folded row.
+        // 大文字小文字違いでも folded 一致する。
+        Assert.Single(_reader.SearchSymbols(new[] { "CAFÉ_INIT" }, limit: 10, exact: true));
+        Assert.Single(_reader.SearchSymbols(new[] { "café_init" }, limit: 10, exact: true));
+
+        // Fullwidth vs halfwidth: FormKC collapses them.
+        // 全角/半角も FormKC 合成で同じになる。
+        var halfwidth = _reader.SearchSymbols(new[] { "Run" }, limit: 10, exact: true)
+            .Select(r => r.Name).OrderBy(n => n).ToList();
+        Assert.Contains("Ｒｕｎ", halfwidth);
+    }
+
+    [Fact]
+    public void SearchSymbols_ExactFallsBackToNocaseWhenFoldNotReady()
+    {
+        // Legacy / partial-backfill DBs do not set FoldReadyFlag; the reader must silently
+        // fall back to the ASCII `COLLATE NOCASE` path and still return correct ASCII results.
+        // Non-ASCII casing is expected to miss (documented limitation until reindex).
+        // Legacy DB は fold フラグ未設定なら NOCASE fallback。ASCII は動き続ける。
+        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_legacy_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var legacyDb = new DbContext(legacyPath);
+            legacyDb.InitializeSchema();
+            var writer = new DbWriter(legacyDb.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            writer.MarkGraphReady();
+            writer.MarkIssuesReady();
+            // NOTE: intentionally do NOT stamp FoldReady.
+
+            var legacyReader = new DbReader(legacyDb.Connection);
+            Assert.False(legacyReader._foldReady);
+            // ASCII case-insensitive equality still works via COLLATE NOCASE fallback.
+            Assert.Single(legacyReader.SearchSymbols(new[] { "AUTHENTICATE" }, limit: 10, exact: true));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(legacyPath)) File.Delete(legacyPath);
+        }
     }
 
     [Fact]

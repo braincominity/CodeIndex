@@ -399,6 +399,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
                 writer.MarkIssuesReady();
+                writer.MarkFoldReady();
                 Assert.Equal(DbContext.CurrentSchemaVersion, db.GetUserVersion());
 
                 // Simulate the start of a refresh: clear readiness. An interrupted refresh
@@ -548,6 +549,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
                 writer.MarkIssuesReady();
+                writer.MarkFoldReady();
                 Assert.Equal(DbContext.CurrentSchemaVersion, db.GetUserVersion());
             }
             SqliteConnection.ClearAllPools();
@@ -594,6 +596,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
                 writer.MarkIssuesReady();
+                writer.MarkFoldReady();
                 Assert.Equal(DbContext.CurrentSchemaVersion, db.GetUserVersion());
 
                 var reader = new DbReader(db.Connection);

@@ -197,7 +197,13 @@ public class DbContext : IDisposable
     // index の成功末尾で user_version に打つビットマップ。CLI と MCP が独立に立てる。
     public const int GraphReadyFlag = 1;
     public const int IssuesReadyFlag = 2;
-    public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag; // 3 — full CLI readiness
+    // bit 2 (FoldReadyFlag, #86) — name_folded columns (Unicode NFKC + lowerInvariant) fully
+    // backfilled on symbols and symbol_references. Set only after a full scan populates every
+    // row's folded value so `--exact` queries can use the folded index path for Unicode
+    // casing (Ä/ä). Legacy DBs without fold stay on the COLLATE NOCASE fallback until reindex.
+    // bit 2 (FoldReadyFlag, #86): name_folded 列の完全バックフィル完了を示す。
+    public const int FoldReadyFlag = 4;
+    public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag; // 7 — full CLI readiness
 
     public int GetUserVersion()
     {
@@ -299,6 +305,14 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "container_name", "TEXT");
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
+        // #86: Unicode-aware folded name columns for `--exact` name matching across all
+        // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
+        // legacy rows until a full reindex, in which case the reader falls back to the
+        // COLLATE NOCASE path (correct for ASCII, misses non-ASCII casing — #86 fix).
+        // #86: --exact 用の Unicode 折り畳み列。レガシー行は NULL のまま、再 index で埋まる。
+        EnsureColumn("symbols", "name_folded", "TEXT");
+        EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
+        EnsureColumn("symbol_references", "container_name_folded", "TEXT");
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -331,6 +345,13 @@ public class DbContext : IDisposable
         // `references / callers / callees --exact` 用の NOCASE index。idx_symbols_name_nocase と対になる。
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase      ON symbol_references(symbol_name COLLATE NOCASE)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)");
+        // #86: Indexes on the Unicode-folded columns. Used when FoldReadyFlag is set on the
+        // DB (= the write path filled every folded column). Legacy / partial DBs keep using
+        // the NOCASE indexes above. Both sets coexist so mixed-state DBs cannot regress.
+        // #86: 折り畳み列のインデックス。FoldReadyFlag が立っている DB でだけ使う。
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)");
 
         // Full-text search / 全文検索
         Execute(@"
@@ -433,6 +454,15 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "container_name", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
+            // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
+            // not fail on legacy DBs where the column did not exist yet.
+            // #86: folded 列を追加してから folded index を作らないと legacy DB でクラッシュする。
+            EnsureColumn("symbols", "name_folded", "TEXT");
+            EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
+            EnsureColumn("symbol_references", "container_name_folded", "TEXT");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)");
 
             // Ensure file_issues table for older DBs / 古いDBに file_issues テーブルが無い場合に作成
             Execute(@"

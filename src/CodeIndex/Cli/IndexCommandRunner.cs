@@ -415,6 +415,11 @@ public static class IndexCommandRunner
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            // Update mode does NOT stamp FoldReady (#86): only the files in this partial
+            // update have name_folded populated, so legacy rows outside the update scope
+            // stay NULL. Reader must keep using the COLLATE NOCASE fallback until a full
+            // scan upgrades the whole DB.
+            // update mode は fold stamp しない。範囲外の legacy 行が未埋めで残るため。
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -604,6 +609,11 @@ public static class IndexCommandRunner
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            // Full-scan always stamps FoldReady (#86): every symbols / symbol_references
+            // row this run inserted has name_folded populated, so the reader's Unicode
+            // fold path is safe to trust for `--exact` queries.
+            // full-scan は fold も stamp。全行に folded が入っているので reader の unicode 経路 OK。
+            writer.MarkFoldReady();
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();

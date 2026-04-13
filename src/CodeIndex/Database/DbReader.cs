@@ -14,6 +14,11 @@ public partial class DbReader
     private readonly HashSet<string> _symbolColumns;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
+    // #86: True when every symbols / symbol_references row has name_folded populated and
+    // the Unicode fold path is safe to use for `--exact`. Legacy / partial-backfill DBs
+    // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
+    // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
+    internal readonly bool _foldReady;
     internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
@@ -96,6 +101,8 @@ public partial class DbReader
         }
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
+        _foldReady = (userVersion & DbContext.FoldReadyFlag) != 0
+                     && _symbolColumns.Contains("name_folded");
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
         // repo is untouched, which would flip trust on prematurely. Only an explicit
@@ -220,13 +227,16 @@ public partial class DbReader
 
         if (query != null)
         {
-            // --exact: ASCII case-insensitive equality, backed by idx_symbol_refs_name_nocase.
-            // Uses `= ... COLLATE NOCASE` (not `lower(col) = lower(@q)`) so SQLite can pick the index.
-            // Unicode fold is tracked in #86 (same limitation as symbols --exact).
-            // --exact: ASCII NOCASE の完全一致。idx_symbol_refs_name_nocase を利用。
-            sql += exact
-                ? " AND r.symbol_name = @query COLLATE NOCASE"
-                : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
+            // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
+            // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
+            // --exact: FoldReady なら Unicode 折り畳み経路、未 ready なら ASCII NOCASE へ fallback。
+            if (exact && _foldReady)
+                sql += " AND r.symbol_name_folded = @query";
+            else if (exact)
+                sql += " AND r.symbol_name = @query COLLATE NOCASE";
+            else
+                sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -238,7 +248,14 @@ public partial class DbReader
         cmd.CommandText = sql;
         if (query != null)
         {
-            cmd.Parameters.AddWithValue("@query", exact ? query : $"%{EscapeLikeQuery(query)}%");
+            string queryParam;
+            if (!exact)
+                queryParam = $"%{EscapeLikeQuery(query)}%";
+            else if (_foldReady)
+                queryParam = NameFold.Fold(query) ?? query;
+            else
+                queryParam = query;
+            cmd.Parameters.AddWithValue("@query", queryParam);
             cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
             cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
         }
@@ -295,16 +312,26 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += " AND r.reference_kind IN ('call', 'instantiate')";
-        sql += exact
-            ? " AND r.symbol_name = @query COLLATE NOCASE"
-            : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (exact && _foldReady)
+            sql += " AND r.symbol_name_folded = @query";
+        else if (exact)
+            sql += " AND r.symbol_name = @query COLLATE NOCASE";
+        else
+            sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", exact ? query : $"%{EscapeLikeQuery(query)}%");
+        string callersQueryParam;
+        if (!exact)
+            callersQueryParam = $"%{EscapeLikeQuery(query)}%";
+        else if (_foldReady)
+            callersQueryParam = NameFold.Fold(query) ?? query;
+        else
+            callersQueryParam = query;
+        cmd.Parameters.AddWithValue("@query", callersQueryParam);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -352,16 +379,26 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += " AND r.reference_kind IN ('call', 'instantiate')";
-        sql += exact
-            ? " AND r.container_name = @query COLLATE NOCASE"
-            : " AND r.container_name LIKE @query ESCAPE '\\'";
+        if (exact && _foldReady)
+            sql += " AND r.container_name_folded = @query";
+        else if (exact)
+            sql += " AND r.container_name = @query COLLATE NOCASE";
+        else
+            sql += " AND r.container_name LIKE @query ESCAPE '\\'";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", exact ? query : $"%{EscapeLikeQuery(query)}%");
+        string calleesQueryParam;
+        if (!exact)
+            calleesQueryParam = $"%{EscapeLikeQuery(query)}%";
+        else if (_foldReady)
+            calleesQueryParam = NameFold.Fold(query) ?? query;
+        else
+            calleesQueryParam = query;
+        cmd.Parameters.AddWithValue("@query", calleesQueryParam);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);

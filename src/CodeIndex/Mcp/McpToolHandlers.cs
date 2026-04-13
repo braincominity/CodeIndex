@@ -1025,6 +1025,10 @@ public partial class McpServer
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            // MCP index_project is a full scan, so every row has name_folded populated and
+            // the Unicode `--exact` fold path is safe to trust (#86). Matches CLI RunFullScan.
+            // MCP index は full scan のため fold も stamp（CLI RunFullScan と同じ）。
+            writer.MarkFoldReady();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 
