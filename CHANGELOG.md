@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Added
+- **Exact-zero hint for `symbols` / `definition` / `references` / `callers` / `callees` (#88)** — When `--exact` returns zero results, the five exact-match commands now automatically rerun the same query without `--exact` and emit an additive `exact_zero_hint` only when relaxed matching would have produced results. CLI human output now explains that `--exact` is the reason the result set is empty and shows up to five sample indexed names; CLI `--json` now emits a zero-result payload instead of staying silent so AI clients can distinguish a real empty result from an exactness miss without issuing a second round trip. MCP `structuredContent` now mirrors the same `exact_zero_hint` contract for `symbols`, `definition`, `references`, `callers`, and `callees`, with snake_case nested fields (`relaxed_count`, `sample_names`, `suggestion`) to match the CLI JSON shape. The suggestion text was updated to say "exact indexed name" rather than "exact indexed casing" because #86 already made `--exact` Unicode case-insensitive; the remaining failure mode is wrong spelling or over-broad substring intent, not casing drift. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Models/QueryResults.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`. Closes #88.
+
 ### [1.9.0] - 2026-04-14
 
 #### Added
@@ -599,6 +602,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 追加
+- **`symbols` / `definition` / `references` / `callers` / `callees` の exact-zero ヒント (#88)** — `--exact` が 0 件になったとき、5 つの exact-match 系コマンドは同じ条件で `--exact` なしの緩和クエリをサーバー側で再実行し、緩和側なら結果が出る場合にだけ加算的な `exact_zero_hint` を返すようになった。CLI の人間向け出力は「0 件の原因が `--exact` にある」ことを明示し、最大 5 件のサンプル名を提示する。CLI の `--json` は従来の無出力ではなく 0 件 payload を返すため、AI クライアントは追加の往復なしで「本当に空なのか」「exactness で落ちただけなのか」を区別できる。MCP の `structuredContent` も `symbols` / `definition` / `references` / `callers` / `callees` で同じ `exact_zero_hint` 契約を返し、ネスト内部は CLI JSON と揃えた snake_case（`relaxed_count`、`sample_names`、`suggestion`）を使う。提案文言は #86 ですでに `--exact` が Unicode の大文字小文字差を吸収するようになったため、「exact indexed casing」ではなく「exact indexed name」に更新した。残る失敗モードは casing ではなく、綴り違いまたは substring の意図との不一致である。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`、`src/CodeIndex/Mcp/McpToolHandlers.cs`、`src/CodeIndex/Models/QueryResults.cs`、`tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`、`tests/CodeIndex.Tests/McpServerTests.cs`。Closes #88。
 
 ### [1.9.0] - 2026-04-14
 
