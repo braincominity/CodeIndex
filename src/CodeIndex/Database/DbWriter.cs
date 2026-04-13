@@ -598,6 +598,28 @@ public class DbWriter
     public void MarkFoldReady()     => SetReadyBit(DbContext.FoldReadyFlag);
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
 
+    /// <summary>
+    /// True only when every existing row in symbols / symbol_references has a populated folded
+    /// value for each source name that is itself non-NULL. Callers use this before stamping
+    /// `FoldReadyFlag` on a full scan because the default incremental path skips unchanged files
+    /// — their pre-#86 rows still carry NULL folded columns, so a naive stamp would flip readers
+    /// onto the folded equality path and silently miss those legacy rows. Codex #86 review.
+    /// full scan 成功時でも、incremental で skip された legacy 行が NULL のまま残っていれば
+    /// fold-ready にしてはならない。stamp 前にこの実検証を通す。
+    /// </summary>
+    public bool AllFoldedColumnsBackfilled()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                (SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL)
+              + (SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
+              + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
+        var raw = cmd.ExecuteScalar();
+        long missing = raw is long l ? l : (raw is int i ? i : 0);
+        return missing == 0;
+    }
+
     private void SetReadyBit(int flag)
     {
         using var cmd = _conn.CreateCommand();

@@ -415,11 +415,16 @@ public static class IndexCommandRunner
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
-            // Update mode does NOT stamp FoldReady (#86): only the files in this partial
-            // update have name_folded populated, so legacy rows outside the update scope
-            // stay NULL. Reader must keep using the COLLATE NOCASE fallback until a full
-            // scan upgrades the whole DB.
-            // update mode は fold stamp しない。範囲外の legacy 行が未埋めで残るため。
+            // Update mode: ClearReadyFlags() wiped all 3 bits at the start, so fold-ready
+            // must be explicitly restored. `canStampReadiness` already requires the DB was
+            // at `CurrentSchemaVersion` (which includes FoldReadyFlag) before the update —
+            // i.e. every pre-existing row already had name_folded populated. Rows the update
+            // just rewrote also have name_folded populated (DbWriter does it on every insert).
+            // So the fold invariant still holds; restamp unconditionally when canStampReadiness.
+            // As a defensive check, also verify no NULL folded columns leaked in. Codex #86 review.
+            // update mode は canStampReadiness なら fold も復元する。Clear で落ちた bit を戻す。
+            if (writer.AllFoldedColumnsBackfilled())
+                writer.MarkFoldReady();
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -609,11 +614,23 @@ public static class IndexCommandRunner
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
-            // Full-scan always stamps FoldReady (#86): every symbols / symbol_references
-            // row this run inserted has name_folded populated, so the reader's Unicode
-            // fold path is safe to trust for `--exact` queries.
-            // full-scan は fold も stamp。全行に folded が入っているので reader の unicode 経路 OK。
-            writer.MarkFoldReady();
+            // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
+            // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
+            // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip
+            // readers onto the folded-equality path and silently miss those rows. Verify
+            // every existing row has its folded column populated before stamping, and tell
+            // the user how to upgrade when not (only --rebuild / a truly-fresh index can
+            // guarantee 100% backfill on a legacy DB).
+            // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
+            // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
+            if (writer.AllFoldedColumnsBackfilled())
+            {
+                writer.MarkFoldReady();
+            }
+            else if (!options.Json)
+            {
+                ConsoleUi.PrintWarning("--exact Unicode fold path not stamped: legacy rows without name_folded remain. Run `cdidx index . --rebuild` to upgrade the whole DB.");
+            }
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();

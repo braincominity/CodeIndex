@@ -1025,10 +1025,13 @@ public partial class McpServer
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
-            // MCP index_project is a full scan, so every row has name_folded populated and
-            // the Unicode `--exact` fold path is safe to trust (#86). Matches CLI RunFullScan.
-            // MCP index は full scan のため fold も stamp（CLI RunFullScan と同じ）。
-            writer.MarkFoldReady();
+            // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
+            // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
+            // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
+            // would silently miss legacy rows on the folded-equality path. Codex #86 review.
+            // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
+            if (writer.AllFoldedColumnsBackfilled())
+                writer.MarkFoldReady();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 

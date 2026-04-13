@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -223,6 +224,58 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotStampFoldReadyWhenLegacyRowsRemain()
+    {
+        // Codex #86 review regression: on a legacy DB (pre-#86) opened by a new binary, the
+        // incremental default of `cdidx index .` skips unchanged files via GetUnchangedFileId.
+        // Their old rows stay NULL in name_folded. Stamping FoldReady would flip readers onto
+        // the folded-equality path and silently miss those rows. Verify the stamp is withheld.
+        // Legacy 行が残っているときに FoldReady が stamp されないことを確認する回帰テスト。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+
+            // Initial index — writes every row with name_folded populated, stamps FoldReady.
+            // 初回 index: 全行 folded 付き、FoldReady stamp される。
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            // Simulate pre-#86 legacy state: wipe folded columns + FoldReady bit on the existing
+            // row to model an upgrade from a binary that did not populate name_folded yet.
+            // pre-#86 を模擬: folded 列を NULL に戻し、FoldReady bit も落とす。
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL; UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL; PRAGMA user_version = 3";
+                cmd.ExecuteNonQuery();
+            }
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+            // Incremental re-run skips the unchanged file — legacy rows with NULL folded columns
+            // still exist, so FoldReady MUST NOT be restamped.
+            // 再 index は unchanged file を skip するため legacy 行が残る → FoldReady は立てない。
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var verifyCmd = verify.CreateCommand();
+            verifyCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)verifyCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }

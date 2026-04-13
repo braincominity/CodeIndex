@@ -362,6 +362,49 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AllFoldedColumnsBackfilled_DetectsLegacyRowsWithNullFoldedValues()
+    {
+        // Regression for codex #86 review: the upgrade path must not stamp FoldReady when
+        // legacy rows (pre-#86) still have NULL folded columns. Simulate by inserting a row
+        // via raw SQL that bypasses the writer's folded-column population, then confirm the
+        // backfill check reports missing data.
+        // Codex 指摘の回帰: legacy 行が残っていれば AllFoldedColumnsBackfilled() は false を返す。
+        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_verify_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(legacyPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+
+            // Happy path: fresh DB with writer-inserted rows — all folded columns populated.
+            // writer 経由で入れた行は folded 付き。
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            Assert.True(writer.AllFoldedColumnsBackfilled());
+
+            // Simulate a legacy row by manually nulling name_folded (as a pre-#86 row would be).
+            // pre-#86 の legacy 行を模擬して name_folded を NULL に戻す。
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL WHERE name = 'authenticate'";
+                cmd.ExecuteNonQuery();
+            }
+            Assert.False(writer.AllFoldedColumnsBackfilled());
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(legacyPath)) File.Delete(legacyPath);
+        }
+    }
+
+    [Fact]
     public void SearchSymbols_ExactFallsBackToNocaseWhenFoldNotReady()
     {
         // Legacy / partial-backfill DBs do not set FoldReadyFlag; the reader must silently
