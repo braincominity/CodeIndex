@@ -40,7 +40,23 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                {
+                    if (options.Json)
+                    {
+                        var (fileCount, indexedAt) = reader.GetFreshnessHint();
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            BuildJsonZeroResultPayload(
+                                exactZeroHint: null,
+                                includeFiles: true,
+                                indexedFileCount: fileCount,
+                                indexedAt: indexedAt),
+                            jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                    }
+                }
                 else if (options.Json)
                 {
                     var (fileCount, indexedAt) = reader.GetFreshnessHint();
@@ -507,7 +523,22 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0 }, jsonOptions) : "0");
+                {
+                    if (options.Json)
+                    {
+                        var (fileCount, indexedAt) = reader.GetFreshnessHint();
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            BuildJsonZeroResultPayload(
+                                exactZeroHint: null,
+                                indexedFileCount: fileCount,
+                                indexedAt: indexedAt),
+                            jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                    }
+                }
                 else if (options.Json)
                 {
                     var (fileCount, indexedAt) = reader.GetFreshnessHint();
