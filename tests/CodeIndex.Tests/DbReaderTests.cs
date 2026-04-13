@@ -1673,6 +1673,87 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_IgnoreAttributes_DoNotClassifyAsSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_ignore_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Runtime.Serialization;
+                using System.Text.Json.Serialization;
+
+                public class LegacyDto
+                {
+                    [JsonIgnore]
+                    public string LegacyField { get; set; } = string.Empty;
+                    [IgnoreDataMember]
+                    public string LegacyAlias { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "LegacyDto",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 9,
+                Signature = "public class LegacyDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "LegacyField",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string LegacyField { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "LegacyDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "LegacyAlias",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "public string LegacyAlias { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "LegacyDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_ignore_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "LegacyField").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "LegacyAlias").UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_SmallLimitDiversifiesAcrossBuckets()
     {
         var fileId = _writer.UpsertFile(new FileRecord

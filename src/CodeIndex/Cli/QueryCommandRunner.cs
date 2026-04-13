@@ -1007,18 +1007,16 @@ public static class QueryCommandRunner
 
             if (options.CountOnly)
             {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                var bucketCounts = BuildUnusedBucketCounts(results);
+                var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 Console.WriteLine(options.Json
                     ? JsonSerializer.Serialize(new
                     {
-                        count = results.Count,
-                        files = fc,
+                        count = countSummary.Count,
+                        files = countSummary.FileCount,
                         graph_supported = graphSupported,
-                        graph_support_reason = graphSupportReason,
-                        returned_bucket_counts = bucketCounts
+                        graph_support_reason = graphSupportReason
                     }, jsonOptions)
-                    : $"{results.Count}");
+                    : $"{countSummary.Count}");
                 return CommandExitCodes.Success;
             }
 

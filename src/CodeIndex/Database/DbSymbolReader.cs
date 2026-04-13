@@ -18,9 +18,7 @@ public partial class DbReader
         "[jsonpropertyname(",
         "[jsonproperty(",
         "[jsoninclude",
-        "[jsonignore",
         "[datamember",
-        "[ignoredatamember",
         "[bsonelement",
         "[bsonid",
         "[xmlelement",
@@ -28,6 +26,14 @@ public partial class DbReader
         "[yamlmember",
         "[column(",
     ];
+    private static readonly string[] ReflectionIgnoreAttributeMarkers =
+    [
+        "[jsonignore",
+        "[ignoredatamember",
+    ];
+    private const int UnusedPublicOverfetchMultiplier = 16;
+    private const int UnusedPublicOverfetchMinimum = 64;
+    private const int UnusedPublicOverfetchMaximum = 1024;
 
     /// <summary>
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
@@ -551,23 +557,36 @@ public partial class DbReader
                 AND s.kind = 'property'
                 AND {hasConfigContextSql}
             )";
+        var provisionalBucketOrderSql = $@"
+            CASE
+                WHEN {isReflectionOrConfigSuspectSql} THEN 3
+                WHEN {isPublicOrExportedSql} THEN 2
+                WHEN {visibilitySql} IN ('private', 'fileprivate') THEN 0
+                ELSE 1
+            END";
+        var publicBucketLimit = Math.Min(
+            Math.Max(limit * UnusedPublicOverfetchMultiplier, UnusedPublicOverfetchMinimum),
+            UnusedPublicOverfetchMaximum);
+        var perBucketLimit = Math.Max(limit, 1);
         var sql = $@"
-            SELECT f.path, f.lang, s.kind, s.name, s.line,
-                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type,
-                   {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name,
-                   CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
-                   CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE s.kind NOT IN ('import', 'namespace')
-              AND NOT EXISTS (
-                  SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
-              )";
+            WITH unused_candidates AS (
+                SELECT f.path, f.lang, s.kind, s.name, s.line,
+                       {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                       {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                       {GetSymbolColumnSql("signature")} AS signature,
+                       {GetSymbolColumnSql("visibility")} AS visibility,
+                       {GetSymbolColumnSql("return_type")} AS return_type,
+                       {GetSymbolColumnSql("container_kind")} AS container_kind,
+                       {GetSymbolColumnSql("container_name")} AS container_name,
+                       {provisionalBucketOrderSql} AS provisional_bucket_order,
+                       CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
+                       CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.kind NOT IN ('import', 'namespace')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+                  )";
 
         if (lang != null)
         {
@@ -584,10 +603,30 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += " ORDER BY f.path, s.line, s.name";
+        sql += @"
+            ),
+            ranked_unused AS (
+                SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                       return_type, container_kind, container_name, is_public_or_exported,
+                       is_reflection_or_config_suspect, provisional_bucket_order,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY provisional_bucket_order
+                           ORDER BY path, line, name
+                       ) AS provisional_row_number
+                FROM unused_candidates
+            )
+            SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                   return_type, container_kind, container_name, is_public_or_exported,
+                   is_reflection_or_config_suspect
+            FROM ranked_unused
+            WHERE (provisional_bucket_order = 2 AND provisional_row_number <= @publicBucketLimit)
+               OR (provisional_bucket_order <> 2 AND provisional_row_number <= @perBucketLimit)
+            ORDER BY provisional_bucket_order, path, line, name";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@perBucketLimit", perBucketLimit);
+        cmd.Parameters.AddWithValue("@publicBucketLimit", publicBucketLimit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         else
@@ -671,6 +710,50 @@ public partial class DbReader
         return limited;
     }
 
+    public (int Count, int FileCount) CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (!_hasReferencesTable)
+            return (0, 0);
+
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT COUNT(*), COUNT(DISTINCT f.path)
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.kind NOT IN ('import', 'namespace')
+              AND NOT EXISTS (
+                  SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+              )";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        else
+            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
+
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        else
+        {
+            var langList = graphLangs.ToList();
+            for (int i = 0; i < langList.Count; i++)
+                cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
+        }
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return (0, 0);
+        return (reader.GetInt32(0), reader.GetInt32(1));
+    }
+
     private bool HasReflectionAttributeContext(string path, int startLine)
     {
         var excerptStart = Math.Max(1, startLine - 3);
@@ -686,6 +769,8 @@ public partial class DbReader
                 continue;
 
             var lowered = trimmed.ToLowerInvariant();
+            if (ReflectionIgnoreAttributeMarkers.Any(marker => lowered.Contains(marker, StringComparison.Ordinal)))
+                return false;
             if (ReflectionAttributeMarkers.Any(marker => lowered.Contains(marker, StringComparison.Ordinal)))
                 return true;
         }
