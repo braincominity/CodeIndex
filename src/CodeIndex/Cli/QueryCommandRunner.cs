@@ -97,8 +97,9 @@ public static class QueryCommandRunner
             var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact,
-                () => reader.SearchSymbols(options.Query, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false).Count > 0,
-                () => reader.SearchSymbols(options.Query, ExactZeroHintSampleLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                () => reader.CountSearchSymbols(options.Query, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
+                () => reader.CountSearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                () => reader.SearchSymbols(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                 r => r.Name);
             if (results.Count == 0)
             {
@@ -177,8 +178,9 @@ public static class QueryCommandRunner
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact && reader._hasReferencesTable,
-                () => reader.SearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false).Count > 0,
-                () => reader.SearchReferences(options.Query, ExactZeroHintSampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.SymbolName);
             WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
             if (results.Count == 0)
@@ -250,8 +252,9 @@ public static class QueryCommandRunner
             var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact && reader._hasReferencesTable,
-                () => reader.GetCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false).Count > 0,
-                () => reader.GetCallers(options.Query, ExactZeroHintSampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CalleeName);
             WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
             if (results.Count == 0)
@@ -319,8 +322,9 @@ public static class QueryCommandRunner
             var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact && reader._hasReferencesTable,
-                () => reader.GetCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false).Count > 0,
-                () => reader.GetCallees(options.Query, ExactZeroHintSampleLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CallerName);
             WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
             if (results.Count == 0)
@@ -420,8 +424,9 @@ public static class QueryCommandRunner
             var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
             var exactZeroHint = BuildExactZeroHint(
                 options.Exact && symbolQueries != null && symbolQueries.Count > 0,
-                () => reader.SearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false).Count > 0,
-                () => reader.SearchSymbols(symbolQueries, ExactZeroHintSampleLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
+                () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                 r => r.Name);
             if (results.Count == 0)
             {
@@ -1341,12 +1346,16 @@ public static class QueryCommandRunner
             Console.Error.WriteLine("Hint: the index may be stale. Run 'cdidx index <projectPath>' to refresh.");
     }
 
-    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
+    internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<int> relaxedCountQuery, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
     {
         if (!shouldProbe)
             return null;
 
         if (!anyRelaxedMatch())
+            return null;
+
+        var relaxedCount = relaxedCountQuery();
+        if (relaxedCount == 0)
             return null;
 
         var relaxedResults = relaxedSampleQuery();
@@ -1363,7 +1372,7 @@ public static class QueryCommandRunner
 
         return new ExactZeroHintResult
         {
-            RelaxedCount = relaxedResults.Count,
+            RelaxedCount = relaxedCount,
             SampleNames = sampleNames,
             Suggestion = ExactZeroSuggestion,
         };
