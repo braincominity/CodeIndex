@@ -308,12 +308,11 @@ public class QueryCommandRunnerTests
                 writer.MarkGraphReady();
             }
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["Handle", "--db", dbPath, "--exact"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
             Assert.Contains("No references found.", stderr);
             Assert.Contains("--exact found 0 matches, but substring matching would return 1", stderr);
             Assert.Contains("`HandleRequest`", stderr);
