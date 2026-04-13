@@ -174,6 +174,9 @@ The only production dependency is **Microsoft.Data.Sqlite** — keep it that way
 ### Absolute prohibition
 Code review uses the **locally built binary** from the current commit (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) to search and verify the codebase. This means the reviewer sees exactly what the code actually does — not what tests claim it does, not what documentation says it does, but what the running binary produces. **It is strictly forbidden to intentionally implement incomplete, hollow, or deceptive code that passes tests or review on paper but fails in practice.** Every feature must work correctly when exercised by the binary itself. Cutting corners to "pass review" defeats the purpose of the self-improvement loop and will be caught by dogfooding.
 
+### Code search tools (Claude Code / AI harnesses)
+Repo-tracked `.claude/settings.json` denies the full set of shell code-search and file-discovery commands (`rg`, `grep`, `egrep`, `fgrep`, `zgrep`, `rgrep`, `ripgrep`, `ag`, `ack`, `ack-grep`, `git grep`, `find`, `locate`, `mlocate`, `mdfind`, `cdidx`) so Claude Code agents cannot silently fall back to any of them. Use the built-in Grep / Glob tools and the **locally built binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) for searches — the global `cdidx` may have an older DB schema, missing query features, or stale extraction logic that silently returns wrong results. Contributors who want shell-level access to any of these commands can allow-list them in their own untracked `.claude/settings.local.json`.
+
 ### Method signature changes
 When changing a method's return type or parameters (e.g. `BuildRecord` from `(FileRecord, string)` to `(FileRecord, string, string?)`), **update ALL callers** in the same commit:
 - `Cli/IndexCommandRunner.cs` (full scan AND `--commits`/`--files` update mode)
@@ -412,6 +415,9 @@ tests/CodeIndex.Tests/
 
 ### 絶対禁止事項
 コードレビューは現在のコミットから**ローカルビルドしたバイナリ**（`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`）を使ってコードベースを検索・検証します。つまりレビュアーは、テストが主張する動作でもドキュメントが述べる動作でもなく、実行中のバイナリが実際に出す結果を見ます。**テストやレビューを表面上パスするが実際には動作しない、不完全・中身のない・欺瞞的なコードを意図的に実装することは厳禁です。** すべての機能はバイナリ自身で実行したときに正しく動作しなければなりません。「レビューを通す」ための手抜きは自己改善ループの目的を損ない、ドッグフーディングで必ず発覚します。
+
+### コード検索ツール（Claude Code / AI ハーネス）
+リポジトリ追跡の `.claude/settings.json` で、shell のコード検索・ファイル探索系コマンドを網羅的に deny しています（`rg`、`grep`、`egrep`、`fgrep`、`zgrep`、`rgrep`、`ripgrep`、`ag`、`ack`、`ack-grep`、`git grep`、`find`、`locate`、`mlocate`、`mdfind`、`cdidx`）。これにより Claude Code エージェントは、これらのいずれにも黙ってフォールバックできません。検索には組み込みの Grep / Glob ツール、または**ローカルビルドしたバイナリ**（`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`）を使ってください — グローバル版 `cdidx` は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す恐れがあります。shell レベルで使いたい貢献者は、自分の追跡外 `.claude/settings.local.json` で allow-list してください。
 
 ### メソッドシグネチャの変更
 メソッドの戻り値やパラメータを変更した場合（例: `BuildRecord`を`(FileRecord, string)`から`(FileRecord, string, string?)`に変更）、**同じコミットで全ての呼び出し元を更新すること**:
