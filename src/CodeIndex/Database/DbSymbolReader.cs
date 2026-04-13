@@ -137,7 +137,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {PathBucketOrder}, {VisibilityOrder}, CASE WHEN @preferExactCase = 1 AND s.name = @rawQuery THEN 0 ELSE 1 END, s.name, f.path, s.line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND s.name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)

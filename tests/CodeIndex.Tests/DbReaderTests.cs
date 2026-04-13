@@ -366,7 +366,7 @@ public class DbReaderTests : IDisposable
     {
         InsertIndexedFile("src/a_case.py", "python",
             "def apiTwin():\n    return authenticate('a', 'b')\n");
-        InsertIndexedFile("src/z_case.py", "python",
+        InsertIndexedFile("tests/z_case.py", "python",
             "def ApiTwin():\n    return authenticate('a', 'b')\n");
 
         var symbols = _reader.SearchSymbols(new[] { "ApiTwin" }, limit: 10, exact: true)
@@ -384,6 +384,14 @@ public class DbReaderTests : IDisposable
             .Take(2)
             .ToList();
         Assert.Equal(new[] { "ApiTwin", "apiTwin" }, definitions);
+
+        var topSymbol = Assert.Single(_reader.SearchSymbols(new[] { "ApiTwin" }, limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topSymbol.Name);
+        Assert.Equal("tests/z_case.py", topSymbol.Path);
+
+        var topDefinition = Assert.Single(_reader.GetDefinitions("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topDefinition.Name);
+        Assert.Equal("tests/z_case.py", topDefinition.Path);
     }
 
     [Fact]
@@ -701,7 +709,7 @@ public class DbReaderTests : IDisposable
         InsertIndexedFile("src/a_case.py", "python",
             "def apiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
             "def lower_wrapper():\n    return apiTwin()\n");
-        InsertIndexedFile("src/z_case.py", "python",
+        InsertIndexedFile("tests/z_case.py", "python",
             "def ApiTwin():\n    authenticate('a', 'b')\n    return True\n\n" +
             "def upper_wrapper():\n    return ApiTwin()\n");
 
@@ -728,6 +736,18 @@ public class DbReaderTests : IDisposable
             .Take(2)
             .ToList();
         Assert.Equal(new[] { "ApiTwin", "apiTwin" }, callees);
+
+        var topReference = Assert.Single(_reader.SearchReferences("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topReference.SymbolName);
+        Assert.Equal("tests/z_case.py", topReference.Path);
+
+        var topCaller = Assert.Single(_reader.GetCallers("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCaller.CalleeName);
+        Assert.Equal("tests/z_case.py", topCaller.Path);
+
+        var topCallee = Assert.Single(_reader.GetCallees("ApiTwin", limit: 1, exact: true));
+        Assert.Equal("ApiTwin", topCallee.CallerName);
+        Assert.Equal("tests/z_case.py", topCallee.Path);
     }
 
     [Fact]
