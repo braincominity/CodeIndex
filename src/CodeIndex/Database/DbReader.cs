@@ -101,14 +101,44 @@ public partial class DbReader
         }
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
-        _foldReady = (userVersion & DbContext.FoldReadyFlag) != 0
-                     && _symbolColumns.Contains("name_folded");
+        // #86 third-pass: require BOTH the FoldReady bit AND a matching NameFold.Version in
+        // codeindex_meta. Without the version guard, a future NameFold.Fold semantic change
+        // (e.g. #96 true Unicode CaseFold) would silently mismatch against stale stored keys.
+        // Legacy DBs without the metadata row (or without the codeindex_meta table on read-only
+        // sandboxes where TryMigrateForRead skipped it) read as null → treated as version
+        // mismatch → NOCASE fallback. Rebuild (`cdidx index . --rebuild`) restamps to current.
+        // #86 3rd pass: FoldReadyFlag だけでなく fold_key_version も一致で初めて fold 経路を使う。
+        // version mismatch や未記録は NOCASE fallback に降格させる。
+        var foldBitSet = (userVersion & DbContext.FoldReadyFlag) != 0
+                         && _symbolColumns.Contains("name_folded");
+        var storedFoldVersion = foldBitSet ? ParseFoldVersion(connection) : -1;
+        _foldReady = foldBitSet && storedFoldVersion == NameFold.Version;
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
         // repo is untouched, which would flip trust on prematurely. Only an explicit
         // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
         // get stamped — degradation is safer than silent false-clean zeroes.
         // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+    }
+
+    private static int ParseFoldVersion(SqliteConnection conn)
+    {
+        // Inline the codeindex_meta lookup to avoid creating a DbContext here.
+        // codeindex_meta を直接引く（DbContext を new しない）。
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var raw = cmd.ExecuteScalar();
+            if (raw is string s && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var v))
+                return v;
+        }
+        catch (SqliteException)
+        {
+            // codeindex_meta missing (legacy DB / read-only where migration skipped)
+            // → return -1 so the reader treats fold as not-ready and falls back to NOCASE.
+        }
+        return -1;
     }
 
     // Reference-count subquery that gracefully degrades to 0 when symbol_references is absent

@@ -595,7 +595,35 @@ public class DbWriter
     // CLI / MCP 共に full-scan で graph + fold を立てる。fold は部分更新では立てない。
     public void MarkGraphReady()    => SetReadyBit(DbContext.GraphReadyFlag);
     public void MarkIssuesReady()   => SetReadyBit(DbContext.IssuesReadyFlag);
-    public void MarkFoldReady()     => SetReadyBit(DbContext.FoldReadyFlag);
+
+    /// <summary>
+    /// Stamp FoldReadyFlag AND write the current <see cref="NameFold.Version"/> into
+    /// `codeindex_meta`. Readers require both the bit and an exact version match before
+    /// trusting folded columns, so when #96 (or any future tweak) changes the fold
+    /// algorithm and bumps `NameFold.Version`, existing DBs will not silently query new
+    /// code against stale keys — they automatically fall back to the NOCASE path until
+    /// `--rebuild` regenerates the folded columns. Codex #86 third-pass review.
+    /// FoldReady bit + fold_key_version の両方を書く。アルゴリズム変更時の silent mismatch を防ぐ。
+    /// </summary>
+    public void MarkFoldReady()
+    {
+        SetReadyBit(DbContext.FoldReadyFlag);
+        SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Upsert a metadata key/value into `codeindex_meta`.
+    /// codeindex_meta への key/value の upsert。
+    /// </summary>
+    public void SetMeta(string key, string? value)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
+                            ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        cmd.Parameters.AddWithValue("@key", key);
+        cmd.Parameters.AddWithValue("@value", (object?)value ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
 
     /// <summary>

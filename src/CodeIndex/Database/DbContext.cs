@@ -222,6 +222,29 @@ public class DbContext : IDisposable
         Execute("PRAGMA user_version = 0");
     }
 
+    /// <summary>
+    /// Read a string value from `codeindex_meta`. Returns null when absent or the table
+    /// hasn't been created (legacy DBs, read-only sandboxes where migration was skipped).
+    /// codeindex_meta からの読み取り。テーブル未作成や未登録キーは null を返す。
+    /// </summary>
+    public string? GetMetaString(string key)
+    {
+        if (!TableExists("codeindex_meta")) return null;
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", key);
+        var raw = cmd.ExecuteScalar();
+        return raw is string s ? s : null;
+    }
+
+    private bool TableExists(string name)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
+        cmd.Parameters.AddWithValue("@name", name);
+        return cmd.ExecuteScalar() != null;
+    }
+
     public void InitializeSchema()
     {
         // Files table / ファイルテーブル
@@ -290,6 +313,16 @@ public class DbContext : IDisposable
                 kind            TEXT NOT NULL,
                 line            INTEGER NOT NULL DEFAULT 0,
                 message         TEXT NOT NULL
+            )");
+
+        // Key-value metadata: fold algorithm version, future per-subsystem schema markers
+        // that don't fit in PRAGMA user_version's 3-bit readiness bitmap. See
+        // NameFold.Version and DbReader fold-ready gate.
+        // メタデータ用 key-value: fold のアルゴリズム版数など、user_version bitmap に収まらない情報。
+        Execute(@"
+            CREATE TABLE IF NOT EXISTS codeindex_meta (
+                key    TEXT PRIMARY KEY NOT NULL,
+                value  TEXT
             )");
 
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
@@ -472,6 +505,13 @@ public class DbContext : IDisposable
                     kind            TEXT NOT NULL,
                     line            INTEGER NOT NULL DEFAULT 0,
                     message         TEXT NOT NULL
+                )");
+
+            // #86 codex third-pass review: metadata table for fold-algorithm version guard.
+            Execute(@"
+                CREATE TABLE IF NOT EXISTS codeindex_meta (
+                    key    TEXT PRIMARY KEY NOT NULL,
+                    value  TEXT
                 )");
         }
         catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
