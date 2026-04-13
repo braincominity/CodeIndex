@@ -41,6 +41,17 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions) : "0");
+                else if (options.Json)
+                {
+                    var (fileCount, indexedAt) = reader.GetFreshnessHint();
+                    Console.WriteLine(JsonSerializer.Serialize(
+                        BuildJsonZeroResultPayload(
+                            exactZeroHint: null,
+                            resultsKey: "results",
+                            indexedFileCount: fileCount,
+                            indexedAt: indexedAt),
+                        jsonOptions));
+                }
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No results found.");
@@ -497,6 +508,17 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0 }, jsonOptions) : "0");
+                else if (options.Json)
+                {
+                    var (fileCount, indexedAt) = reader.GetFreshnessHint();
+                    Console.WriteLine(JsonSerializer.Serialize(
+                        BuildJsonZeroResultPayload(
+                            exactZeroHint: null,
+                            resultsKey: "files",
+                            indexedFileCount: fileCount,
+                            indexedAt: indexedAt),
+                        jsonOptions));
+                }
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No files found.");
@@ -1393,7 +1415,14 @@ public static class QueryCommandRunner
         };
     }
 
-    private static Dictionary<string, object?> BuildJsonZeroResultPayload(ExactZeroHintResult? exactZeroHint, bool includeFiles = false, bool? graphTableAvailable = null, bool? degraded = null)
+    private static Dictionary<string, object?> BuildJsonZeroResultPayload(
+        ExactZeroHintResult? exactZeroHint,
+        bool includeFiles = false,
+        string? resultsKey = null,
+        bool? graphTableAvailable = null,
+        bool? degraded = null,
+        long? indexedFileCount = null,
+        DateTime? indexedAt = null)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -1402,10 +1431,16 @@ public static class QueryCommandRunner
 
         if (includeFiles)
             payload["files"] = 0;
+        if (resultsKey != null)
+            payload[resultsKey] = Array.Empty<object>();
         if (graphTableAvailable.HasValue)
             payload["graph_table_available"] = graphTableAvailable.Value;
         if (degraded.HasValue)
             payload["degraded"] = degraded.Value;
+        if (indexedFileCount.HasValue)
+            payload["indexed_file_count"] = indexedFileCount.Value;
+        if (indexedAt.HasValue)
+            payload["indexed_at"] = indexedAt.Value;
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = exactZeroHint;
 
