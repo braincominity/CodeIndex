@@ -551,6 +551,29 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_AnalyzeSymbol_ExactZeroHintWhenWholeBundleIsEmpty()
+    {
+        InsertIndexedFile("src/handler.cs", "csharp",
+            """
+            public class Handler
+            {
+                public void HandleRequest() { }
+                public void HandleRequestAsync() { HandleRequest(); }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"HandleRe","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+
+        Assert.NotNull(structured["exact_zero_hint"]);
+        Assert.Equal(2, structured["exact_zero_hint"]!["relaxed_count"]!.GetValue<int>());
+        Assert.Contains("HandleRequest", structured["exact_zero_hint"]!["sample_names"]!.ToJsonString());
+        Assert.Contains("Substring would return 2", text);
+    }
+
+    [Fact]
     public void ToolsCall_Search_MissingQuery_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{}}}""")!;

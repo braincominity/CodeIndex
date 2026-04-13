@@ -19,8 +19,6 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
-    internal const string ExactZeroSuggestion = "drop --exact or use the exact indexed name";
-
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -684,6 +682,7 @@ public static class QueryCommandRunner
                     Console.WriteLine("Graph Table          : MISSING — empty References/Callers/Callees are degraded, NOT real zero-hit results.");
                 if (options.Exact && analysis.GraphTableAvailable && analysis.ExactIndexAvailable == false && analysis.DegradedReason != null)
                     Console.WriteLine($"Exact Index          : DEGRADED — {analysis.DegradedReason}. Results are correct but may be slow.");
+                WriteExactZeroHint(analysis.ExactZeroHint);
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("References", analysis.References.Select(item => $"{item.Path}:{item.Line}:{item.Column}  {item.Context}"));
@@ -1390,7 +1389,7 @@ public static class QueryCommandRunner
         {
             RelaxedCount = relaxedCount,
             SampleNames = sampleNames,
-            Suggestion = ExactZeroSuggestion,
+            Suggestion = ExactZeroHintResult.DefaultSuggestion,
         };
     }
 
