@@ -892,6 +892,179 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Analyze impact for a query by combining transitive callers with symbol-resolution
+    /// metadata and a class-like file-dependency fallback when symbol-level callers are absent.
+    /// impact 用に caller BFS と解決メタデータを束ね、class 系で caller 不在なら
+    /// file dependency をフォールバックとして返す。
+    /// </summary>
+    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        var resolvedName = ResolveSymbolName(symbolName, lang);
+        var definitions = ResolveImpactDefinitions(resolvedName, lang);
+        var definitionPaths = definitions
+            .Select(d => d.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var hasClassLikeDefinitions = definitions.Any(d => IsClassLikeImpactKind(d.Kind));
+        var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+
+        var impactMode = "callers";
+        var fileImpacts = new List<FileDependencyResult>();
+        string? zeroResultReason = null;
+        string? suggestion = null;
+
+        if (callers.Count == 0)
+        {
+            impactMode = "none";
+
+            if (_hasReferencesTable)
+            {
+                if (hasClassLikeDefinitions && definitionPaths.Count > 0)
+                {
+                    fileImpacts = GetFileDependenciesToTargets(definitionPaths, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    if (fileImpacts.Count > 0)
+                    {
+                        impactMode = "file_dependencies";
+                    }
+                    else
+                    {
+                        zeroResultReason = definitionPaths.Count > 1
+                            ? "multiple_definition_files"
+                            : "class_symbol_no_symbol_callers";
+                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, definitionPaths.Count > 1);
+                    }
+                }
+                else if (definitionPaths.Count > 1)
+                {
+                    zeroResultReason = "multiple_definition_files";
+                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions: false, hasMultipleDefinitionFiles: true);
+                }
+                else if (definitions.Count == 0)
+                {
+                    zeroResultReason = "no_matching_definition";
+                    suggestion = "Try `cdidx definition <symbol>` to confirm the indexed name.";
+                }
+            }
+        }
+
+        return new ImpactAnalysisResult
+        {
+            Query = symbolName,
+            ResolvedName = resolvedName,
+            ImpactMode = impactMode,
+            MaxDepth = maxDepth,
+            DefinitionCount = definitions.Count,
+            DefinitionFileCount = definitionPaths.Count,
+            HasClassLikeDefinitions = hasClassLikeDefinitions,
+            HasMultipleDefinitionFiles = definitionPaths.Count > 1,
+            Definitions = definitions,
+            Callers = callers,
+            FileImpacts = fileImpacts,
+            Truncated = truncated,
+            GraphTableAvailable = _hasReferencesTable,
+            ZeroResultReason = zeroResultReason,
+            Suggestion = suggestion,
+        };
+    }
+
+    private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang)
+    {
+        return SearchSymbols(resolvedName, limit: 50, kind: null, lang, pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null, exact: true)
+            .Where(symbol => string.Equals(symbol.Name, resolvedName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private List<FileDependencyResult> GetFileDependenciesToTargets(IReadOnlyList<string> targetPaths, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        if (!_hasReferencesTable || targetPaths.Count == 0)
+            return new List<FileDependencyResult>();
+
+        using var cmd = _conn.CreateCommand();
+        var innerSql = @"
+                SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
+                       r.symbol_name AS symbol_name
+                FROM symbol_references r
+                JOIN files src ON r.file_id = src.id
+                JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
+                JOIN files dst ON s.file_id = dst.id
+                WHERE src.path != dst.path";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
+        if (lang != null)
+            innerSql += " AND src.lang = @lang";
+
+        var targetPathClauses = new List<string>(targetPaths.Count);
+        for (int i = 0; i < targetPaths.Count; i++)
+            targetPathClauses.Add($"dst.path = @impactTargetPath{i}");
+        innerSql += " AND (" + string.Join(" OR ", targetPathClauses) + ")";
+
+        if (pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"src.path LIKE @pathPattern{i} ESCAPE '\\'");
+            innerSql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                innerSql += $" AND src.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
+        if (excludeTests)
+            innerSql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
+
+        cmd.CommandText = $@"
+            SELECT source_path, target_path,
+                   COUNT(*) AS reference_count,
+                   GROUP_CONCAT(symbol_name) AS symbols
+            FROM ({innerSql}) edges
+            GROUP BY source_path, target_path
+            ORDER BY reference_count DESC, source_path, target_path
+            LIMIT @limit";
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        for (int i = 0; i < targetPaths.Count; i++)
+            cmd.Parameters.AddWithValue($"@impactTargetPath{i}", targetPaths[i]);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<FileDependencyResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            results.Add(new FileDependencyResult
+            {
+                SourcePath = reader.GetString(0),
+                TargetPath = reader.GetString(1),
+                ReferenceCount = reader.GetInt32(2),
+                Symbols = reader.GetString(3),
+            });
+        }
+
+        return results;
+    }
+
+    private static bool IsClassLikeImpactKind(string? kind)
+    {
+        return kind is "class" or "struct" or "interface" or "enum" or "namespace";
+    }
+
+    private static string BuildImpactSuggestion(IReadOnlyList<string> definitionPaths, bool hasClassLikeDefinitions, bool hasMultipleDefinitionFiles)
+    {
+        if (hasClassLikeDefinitions)
+        {
+            if (hasMultipleDefinitionFiles)
+                return "Try `cdidx deps --path <definition-path> --reverse` for each definition file or query a member symbol instead.";
+            if (definitionPaths.Count > 0)
+                return $"Try `cdidx deps --path {definitionPaths[0]} --reverse` or query a member symbol instead.";
+        }
+
+        if (hasMultipleDefinitionFiles)
+            return "Try a more specific symbol name or inspect each definition file with `cdidx definition <symbol> --body`.";
+
+        return "Try `cdidx definition <symbol>` to confirm the indexed symbol and then query a more specific callable member.";
+    }
+
+    /// <summary>
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>

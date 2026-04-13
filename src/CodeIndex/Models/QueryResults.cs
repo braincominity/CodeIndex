@@ -140,6 +140,27 @@ public class ImpactResult
     public int ReferenceCount { get; set; }
 }
 
+public class ImpactAnalysisResult
+{
+    public string Query { get; set; } = string.Empty;
+    public string ResolvedName { get; set; } = string.Empty;
+    public string ImpactMode { get; set; } = "callers";
+    public int MaxDepth { get; set; }
+    public int DefinitionCount { get; set; }
+    public int DefinitionFileCount { get; set; }
+    public bool HasClassLikeDefinitions { get; set; }
+    public bool HasMultipleDefinitionFiles { get; set; }
+    public List<SymbolResult> Definitions { get; set; } = [];
+    public List<ImpactResult> Callers { get; set; } = [];
+    public List<FileDependencyResult> FileImpacts { get; set; } = [];
+    public bool Truncated { get; set; }
+    public bool GraphTableAvailable { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ZeroResultReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Suggestion { get; set; }
+}
+
 public class StatusResult
 {
     public long Files { get; set; }

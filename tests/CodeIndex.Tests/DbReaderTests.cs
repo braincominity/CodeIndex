@@ -1101,6 +1101,68 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_ClassSymbolFallsBackToFileDependencies()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependencies", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.True(analysis.HasClassLikeDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        var edge = Assert.Single(analysis.FileImpacts);
+        Assert.Equal("src/App.cs", edge.SourcePath);
+        Assert.Equal("src/FolderDiffService.cs", edge.TargetPath);
+        Assert.Contains("ExecuteFolderDiffAsync", edge.Symbols);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_PartialClassWithoutReverseEdges_ExplainsMultipleDefinitions()
+    {
+        InsertIndexedFile("src/Worker.Part1.cs", "csharp",
+            """
+            public partial class Worker
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/Worker.Part2.cs", "csharp",
+            """
+            public partial class Worker
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Worker", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.True(analysis.HasClassLikeDefinitions);
+        Assert.True(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+        Assert.Contains("deps --path <definition-path> --reverse", analysis.Suggestion);
+    }
+
+    [Fact]
     public void ListFiles_ReturnsAllFiles()
     {
         var results = _reader.ListFiles();

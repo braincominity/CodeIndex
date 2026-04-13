@@ -247,6 +247,99 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ClassSymbolJsonFallsBackToFileDependencies()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_class_fallback");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Run(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependencies", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            Assert.True(json.GetProperty("has_class_like_definitions").GetBoolean());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+            Assert.Equal("src/FolderDiffService.cs", json.GetProperty("file_impacts")[0].GetProperty("target_path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_PartialClassJsonReturnsResolutionHintPayload()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_partial_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part1.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Start() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part2.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Stop() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Worker", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
+            Assert.Contains("deps --path <definition-path> --reverse", json.GetProperty("suggestion").GetString());
+            Assert.Equal(2, json.GetProperty("definition_file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void BuildExactZeroHint_NoRelaxedMatch_DoesNotRunSampleQuery()
     {
         var sampleInvoked = false;
@@ -948,6 +1041,14 @@ public class QueryCommandRunnerTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Last();
         return JsonDocument.Parse(jsonLine);
+    }
+
+    private static void MarkGraphAndFoldReady(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkFoldReady();
     }
 
     private static void DropGraphExactFallbackIndexes(string dbPath)

@@ -521,6 +521,40 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_ClassSymbolFallsBackToFileDependencies()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var fileImpacts = structured["file_impacts"]!.AsArray();
+
+        Assert.Equal("file_dependencies", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("src/App.cs", fileImpacts[0]!["sourcePath"]!.GetValue<string>());
+        Assert.Equal("src/FolderDiffService.cs", fileImpacts[0]!["targetPath"]!.GetValue<string>());
+        Assert.True(structured["has_class_like_definitions"]!.GetValue<bool>());
+        Assert.Contains("file-level dependency", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_IncludesCombinedExactIndexSignal()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");

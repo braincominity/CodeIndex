@@ -833,16 +833,74 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
-            var (results, truncated) = reader.GetTransitiveCallers(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            if (results.Count == 0)
+            var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var count = analysis.ImpactMode == "file_dependencies" ? analysis.FileImpacts.Count : analysis.Callers.Count;
+            var fileCount = analysis.ImpactMode == "file_dependencies"
+                ? analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count()
+                : analysis.Callers.Select(r => r.Path).Distinct().Count();
+
+            if (count == 0)
             {
                 if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new { count = 0, files = 0, graph_table_available = reader._hasReferencesTable, degraded = !reader._hasReferencesTable }, jsonOptions) : "0");
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions);
+                {
+                    if (options.Json)
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(new
+                        {
+                            query = options.Query,
+                            resolved_name = analysis.ResolvedName,
+                            count = 0,
+                            files = 0,
+                            impact_mode = analysis.ImpactMode,
+                            definition_count = analysis.DefinitionCount,
+                            definition_file_count = analysis.DefinitionFileCount,
+                            has_class_like_definitions = analysis.HasClassLikeDefinitions,
+                            has_multiple_definition_files = analysis.HasMultipleDefinitionFiles,
+                            graph_table_available = analysis.GraphTableAvailable,
+                            degraded = !analysis.GraphTableAvailable,
+                            zero_result_reason = analysis.ZeroResultReason,
+                            suggestion = analysis.Suggestion,
+                        }, jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                    }
+                }
+                else if (options.Json)
+                {
+                    var payload = new Dictionary<string, object?>
+                    {
+                        ["query"] = options.Query,
+                        ["resolved_name"] = analysis.ResolvedName,
+                        ["count"] = 0,
+                        ["file_count"] = 0,
+                        ["max_depth"] = maxDepth,
+                        ["actual_depth"] = 0,
+                        ["truncated"] = analysis.Truncated,
+                        ["impact_mode"] = analysis.ImpactMode,
+                        ["callers"] = Array.Empty<object>(),
+                        ["file_impacts"] = Array.Empty<object>(),
+                        ["definition_count"] = analysis.DefinitionCount,
+                        ["definition_file_count"] = analysis.DefinitionFileCount,
+                        ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
+                        ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
+                        ["definitions"] = analysis.Definitions,
+                        ["graph_table_available"] = analysis.GraphTableAvailable,
+                        ["degraded"] = !analysis.GraphTableAvailable,
+                    };
+                    if (analysis.ZeroResultReason != null)
+                        payload["zero_result_reason"] = analysis.ZeroResultReason;
+                    if (analysis.Suggestion != null)
+                        payload["suggestion"] = analysis.Suggestion;
+                    if (!analysis.GraphTableAvailable)
+                        payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                    Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+                }
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No impact found.");
+                    WriteImpactResolutionHint(analysis);
                     WriteGraphSupportHint(options.Lang);
                     WriteDegradedGraphZeroResult("callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -851,32 +909,69 @@ public static class QueryCommandRunner
 
             if (options.CountOnly)
             {
-                var fc = results.Select(r => r.Path).Distinct().Count();
                 Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
-                    : $"{results.Count}");
+                    ? JsonSerializer.Serialize(new
+                    {
+                        query = options.Query,
+                        resolved_name = analysis.ResolvedName,
+                        count,
+                        files = fileCount,
+                        impact_mode = analysis.ImpactMode,
+                    }, jsonOptions)
+                    : $"{count}");
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { query = options.Query, count = results.Count, max_depth = maxDepth, truncated, callers = results }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    query = options.Query,
+                    resolved_name = analysis.ResolvedName,
+                    count,
+                    file_count = fileCount,
+                    max_depth = maxDepth,
+                    actual_depth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0,
+                    truncated = analysis.Truncated,
+                    impact_mode = analysis.ImpactMode,
+                    callers = analysis.Callers,
+                    file_impacts = analysis.FileImpacts,
+                    definition_count = analysis.DefinitionCount,
+                    definition_file_count = analysis.DefinitionFileCount,
+                    has_class_like_definitions = analysis.HasClassLikeDefinitions,
+                    has_multiple_definition_files = analysis.HasMultipleDefinitionFiles,
+                    definitions = analysis.Definitions,
+                    suggestion = analysis.Suggestion,
+                }, jsonOptions));
             }
             else
             {
-                var grouped = results.GroupBy(r => r.Depth).OrderBy(g => g.Key);
-                foreach (var group in grouped)
+                if (analysis.ImpactMode == "file_dependencies")
                 {
-                    Console.Error.WriteLine($"--- Depth {group.Key} ---");
-                    foreach (var r in group)
+                    Console.Error.WriteLine($"No symbol-level callers found for '{analysis.ResolvedName}'. Showing file-level dependents instead.");
+                    WriteImpactResolutionHint(analysis);
+                    foreach (var edge in analysis.FileImpacts)
+                        Console.WriteLine($"  {edge.SourcePath,-40} -> {edge.TargetPath} ({edge.ReferenceCount} refs: {edge.Symbols})");
+                }
+                else
+                {
+                    var grouped = analysis.Callers.GroupBy(r => r.Depth).OrderBy(g => g.Key);
+                    foreach (var group in grouped)
                     {
-                        var indent = new string(' ', (r.Depth - 1) * 2);
-                        Console.WriteLine($"  {indent}{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                        Console.Error.WriteLine($"--- Depth {group.Key} ---");
+                        foreach (var r in group)
+                        {
+                            var indent = new string(' ', (r.Depth - 1) * 2);
+                            Console.WriteLine($"  {indent}{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                        }
                     }
                 }
-                var fileCount = results.Select(r => r.Path).Distinct().Count();
-                var truncNote = truncated ? " [TRUNCATED]" : "";
-                Console.Error.WriteLine($"\n({results.Count} callers across {fileCount} files, max depth {maxDepth}{truncNote})");
+
+                var truncNote = analysis.Truncated ? " [TRUNCATED]" : "";
+                if (analysis.ImpactMode == "file_dependencies")
+                    Console.Error.WriteLine($"\n({count} dependency edges across {fileCount} files{truncNote})");
+                else
+                    Console.Error.WriteLine($"\n({count} callers across {fileCount} files, max depth {maxDepth}{truncNote})");
             }
             return CommandExitCodes.Success;
         });
@@ -1465,6 +1560,30 @@ public static class QueryCommandRunner
     {
         if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
             Console.Error.WriteLine($"Note: call-graph queries are not indexed for '{lang}'. Use search, definition, excerpt, or files instead.");
+    }
+
+    private static void WriteImpactResolutionHint(ImpactAnalysisResult analysis)
+    {
+        if (analysis.DefinitionCount > 0)
+        {
+            var kinds = string.Join(", ", analysis.Definitions.Select(d => d.Kind).Distinct().OrderBy(k => k));
+            var pathPreview = analysis.Definitions
+                .Select(d => d.Path)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(3)
+                .ToList();
+            var extra = analysis.DefinitionFileCount > pathPreview.Count
+                ? $" (+{analysis.DefinitionFileCount - pathPreview.Count} more)"
+                : string.Empty;
+            Console.Error.WriteLine($"Note: '{analysis.Query}' resolved to '{analysis.ResolvedName}' ({kinds}) in {analysis.DefinitionFileCount} file(s): {string.Join(", ", pathPreview)}{extra}");
+        }
+        else if (analysis.ZeroResultReason == "no_matching_definition")
+        {
+            Console.Error.WriteLine($"Note: no indexed definition matched '{analysis.Query}'.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(analysis.Suggestion))
+            Console.Error.WriteLine($"Hint: {analysis.Suggestion}");
     }
 
     // Emit a zero-result payload that distinguishes "real 0 hits" from "graph table missing
