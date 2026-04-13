@@ -671,6 +671,99 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_ExactUsesUnicodeFoldForResolutionAndCallerMatch()
+    {
+        // Regression for #93: impact BFS used ASCII-only equality in both ResolveSymbolName()
+        // and GetCallersExact(), so a mixed fullwidth/non-ASCII query could miss even when
+        // the definition and caller rows were both present and fold-equivalent.
+        // #93 回帰: impact BFS の 2 箇所が ASCII-only 比較だったため、fullwidth と
+        // 非 ASCII 大文字を含むクエリで definition / caller が両方揃っていても取りこぼした。
+        var symbolFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/intl.py",
+            Lang = "python",
+            Size = 48,
+            Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = symbolFileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 2,
+            Content = "def café_init():\n    return True\n",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = symbolFileId,
+                Kind = "function",
+                Name = "café_init",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+                BodyStartLine = 2,
+                BodyEndLine = 2,
+                Signature = "def café_init():",
+            },
+        ]);
+
+        var callerFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/bootstrap.py",
+            Lang = "python",
+            Size = 58,
+            Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = callerFileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 2,
+            Content = "def bootstrap():\n    return CAFÉ_INIT()\n",
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = callerFileId,
+                Kind = "function",
+                Name = "bootstrap",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+                BodyStartLine = 2,
+                BodyEndLine = 2,
+                Signature = "def bootstrap():",
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "CAFÉ_INIT",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 12,
+                Context = "return CAFÉ_INIT()",
+                ContainerKind = "function",
+                ContainerName = "bootstrap",
+            },
+        ]);
+
+        var (results, truncated) = _reader.GetTransitiveCallers("ＣＡＦÉ_ＩＮＩＴ", maxDepth: 1, limit: 10);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(results);
+        Assert.Equal("src/bootstrap.py", caller.Path);
+        Assert.Equal("bootstrap", caller.CallerName);
+        Assert.Equal("CAFÉ_INIT", caller.CalleeName);
+        Assert.Equal(1, caller.Depth);
+    }
+
+    [Fact]
     public void GetDefinitions_ExactMatchesNameEquality()
     {
         var extraFileId = _writer.UpsertFile(new FileRecord
