@@ -205,7 +205,7 @@ cdidx ./myproject --json
 ```
 
 ```json
-{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":420,"files_scanned":42,"files_skipped":28,"files_purged":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"fold_ready":false,"elapsed_ms":2012}
+{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":420,"files_scanned":42,"files_skipped":28,"files_purged":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"fold_ready":true,"elapsed_ms":2012}
 ```
 
 With `--verbose`, each file also shows a status tag so you can see exactly what happened:
@@ -1089,7 +1089,7 @@ cdidx ./myproject --json
 ```
 
 ```json
-{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":420,"files_scanned":42,"files_skipped":28,"files_purged":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"fold_ready":false,"elapsed_ms":2012}
+{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":420,"files_scanned":42,"files_skipped":28,"files_purged":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"fold_ready":true,"elapsed_ms":2012}
 ```
 
 `--verbose` を付けると、各ファイルにステータスタグも表示され、何が起きたか一目でわかります:
