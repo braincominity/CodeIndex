@@ -89,6 +89,8 @@ public static class QueryCommandRunner
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -190,6 +192,8 @@ public static class QueryCommandRunner
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -266,6 +270,8 @@ public static class QueryCommandRunner
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -338,6 +344,8 @@ public static class QueryCommandRunner
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -589,6 +597,8 @@ public static class QueryCommandRunner
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
             WriteUsageError(
@@ -641,6 +651,8 @@ public static class QueryCommandRunner
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -705,6 +717,8 @@ public static class QueryCommandRunner
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -779,6 +793,8 @@ public static class QueryCommandRunner
 
         var filePath = cmdArgs[0].Replace('\\', '/');
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -821,6 +837,8 @@ public static class QueryCommandRunner
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -897,6 +915,8 @@ public static class QueryCommandRunner
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -1096,6 +1116,8 @@ public static class QueryCommandRunner
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1135,6 +1157,8 @@ public static class QueryCommandRunner
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1188,6 +1212,8 @@ public static class QueryCommandRunner
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1245,6 +1271,8 @@ public static class QueryCommandRunner
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1532,6 +1560,15 @@ public static class QueryCommandRunner
         var lines = content.Split('\n');
         for (int i = 0; i < lines.Length; i++)
             Console.WriteLine($"  {startLine + i,4}: {lines[i]}");
+    }
+
+    private static bool TryWriteParseError(QueryCommandOptions options)
+    {
+        if (options.ParseError == null)
+            return false;
+
+        Console.Error.WriteLine(options.ParseError);
+        return true;
     }
 
     private static void WriteUsageError(string message, string usage, string hint)

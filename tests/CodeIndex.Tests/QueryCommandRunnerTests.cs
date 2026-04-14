@@ -120,6 +120,30 @@ public class QueryCommandRunnerTests
         Assert.NotNull(badTail.ParseError);
     }
 
+    [Theory]
+    [InlineData("definition")]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("excerpt")]
+    [InlineData("map")]
+    [InlineData("inspect")]
+    [InlineData("outline")]
+    [InlineData("status")]
+    [InlineData("impact")]
+    [InlineData("deps")]
+    [InlineData("hotspots")]
+    [InlineData("unused")]
+    [InlineData("validate")]
+    public void QueryEntrypoints_InvalidSinceReturnUsageError(string command)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithInvalidSince(command));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error: could not parse --since value 'nope' as a date/time.", stderr);
+        Assert.DoesNotContain("No ", stderr);
+    }
+
     [Fact]
     public void BuildSymbolQueryList_TreatsPipeAsLiteralNameCharacter()
     {
@@ -2578,6 +2602,28 @@ public class QueryCommandRunnerTests
                 Console.SetError(originalError);
             }
         }
+    }
+
+    private int RunCommandWithInvalidSince(string command)
+    {
+        return command switch
+        {
+            "definition" => QueryCommandRunner.RunDefinition(["QueryCommandRunner", "--since", "nope"], _jsonOptions),
+            "references" => QueryCommandRunner.RunReferences(["QueryCommandRunner", "--since", "nope", "--count"], _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(["QueryCommandRunner", "--since", "nope", "--count"], _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(["QueryCommandRunner", "--since", "nope", "--count"], _jsonOptions),
+            "excerpt" => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "--start", "1", "--since", "nope"], _jsonOptions),
+            "map" => QueryCommandRunner.RunMap(["--since", "nope"], _jsonOptions),
+            "inspect" => QueryCommandRunner.RunInspect(["QueryCommandRunner", "--since", "nope"], _jsonOptions),
+            "outline" => QueryCommandRunner.RunOutline(["src/CodeIndex/Program.cs", "--since", "nope"], _jsonOptions),
+            "status" => QueryCommandRunner.RunStatus(["--since", "nope"], _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(["QueryCommandRunner", "--since", "nope", "--count"], _jsonOptions),
+            "deps" => QueryCommandRunner.RunDeps(["--since", "nope"], _jsonOptions),
+            "hotspots" => QueryCommandRunner.RunHotspots(["--since", "nope", "--count"], _jsonOptions),
+            "unused" => QueryCommandRunner.RunUnused(["--since", "nope", "--count"], _jsonOptions),
+            "validate" => QueryCommandRunner.RunValidate(["--since", "nope"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
     }
 
     private static int RunGraphCommand(string command, string[] args, JsonSerializerOptions jsonOptions) => command switch
