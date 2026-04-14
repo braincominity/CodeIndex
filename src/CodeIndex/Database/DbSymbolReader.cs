@@ -212,7 +212,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND s.name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)
@@ -229,9 +229,9 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@query{idx}", paramValue);
             }
         }
-        var preferExactCase = exact && effectiveQueries != null && effectiveQueries.Count == 1;
-        cmd.Parameters.AddWithValue("@preferExactCase", preferExactCase ? 1 : 0);
-        cmd.Parameters.AddWithValue("@rawQuery", preferExactCase ? effectiveQueries![0] : string.Empty);
+        var preferLiteralExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
+        cmd.Parameters.AddWithValue("@preferLiteralExactMatch", preferLiteralExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
@@ -388,12 +388,14 @@ public partial class DbReader
         // into references / callers / callees. See codex review of #83.
         // `exact` は bundle 内のすべての sub-query に伝播させ、leaf コマンドと precision を揃える。
         var definitionLimit = Math.Min(limit, 5);
-        var primaryDefinition = GetDefinitions(query, 1, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
-            .FirstOrDefault();
-        var definitions = BuildAnalysisDefinitions(
-            primaryDefinition,
-            GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact),
-            definitionLimit);
+        DefinitionResult? primaryDefinition = null;
+        var definitions = GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
+        if (exact)
+        {
+            primaryDefinition = GetDefinitions(query, 1, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
+                .FirstOrDefault();
+            definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
+        }
         primaryDefinition ??= definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();

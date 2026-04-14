@@ -1990,6 +1990,26 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_NonExactDoesNotUseFoldOnlyExactAnchor()
+    {
+        InsertIndexedFile("src/Intl/FullwidthRun.cs", "csharp",
+            """
+            public class Holder
+            {
+                public void Ｒｕｎ() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeSymbol("Run", limit: 1, lang: "csharp", exact: false);
+
+        Assert.Null(analysis.File);
+        Assert.Empty(analysis.Definitions);
+        Assert.Empty(analysis.NearbySymbols);
+        Assert.Null(analysis.ExactIndexAvailable);
+        Assert.Null(analysis.DegradedReason);
+    }
+
+    [Fact]
     public void AnalyzeSymbol_UnsupportedLanguage_ReportsGraphSupportMetadata()
     {
         var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "markdown");
