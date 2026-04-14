@@ -188,6 +188,76 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_JsonKeepsGraphAndIssuesReadyAfterHealthyScopedRefresh()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_HumanOutputShowsDegradedReadinessWhenBitsStayDown()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, output) = RunAndCaptureOutput([projectRoot, "--files", "app.cs"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Graph   : degraded", output);
+            Assert.Contains("Issues  : degraded", output);
+            Assert.Contains("Fold    : degraded", output);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_WithAbsoluteDbPathInsideProject_WritesRepoRelativePatternToGitExclude()
     {
         var projectRoot = CreateTempProject();

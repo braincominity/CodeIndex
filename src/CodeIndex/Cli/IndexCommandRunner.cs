@@ -536,6 +536,8 @@ public static class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        var graphTableAvailableAfter = false;
+        var issuesTableAvailableAfter = false;
         var foldReadyAfter = false;
         if (errors == 0)
         {
@@ -553,9 +555,15 @@ public static class IndexCommandRunner
             // update mode は事前 bit を個別に復元。Graph/Issues は prior bit があれば復元、
             // Fold も prior bit があれば invariant を信じて restamp（codex 2nd review 対応）。
             if ((priorReadiness & DbContext.GraphReadyFlag) != 0)
+            {
                 writer.MarkGraphReady();
+                graphTableAvailableAfter = true;
+            }
             if ((priorReadiness & DbContext.IssuesReadyFlag) != 0)
+            {
                 writer.MarkIssuesReady();
+                issuesTableAvailableAfter = true;
+            }
             // FoldReady restamp requires both the prior stored version and fingerprint to
             // match the current binary/runtime. Otherwise untouched rows still carry keys
             // from an older fold implementation or runtime table set, and advertising
@@ -592,6 +600,8 @@ public static class IndexCommandRunner
                     skipped,
                     errors,
                 },
+                graph_table_available = graphTableAvailableAfter,
+                issues_table_available = issuesTableAvailableAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
@@ -614,8 +624,13 @@ public static class IndexCommandRunner
             if (removed > 0) Console.WriteLine($"  Removed : {removed:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0}");
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
+            Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter));
         }
 
         return CommandExitCodes.Success;
@@ -761,6 +776,8 @@ public static class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
+        var graphTableAvailableAfter = false;
+        var issuesTableAvailableAfter = false;
         var foldReadyAfter = false;
         if (errors == 0)
         {
@@ -771,6 +788,8 @@ public static class IndexCommandRunner
             // full-scan は全repo をカバーするため、Graph / Issues は常に stamp。Fold のみ条件付き。
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            graphTableAvailableAfter = true;
+            issuesTableAvailableAfter = true;
             // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
             // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
             // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip
@@ -827,6 +846,8 @@ public static class IndexCommandRunner
                     files_purged = purged,
                     errors,
                 },
+                graph_table_available = graphTableAvailableAfter,
+                issues_table_available = issuesTableAvailableAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
@@ -847,8 +868,13 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Refs    : {totalReferences:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
+            Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter));
         }
 
         return CommandExitCodes.Success;
@@ -872,6 +898,19 @@ public static class IndexCommandRunner
         }
 
         return "--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` to rewrite folded keys in place, or use `cdidx index . --rebuild` to regenerate the whole DB.";
+    }
+
+    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool foldReady)
+    {
+        var degradedParts = new List<string>();
+        if (!graphTableAvailable)
+            degradedParts.Add("graph_table_available=false");
+        if (!issuesTableAvailable)
+            degradedParts.Add("issues_table_available=false");
+        if (!foldReady)
+            degradedParts.Add("fold_ready=false");
+
+        return $"Index completed with degraded readiness ({string.Join(", ", degradedParts)}). Run `cdidx status --json` to inspect the current DB state.";
     }
 
     private static void AddToGitExclude(string projectPath, string dbPath)
