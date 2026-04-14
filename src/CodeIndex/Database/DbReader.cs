@@ -1397,7 +1397,7 @@ public partial class DbReader
                         Snippet = string.Join("\n", snippetLineNumbers.Select(line => lineMap[line])),
                     });
 
-                    searchStart = matchColumn + Math.Max(1, query.Length);
+                    searchStart = matchColumn + 1;
                 }
             }
         }

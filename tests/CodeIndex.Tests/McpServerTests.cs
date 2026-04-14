@@ -1704,6 +1704,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_FindInFile_CountsOverlappingOccurrences()
+    {
+        InsertIndexedFile("src/Sample.cs", "csharp", "// banana\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"ana","path":"src/Sample.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var results = structured["results"]!.AsArray();
+
+        Assert.Equal(2, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["fileCount"]!.GetValue<int>());
+        Assert.Equal([5, 7], results.Select(node => node!["column"]!.GetValue<int>()).ToArray());
+    }
+
+    [Fact]
     public void ToolsCall_Status_ReturnsCounts()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;

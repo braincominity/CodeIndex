@@ -347,6 +347,17 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void FindInFiles_CountsOverlappingOccurrences()
+    {
+        InsertIndexedFile("src/Sample.cs", "csharp", "// banana\n");
+
+        var results = _reader.FindInFiles("ana", limit: 10, pathPatterns: ["src/Sample.cs"]);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal([5, 7], results.Select(r => r.Column).ToArray());
+    }
+
+    [Fact]
     public void GetDefinitions_ReturnsDefinitionContentAndOptionalBody()
     {
         var results = _reader.GetDefinitions("authenticate", includeBody: true);
