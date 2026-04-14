@@ -744,7 +744,7 @@ public static class QueryCommandRunner
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
-            WriteExactGraphWarningIfNeeded(options.Exact, options.Json,
+            WriteExactBundleWarningIfNeeded(options.Exact, options.Json,
                 (analysis.ExactIndexAvailable ?? true, analysis.DegradedReason));
             if (options.Json)
             {
@@ -1628,6 +1628,17 @@ public static class QueryCommandRunner
             return;
 
         Console.Error.WriteLine($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
+        Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+    }
+
+    private static void WriteExactBundleWarningIfNeeded(bool exact, bool json, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    {
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
+            return;
+        if (signal.DegradedReason.Contains("table missing", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Console.Error.WriteLine($"WARN: --exact inspect bundle ran without all supporting indexes ({signal.DegradedReason}). Results are correct but may be slow.");
         Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
     }
 

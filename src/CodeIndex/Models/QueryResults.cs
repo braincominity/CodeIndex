@@ -276,10 +276,10 @@ public class SymbolAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExactZeroHintResult? ExactZeroHint { get; set; }
     /// <summary>
-    /// True when the active `--exact` graph predicates can use their supporting indexes.
-    /// False means the query still returns correct hits, but may be slow on a legacy DB
-    /// missing the relevant NOCASE / folded graph indexes.
-    /// `--exact` の graph predicate が対応 index を使えるか。false でも結果は正しいが遅くなりうる。
+    /// True when every active `--exact` sub-query in the bundle can use its supporting indexes.
+    /// False means the bundled result still returns correct hits, but at least one exact
+    /// sub-query degraded to a slower legacy fallback path.
+    /// bundle 内の `--exact` sub-query がすべて対応 index を使えるか。false でも結果は正しい。
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? ExactIndexAvailable { get; set; }

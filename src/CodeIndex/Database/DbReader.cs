@@ -239,6 +239,24 @@ public partial class DbReader
         return (false, BuildExactGraphIndexReason(missingIndexes));
     }
 
+    private static (bool ExactIndexAvailable, string? DegradedReason) CombineExactSignals(params (bool ExactIndexAvailable, string? DegradedReason)?[] signals)
+    {
+        var participating = signals.Where(signal => signal.HasValue).Select(signal => signal!.Value).ToList();
+        if (participating.Count == 0)
+            return (true, null);
+
+        if (participating.All(signal => signal.ExactIndexAvailable))
+            return (true, null);
+
+        var reasons = participating
+            .Where(signal => !signal.ExactIndexAvailable && !string.IsNullOrWhiteSpace(signal.DegradedReason))
+            .Select(signal => signal.DegradedReason!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return (false, reasons.Count == 0 ? null : string.Join("; ", reasons));
+    }
+
     public (bool ExactIndexAvailable, string? DegradedReason) GetSymbolsExactQuerySignal() =>
         BuildExactSymbolSignal(SymbolNameExactIndexAvailable,
             _foldReady ? "idx_symbols_name_folded" : "idx_symbols_name_nocase");
@@ -259,6 +277,13 @@ public partial class DbReader
             _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
     public (bool ExactIndexAvailable, string? DegradedReason) GetAnalyzeSymbolExactQuerySignal()
+    {
+        return CombineExactSignals(
+            GetDefinitionExactQuerySignal(),
+            BuildAnalyzeGraphExactQuerySignal());
+    }
+
+    private (bool ExactIndexAvailable, string? DegradedReason) BuildAnalyzeGraphExactQuerySignal()
     {
         if (!_hasReferencesTable)
             return (false, "symbol_references table missing in this index");

@@ -690,6 +690,38 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ExactOnReadOnlyLegacyDb_WithMissingSymbolFallbackIndex_WarnsAtBundleLevel()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_symbol_exact_warn");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/session.py",
+                "python",
+                "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            ForceLegacyExactFallbackMode(dbPath);
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", readOnlyUri, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Exact Index          : DEGRADED", stdout);
+            Assert.Contains("idx_symbols_name_nocase", stdout);
+            Assert.Contains("WARN: --exact inspect bundle ran without all supporting indexes", stderr);
+            Assert.Contains("idx_symbols_name_nocase", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ExactZeroHumanOutput_PrintsExactZeroHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_exact_zero");
@@ -1265,6 +1297,16 @@ public class QueryCommandRunnerTests
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static void ForceLegacyExactFallbackMode(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        db.ClearReadyFlags();
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkIssuesReady();
         SqliteConnection.ClearAllPools();
     }
 }
