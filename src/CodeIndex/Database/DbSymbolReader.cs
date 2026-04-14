@@ -31,6 +31,18 @@ public partial class DbReader
         "jsonignore",
         "ignoredatamember",
     };
+    private static readonly HashSet<string> AttributeTargetNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "assembly",
+        "module",
+        "field",
+        "event",
+        "method",
+        "param",
+        "property",
+        "return",
+        "type",
+    };
     private const int UnusedAttributeContextWindow = 16;
     private const int UnusedPublicOverfetchMultiplier = 16;
     private const int UnusedPublicOverfetchMinimum = 64;
@@ -796,7 +808,8 @@ public partial class DbReader
         if (currentIndex < 0 || currentIndex >= lines.Length)
             return false;
 
-        var attributeBlock = GetAdjacentAttributeBlock(lines, currentIndex);
+        var triviaMask = BuildTriviaMask(lines);
+        var attributeBlock = GetAdjacentAttributeBlock(lines, triviaMask, currentIndex);
         if (attributeBlock.Count == 0)
             return false;
 
@@ -807,17 +820,17 @@ public partial class DbReader
         return attributeNames.Overlaps(ReflectionAttributeNames);
     }
 
-    private static List<string> GetAdjacentAttributeBlock(string[] lines, int anchorIndex)
+    private static List<string> GetAdjacentAttributeBlock(string[] lines, bool[] triviaMask, int anchorIndex)
     {
         var declarationIndex = anchorIndex;
         if (LooksLikeAttributeBoundaryLine(lines[anchorIndex]))
         {
-            declarationIndex = FindNextDeclarationLine(lines, anchorIndex + 1);
+            declarationIndex = FindNextDeclarationLine(lines, triviaMask, anchorIndex + 1);
             if (declarationIndex < 0)
                 return [];
         }
 
-        var attributeBottom = FindPreviousNonTriviaLine(lines, declarationIndex - 1);
+        var attributeBottom = FindPreviousNonTriviaLine(lines, triviaMask, declarationIndex - 1);
         if (attributeBottom < 0 || !LooksLikeAttributeBoundaryLine(lines[attributeBottom]))
             return [];
 
@@ -828,7 +841,7 @@ public partial class DbReader
         for (int i = attributeBottom; i >= 0; i--)
         {
             var trimmed = lines[i].Trim();
-            if (IsTriviaLine(trimmed))
+            if (triviaMask[i])
             {
                 if (sawBracket)
                     block.Add(trimmed);
@@ -857,42 +870,78 @@ public partial class DbReader
         return block;
     }
 
-    private static int FindNextDeclarationLine(string[] lines, int startIndex)
+    private static int FindNextDeclarationLine(string[] lines, bool[] triviaMask, int startIndex)
     {
         for (int i = startIndex; i < lines.Length; i++)
         {
-            if (!IsTriviaLine(lines[i].Trim()))
+            if (!triviaMask[i])
                 return i;
         }
 
         return -1;
     }
 
-    private static int FindPreviousNonTriviaLine(string[] lines, int startIndex)
+    private static int FindPreviousNonTriviaLine(string[] lines, bool[] triviaMask, int startIndex)
     {
         for (int i = startIndex; i >= 0; i--)
         {
-            if (!IsTriviaLine(lines[i].Trim()))
+            if (!triviaMask[i])
                 return i;
         }
 
         return -1;
     }
 
-    private static bool IsTriviaLine(string trimmed)
+    private static bool[] BuildTriviaMask(string[] lines)
     {
-        return trimmed.Length == 0
-            || trimmed.StartsWith("//", StringComparison.Ordinal)
-            || trimmed.StartsWith("///", StringComparison.Ordinal)
-            || trimmed.StartsWith("/*", StringComparison.Ordinal)
-            || trimmed == "*/"
-            || trimmed.StartsWith('*');
+        var triviaMask = new bool[lines.Length];
+        var inBlockComment = false;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.Length == 0)
+            {
+                triviaMask[i] = true;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                triviaMask[i] = true;
+                if (trimmed.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = false;
+                continue;
+            }
+
+            if (trimmed.StartsWith("//", StringComparison.Ordinal))
+            {
+                triviaMask[i] = true;
+                continue;
+            }
+
+            if (trimmed.StartsWith("/*", StringComparison.Ordinal))
+            {
+                triviaMask[i] = true;
+                if (!trimmed.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = true;
+                continue;
+            }
+
+            if (trimmed.StartsWith('*') || trimmed.Contains("*/", StringComparison.Ordinal))
+            {
+                triviaMask[i] = true;
+                continue;
+            }
+        }
+
+        return triviaMask;
     }
 
     private static HashSet<string> ExtractNormalizedAttributeNames(IReadOnlyList<string> attributeBlock)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
-        var content = string.Join("\n", attributeBlock.Where(line => !IsTriviaLine(line)));
+        var content = string.Join("\n", attributeBlock.Where(line => !BuildSingleLineTrivia(line.Trim())));
         var parenDepth = 0;
 
         for (int i = 0; i < content.Length; i++)
@@ -933,8 +982,8 @@ public partial class DbReader
             i++;
 
         var start = i;
-        while (i < content.Length && (char.IsLetterOrDigit(content[i]) || content[i] == '_' || content[i] == '.'))
-            i++;
+        if (!TryConsumeAttributeName(content, ref i))
+            return false;
         if (i == start)
             return false;
 
@@ -942,14 +991,15 @@ public partial class DbReader
             i++;
 
         // Skip attribute targets like `[property: JsonPropertyName]`.
-        if (i < content.Length && content[i] == ':')
+        var leadingIdentifier = content[start..i];
+        if (i < content.Length && content[i] == ':' && (i + 1 >= content.Length || content[i + 1] != ':') && AttributeTargetNames.Contains(leadingIdentifier))
         {
             i++;
             while (i < content.Length && char.IsWhiteSpace(content[i]))
                 i++;
             start = i;
-            while (i < content.Length && (char.IsLetterOrDigit(content[i]) || content[i] == '_' || content[i] == '.'))
-                i++;
+            if (!TryConsumeAttributeName(content, ref i))
+                return false;
             if (i == start)
                 return false;
         }
@@ -959,10 +1009,44 @@ public partial class DbReader
         return true;
     }
 
+    private static bool TryConsumeAttributeName(string content, ref int index)
+    {
+        var consumed = false;
+        while (index < content.Length)
+        {
+            var segmentStart = index;
+            while (index < content.Length && (char.IsLetterOrDigit(content[index]) || content[index] == '_'))
+                index++;
+            if (index == segmentStart)
+                break;
+
+            consumed = true;
+            if (index + 1 < content.Length && content[index] == ':' && content[index + 1] == ':')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (index < content.Length && content[index] == '.')
+            {
+                index++;
+                continue;
+            }
+
+            break;
+        }
+
+        return consumed;
+    }
+
     private static string? NormalizeAttributeIdentifier(string? identifier)
     {
         if (string.IsNullOrWhiteSpace(identifier))
             return null;
+
+        var qualifierIndex = identifier.LastIndexOf("::", StringComparison.Ordinal);
+        if (qualifierIndex >= 0)
+            identifier = identifier[(qualifierIndex + 2)..];
 
         var lastDot = identifier.LastIndexOf('.');
         var simpleName = lastDot >= 0 ? identifier[(lastDot + 1)..] : identifier;
@@ -970,6 +1054,15 @@ public partial class DbReader
             simpleName = simpleName[..^"Attribute".Length];
 
         return simpleName.Length == 0 ? null : simpleName.ToLowerInvariant();
+    }
+
+    private static bool BuildSingleLineTrivia(string trimmed)
+    {
+        return trimmed.Length == 0
+            || trimmed.StartsWith("//", StringComparison.Ordinal)
+            || trimmed.StartsWith("/*", StringComparison.Ordinal)
+            || trimmed.StartsWith('*')
+            || trimmed.Contains("*/", StringComparison.Ordinal);
     }
 
     private static bool LooksLikeAttributeBoundaryLine(string line)
