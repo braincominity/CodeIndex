@@ -466,6 +466,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
+            var hasExactPredicate = options.Exact && symbolQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal();
             var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
@@ -480,15 +481,15 @@ public static class QueryCommandRunner
                     () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     r => r.Name);
-            WriteExactSymbolWarningIfNeeded(options.Exact, options.Json, exactSignal);
+            WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
                     Console.WriteLine(options.Json
-                        ? JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, includeFiles: true, exactSignal: options.Exact ? exactSignal : null), jsonOptions)
+                        ? JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, includeFiles: true, exactSignal: hasExactPredicate ? exactSignal : null), jsonOptions)
                         : "0");
                 else if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, exactSignal: options.Exact ? exactSignal : null), jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, exactSignal: hasExactPredicate ? exactSignal : null), jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No symbols found.");
@@ -509,7 +510,7 @@ public static class QueryCommandRunner
                         ["count"] = results.Count,
                         ["files"] = fc,
                     };
-                    if (options.Exact)
+                    if (hasExactPredicate)
                         AddExactJsonFields(payload, exactSignal);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -524,7 +525,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    if (options.Exact)
+                    if (hasExactPredicate)
                         WriteJsonResultWithExactSignal(r, exactSignal, jsonOptions);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));

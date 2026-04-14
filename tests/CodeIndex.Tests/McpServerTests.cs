@@ -566,6 +566,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Symbols_ExactWithoutQuery_OnReadOnlyLegacyDb_OmitsExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n");
+        DropSymbolExactFallbackIndex();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"exact":true,"limit":1}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Null(structured["exactIndexAvailable"]);
+        Assert.Null(structured["degradedReason"]);
+    }
+
+    [Fact]
     public void ToolsCall_Definition_ExactOnReadOnlyLegacyDb_IncludesExactIndexSignal()
     {
         InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");

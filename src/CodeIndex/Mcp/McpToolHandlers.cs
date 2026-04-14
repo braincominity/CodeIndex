@@ -266,6 +266,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
+            var hasExactPredicate = exact && effectiveQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal();
             var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
@@ -294,7 +295,7 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
-                if (exact)
+                if (hasExactPredicate)
                     AddExactGraphSignal(payload, exactSignal);
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
@@ -312,7 +313,7 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            if (exact)
+            if (hasExactPredicate)
                 AddExactGraphSignal(structured, exactSignal);
             return CreateToolResult(id, $"Found {results.Count} symbol(s).", structured);
         });

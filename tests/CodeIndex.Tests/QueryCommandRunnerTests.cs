@@ -631,6 +631,36 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactWithoutQuery_OnReadOnlyLegacyDb_OmitsExactSignalAndWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_symbol_exact_no_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n");
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", readOnlyUri, "--exact", "--json", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", json.GetProperty("name").GetString());
+            Assert.False(json.TryGetProperty("exact_index_available", out _));
+            Assert.False(json.TryGetProperty("degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_ExactJsonOnReadOnlyLegacyDb_IncludesExactIndexSignal()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_json");
