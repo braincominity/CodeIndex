@@ -1045,6 +1045,13 @@ public partial class DbReader
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
+        innerSql += @"
+              AND EXISTS (
+                    SELECT 1
+                    FROM chunks c
+                    WHERE c.file_id = src.id
+                      AND c.content LIKE @impactTypeNamePattern ESCAPE '\'
+                  )";
         var nameClauses = new List<string>(fallbackNames.Count);
         for (int i = 0; i < fallbackNames.Count; i++)
             nameClauses.Add($"r.symbol_name = @impactFallbackName{i}");
@@ -1076,6 +1083,7 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         cmd.Parameters.AddWithValue("@impactTargetPath", definition.Path);
+        cmd.Parameters.AddWithValue("@impactTypeNamePattern", $"%{EscapeLikeQuery(definition.Name)}%");
         for (int i = 0; i < fallbackNames.Count; i++)
             cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);

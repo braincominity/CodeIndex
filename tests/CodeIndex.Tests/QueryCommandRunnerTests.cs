@@ -448,7 +448,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunImpact_ClassCollisionJsonReturnsHeuristicHints()
+    public void RunImpact_ClassCollisionWithoutTypeEvidenceReturnsNoHints()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_collision");
         try
@@ -487,13 +487,14 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
-            Assert.True(json.GetProperty("heuristic").GetBoolean());
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.False(json.GetProperty("heuristic").GetBoolean());
             Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
-            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
         }
         finally
         {
@@ -744,7 +745,7 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
+            Assert.DoesNotContain("file_dependency_hints", stdout);
             Assert.Contains("2 definition(s) across 1 file(s)", stderr);
         }
         finally
@@ -849,6 +850,52 @@ public class QueryCommandRunnerTests
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.Equal(3, json.GetProperty("file_impacts")[0].GetProperty("reference_count").GetInt32());
             Assert.Equal("ExecuteFolderDiffAsync", json.GetProperty("file_impacts")[0].GetProperty("symbols").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_UnresolvedExternalCallWithoutTypeEvidenceReturnsNoHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unresolved_external");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/ExternalConsumer.cs", "csharp",
+                """
+                public class ExternalConsumer
+                {
+                    public void Boot()
+                    {
+                        ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
         }
         finally
         {

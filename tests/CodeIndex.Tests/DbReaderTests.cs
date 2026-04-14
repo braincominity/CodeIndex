@@ -1274,7 +1274,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void AnalyzeImpact_ClassCollisionReturnsHeuristicHintsInsteadOfAuthoritativeImpact()
+    public void AnalyzeImpact_ClassCollisionWithoutTypeEvidenceReturnsNoHints()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
             """
@@ -1303,13 +1303,12 @@ public class DbReaderTests : IDisposable
 
         var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
 
-        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
-        Assert.True(analysis.Heuristic);
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
         Assert.Empty(analysis.Callers);
-        var edge = Assert.Single(analysis.FileImpacts);
-        Assert.Equal("src/App.cs", edge.SourcePath);
-        Assert.Equal("src/FooService.cs", edge.TargetPath);
-        Assert.Equal(1, analysis.HintCount);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
     }
 
     [Fact]
@@ -1346,7 +1345,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void AnalyzeImpact_UnresolvedExternalCallOnlyReturnsHeuristicHints()
+    public void AnalyzeImpact_UnresolvedExternalCallOnlyWithoutTypeEvidenceReturnsNoHints()
     {
         InsertIndexedFile("src/FolderDiffService.cs", "csharp",
             """
@@ -1368,12 +1367,12 @@ public class DbReaderTests : IDisposable
 
         var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
 
-        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
-        Assert.True(analysis.Heuristic);
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
         Assert.Empty(analysis.Callers);
-        Assert.Equal(1, analysis.HintCount);
-        var edge = Assert.Single(analysis.FileImpacts);
-        Assert.Equal("src/ExternalConsumer.cs", edge.SourcePath);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
     }
 
     [Fact]

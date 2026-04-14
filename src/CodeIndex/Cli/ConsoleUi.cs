@@ -339,7 +339,7 @@ public static class ConsoleUi
         Console.WriteLine("  outline <path>             Show the symbol outline of a single file");
         Console.WriteLine("  status                     Show database statistics");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings)");
-        Console.WriteLine("  impact <query>             Show transitive callers (ripple effect of changing a symbol)");
+        Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
         Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
         Console.WriteLine("  hotspots                   Find most-referenced symbols (high-impact code)");
@@ -401,6 +401,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx unused --lang csharp --exclude-tests      Find potentially unused symbols");
         Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find most-referenced symbols");
         Console.WriteLine("  cdidx impact Run --depth 3 --exclude-tests      Transitive callers of a symbol");
+        Console.WriteLine("  cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
