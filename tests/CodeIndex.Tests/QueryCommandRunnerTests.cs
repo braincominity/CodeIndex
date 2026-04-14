@@ -612,6 +612,37 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonMissingChunks_DegradesReflectionClassificationWithoutCrashing()
+    {
+        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "DROP TABLE chunks;";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("public_or_exported_no_refs", symbols["FullName"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_CountHumanMissingGraphTable_WarnsDegradedZero()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_count_human");

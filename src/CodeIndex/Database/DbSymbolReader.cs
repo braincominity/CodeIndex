@@ -795,11 +795,19 @@ public partial class DbReader
 
     private bool HasReflectionAttributeContext(string path, int startLine)
     {
-        if (startLine <= 1)
+        if (!_hasChunksTable || startLine <= 1)
             return false;
 
         var excerptStart = Math.Max(1, startLine - UnusedAttributeContextWindow);
-        var excerpt = GetExcerpt(path, excerptStart, startLine + UnusedAttributeContextWindow);
+        FileExcerptResult? excerpt;
+        try
+        {
+            excerpt = GetExcerpt(path, excerptStart, startLine + UnusedAttributeContextWindow);
+        }
+        catch (SqliteException ex) when (IsMissingChunksTableError(ex))
+        {
+            return false;
+        }
         if (excerpt == null)
             return false;
 
@@ -819,6 +827,10 @@ public partial class DbReader
 
         return attributeNames.Overlaps(ReflectionAttributeNames);
     }
+
+    private static bool IsMissingChunksTableError(SqliteException ex) =>
+        ex.SqliteErrorCode == 1
+        && ex.Message.Contains("no such table: chunks", StringComparison.OrdinalIgnoreCase);
 
     private static List<string> GetAdjacentAttributeBlock(string[] lines, bool[] triviaMask, int anchorIndex)
     {
