@@ -855,10 +855,13 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
-            var count = analysis.Callers.Count;
-            var fileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
+            var confirmedCount = analysis.Callers.Count;
+            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
             var hintCount = analysis.FileImpacts.Count;
             var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+            var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints" && hintCount > 0;
+            var count = hasHeuristicHints ? hintCount : confirmedCount;
+            var fileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
             var maxActualDepth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0;
             var payload = new JsonObject
             {
@@ -866,6 +869,8 @@ public partial class McpServer
                 ["resolved_name"] = analysis.ResolvedName,
                 ["count"] = count,
                 ["file_count"] = fileCount,
+                ["confirmed_count"] = confirmedCount,
+                ["confirmed_file_count"] = confirmedFileCount,
                 ["hint_count"] = hintCount,
                 ["hint_file_count"] = hintFileCount,
                 ["max_depth"] = maxDepth,
@@ -905,9 +910,9 @@ public partial class McpServer
                     payload["graph_support_reason"] = graphReason;
                 if (!analysis.GraphTableAvailable)
                     payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
-                else if (analysis.Heuristic)
-                    payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
             }
+            else if (analysis.Heuristic)
+                payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
             return CreateToolResult(id, summary, payload);
         });
     }

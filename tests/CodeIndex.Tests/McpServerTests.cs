@@ -575,12 +575,15 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
         Assert.True(structured["heuristic"]!.GetValue<bool>());
-        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_file_count"]!.GetValue<int>());
         Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
         Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
         Assert.Equal("src/App.cs", fileImpacts[0]!["sourcePath"]!.GetValue<string>());
         Assert.Equal("src/FolderDiffService.cs", fileImpacts[0]!["targetPath"]!.GetValue<string>());
         Assert.True(structured["has_class_like_definitions"]!.GetValue<bool>());
+        Assert.Contains("heuristic hints only", structured["note"]!.GetValue<string>());
         Assert.Contains("heuristic only", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
@@ -616,7 +619,43 @@ public class McpServerTests : IDisposable
         Assert.True(structured["has_multiple_definitions"]!.GetValue<bool>());
         Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
         Assert.Equal(2, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_count"]!.GetValue<int>());
         Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_HeuristicHintsUseVisibleCount()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["file_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_file_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_file_count"]!.GetValue<int>());
     }
 
     [Fact]
@@ -696,6 +735,84 @@ public class McpServerTests : IDisposable
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
         Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_CommentOnlyTypeMentionDoesNotProduceHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/OtherService.cs", "csharp",
+            """
+            public class OtherService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(OtherService service)
+                {
+                    service.Run(); // TODO: maybe replace with FooService later
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_StringLiteralTypeMentionDoesNotProduceHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/Worker.cs", "csharp",
+            """
+            public class Worker
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(Worker worker)
+                {
+                    var label = "FooService";
+                    worker.Execute();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
         Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
         Assert.Empty(structured["file_impacts"]!.AsArray());
     }
@@ -806,6 +923,7 @@ public class McpServerTests : IDisposable
         Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
         Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
         Assert.Equal(1, structured["definition_file_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("src/FooService.cs", structured["definitions"]![0]!["path"]!.GetValue<string>());
         Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
     }
@@ -846,6 +964,7 @@ public class McpServerTests : IDisposable
         Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
         Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
         Assert.Equal(1, structured["definition_file_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("src/FooService.cs", structured["definitions"]![0]!["path"]!.GetValue<string>());
         Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
     }
@@ -888,6 +1007,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
         Assert.True(structured["heuristic"]!.GetValue<bool>());
         Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
         Assert.Single(structured["file_impacts"]!.AsArray());
     }
@@ -920,6 +1040,7 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal(3, structured["file_impacts"]![0]!["referenceCount"]!.GetValue<int>());
         Assert.Equal("ExecuteFolderDiffAsync", structured["file_impacts"]![0]!["symbols"]!.GetValue<string>());
     }

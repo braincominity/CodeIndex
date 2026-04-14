@@ -1048,9 +1048,12 @@ public partial class DbReader
         innerSql += @"
               AND EXISTS (
                     SELECT 1
-                    FROM chunks c
-                    WHERE c.file_id = src.id
-                      AND c.content LIKE @impactTypeNamePattern ESCAPE '\'
+                    FROM symbols s
+                    WHERE s.file_id = src.id
+                      AND (
+                            (s.signature IS NOT NULL AND s.signature LIKE @impactTypeNamePattern ESCAPE '\')
+                            OR (s.return_type IS NOT NULL AND s.return_type = @impactTypeName COLLATE NOCASE)
+                          )
                   )";
         var nameClauses = new List<string>(fallbackNames.Count);
         for (int i = 0; i < fallbackNames.Count; i++)
@@ -1083,6 +1086,7 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         cmd.Parameters.AddWithValue("@impactTargetPath", definition.Path);
+        cmd.Parameters.AddWithValue("@impactTypeName", definition.Name);
         cmd.Parameters.AddWithValue("@impactTypeNamePattern", $"%{EscapeLikeQuery(definition.Name)}%");
         for (int i = 0; i < fallbackNames.Count; i++)
             cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);

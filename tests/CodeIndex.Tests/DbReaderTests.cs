@@ -1376,6 +1376,81 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_CommentOnlyTypeMentionDoesNotCountAsTypeEvidence()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/OtherService.cs", "csharp",
+            """
+            public class OtherService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(OtherService service)
+                {
+                    service.Run(); // TODO: maybe replace with FooService later
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_StringLiteralTypeMentionDoesNotCountAsTypeEvidence()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/Worker.cs", "csharp",
+            """
+            public class Worker
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(Worker worker)
+                {
+                    var label = "FooService";
+                    worker.Execute();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
     public void AnalyzeImpact_ExcludeTestsIgnoresOutOfScopeDuplicateDefinitions()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",

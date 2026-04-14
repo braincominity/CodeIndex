@@ -283,7 +283,9 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.True(json.GetProperty("heuristic").GetBoolean());
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_file_count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
             Assert.False(json.GetProperty("has_multiple_definitions").GetBoolean());
@@ -339,7 +341,58 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
             Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
             Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_HeuristicHintsCountOnlyJsonUsesVisibleResultCount()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_hint_count_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Run(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_files").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_files").GetInt32());
         }
         finally
         {
@@ -503,6 +556,112 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_CommentOnlyTypeMentionDoesNotProduceHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_comment_only_type_name");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/OtherService.cs", "csharp",
+                """
+                public class OtherService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(OtherService service)
+                    {
+                        service.Run(); // TODO: maybe replace with FooService later
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_StringLiteralTypeMentionDoesNotProduceHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_string_only_type_name");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Execute() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp",
+                """
+                public class Worker
+                {
+                    public void Execute() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(Worker worker)
+                    {
+                        var label = "FooService";
+                        worker.Execute();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_NamespaceJsonDoesNotFallbackToFileDependencies()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_namespace");
@@ -600,6 +759,7 @@ public class QueryCommandRunnerTests
             Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
             Assert.Equal(1, json.GetProperty("definition_file_count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("src/FooService.cs", json.GetProperty("definitions")[0].GetProperty("path").GetString());
             Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
         }
@@ -655,6 +815,7 @@ public class QueryCommandRunnerTests
             Assert.False(json.GetProperty("has_multiple_definitions").GetBoolean());
             Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
             Assert.Equal(1, json.GetProperty("definition_file_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("src/FooService.cs", json.GetProperty("definitions")[0].GetProperty("path").GetString());
             Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
         }
@@ -801,6 +962,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
             Assert.Equal(1, json.GetProperty("file_impacts").GetArrayLength());
         }
@@ -848,6 +1010,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(3, json.GetProperty("file_impacts")[0].GetProperty("reference_count").GetInt32());
             Assert.Equal("ExecuteFolderDiffAsync", json.GetProperty("file_impacts")[0].GetProperty("symbols").GetString());
         }

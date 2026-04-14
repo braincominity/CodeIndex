@@ -839,6 +839,8 @@ public static class QueryCommandRunner
             var hintCount = analysis.FileImpacts.Count;
             var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
             var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints";
+            var visibleCount = hasHeuristicHints ? hintCount : confirmedCount;
+            var visibleFileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
 
             if (confirmedCount == 0 && !hasHeuristicHints)
             {
@@ -921,15 +923,17 @@ public static class QueryCommandRunner
                     {
                         query = options.Query,
                         resolved_name = analysis.ResolvedName,
-                        count = confirmedCount,
-                        files = confirmedFileCount,
+                        count = visibleCount,
+                        files = visibleFileCount,
+                        confirmed_count = confirmedCount,
+                        confirmed_files = confirmedFileCount,
                         impact_mode = analysis.ImpactMode,
                         heuristic = analysis.Heuristic,
                         hint_count = hintCount,
                         hint_files = hintFileCount,
                         truncated = analysis.Truncated,
                     }, jsonOptions)
-                    : $"{confirmedCount}");
+                    : $"{visibleCount}");
                 return CommandExitCodes.Success;
             }
 
@@ -939,8 +943,10 @@ public static class QueryCommandRunner
                 {
                     query = options.Query,
                     resolved_name = analysis.ResolvedName,
-                    count = confirmedCount,
-                    file_count = confirmedFileCount,
+                    count = visibleCount,
+                    file_count = visibleFileCount,
+                    confirmed_count = confirmedCount,
+                    confirmed_file_count = confirmedFileCount,
                     hint_count = hintCount,
                     hint_file_count = hintFileCount,
                     max_depth = maxDepth,
