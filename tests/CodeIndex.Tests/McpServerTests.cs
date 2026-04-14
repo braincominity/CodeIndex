@@ -13,6 +13,7 @@ namespace CodeIndex.Tests;
 /// Tests for McpServer JSON-RPC message handling.
 /// McpServerのJSON-RPCメッセージ処理のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class McpServerTests : IDisposable
 {
     private readonly string _dbPath;

@@ -108,8 +108,6 @@ internal static class TestProjectHelper
 
         for (int attempt = 0; attempt < 5; attempt++)
         {
-            SqliteConnection.ClearAllPools();
-
             try
             {
                 Directory.Delete(path, recursive: true);
@@ -117,11 +115,21 @@ internal static class TestProjectHelper
             }
             catch (IOException) when (attempt < 4)
             {
+                // Avoid clearing SQLite pools on every temp-project cleanup: that is a
+                // process-global operation and can interfere with unrelated tests running in
+                // parallel. On Windows, a failed recursive delete is the signal that pooled
+                // handles may still need releasing, so escalate only on retry.
+                // 毎回の cleanup で SQLite pool を落とすと並列テスト全体へ波及するため、
+                // 通常経路では触らない。Windows で削除失敗したときだけ最終手段として解放する。
+                if (OperatingSystem.IsWindows())
+                    SqliteConnection.ClearAllPools();
                 Thread.Sleep(100);
                 ClearAttributes(path);
             }
             catch (UnauthorizedAccessException) when (attempt < 4)
             {
+                if (OperatingSystem.IsWindows())
+                    SqliteConnection.ClearAllPools();
                 Thread.Sleep(100);
                 ClearAttributes(path);
             }
