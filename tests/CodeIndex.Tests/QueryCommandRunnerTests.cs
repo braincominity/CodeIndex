@@ -364,6 +364,31 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonKeepsPlainCliOptionsPropertiesInPublicBucket()
+    {
+        var (projectRoot, dbPath) = CreatePlainCliOptionsUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("public_or_exported_no_refs", symbols["ShowHelp"].GetProperty("unused_bucket").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols["ProjectPath"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonMarksBlockCommentSeparatedReflectionAttributeAsSuspect()
     {
         var (projectRoot, dbPath) = CreateBlockCommentReflectionUnusedFixtureDb();
@@ -1253,7 +1278,7 @@ public class QueryCommandRunnerTests
         var writer = new DbWriter(db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
-            Path = "src/unused_fixture.cs",
+            Path = "src/config/unused_fixture.cs",
             Lang = "csharp",
             Size = 200,
             Lines = 20,
@@ -1370,6 +1395,66 @@ public class QueryCommandRunnerTests
                 Visibility = "public",
                 ContainerKind = "class",
                 ContainerName = "AppSettings",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreatePlainCliOptionsUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_cli_options");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/cli_options_fixture.cs",
+            Lang = "csharp",
+            Size = 180,
+            Lines = 6,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "CliOptions",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public sealed class CliOptions",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ShowHelp",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public bool ShowHelp { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ProjectPath",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "public string? ProjectPath { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
             },
         ]);
         writer.MarkGraphReady();

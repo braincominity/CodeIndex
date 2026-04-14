@@ -1396,7 +1396,7 @@ public class DbReaderTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/unused_fixture.cs",
+            Path = "src/config/unused_fixture.cs",
             Lang = "csharp",
             Size = 200,
             Lines = 20,
@@ -1536,6 +1536,65 @@ public class DbReaderTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "TokenService").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ApplyConfiguration").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "UseIOptions").UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_PlainCliOptionsProperties_StayInPublicBucket()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/cli_options_fixture.cs",
+            Lang = "csharp",
+            Size = 160,
+            Lines = 6,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "CliOptions",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public sealed class CliOptions",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ShowHelp",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public bool ShowHelp { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ProjectPath",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "public string? ProjectPath { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["cli_options_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ShowHelp").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ProjectPath").UnusedBucket);
     }
 
     [Fact]

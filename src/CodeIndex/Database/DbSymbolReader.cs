@@ -593,15 +593,11 @@ public partial class DbReader
     {
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
-        var containerNameSql = $"lower({GetSymbolColumnSql("container_name", "''")})";
         var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
         const string pathSql = "lower(f.path)";
         var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
         var hasConfigContextSql = $@"(
-                {containerNameSql} LIKE '%config%'
-                OR {containerNameSql} LIKE '%settings%'
-                OR {containerNameSql} LIKE '%options%'
-                OR {pathSql} LIKE 'config/%'
+                {pathSql} LIKE 'config/%'
                 OR {pathSql} LIKE '%/config/%'
                 OR {pathSql} LIKE 'settings/%'
                 OR {pathSql} LIKE '%/settings/%'

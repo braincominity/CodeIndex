@@ -906,7 +906,7 @@ public class McpServerTests : IDisposable
         var writer = new DbWriter(_db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
-            Path = "src/unused_fixture.cs",
+            Path = "src/config/unused_fixture.cs",
             Lang = "csharp",
             Size = 200,
             Lines = 20,
@@ -1190,6 +1190,70 @@ public class McpServerTests : IDisposable
         var symbols = response["result"]!["structuredContent"]!["symbols"]!.AsArray();
         Assert.Equal("FullName", symbols[1]!["name"]!.GetValue<string>());
         Assert.Equal("reflection_or_config_suspect", symbols[1]!["unusedBucket"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_UnusedSymbols_KeepsPlainCliOptionsPropertiesInPublicBucket()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/cli_options_fixture.cs",
+            Lang = "csharp",
+            Size = 180,
+            Lines = 6,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "CliOptions",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public sealed class CliOptions",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ShowHelp",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public bool ShowHelp { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ProjectPath",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "public string? ProjectPath { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
+            },
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"cli_options_fixture.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var symbols = response["result"]!["structuredContent"]!["symbols"]!.AsArray()
+            .ToDictionary(symbol => symbol!["name"]!.GetValue<string>(), StringComparer.Ordinal);
+        Assert.Equal("public_or_exported_no_refs", symbols["ShowHelp"]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("public_or_exported_no_refs", symbols["ProjectPath"]!["unusedBucket"]!.GetValue<string>());
     }
 
     [Fact]
