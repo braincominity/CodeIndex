@@ -1,7 +1,14 @@
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Database;
+
+public readonly record struct ExactQuerySignal(
+    bool ExactIndexAvailable,
+    bool HasMissingIndex,
+    bool HasMissingTable,
+    string? DegradedReason);
 
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
@@ -9,10 +16,12 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[\p{L}_][\p{L}\p{Nd}_]*", RegexOptions.Compiled);
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
+    private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
@@ -96,6 +105,7 @@ public partial class DbReader
         _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
+        _symbolIndexes = LoadIndexes("symbols");
         int userVersion;
         using (var v = _conn.CreateCommand())
         {
@@ -193,7 +203,13 @@ public partial class DbReader
         return cmd.ExecuteScalar() != null;
     }
 
+    private bool HasSymbolIndex(string indexName) => _symbolIndexes.Contains(indexName);
     private bool HasReferenceIndex(string indexName) => _referenceIndexes.Contains(indexName);
+
+    private bool SymbolNameExactIndexAvailable =>
+        _foldReady
+            ? HasSymbolIndex("idx_symbols_name_folded")
+            : HasSymbolIndex("idx_symbols_name_nocase");
 
     private bool SymbolNameExactGraphIndexAvailable =>
         _foldReady
@@ -217,31 +233,96 @@ public partial class DbReader
             : $"{string.Join(", ", missing)} missing on {scope}";
     }
 
-    private (bool ExactIndexAvailable, string? DegradedReason) BuildExactGraphSignal(bool available, params string[] missingIndexes)
+    private ExactQuerySignal BuildExactGraphSignal(bool available, params string[] missingIndexes)
     {
         if (!_hasReferencesTable)
-            return (false, "symbol_references table missing in this index");
+            return new(false, HasMissingIndex: false, HasMissingTable: true, "symbol_references table missing in this index");
         if (available)
-            return (true, null);
-        return (false, BuildExactGraphIndexReason(missingIndexes));
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+        return new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missingIndexes));
     }
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetReferencesExactQuerySignal() =>
+    private ExactQuerySignal BuildExactSymbolSignal(bool available, params string[] missingIndexes)
+    {
+        if (available)
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+        return new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missingIndexes));
+    }
+
+    private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
+    {
+        var participating = signals.Where(signal => signal.HasValue).Select(signal => signal!.Value).ToList();
+        if (participating.Count == 0)
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+
+        if (participating.All(signal => signal.ExactIndexAvailable))
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+
+        var reasons = participating
+            .Where(signal => !signal.ExactIndexAvailable && !string.IsNullOrWhiteSpace(signal.DegradedReason))
+            .Select(signal => signal.DegradedReason!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: participating.Any(signal => signal.HasMissingIndex),
+            HasMissingTable: participating.Any(signal => signal.HasMissingTable),
+            DegradedReason: reasons.Count == 0 ? null : string.Join("; ", reasons));
+    }
+
+    public ExactQuerySignal GetSymbolsExactQuerySignal() =>
+        BuildExactSymbolSignal(SymbolNameExactIndexAvailable,
+            _foldReady ? "idx_symbols_name_folded" : "idx_symbols_name_nocase");
+
+    public ExactQuerySignal GetDefinitionExactQuerySignal() =>
+        GetSymbolsExactQuerySignal();
+
+    public ExactQuerySignal GetReferencesExactQuerySignal() =>
         BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetCallersExactQuerySignal() =>
+    public ExactQuerySignal GetCallersExactQuerySignal() =>
         BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetCalleesExactQuerySignal() =>
+    public ExactQuerySignal GetCalleesExactQuerySignal() =>
         BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetAnalyzeSymbolExactQuerySignal()
+    public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(bool includeGraphSignal = true)
+    {
+        return CombineExactSignals(
+            GetDefinitionExactQuerySignal(),
+            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
+    }
+
+    internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT 1
+            FROM files f
+            WHERE 1=1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphApplicableLang")}";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private ExactQuerySignal BuildAnalyzeGraphExactQuerySignal()
     {
         if (!_hasReferencesTable)
-            return (false, "symbol_references table missing in this index");
+            return new(false, HasMissingIndex: false, HasMissingTable: true, "symbol_references table missing in this index");
 
         var missing = new List<string>();
         if (!SymbolNameExactGraphIndexAvailable)
@@ -250,8 +331,8 @@ public partial class DbReader
             missing.Add(_foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
         return missing.Count == 0
-            ? (true, null)
-            : (false, BuildExactGraphIndexReason(missing));
+            ? new(true, HasMissingIndex: false, HasMissingTable: false, null)
+            : new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missing));
     }
 
     internal static string EscapeLikeQuery(string input)
@@ -420,6 +501,55 @@ public partial class DbReader
         return results;
     }
 
+    public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT 1
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE 1=1";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (query != null)
+        {
+            if (exact && _foldReady)
+                innerSql += " AND r.symbol_name_folded = @query";
+            else if (exact)
+                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            else
+                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        }
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        innerSql += " LIMIT @limit";
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        if (query != null)
+        {
+            var value = !exact
+                ? $"%{EscapeLikeQuery(query)}%"
+                : _foldReady
+                    ? NameFold.Fold(query) ?? query
+                    : query;
+            cmd.Parameters.AddWithValue("@query", value);
+        }
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : Convert.ToInt32(raw);
+    }
+
     /// <summary>
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
@@ -487,6 +617,51 @@ public partial class DbReader
             });
         }
         return results;
+    }
+
+    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT 1
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        else
+            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+        if (exact && _foldReady)
+            innerSql += " AND r.symbol_name_folded = @query";
+        else if (exact)
+            innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+        else
+            innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name LIMIT @limit";
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
     /// <summary>
@@ -557,6 +732,51 @@ public partial class DbReader
             });
         }
         return results;
+    }
+
+    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable) return 0;
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT 1
+            FROM symbol_references r
+            JOIN files f ON r.file_id = f.id
+            WHERE r.container_name IS NOT NULL";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        else
+            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+        if (exact && _foldReady)
+            innerSql += " AND r.container_name_folded = @query";
+        else if (exact)
+            innerSql += " AND r.container_name = @query COLLATE NOCASE";
+        else
+            innerSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit";
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
     /// <summary>
@@ -755,6 +975,499 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Analyze impact for a query by combining transitive callers with symbol-resolution
+    /// metadata and a class-like file-dependency fallback when symbol-level callers are absent.
+    /// impact 用に caller BFS と解決メタデータを束ね、class 系で caller 不在なら
+    /// file dependency をフォールバックとして返す。
+    /// </summary>
+    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        var resolvedName = ResolveSymbolName(symbolName, lang);
+        var definitions = ResolveImpactDefinitions(resolvedName, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var definitionPaths = definitions
+            .Select(d => d.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var hasMultipleDefinitions = definitions.Count > 1;
+        var fallbackDefinitions = definitions
+            .Where(d => IsPreciseImpactFallbackKind(d.Kind))
+            .ToList();
+        var fallbackDefinitionPaths = fallbackDefinitions
+            .Select(d => d.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var hasMultipleFallbackDefinitions = fallbackDefinitions.Count > 1;
+        var hasMultipleFallbackDefinitionFiles = fallbackDefinitionPaths.Count > 1;
+        var hasClassLikeDefinitions = fallbackDefinitions.Count > 0;
+        var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+
+        var impactMode = "callers";
+        var fileImpacts = new List<FileDependencyResult>();
+        string? zeroResultReason = null;
+        string? suggestion = null;
+        var heuristic = false;
+
+        if (callers.Count == 0)
+        {
+            impactMode = "none";
+
+            if (_hasReferencesTable)
+            {
+                if (definitions.Count > 0 && definitions.All(d => IsNonCallableImpactKind(d.Kind)))
+                {
+                    zeroResultReason = "non_callable_symbol_kind";
+                    suggestion = "Try `cdidx definition <symbol>` and then run `impact` on a specific callable member instead.";
+                }
+                else if (hasMultipleFallbackDefinitions)
+                {
+                    zeroResultReason = hasMultipleFallbackDefinitionFiles ? "multiple_definition_files" : "multiple_definitions";
+                    suggestion = BuildImpactSuggestion(fallbackDefinitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: hasMultipleFallbackDefinitionFiles);
+                }
+                else if (fallbackDefinitions.Count == 1)
+                {
+                    var fallbackNames = ResolveImpactFallbackNames(fallbackDefinitions[0]);
+                    var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    fileImpacts = hintResults;
+                    truncated |= hintTruncated;
+                    if (fileImpacts.Count > 0)
+                    {
+                        impactMode = "file_dependency_hints";
+                        heuristic = true;
+                        suggestion = "These file-level dependents are heuristic only; confirm with `cdidx deps --path <definition-path> --reverse` and a member-level `impact` query.";
+                    }
+                    else
+                    {
+                        zeroResultReason = "class_symbol_no_symbol_callers";
+                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: false, hasMultipleDefinitionFiles: false);
+                    }
+                }
+                else if (hasMultipleDefinitions)
+                {
+                    zeroResultReason = definitionPaths.Count > 1 ? "multiple_definition_files" : "multiple_definitions";
+                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: definitionPaths.Count > 1);
+                }
+                else if (definitions.Count == 0)
+                {
+                    zeroResultReason = "no_matching_definition";
+                    suggestion = "Try `cdidx definition <symbol>` to confirm the indexed name.";
+                }
+            }
+        }
+
+        return new ImpactAnalysisResult
+        {
+            Query = symbolName,
+            ResolvedName = resolvedName,
+            ImpactMode = impactMode,
+            Heuristic = heuristic,
+            MaxDepth = maxDepth,
+            DefinitionCount = definitions.Count,
+            DefinitionFileCount = definitionPaths.Count,
+            HintCount = fileImpacts.Count,
+            HasClassLikeDefinitions = hasClassLikeDefinitions,
+            HasMultipleDefinitions = hasMultipleDefinitions,
+            HasMultipleDefinitionFiles = definitionPaths.Count > 1,
+            Definitions = definitions,
+            Callers = callers,
+            FileImpacts = fileImpacts,
+            Truncated = truncated,
+            GraphTableAvailable = _hasReferencesTable,
+            ZeroResultReason = zeroResultReason,
+            Suggestion = suggestion,
+        };
+    }
+
+    private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
+        var nameCondition = _foldReady
+            ? "s.name_folded = @resolvedNameFolded"
+            : "s.name = @resolvedName COLLATE NOCASE";
+        var sql = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
+                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE {nameCondition}
+              AND {supportedLangFilter}";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY CASE WHEN s.name = @resolvedName THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@resolvedName", resolvedName);
+        if (_foldReady)
+            cmd.Parameters.AddWithValue("@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", 50);
+
+        var results = new List<SymbolResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            results.Add(new SymbolResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.GetString(1),
+                Kind = reader.GetString(2),
+                Name = reader.GetString(3),
+                Line = reader.GetInt32(4),
+                StartLine = !reader.IsDBNull(5) ? reader.GetInt32(5) : reader.GetInt32(4),
+                EndLine = !reader.IsDBNull(6) ? reader.GetInt32(6) : reader.GetInt32(4),
+                BodyStartLine = !reader.IsDBNull(7) ? reader.GetInt32(7) : null,
+                BodyEndLine = !reader.IsDBNull(8) ? reader.GetInt32(8) : null,
+                Signature = !reader.IsDBNull(9) ? reader.GetString(9) : null,
+                ContainerKind = !reader.IsDBNull(10) ? reader.GetString(10) : null,
+                ContainerName = !reader.IsDBNull(11) ? reader.GetString(11) : null,
+                Visibility = !reader.IsDBNull(12) ? reader.GetString(12) : null,
+                ReturnType = !reader.IsDBNull(13) ? reader.GetString(13) : null,
+            });
+        }
+
+        return results;
+    }
+
+    private List<string> ResolveImpactFallbackNames(SymbolResult definition)
+    {
+        if (string.IsNullOrWhiteSpace(definition.Path) || string.IsNullOrWhiteSpace(definition.Name))
+            return new List<string>();
+
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactSafeNameLang");
+        cmd.CommandText = @"
+            SELECT DISTINCT s.name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @targetPath
+              AND " + supportedLangFilter + @"
+              AND (
+                    (s.name = @containerName AND s.kind = @containerKind)
+                    OR s.container_name = @containerName
+                  )
+            ORDER BY s.name";
+        cmd.Parameters.AddWithValue("@targetPath", definition.Path);
+        cmd.Parameters.AddWithValue("@containerName", definition.Name);
+        cmd.Parameters.AddWithValue("@containerKind", definition.Kind);
+
+        var results = new List<string>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+            results.Add(reader.GetString(0));
+        return results;
+    }
+
+    private (List<FileDependencyResult> Results, bool Truncated) GetFileDependencyHintsToResolvedType(SymbolResult definition, IReadOnlyList<string> fallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || fallbackNames.Count == 0)
+            return (new List<FileDependencyResult>(), false);
+
+        using var cmd = _conn.CreateCommand();
+        var innerSql = @"
+                SELECT src.id AS source_file_id, src.path AS source_path, @impactTargetPath AS target_path,
+                       r.symbol_name AS symbol_name
+                FROM symbol_references r
+                JOIN files src ON r.file_id = src.id
+                WHERE src.path != @impactTargetPath";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
+        if (lang != null)
+            innerSql += " AND src.lang = @lang";
+        var nameClauses = new List<string>(fallbackNames.Count);
+        for (int i = 0; i < fallbackNames.Count; i++)
+            nameClauses.Add($"r.symbol_name = @impactFallbackName{i}");
+        innerSql += " AND (" + string.Join(" OR ", nameClauses) + ")";
+
+        if (pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"src.path LIKE @pathPattern{i} ESCAPE '\\'");
+            innerSql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                innerSql += $" AND src.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
+        if (excludeTests)
+            innerSql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
+
+        cmd.CommandText = $@"
+            SELECT source_file_id, source_path, target_path,
+                   COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT symbol_name) AS symbols
+            FROM ({innerSql}) edges
+            GROUP BY source_file_id, source_path, target_path
+            ORDER BY reference_count DESC, source_path, target_path";
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        cmd.Parameters.AddWithValue("@impactTargetPath", definition.Path);
+        for (int i = 0; i < fallbackNames.Count; i++)
+            cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var candidates = new List<(long SourceFileId, FileDependencyResult Edge)>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            candidates.Add((
+                reader.GetInt64(0),
+                new FileDependencyResult
+                {
+                    SourcePath = reader.GetString(1),
+                    TargetPath = reader.GetString(2),
+                    ReferenceCount = reader.GetInt32(3),
+                    Symbols = reader.GetString(4),
+                }));
+        }
+
+        var evidenceCache = new Dictionary<long, bool>();
+        var filtered = new List<FileDependencyResult>();
+        foreach (var candidate in candidates)
+        {
+            if (!evidenceCache.TryGetValue(candidate.SourceFileId, out var hasEvidence))
+            {
+                hasEvidence = SourceFileHasStructuredTypeEvidence(candidate.SourceFileId, definition.Name);
+                evidenceCache[candidate.SourceFileId] = hasEvidence;
+            }
+            if (hasEvidence)
+                filtered.Add(candidate.Edge);
+        }
+
+        var truncated = filtered.Count > limit;
+        if (truncated)
+            filtered.RemoveRange(limit, filtered.Count - limit);
+
+        return (filtered, truncated);
+    }
+
+    private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.name,
+                   " + GetSymbolColumnSql("signature") + @" AS signature,
+                   " + GetSymbolColumnSql("return_type") + @" AS return_type
+            FROM symbols s
+            WHERE s.file_id = @fileId";
+        cmd.Parameters.AddWithValue("@fileId", fileId);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var symbolName = reader.GetString(0);
+            var signature = !reader.IsDBNull(1) ? reader.GetString(1) : null;
+            var returnType = !reader.IsDBNull(2) ? reader.GetString(2) : null;
+            if (SymbolProvidesStructuredTypeEvidence(symbolName, signature, returnType, typeName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool SymbolProvidesStructuredTypeEvidence(string symbolName, string? signature, string? returnType, string typeName)
+    {
+        if (FoldedImpactNameEquals(returnType, typeName))
+            return true;
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        foreach (Match match in ImpactSignatureIdentifierRegex.Matches(signature))
+        {
+            var token = match.Value;
+            if (FoldedImpactNameEquals(token, symbolName))
+                continue;
+            if (FoldedImpactNameEquals(token, typeName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool FoldedImpactNameEquals(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            return false;
+
+        var leftFolded = NameFold.Fold(left) ?? left;
+        var rightFolded = NameFold.Fold(right) ?? right;
+        return string.Equals(leftFolded, rightFolded, StringComparison.Ordinal);
+    }
+
+    private static bool IsNonCallableImpactKind(string? kind) =>
+        kind is "namespace" or "import";
+
+    private static bool IsPreciseImpactFallbackKind(string? kind)
+    {
+        return kind is "class" or "struct" or "interface";
+    }
+
+    private static string BuildImpactSuggestion(IReadOnlyList<string> definitionPaths, bool hasClassLikeDefinitions, bool hasMultipleDefinitions, bool hasMultipleDefinitionFiles)
+    {
+        if (hasClassLikeDefinitions)
+        {
+            if (hasMultipleDefinitionFiles)
+                return "Try `cdidx deps --path <definition-path> --reverse` for each definition file or query a member symbol instead.";
+            if (hasMultipleDefinitions)
+                return "Try a fully qualified or member symbol query, or inspect the overlapping definitions with `cdidx definition <symbol> --body`.";
+            if (definitionPaths.Count > 0)
+                return $"Try `cdidx deps --path {definitionPaths[0]} --reverse` or query a member symbol instead.";
+        }
+
+        if (hasMultipleDefinitions)
+            return "Try a more specific symbol name or inspect each definition file with `cdidx definition <symbol> --body`.";
+
+        return "Try `cdidx definition <symbol>` to confirm the indexed symbol and then query a more specific callable member.";
+    }
+
+    /// <summary>
+    /// Find literal substring matches inside path-scoped indexed files.
+    /// path で絞ったインデックス済みファイル内でリテラル部分文字列一致を探す。
+    /// </summary>
+    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false)
+    {
+        if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
+            return [];
+
+        before = Math.Max(0, before);
+        after = Math.Max(0, after);
+        var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        using var fileCmd = _conn.CreateCommand();
+        var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {PathBucketOrder}, f.path";
+        fileCmd.CommandText = sql;
+        if (lang != null)
+            fileCmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+
+        var results = new List<FileFindResult>();
+        using var fileReader = fileCmd.ExecuteTrackedReader();
+        while (fileReader.TrackedRead())
+        {
+            if (results.Count >= limit)
+                break;
+
+            var path = fileReader.GetString(0);
+            var fileLang = GetNullableString(fileReader, 1);
+            var totalLines = fileReader.GetInt32(2);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
+                continue;
+
+            for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
+            {
+                if (!lineMap.TryGetValue(lineNumber, out var lineText))
+                    continue;
+
+                var snippetStart = Math.Max(1, lineNumber - before);
+                var snippetEnd = Math.Min(totalLines, lineNumber + after);
+                var snippetLineNumbers = Enumerable.Range(snippetStart, snippetEnd - snippetStart + 1)
+                    .Where(lineMap.ContainsKey)
+                    .ToList();
+                if (snippetLineNumbers.Count == 0)
+                    continue;
+
+                for (int searchStart = 0; searchStart < lineText.Length && results.Count < limit;)
+                {
+                    var matchColumn = lineText.IndexOf(query, searchStart, comparison);
+                    if (matchColumn < 0)
+                        break;
+
+                    results.Add(new FileFindResult
+                    {
+                        Path = path,
+                        Lang = fileLang,
+                        Line = lineNumber,
+                        Column = matchColumn + 1,
+                        StartLine = snippetLineNumbers[0],
+                        EndLine = snippetLineNumbers[^1],
+                        Snippet = string.Join("\n", snippetLineNumbers.Select(line => lineMap[line])),
+                    });
+
+                    searchStart = matchColumn + 1;
+                }
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Reconstruct one indexed file into an ordered line map.
+    /// 1つのインデックス済みファイルを順序付き行マップへ再構成する。
+    /// </summary>
+    private bool TryLoadIndexedFileLines(string path, out string? lang, out int totalLines, out SortedDictionary<int, string> lineMap, int? startLine = null, int? endLine = null)
+    {
+        lang = null;
+        totalLines = 0;
+        lineMap = new SortedDictionary<int, string>();
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        using var fileCmd = _conn.CreateCommand();
+        fileCmd.CommandText = "SELECT lang, lines FROM files WHERE path = @path";
+        fileCmd.Parameters.AddWithValue("@path", path);
+
+        using var fileReader = fileCmd.ExecuteTrackedReader();
+        if (!fileReader.TrackedRead())
+            return false;
+
+        lang = GetNullableString(fileReader, 0);
+        totalLines = fileReader.GetInt32(1);
+
+        using var chunkCmd = _conn.CreateCommand();
+        var chunkSql = @"
+            SELECT c.start_line, c.end_line, c.content
+            FROM chunks c
+            JOIN files f ON c.file_id = f.id
+            WHERE f.path = @path";
+        if (startLine.HasValue)
+            chunkSql += " AND c.end_line >= @startLine";
+        if (endLine.HasValue)
+            chunkSql += " AND c.start_line <= @endLine";
+        chunkSql += " ORDER BY c.start_line, c.chunk_index";
+        chunkCmd.CommandText = chunkSql;
+        chunkCmd.Parameters.AddWithValue("@path", path);
+        if (startLine.HasValue)
+            chunkCmd.Parameters.AddWithValue("@startLine", startLine.Value);
+        if (endLine.HasValue)
+            chunkCmd.Parameters.AddWithValue("@endLine", endLine.Value);
+
+        using var chunkReader = chunkCmd.ExecuteTrackedReader();
+        while (chunkReader.TrackedRead())
+        {
+            var chunkStartLine = chunkReader.GetInt32(0);
+            var chunkEndLine = chunkReader.GetInt32(1);
+            var chunkLines = chunkReader.GetString(2).Split('\n');
+            var lineCount = chunkEndLine - chunkStartLine + 1;
+
+            for (int i = 0; i < chunkLines.Length && i < lineCount; i++)
+            {
+                var absoluteLine = chunkStartLine + i;
+                if (!lineMap.ContainsKey(absoluteLine))
+                    lineMap[absoluteLine] = chunkLines[i];
+            }
+        }
+
+        return lineMap.Count > 0;
+    }
+
+    /// <summary>
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>
@@ -771,54 +1484,10 @@ public partial class DbReader
             before = 0;
         if (after < 0)
             after = 0;
-
-        using var fileCmd = _conn.CreateCommand();
-        fileCmd.CommandText = "SELECT lang, lines FROM files WHERE path = @path";
-        fileCmd.Parameters.AddWithValue("@path", path);
-
-        using var fileReader = fileCmd.ExecuteTrackedReader();
-        if (!fileReader.TrackedRead())
-            return null;
-
-        var lang = GetNullableString(fileReader, 0);
-        var totalLines = fileReader.GetInt32(1);
         var requestedStart = Math.Max(1, startLine - before);
-        var requestedEnd = Math.Min(totalLines, endLine + after);
-
-        using var chunkCmd = _conn.CreateCommand();
-        chunkCmd.CommandText = @"
-            SELECT c.start_line, c.end_line, c.content
-            FROM chunks c
-            JOIN files f ON c.file_id = f.id
-            WHERE f.path = @path
-              AND c.end_line >= @startLine
-              AND c.start_line <= @endLine
-            ORDER BY c.start_line, c.chunk_index";
-        chunkCmd.Parameters.AddWithValue("@path", path);
-        chunkCmd.Parameters.AddWithValue("@startLine", requestedStart);
-        chunkCmd.Parameters.AddWithValue("@endLine", requestedEnd);
-
-        var lineMap = new SortedDictionary<int, string>();
-        using var chunkReader = chunkCmd.ExecuteTrackedReader();
-        while (chunkReader.TrackedRead())
-        {
-            var chunkStartLine = chunkReader.GetInt32(0);
-            var chunkEndLine = chunkReader.GetInt32(1);
-            var chunkLines = chunkReader.GetString(2).Split('\n');
-            var lineCount = chunkEndLine - chunkStartLine + 1;
-
-            for (int i = 0; i < chunkLines.Length && i < lineCount; i++)
-            {
-                var absoluteLine = chunkStartLine + i;
-                if (absoluteLine < requestedStart || absoluteLine > requestedEnd)
-                    continue;
-                if (!lineMap.ContainsKey(absoluteLine))
-                    lineMap[absoluteLine] = chunkLines[i];
-            }
-        }
-
-        if (lineMap.Count == 0)
+        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap, requestedStart, endLine + after))
             return null;
+        var requestedEnd = Math.Min(totalLines, endLine + after);
 
         var selectedLines = Enumerable.Range(requestedStart, requestedEnd - requestedStart + 1)
             .Where(lineMap.ContainsKey)
@@ -929,12 +1598,19 @@ public partial class DbReader
     /// Return a lightweight freshness hint for zero-result MCP responses.
     /// 0件MCPレスポンス向けの軽量な鮮度ヒントを返す。
     /// </summary>
-    public (long FileCount, DateTime? IndexedAt) GetFreshnessHint()
+    public FreshnessHintResult GetFreshnessHint()
     {
+        var freshnessAvailable = _fileColumns.Contains("indexed_at");
         var fileCount = ExecuteScalar("SELECT COUNT(*) FROM files");
         var indexedAt = ExecuteNullableDateTime(
-            _fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null);
-        return (fileCount, indexedAt);
+            freshnessAvailable ? "SELECT MAX(indexed_at) FROM files" : null);
+        return new FreshnessHintResult
+        {
+            FileCount = fileCount,
+            IndexedAt = indexedAt,
+            FreshnessAvailable = freshnessAvailable,
+            FreshnessDegradedReason = freshnessAvailable ? null : "files.indexed_at column missing in this index",
+        };
     }
 
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()

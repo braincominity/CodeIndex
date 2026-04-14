@@ -1022,6 +1022,56 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotMatchNamedArgumentFrameworkCallsAsDefinitions()
+    {
+        // Named-argument labels preceding qualified framework calls must not look like explicit interface impls.
+        // 修飾付き framework call の前にある named-argument label を明示的インターフェース実装と誤認しないこと。
+        var content = """
+            public class PlatformState
+            {
+                public PlatformState(bool isWindows, bool isMacCatalyst)
+                {
+                }
+
+                public static PlatformState Detect() =>
+                    new(
+                        isWindows: OperatingSystem.IsWindows(),
+                        isMacCatalyst: OperatingSystem.IsMacCatalyst());
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "PlatformState");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Detect");
+        Assert.DoesNotContain(symbols, s => s.Name == "IsWindows");
+        Assert.DoesNotContain(symbols, s => s.Name == "IsMacCatalyst");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsAliasQualifiedExplicitInterfaceImplementations()
+    {
+        // Alias-qualified return types should still match explicit interface implementations.
+        // alias-qualified な戻り値型でも明示的インターフェース実装として抽出されること。
+        var content = """
+            public interface IFoo
+            {
+                string Name();
+                object Create();
+            }
+
+            public class Impl : IFoo
+            {
+                global::System.String IFoo.Name() => "x";
+                Alias::Type IFoo.Create() => default;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "global::System.String");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create" && s.ReturnType == "Alias::Type");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNewModifierMethods()
     {
         // C# `new` modifier for member hiding should still be extracted as definitions

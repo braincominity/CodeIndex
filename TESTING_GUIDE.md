@@ -22,6 +22,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Target framework: `net8.0`
 - Main test project: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
 - Common support packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`
+- Test parallelism: disabled at the assembly level. The suite mutates process-global `Console.Out` / `Console.Error`, clears SQLite pools during cleanup, and opens many temporary databases, so serial execution is the stable default.
 
 ## Test Layout
 
@@ -86,6 +87,8 @@ Use these helpers when possible so test behavior stays consistent across files a
 Any test that swaps `Console.Out` or `Console.Error` must lock on `TestConsoleLock.Gate`.
 
 This prevents parallel console redirection from corrupting captured output and avoids flaky assertions in CLI and console UI tests.
+
+The assembly also disables xUnit test parallelization. Keep the console lock anyway: it documents intent locally and protects helpers if a subset of tests is ever re-enabled for parallel execution.
 
 ## Writing Tests
 
@@ -166,6 +169,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 対象フレームワーク: `net8.0`
 - メインのテストプロジェクト: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
 - 主な補助パッケージ: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`
+- テスト並列実行: assembly 単位で無効。スイート全体で `Console.Out` / `Console.Error` の差し替え、SQLite pool のクリア、テンポラリ DB の大量 open/close を行うため、直列実行を既定の安定経路にしている。
 
 ## テスト構成
 
@@ -230,6 +234,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 `Console.Out` や `Console.Error` を差し替えるテストは、必ず `TestConsoleLock.Gate` で lock してください。
 
 これにより、並列実行時のコンソール出力取り込みの衝突を防ぎ、CLI や console UI テストの flaky な失敗を避けられます。
+
+加えて、assembly 全体で xUnit の並列実行も無効化しています。それでも console lock は残してください。各テストの意図が明確になり、将来一部のテストだけ並列実行を戻す場合の保険にもなります。
 
 ## テストの書き方
 

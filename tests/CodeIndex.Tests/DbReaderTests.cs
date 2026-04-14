@@ -240,6 +240,57 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_AndDeps_DoNotTreatNamedArgumentLabelsAsLocalFunctions()
+    {
+        InsertIndexedFile("src/platform.cs", "csharp",
+            """
+            public class PlatformState
+            {
+                public static bool Detect() =>
+                    new Options(
+                        isWindows: OperatingSystem.IsWindows(),
+                        isMacCatalyst: OperatingSystem.IsMacCatalyst()).Ready;
+            }
+            """);
+        InsertIndexedFile("src/app.cs", "csharp",
+            """
+            public class App
+            {
+                public bool Read() => OperatingSystem.IsWindows() || OperatingSystem.IsMacCatalyst();
+            }
+            """);
+
+        Assert.Empty(_reader.SearchSymbols("IsWindows", lang: "csharp"));
+        Assert.Empty(_reader.SearchSymbols("IsMacCatalyst", lang: "csharp"));
+        Assert.Empty(_reader.GetFileDependencies(lang: "csharp"));
+    }
+
+    [Fact]
+    public void SearchSymbols_FindsAliasQualifiedExplicitInterfaceImplementations()
+    {
+        InsertIndexedFile("src/impl.cs", "csharp",
+            """
+            public interface IFoo
+            {
+                string Name();
+                object Create();
+            }
+
+            public class Impl : IFoo
+            {
+                global::System.String IFoo.Name() => "x";
+                Alias::Type IFoo.Create() => default;
+            }
+            """);
+
+        var nameResults = _reader.SearchSymbols("Name", lang: "csharp");
+        var createResults = _reader.SearchSymbols("Create", lang: "csharp");
+
+        Assert.Contains(nameResults, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "global::System.String");
+        Assert.Contains(createResults, s => s.Kind == "function" && s.Name == "Create" && s.ReturnType == "Alias::Type");
+    }
+
+    [Fact]
     public void SearchSymbols_ReturnsRichMetadataWhenAvailable()
     {
         var results = _reader.SearchSymbols("fetchData");
@@ -264,6 +315,71 @@ public class DbReaderTests : IDisposable
         Assert.Equal(2, excerpt.EndLine);
         Assert.Contains("def authenticate(user, password):", excerpt.Content);
         Assert.Contains("if user == 'admin':", excerpt.Content);
+    }
+
+    [Fact]
+    public void FindInFiles_ReturnsPathScopedLiteralMatchesWithContext()
+    {
+        InsertIndexedFile("src/Auth.cs", "csharp",
+            """
+            class Auth
+            {
+                void Guard() {}
+                void Next() {}
+            }
+            """);
+
+        var results = _reader.FindInFiles("guard", limit: 10, pathPatterns: ["src/Auth.cs"], before: 1, after: 1);
+
+        var match = Assert.Single(results);
+        Assert.Equal("src/Auth.cs", match.Path);
+        Assert.Equal(3, match.Line);
+        Assert.Equal(10, match.Column);
+        Assert.Equal(2, match.StartLine);
+        Assert.Equal(4, match.EndLine);
+        Assert.Contains("void Guard()", match.Snippet);
+        Assert.Contains("void Next()", match.Snippet);
+    }
+
+    [Fact]
+    public void FindInFiles_ExactModeIsCaseSensitive()
+    {
+        InsertIndexedFile("src/Auth.cs", "csharp",
+            """
+            class Auth
+            {
+                void Guard() {}
+            }
+            """);
+
+        var insensitive = _reader.FindInFiles("guard", limit: 10, pathPatterns: ["src/Auth.cs"]);
+        var exact = _reader.FindInFiles("guard", limit: 10, pathPatterns: ["src/Auth.cs"], exact: true);
+
+        Assert.Single(insensitive);
+        Assert.Empty(exact);
+    }
+
+    [Fact]
+    public void FindInFiles_ReturnsEverySameLineOccurrence()
+    {
+        InsertIndexedFile("src/Sample.cs", "csharp", "alpha alpha alpha\n");
+
+        var results = _reader.FindInFiles("alpha", limit: 10, pathPatterns: ["src/Sample.cs"]);
+
+        Assert.Equal(3, results.Count);
+        Assert.Equal([1, 7, 13], results.Select(r => r.Column).ToArray());
+        Assert.All(results, result => Assert.Equal(1, result.Line));
+    }
+
+    [Fact]
+    public void FindInFiles_CountsOverlappingOccurrences()
+    {
+        InsertIndexedFile("src/Sample.cs", "csharp", "// banana\n");
+
+        var results = _reader.FindInFiles("ana", limit: 10, pathPatterns: ["src/Sample.cs"]);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal([5, 7], results.Select(r => r.Column).ToArray());
     }
 
     [Fact]
@@ -336,23 +452,36 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void SearchSymbols_ExactFoldsNonAsciiCasing()
     {
-        // #86: FormKC + ToLowerInvariant fold must catch Ä/ä, İ/i, fullwidth/halfwidth, etc.
-        // Seed one symbol per class and assert both casings match through `--exact`.
-        // #86: ä/Ä、İ/i、全角/半角などを同じ folded 値に畳んで `--exact` で一致させる。
+        // #96: true Unicode CaseFold must catch accent/case pairs, sharp-S, Greek final sigma,
+        // and width variants through `--exact`.
+        // #96: Unicode CaseFold により accent/case、sharp-S、Greek final sigma、全角/半角を
+        // `--exact` で同一視できることを確認する。
         var extraFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/intl.py", Lang = "python", Size = 80, Lines = 4,
+            Path = "src/intl.py", Lang = "python", Size = 120, Lines = 6,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertSymbols([
             new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
             new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "Ｒｕｎ", Line = 2, StartLine = 2, EndLine = 2 }, // fullwidth
+            new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "Straße", Line = 3, StartLine = 3, EndLine = 3 },
+            new SymbolRecord { FileId = extraFileId, Kind = "function", Name = "Σ", Line = 4, StartLine = 4, EndLine = 4 },
         ]);
 
         // Lowercase / uppercase Unicode should both land on the same folded row.
         // 大文字小文字違いでも folded 一致する。
         Assert.Single(_reader.SearchSymbols(new[] { "CAFÉ_INIT" }, limit: 10, exact: true));
         Assert.Single(_reader.SearchSymbols(new[] { "café_init" }, limit: 10, exact: true));
+
+        // Sharp-S and final sigma are the classic Unicode CaseFold deltas over invariant lower.
+        // sharp-S と final sigma は invariant-lower との差分が出る代表例。
+        var sharpS = _reader.SearchSymbols(new[] { "STRASSE" }, limit: 10, exact: true)
+            .Select(r => r.Name).ToList();
+        Assert.Equal(new[] { "Straße" }, sharpS);
+
+        var sigma = _reader.SearchSymbols(new[] { "ς" }, limit: 10, exact: true)
+            .Select(r => r.Name).ToList();
+        Assert.Equal(new[] { "Σ" }, sigma);
 
         // Fullwidth vs halfwidth: FormKC collapses them.
         // 全角/半角も FormKC 合成で同じになる。
@@ -440,10 +569,10 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void SearchSymbols_ExactFallsBackToNocaseWhenFoldKeyVersionMismatches()
     {
-        // #86 codex third-pass review: when a future NameFold.Fold change bumps NameFold.Version
-        // (e.g. #96's true Unicode CaseFold), previously stamped DBs must NOT be read through
-        // the folded equality path — their stored keys were generated by the OLD fold function
-        // and comparing them against queries folded with the NEW function silently misses.
+        // #86 codex third-pass review: when NameFold.Fold changes and bumps NameFold.Version,
+        // previously stamped DBs must NOT be read through the folded equality path — their
+        // stored keys were generated by the old fold function and comparing them against
+        // queries folded with the new function silently misses.
         // Simulate by writing a mismatched `fold_key_version` into codeindex_meta and
         // confirming the reader falls back to NOCASE. Rebuild would restamp to current.
         // #86 3rd pass: fold_key_version 不一致時は NOCASE fallback に降格することを固定する。
@@ -466,7 +595,7 @@ public class DbReaderTests : IDisposable
             writer.MarkFoldReady();
 
             // Now simulate a future version bump: overwrite the stored fold_key_version so the
-            // reader sees v2 stamped but runs with NameFold.Version=1 (or vice versa).
+            // reader sees a different stamped version than the current binary.
             // 未来の version bump を模擬: 記録された fold_key_version を書き換え、reader と
             // NameFold.Version を食い違わせる。
             writer.SetMeta("fold_key_version", "99");
@@ -933,6 +1062,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_ExactZeroHint_OnlyWhenWholeBundleIsEmpty()
+    {
+        InsertIndexedFile("src/handlers.cs", "csharp",
+            """
+            public class Handler
+            {
+                public void HandleRequest() { }
+                public void HandleRequestAsync() { HandleRequest(); }
+            }
+            """);
+
+        var exactMiss = _reader.AnalyzeSymbol("HandleRe", exact: true);
+        Assert.NotNull(exactMiss.ExactZeroHint);
+        Assert.Equal(2, exactMiss.ExactZeroHint!.RelaxedCount);
+        Assert.Contains("HandleRequest", exactMiss.ExactZeroHint.SampleNames);
+        Assert.Contains("HandleRequestAsync", exactMiss.ExactZeroHint.SampleNames);
+
+        var exactHit = _reader.AnalyzeSymbol("HandleRequest", exact: true);
+        Assert.Null(exactHit.ExactZeroHint);
+    }
+
+    [Fact]
     public void GraphReaders_ExactPredicatesAreIndexable()
     {
         // Guard: `references / callers / callees --exact` must stay SARGable so SQLite can
@@ -1076,6 +1227,629 @@ public class DbReaderTests : IDisposable
         Assert.Equal(callerCount, results.Count);
         Assert.Equal(callerCount, results.Select(result => $"{result.Path}:{result.CallerName}").Distinct(StringComparer.Ordinal).Count());
         Assert.All(results, result => Assert.Equal(1, result.Depth));
+    }
+
+    [Fact]
+    public void AnalyzeImpact_ClassSymbolReturnsHeuristicFileDependencyHints()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.Empty(analysis.Callers);
+        Assert.True(analysis.HasClassLikeDefinitions);
+        Assert.False(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(1, analysis.HintCount);
+        var edge = Assert.Single(analysis.FileImpacts);
+        Assert.Equal("src/App.cs", edge.SourcePath);
+        Assert.Equal("src/FolderDiffService.cs", edge.TargetPath);
+        Assert.Contains("ExecuteFolderDiffAsync", edge.Symbols);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_ClassAndNamespaceWithSameName_StillReturnsHeuristicHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            namespace FooService;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.Equal(1, analysis.HintCount);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_FoldEquivalentClassDefinitions_ReportAmbiguity()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/FullwidthFooService.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_PartialClassWithoutReverseEdges_ExplainsMultipleDefinitions()
+    {
+        InsertIndexedFile("src/Worker.Part1.cs", "csharp",
+            """
+            public partial class Worker
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/Worker.Part2.cs", "csharp",
+            """
+            public partial class Worker
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Worker", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.True(analysis.HasClassLikeDefinitions);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.True(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+        Assert.Contains("deps --path <definition-path> --reverse", analysis.Suggestion);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_DuplicateDefinitionsInOneFile_ExplainsAmbiguity()
+    {
+        InsertIndexedFile("src/Services.cs", "csharp",
+            """
+            namespace A
+            {
+                public class FooService
+                {
+                    public void Run() { }
+                }
+            }
+
+            namespace B
+            {
+                public class FooService
+                {
+                    public void Run() { }
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.Equal(1, analysis.DefinitionFileCount);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("multiple_definitions", analysis.ZeroResultReason);
+        Assert.Contains("fully qualified or member symbol query", analysis.Suggestion);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_ClassCollisionWithoutTypeEvidenceReturnsNoHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/BarService.cs", "csharp",
+            """
+            public class BarService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(BarService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_NamespaceDoesNotFallbackToFileDependencies()
+    {
+        InsertIndexedFile("src/Services.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Acme", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal("non_callable_symbol_kind", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_ImportOnlyQueryReportsNonCallableSymbolKind()
+    {
+        InsertIndexedFile("src/app.py", "python",
+            """
+            import requests
+            """);
+
+        var analysis = _reader.AnalyzeImpact("requests", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(1, analysis.DefinitionCount);
+        Assert.Equal("import", Assert.Single(analysis.Definitions).Kind);
+        Assert.Equal("non_callable_symbol_kind", analysis.ZeroResultReason);
+        Assert.Contains("definition <symbol>", analysis.Suggestion);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_UnresolvedExternalCallOnlyWithoutTypeEvidenceReturnsNoHints()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/ExternalConsumer.cs", "csharp",
+            """
+            public class ExternalConsumer
+            {
+                public void Boot()
+                {
+                    ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.Callers);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_UnicodeTypeEvidenceStillEnablesHeuristicHints()
+    {
+        InsertIndexedFile("src/ＦｏｏＳｅｒｖｉｃｅ.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(ＦｏｏＳｅｒｖｉｃｅ service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("ＦｏｏＳｅｒｖｉｃｅ", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.Equal(1, analysis.HintCount);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CommentOnlyTypeMentionDoesNotCountAsTypeEvidence()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/OtherService.cs", "csharp",
+            """
+            public class OtherService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(OtherService service)
+                {
+                    service.Run(); // TODO: maybe replace with FooService later
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_StringLiteralTypeMentionDoesNotCountAsTypeEvidence()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/Worker.cs", "csharp",
+            """
+            public class Worker
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(Worker worker)
+                {
+                    var label = "FooService";
+                    worker.Execute();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_ExcludeTestsIgnoresOutOfScopeDuplicateDefinitions()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("tests/FooServiceTests.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10, excludeTests: true);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(1, analysis.DefinitionFileCount);
+        Assert.Equal(1, analysis.HintCount);
+        Assert.Equal("src/FooService.cs", Assert.Single(analysis.Definitions).Path);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_IgnoresUnsupportedLanguageDuplicates()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/tools.sh", "shell",
+            """
+            FooService() {
+              :
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.False(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(1, analysis.DefinitionFileCount);
+        Assert.Equal("src/FooService.cs", Assert.Single(analysis.Definitions).Path);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_ExactDefinitionResolutionSkipsUnsupportedMatchesBeforeLimit()
+    {
+        for (int i = 0; i < 60; i++)
+        {
+            InsertIndexedFile($"scripts/Foo{i:D2}.sh", "shell",
+                """
+                Foo() {
+                  :
+                }
+                """);
+        }
+
+        InsertIndexedFile("src/Foo.cs", "csharp",
+            """
+            public class Foo
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(Foo service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Foo", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.Equal(1, analysis.DefinitionCount);
+        Assert.Equal("src/Foo.cs", Assert.Single(analysis.Definitions).Path);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_SubstringTypeEvidenceDoesNotCountAsStructuredEvidence()
+    {
+        InsertIndexedFile("src/Foo.cs", "csharp",
+            """
+            public class Foo
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Handle(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Foo", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_HeuristicHintsSetTruncatedWhenLimitReached()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App1.cs", "csharp",
+            """
+            public class App1
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+        InsertIndexedFile("src/App2.cs", "csharp",
+            """
+            public class App2
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 1);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.True(analysis.Truncated);
+        Assert.Single(analysis.FileImpacts);
+        Assert.Equal(1, analysis.HintCount);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_HeuristicHintsKeepActualReferenceCount()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        var edge = Assert.Single(analysis.FileImpacts);
+        Assert.Equal(3, edge.ReferenceCount);
+        Assert.Equal("ExecuteFolderDiffAsync", edge.Symbols);
     }
 
     [Fact]
@@ -1274,6 +2048,55 @@ public class DbReaderTests : IDisposable
         Assert.Contains("indexed", analysis.GraphSupportReason);
         Assert.Contains(analysis.NearbySymbols, item => item.Name == "ApiClient");
         Assert.Contains(analysis.Callees, item => item.CalleeName == "fetch");
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_PrefersExactDefinitionAsPrimaryAnchorWhenSubstringMatchesOverlap()
+    {
+        InsertIndexedFile("src/Services/ILoggerService.cs", "csharp",
+            """
+            public interface ILoggerService
+            {
+                void Log(string message);
+            }
+            """);
+        InsertIndexedFile("src/Services/LoggerService.cs", "csharp",
+            """
+            public class LoggerService : ILoggerService
+            {
+                public void Log(string message) { }
+                public void Execute() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeSymbol("loggerservice", limit: 1, lang: "csharp");
+
+        Assert.NotNull(analysis.File);
+        Assert.Equal("src/Services/LoggerService.cs", analysis.File!.Path);
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("LoggerService", definition.Name);
+        Assert.Equal("src/Services/LoggerService.cs", definition.Path);
+        Assert.All(analysis.NearbySymbols, item => Assert.Equal("src/Services/LoggerService.cs", item.Path));
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_NonExactDoesNotUseFoldOnlyExactAnchor()
+    {
+        InsertIndexedFile("src/Intl/FullwidthRun.cs", "csharp",
+            """
+            public class Holder
+            {
+                public void Ｒｕｎ() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeSymbol("Run", limit: 1, lang: "csharp", exact: false);
+
+        Assert.Null(analysis.File);
+        Assert.Empty(analysis.Definitions);
+        Assert.Empty(analysis.NearbySymbols);
+        Assert.Null(analysis.ExactIndexAvailable);
+        Assert.Null(analysis.DegradedReason);
     }
 
     [Fact]

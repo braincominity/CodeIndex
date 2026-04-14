@@ -63,6 +63,17 @@ public class FileExcerptResult
     public string Content { get; set; } = string.Empty;
 }
 
+public class FileFindResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public string Snippet { get; set; } = string.Empty;
+}
+
 public class DefinitionResult : SymbolResult
 {
     public string Content { get; set; } = string.Empty;
@@ -72,9 +83,39 @@ public class DefinitionResult : SymbolResult
 
 public class ExactZeroHintResult
 {
-    public int RelaxedCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RelaxedCount { get; set; }
+    public const string DefaultSuggestion = "drop --exact or use the exact indexed name";
     public List<string> SampleNames { get; set; } = [];
-    public string Suggestion { get; set; } = string.Empty;
+    public string Suggestion { get; set; } = DefaultSuggestion;
+
+    public static ExactZeroHintResult? FromRelaxedMatches(int relaxedCount, IEnumerable<string?> names, int sampleLimit = 5)
+    {
+        if (relaxedCount <= 0)
+            return null;
+
+        var sampleNames = names
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .Take(sampleLimit)
+            .Select(name => name!)
+            .ToList();
+
+        return new ExactZeroHintResult
+        {
+            RelaxedCount = relaxedCount,
+            SampleNames = sampleNames,
+            Suggestion = DefaultSuggestion,
+        };
+    }
+}
+
+public class FreshnessHintResult
+{
+    public long FileCount { get; set; }
+    public DateTime? IndexedAt { get; set; }
+    public bool FreshnessAvailable { get; set; }
+    public string? FreshnessDegradedReason { get; set; }
 }
 
 public class ReferenceResult
@@ -123,6 +164,30 @@ public class ImpactResult
     public int Depth { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
+}
+
+public class ImpactAnalysisResult
+{
+    public string Query { get; set; } = string.Empty;
+    public string ResolvedName { get; set; } = string.Empty;
+    public string ImpactMode { get; set; } = "callers";
+    public bool Heuristic { get; set; }
+    public int MaxDepth { get; set; }
+    public int DefinitionCount { get; set; }
+    public int DefinitionFileCount { get; set; }
+    public int HintCount { get; set; }
+    public bool HasClassLikeDefinitions { get; set; }
+    public bool HasMultipleDefinitions { get; set; }
+    public bool HasMultipleDefinitionFiles { get; set; }
+    public List<SymbolResult> Definitions { get; set; } = [];
+    public List<ImpactResult> Callers { get; set; } = [];
+    public List<FileDependencyResult> FileImpacts { get; set; } = [];
+    public bool Truncated { get; set; }
+    public bool GraphTableAvailable { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ZeroResultReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Suggestion { get; set; }
 }
 
 public class StatusResult
@@ -258,14 +323,20 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExactZeroHintResult? ExactZeroHint { get; set; }
     /// <summary>
-    /// True when the active `--exact` graph predicates can use their supporting indexes.
-    /// False means the query still returns correct hits, but may be slow on a legacy DB
-    /// missing the relevant NOCASE / folded graph indexes.
-    /// `--exact` の graph predicate が対応 index を使えるか。false でも結果は正しいが遅くなりうる。
+    /// True when every active `--exact` sub-query in the bundle can use its supporting indexes.
+    /// False means the bundled result still returns correct hits, but at least one exact
+    /// sub-query degraded to a slower legacy fallback path.
+    /// bundle 内の `--exact` sub-query がすべて対応 index を使えるか。false でも結果は正しい。
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? ExactIndexAvailable { get; set; }
+    [JsonIgnore]
+    public bool? ExactHasMissingIndex { get; set; }
+    [JsonIgnore]
+    public bool? ExactHasMissingTable { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DegradedReason { get; set; }
 }

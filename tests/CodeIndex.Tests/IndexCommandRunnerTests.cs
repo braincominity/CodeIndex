@@ -421,6 +421,301 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_JsonKeepsGraphAndIssuesReadyAfterHealthyScopedRefresh()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_HumanOutputShowsDegradedReadinessWhenBitsStayDown()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, output) = RunAndCaptureOutput([projectRoot, "--files", "app.cs"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Graph   : degraded", output);
+            Assert.Contains("Issues  : degraded", output);
+            Assert.Contains("Fold    : degraded", output);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_JsonPreservesGraphAndIssuesWhenOnlyFoldIsMissing()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = NULL;
+                    UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL;
+                    PRAGMA user_version = 3
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DegradedWarningUsesResolvedProjectDbPathWhenCwdDiffers()
+    {
+        var projectRoot = CreateTempProject();
+        var otherCwd = Path.Combine(Path.GetTempPath(), $"cdidx_other_cwd_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(otherCwd);
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--files", "app.cs"], otherCwd);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("graph_table_available=false", errorOutput);
+            Assert.Contains("issues_table_available=false", errorOutput);
+            Assert.Contains("fold_ready=false", errorOutput);
+            Assert.Contains($"cdidx status --db \"{dbPath}\" --json", errorOutput);
+        }
+        finally
+        {
+            if (Directory.Exists(otherCwd))
+                DeleteDirectory(otherCwd);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DegradedWarningUsesExplicitDbPath()
+    {
+        var projectRoot = CreateTempProject();
+        var customDbDir = Path.Combine(Path.GetTempPath(), $"cdidx_custom_db_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(customDbDir);
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            var customDbPath = Path.Combine(customDbDir, "custom-index.db");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", customDbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var conn = OpenNonPoolingConnection(customDbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--db", customDbPath, "--files", "app.cs"], projectRoot);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("graph_table_available=false", errorOutput);
+            Assert.Contains("issues_table_available=false", errorOutput);
+            Assert.Contains("fold_ready=false", errorOutput);
+            Assert.Contains($"cdidx status --db \"{customDbPath}\" --json", errorOutput);
+        }
+        finally
+        {
+            if (Directory.Exists(customDbDir))
+                DeleteDirectory(customDbDir);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_OutputReportsReadinessInJsonAndHumanModes()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var (jsonExitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            var (humanExitCode, output) = RunAndCaptureOutput([projectRoot]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("Graph   : ready", output);
+            Assert.Contains("Issues  : ready", output);
+            Assert.Contains("Fold    : ready", output);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot], projectRoot);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("fold_ready=false", errorOutput);
+            Assert.DoesNotContain("graph_table_available=false", errorOutput);
+            Assert.DoesNotContain("issues_table_available=false", errorOutput);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_WithAbsoluteDbPathInsideProject_WritesRepoRelativePatternToGitExclude()
     {
         var projectRoot = CreateTempProject();
@@ -691,16 +986,17 @@ public class IndexCommandRunnerTests
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "init");
 
-            // Initial index stamps current version (1).
-            // 初回 index で現在の version (1) が stamp される。
+            // Initial index stamps the current fold-key version.
+            // 初回 index で現在の fold-key version が stamp される。
             var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode1);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
 
             // Simulate a future version bump: the DB was stamped by a binary that wrote
-            // fold_key_version=0 (pretend old). The current binary expects NameFold.Version=1
+            // fold_key_version=0 (pretend old). The current binary expects the latest
+            // NameFold.Version
             // so the reader sees a mismatch and falls back to NOCASE. A partial update must
-            // preserve that state, not silently restamp version=1 on mixed-state rows.
+            // preserve that state, not silently restamp the current version on mixed-state rows.
             // version 不一致を模擬: codeindex_meta の fold_key_version を 0 に書き換え。
             SqliteConnection.ClearAllPools();
             using (var conn = new SqliteConnection($"Data Source={dbPath}"))
@@ -730,10 +1026,72 @@ public class IndexCommandRunnerTests
             versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
             var storedVersion = versionCmd.ExecuteScalar() as string;
             // Stored version may stay at "0" (what we wrote) or be unset; critically it must
-            // NOT have advanced to "1" (the current NameFold.Version) because that would let
-            // the reader treat mixed-state rows as fully version-1 fold-ready.
-            // version は "0" のままで OK。現在の NameFold.Version (="1") に昇格してはいけない。
-            Assert.NotEqual("1", storedVersion);
+            // NOT have advanced to the current NameFold.Version because that would let the
+            // reader treat mixed-state rows as fully fold-ready.
+            // version は "0" のままで OK。現在の NameFold.Version に昇格してはいけない。
+            Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
+    {
+        // Normal non-rebuild `cdidx index .` is still incremental: unchanged rows are skipped.
+        // If an existing DB carries old-version fold keys, a full scan must not advertise the
+        // new version unless every row is rewritten (that requires --rebuild).
+        // 通常の full scan も skip を使うため、旧 version key が残る DB では FoldReady を
+        // restamp してはいけない。安全に昇格できるのは --rebuild のみ。
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            File.WriteAllText(Path.Combine(projectRoot, "intl.py"), "def Straße():\n    pass\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var exitCode1 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = 'straße' WHERE name = 'Straße';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Add a new file so the next non-rebuild scan mixes freshly-written v2 rows with
+            // untouched v1-style rows. The run must leave FoldReady off.
+            // 新規ファイルを追加して mixed-state を作る。FoldReady は off のままであるべき。
+            File.WriteAllText(Path.Combine(projectRoot, "new.cs"), "public class NewFile { }");
+
+            var exitCode2 = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
         }
         finally
         {
@@ -957,6 +1315,7 @@ public class IndexCommandRunnerTests
         lock (TestConsoleLock.Gate)
         {
             var originalOut = Console.Out;
+            var originalErr = Console.Error;
             using var writer = new StringWriter();
 
             try
@@ -968,8 +1327,64 @@ public class IndexCommandRunnerTests
             finally
             {
                 Console.SetOut(originalOut);
+                Console.SetError(originalErr);
             }
         }
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, string workingDirectory)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(GetBuiltCliDllPath());
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cdidx subprocess / cdidx サブプロセスの起動に失敗");
+        var stdOut = process.StandardOutput.ReadToEnd();
+        var stdErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static string GetBuiltCliDllPath()
+    {
+        var tfm = new DirectoryInfo(AppContext.BaseDirectory).Name;
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name;
+        var fallbackConfigurations = new[] { configuration, "Debug", "Release" }
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.Ordinal);
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            foreach (var candidateConfiguration in fallbackConfigurations)
+            {
+                var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", candidateConfiguration!, tfm, "cdidx.dll");
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate built cdidx.dll from test output path / テスト出力パスから cdidx.dll を特定できませんでした");
+    }
+
+    private static SqliteConnection OpenNonPoolingConnection(string dbPath)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Pooling = false,
+        };
+        return new SqliteConnection(builder.ToString());
     }
 
     private static string CreateTempProject()

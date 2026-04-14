@@ -23,13 +23,13 @@ src/CodeIndex/
     DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
     IndexCommandRunner.cs     — Index command execution, update/full-scan flows, backfill-fold upgrade path
-    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status execution and query arg parsing
+    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
     WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
-    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status, file-level deps
+    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, in-file literal find, excerpt reconstruction, outline, inspect bundles, file listing, status, file-level deps
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
@@ -366,7 +366,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, arrow, methods | class | -- | -- | -- | -- | -- | import...from | yes |
 | TypeScript | function, arrow, methods | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
-| C# | methods, ctors, operators, indexers, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
+| C# | methods, ctors, explicit-interface impls (guards named-argument labels only before qualified call expressions; allows `global::` / alias-qualified return types), operators, indexers, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
 | Go | func, methods | type alias | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
 | Java | methods, static final, enum members | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
@@ -464,6 +464,33 @@ The direct MCP graph tools (`references`, `callers`, `callees`) also emit `graph
 {"path":"src/auth.py","lang":"python","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":1,"snippet_end_line":6,"snippet":"def authenticate(user):\n    token = issue_token(user)\n    return token","match_lines":[2],"highlights":[{"line":2,"text":"    token = issue_token(user)","terms":["token"]}],"context_before":1,"context_after":3,"score":-1.5}
 ```
 
+## Release Workflow
+
+The version string has a single source of truth: `version.json` at the repository root.
+
+### Version flow
+
+1. **Build time.** `src/CodeIndex/CodeIndex.csproj` reads `version.json` and sets `<Version>`, so the NuGet package and self-contained binaries are stamped automatically.
+2. **Runtime.** The same project file copies `version.json` next to the published binary. `ConsoleUi.LoadVersion()` reads it from `AppContext.BaseDirectory`, which keeps `cdidx --version`, MCP `serverInfo.version`, and `status --json` aligned.
+3. **Install time.** `install.sh` places `version.json` beside `cdidx` and the native SQLite library. If it is missing, `cdidx --version` falls back to `v0.0.0`.
+
+There are no version constants in C#. Outside `version.json`, the only expected version strings are release headings and compare links in `CHANGELOG.md`.
+
+### Maintainer checklist
+
+0. **Triage every unmerged branch and open PR before bumping the version.**
+   Run `git fetch --all --prune`, then list all unmerged branches with `git branch -a --no-merged main` and all open PRs with `gh pr list --state open --limit 1000`. Do not pre-filter by branch name. For each entry, either merge it before release or explicitly note in the release PR description why it is deferred.
+1. Update `version.json` to the new version (for example `"version": "1.9.0"`).
+2. Promote `[Unreleased]` to `[1.9.0] - YYYY-MM-DD` in both the English and Japanese sections of `CHANGELOG.md`, and leave a fresh empty `[Unreleased]` section above it.
+3. Update the compare links at the bottom of `CHANGELOG.md`:
+   `[Unreleased]: .../compare/v1.9.0...HEAD`
+   `[1.9.0]: .../compare/v1.8.0...v1.9.0`
+4. Commit the version bump.
+5. Tag the commit `v1.9.0` and push the tag. `.github/workflows/release.yml` triggers on `v*` tags and builds the per-platform tarballs plus the NuGet package.
+6. After the release is published, run the one-liner installer on a clean machine and verify `cdidx --version` prints the released version before announcing it.
+
+If a clean install reports `cdidx v0.0.0`, treat it as a release regression: either the tarball did not bundle `version.json`, or `install.sh` did not copy it next to the binary. Use `CLOUD_BOOTSTRAP_PROMPT.md` for the clean-install smoke path.
+
 ## AI Feedback Implementation
 
 The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
@@ -519,11 +546,11 @@ See [Exit codes](README.md#exit-codes) in README.
 - **Path-aware narrowing and ranking** — `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` share path include/exclude filters plus `--exclude-tests`. Read queries prefer source files over tests/docs, and full-text search boosts exact symbol-name and path matches to surface likely implementation files first.
 - **Compact search snippets for AI** — `search --json` and MCP `search` return match-centered snippets with explicit snippet ranges, match lines, highlights, and context counts instead of whole chunks. `--snippet-lines` lets clients trade recall for smaller payloads.
 - **Repo map for first-pass orientation** — `map` aggregates languages, modules, top files, file hot spots, and likely entrypoints from indexed data so AI clients can decide where to look before issuing precise queries. Entrypoint inference now falls back to known top-level entry files when symbol extraction does not produce an explicit `Main`-style symbol.
-- **Freshness metadata for trust decisions** — `status` exposes whole-workspace freshness and git state. `map` keeps `indexed_at` / `latest_modified` scoped to the filtered result set and also exposes `workspace_indexed_at` / `workspace_latest_modified` for whole-workspace freshness. `inspect` mirrors those whole-workspace timestamps and git fields so symbol-oriented AI flows can make trust decisions without a separate `status` call. `files` exposes per-file checksum plus modified/indexed timestamps. File-column migrations are applied opportunistically for older DBs, and read paths are designed to avoid crashing if in-place migration is unavailable. MCP zero-result responses include `indexed_file_count` and `indexed_at` so AI clients can self-diagnose stale or empty indexes without a separate `status` call.
+- **Freshness metadata for trust decisions** — `status` exposes whole-workspace freshness and git state. `map` keeps `indexed_at` / `latest_modified` scoped to the filtered result set and also exposes `workspace_indexed_at` / `workspace_latest_modified` for whole-workspace freshness. `inspect` mirrors those whole-workspace timestamps and git fields so symbol-oriented AI flows can make trust decisions without a separate `status` call. `files` exposes per-file checksum plus modified/indexed timestamps. File-column migrations are applied opportunistically for older DBs, and read paths are designed to avoid crashing if in-place migration is unavailable. CLI and MCP zero-result JSON responses for `search`, `files`, `symbols`, `definition`, `references`, `callers`, `callees`, `deps`, `unused`, `hotspots`, and `impact` include `indexed_file_count`, `indexed_at`, and `freshness_available`. `indexed_at:null` with `freshness_available=true` means the index is empty, while `freshness_available=false` means a legacy/read-only DB could not expose freshness timestamps and `freshness_degraded_reason` explains why.
 - **Folded-key upgrade without reparse** — `backfill-fold` and MCP `backfill_fold` recompute `name_folded` / `*_folded` directly from existing DB rows, then stamp `FoldReadyFlag` once verification confirms no required folded values remain NULL. This gives AI clients and users a low-cost upgrade path from pre-#86 DBs without re-reading every source file, and it also rewrites all folded rows when `fold_key_version` is missing or mismatched so future `NameFold.Version` bumps cannot silently restamp stale keys.
 - **Bundled symbol analysis** — `inspect` and MCP `analyze_symbol` return definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph-support metadata in one request so AI clients can answer common symbol questions with fewer round-trips.
 - **Language-aware reference extraction** — `references`, `callers`, `callees`, and `impact` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful (30 of 46 languages). Unsupported languages intentionally fall back to text search instead of returning low-confidence pseudo-graph data. When a language is removed from graph support, `PurgeUnsupportedReferences` deletes its stale `symbol_references` rows on the next indexing run, and graph read paths additionally filter by supported languages to prevent stale edges from surviving between index runs. Shell is intentionally excluded because its command-style invocations (`foo arg1 arg2`) cannot be detected by the parenthesized-call regex.
-- **Transitive impact analysis** — `impact` and MCP `impact_analysis` compute the transitive caller chain of a symbol using BFS. Design constraints refined through adversarial review: caller matching uses case-insensitive exact match (`lower() = lower()`) to avoid both substring expansion and case-sensitivity brittleness; symbol names are pre-resolved through definitions with exact-case preference; the read path filters to graph-supported languages to prevent stale edges from removed languages; BFS pages post-deduplication with a safety cap; and `PurgeUnsupportedReferences` runs in all three indexing paths (CLI full scan, CLI update mode, MCP index).
+- **Transitive impact analysis** — `impact` and MCP `impact_analysis` compute the transitive caller chain of a symbol using BFS. Design constraints refined through adversarial review: caller matching uses case-insensitive exact match (`lower() = lower()`) to avoid both substring expansion and case-sensitivity brittleness; symbol names are pre-resolved through definitions with exact-case preference; the read path filters to graph-supported languages to prevent stale edges from removed languages; the definition set used for heuristic fallback must also respect active `--lang` / `--path` / `--exclude-path` / `--exclude-tests` filters and graph-supported languages so out-of-scope or unsupported duplicates do not suppress in-scope hints; fallback eligibility is keyed off class-like definitions only, so same-name namespace/import siblings do not block a single resolved class / struct / interface target, while pure non-callable `namespace` / `import` queries surface `non_callable_symbol_kind` guidance; heuristic file-level hints still return a successful result and encode their non-authoritative status via `impact_mode`, `heuristic`, `hint_count`, and `truncated`; `count` / `file_count` now describe the visible returned set while `confirmed_count` / `confirmed_file_count` preserve symbol-level caller totals for heuristic-success payloads, and `impact --json --count` uses the same `*_count` field names as the full payload; to reduce general-name collisions, a file only qualifies for type fallback if it both references one of the candidate member names and also exposes same-file structured type evidence through indexed symbol metadata such as signatures or return types, rather than raw comment/string text matches; that signature evidence path is Unicode-aware so fullwidth/accented identifiers are tokenized consistently with exact-name resolution; hint `reference_count` reflects the real number of matching reference rows while the symbol list stays deduplicated; only multiple class-like definitions are treated as fallback ambiguity, even when they share one file; and `PurgeUnsupportedReferences` runs in all three indexing paths (CLI full scan, CLI update mode, MCP index).
 - **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability, but stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, visibility, and return types when the language patterns can infer them. **Pattern externalization**: Language patterns are currently defined inline in `SymbolExtractor.cs` using compiled `Regex` objects. This keeps the extraction pipeline self-contained and allows compile-time validation, but means adding a new language requires a code change and rebuild. A future iteration could externalize patterns to JSON/TOML files (loaded at startup), which would lower the barrier for community contributions and enable hot-reload during development. The trade-off is losing compile-time safety and slightly increasing startup cost. If externalized, patterns should include: language name, kind (function/class/import/namespace), regex string, body style (brace/indent/ruby-end/none), and optional capture group names for visibility and return type.
 - **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
 - **Structured MCP responses** — MCP tool calls return typed JSON in `structuredContent` and keep `content` concise for compatibility.
@@ -943,13 +970,13 @@ src/CodeIndex/
     DbPathResolver.cs         — indexコマンド用の既定DBパス解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
     IndexCommandRunner.cs     — indexコマンド実行、更新/フルスキャンフロー、backfill-fold アップグレード経路
-    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status実行とクエリ引数解析
+    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status実行とクエリ引数解析
     SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペット整形
     WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ、参照書き込み
-    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、抜粋再構成、アウトライン、inspect向け集約、ファイル一覧、ステータス
+    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、既知ファイル内 literal find、抜粋再構成、アウトライン、inspect向け集約、ファイル一覧、ステータス
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
@@ -1286,7 +1313,7 @@ LIMIT 20;
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, アロー, メソッド | class | -- | -- | -- | -- | -- | import...from | yes |
 | TypeScript | function, アロー, メソッド | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
-| C# | メソッド, コンストラクタ, 演算子, インデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
+| C# | メソッド, コンストラクタ, explicit-interface 実装（qualified call expression の直前にある named-argument label だけを除外し、`global::` / alias-qualified な戻り値型は許可）, 演算子, インデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
 | Go | func, メソッド | 型エイリアス | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
 | Java | メソッド, static final, enum メンバー | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
@@ -1384,6 +1411,33 @@ MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に
 {"path":"src/auth.py","lang":"python","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":1,"snippet_end_line":6,"snippet":"def authenticate(user):\n    token = issue_token(user)\n    return token","match_lines":[2],"highlights":[{"line":2,"text":"    token = issue_token(user)","terms":["token"]}],"context_before":1,"context_after":3,"score":-1.5}
 ```
 
+## リリース手順
+
+バージョン文字列の真実は、リポジトリ直下の `version.json` 1か所だけにある。
+
+### バージョンの流れ
+
+1. **ビルド時。** `src/CodeIndex/CodeIndex.csproj` が `version.json` を読み取り、`<Version>` を設定する。NuGet パッケージと self-contained バイナリは自動で正しいバージョンになる。
+2. **実行時。** 同じ project file が `version.json` を publish 済みバイナリの隣へコピーする。`ConsoleUi.LoadVersion()` が `AppContext.BaseDirectory` から読み取るため、`cdidx --version`、MCP `serverInfo.version`、`status --json` の `version` が一致する。
+3. **インストール時。** `install.sh` が `cdidx` とネイティブ SQLite ライブラリの隣へ `version.json` を配置する。これが欠けると `cdidx --version` は `v0.0.0` にフォールバックする。
+
+C# 側にバージョン定数は無い。`version.json` の外でバージョン文字列が出てくるのは、`CHANGELOG.md` のリリース見出しと compare リンクだけである。
+
+### メンテナ向けチェックリスト
+
+0. **バージョンを上げる前に、未マージブランチと open PR を必ず全件トリアージする。**
+   `git fetch --all --prune` を実行し、`git branch -a --no-merged main` で未マージブランチ、`gh pr list --state open --limit 1000` で open PR を列挙する。ブランチ名では事前フィルタしないこと。各項目について、リリース前にマージするか、リリース PR 説明で見送り理由を明記するかを必ず決める。
+1. `version.json` を新しいバージョンへ更新する（例: `"version": "1.9.0"`）。
+2. `CHANGELOG.md` の英語セクションと日本語セクションの両方で、`[Unreleased]` を `[1.9.0] - YYYY-MM-DD` に昇格し、その上に新しい空の `[Unreleased]` を残す。
+3. `CHANGELOG.md` 末尾の compare リンクを更新する:
+   `[Unreleased]: .../compare/v1.9.0...HEAD`
+   `[1.9.0]: .../compare/v1.8.0...v1.9.0`
+4. バージョンバンプをコミットする。
+5. コミットに `v1.9.0` タグを付けて push する。`.github/workflows/release.yml` は `v*` タグで起動し、各プラットフォームの tarball と NuGet パッケージをビルドする。
+6. リリース公開後、クリーンなマシンでワンライナーインストーラを実行し、`cdidx --version` が公開バージョンを返すことを確認してから告知する。
+
+クリーンインストールで `cdidx v0.0.0` が返る場合は、リリースの不具合として扱うこと。tarball に `version.json` が入っていないか、`install.sh` がそれをバイナリの隣へコピーしていない。クリーンインストールのスモーク経路は `CLOUD_BOOTSTRAP_PROMPT.md` を参照。
+
 ## AIフィードバックの実装
 
 `suggest_improvement` MCPツールにより、AIエージェントがギャップやエラーを報告できる。
@@ -1438,7 +1492,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **パス考慮の絞り込みとランキング** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` はパス include/exclude フィルタと `--exclude-tests` を共有する。読み取りクエリは tests や docs より source を優先し、全文検索はシンボル名やパスの exact match を追加ブーストして、実装ファイルを先に返しやすくする。
 - **AI向けの軽量検索スニペット** — `search --json` と MCP の `search` は、チャンク全文ではなく snippet range、match line、highlight、context count を持つ一致中心スニペットを返す。`--snippet-lines` でペイロード量と文脈量のバランスを取れる。
 - **初動向けの repo map** — `map` は、インデックス済みデータから言語、モジュール、主要ファイル、ホットスポット、推定エントリポイントを集約し、AIクライアントが精密検索前に見るべき場所を決めやすくする。シンボル抽出が `Main` 系シンボルを出さない場合でも、既知のトップレベル実行ファイルへフォールバックして入口候補を補う。
-- **信用判断のための鮮度メタデータ** — `status` はワークスペース全体の鮮度と git 状態を返す。`map` は `indexed_at` / `latest_modified` を絞り込み結果の鮮度として維持しつつ、`workspace_indexed_at` / `workspace_latest_modified` でワークスペース全体の鮮度も返す。`inspect` も同じワークスペース鮮度と git フィールドを返すため、シンボル中心の AI フローで `status` を別途呼ばずに済む。`files` はファイルごとの checksum・modified・indexed timestamp を返す。古いDBに対する file 列の移行は可能なら自動で行い、その場移行できない場合でも読み取り経路がクラッシュしないようにする。MCP の 0 件レスポンスは `indexed_file_count` と `indexed_at` を含み、AIクライアントが別途 `status` を呼ばなくてもインデックスの古さや空を自己診断できる。
+- **信用判断のための鮮度メタデータ** — `status` はワークスペース全体の鮮度と git 状態を返す。`map` は `indexed_at` / `latest_modified` を絞り込み結果の鮮度として維持しつつ、`workspace_indexed_at` / `workspace_latest_modified` でワークスペース全体の鮮度も返す。`inspect` も同じワークスペース鮮度と git フィールドを返すため、シンボル中心の AI フローで `status` を別途呼ばずに済む。`files` はファイルごとの checksum・modified・indexed timestamp を返す。古いDBに対する file 列の移行は可能なら自動で行い、その場移行できない場合でも読み取り経路がクラッシュしないようにする。CLI と MCP の 0 件 JSON レスポンスは `indexed_file_count`、`indexed_at`、`freshness_available` を含む。`freshness_available=true` で `indexed_at:null` なら空インデックス、`freshness_available=false` なら legacy/read-only DB で鮮度 timestamp を取得できず、理由は `freshness_degraded_reason` に入る。
 - **再解析不要の folded-key アップグレード** — `backfill-fold` と MCP `backfill_fold` は、既存 DB 行から `name_folded` / `*_folded` を直接再計算し、必要な folded 値に NULL が残っていないことを検証してから `FoldReadyFlag` を stamp する。これにより、pre-#86 DB から AI クライアントやユーザーが低コストで Unicode `--exact` へ上がれる。さらに `fold_key_version` が未記録または不一致なら全 folded 行を再生成するため、将来の `NameFold.Version` 変更後に古い key を silent に再 stamp してしまうことも防ぐ。
 - **まとめて取るシンボル分析** — `inspect` と MCP の `analyze_symbol` は、定義、近傍シンボル、参照、caller、callee、ファイルメタデータ、ワークスペース信頼メタデータ、graph 対応メタデータを1回で返し、AIクライアントが一般的なシンボル調査を少ない往復で終えやすくする。
 - **言語考慮の参照抽出** — `references`、`callers`、`callees` は、正規表現ベースの call/reference 抽出が意味を持つ言語だけに対してインデックス化された参照テーブルで支える。未対応言語では、低信頼な疑似グラフ結果を返す代わりにテキスト検索へ戻る前提で設計する。

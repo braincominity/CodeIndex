@@ -564,6 +564,7 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "container_name", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
+            Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
             // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
             // not fail on legacy DBs where the column did not exist yet.
             // #86: folded 列を追加してから folded index を作らないと legacy DB でクラッシュする。

@@ -32,17 +32,19 @@ public partial class McpServer
             + "for other languages, use 'search' instead. "
             + "Use 'outline' to see the full symbol structure of a single file (functions, classes, properties, interfaces, enums with line numbers) without reading the file content. "
             + "Filter symbols by kind using the 'kind' parameter: function, class, struct, interface, enum, property, event, delegate, namespace, import. "
+            + "Use 'find_in_file' for literal substring navigation when the target file is already known. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results. "
             + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
-            + "Use 'search' with 'exact: true' for case-sensitive substring matching when FTS5 returns too many results. "
+            + "Use 'search' with 'exactSubstring: true' for case-sensitive substring matching when FTS5 returns too many results; "
+            + "use 'exactName: true' on symbols/definition/references/callers/callees/analyze_symbol for exact symbol-name equality. "
             + "If 'status' reports fold_ready=false and Unicode exact-name matching matters, use 'backfill_fold' to upgrade folded keys without reparsing files. "
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
             + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
             + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
-            + "Use 'impact_analysis' to compute transitive callers of a symbol — the ripple effect of changing it. Returns callers at each BFS depth level. "
+            + "Use 'impact_analysis' to compute transitive callers of a symbol. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'. "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
@@ -54,10 +56,14 @@ public partial class McpServer
     /// </summary>
     private static void AddFreshnessHint(JsonObject payload, DbReader reader)
     {
-        var (fileCount, indexedAt) = reader.GetFreshnessHint();
-        payload["indexed_file_count"] = fileCount;
-        if (indexedAt.HasValue)
-            payload["indexed_at"] = JsonSerializer.SerializeToNode(indexedAt.Value);
+        var freshness = reader.GetFreshnessHint();
+        payload["indexed_file_count"] = freshness.FileCount;
+        payload["indexed_at"] = freshness.IndexedAt.HasValue
+            ? JsonSerializer.SerializeToNode(freshness.IndexedAt.Value)
+            : null;
+        payload["freshness_available"] = freshness.FreshnessAvailable;
+        if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
+            payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
     }
 
     private static void AddExactZeroHint(JsonObject payload, ExactZeroHintResult? exactZeroHint)
@@ -71,10 +77,11 @@ public partial class McpServer
 
         payload["exact_zero_hint"] = new JsonObject
         {
-            ["relaxed_count"] = exactZeroHint.RelaxedCount,
             ["sample_names"] = sampleNames,
             ["suggestion"] = exactZeroHint.Suggestion,
         };
+        if (exactZeroHint.RelaxedCount.HasValue)
+            payload["exact_zero_hint"]!["relaxed_count"] = exactZeroHint.RelaxedCount.Value;
     }
 
     /// <summary>
@@ -91,6 +98,34 @@ public partial class McpServer
                 .Cast<string>()
                 .ToList()
             : [];
+    }
+
+    private static bool TryResolveSearchExactArgument(JsonNode? args, out bool exact, out string? error)
+    {
+        if (args?["exactName"]?.GetValue<bool>() ?? false)
+        {
+            exact = false;
+            error = "Search does not accept 'exactName'. Use 'exactSubstring' for search, or keep 'exact' for backward compatibility.";
+            return false;
+        }
+
+        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactSubstring"]?.GetValue<bool>() ?? false);
+        error = null;
+        return true;
+    }
+
+    private static bool TryResolveNameExactArgument(JsonNode? args, string toolName, out bool exact, out string? error)
+    {
+        if (args?["exactSubstring"]?.GetValue<bool>() ?? false)
+        {
+            exact = false;
+            error = $"Tool '{toolName}' does not accept 'exactSubstring'. Use 'exactName', or keep 'exact' for backward compatibility.";
+            return false;
+        }
+
+        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactName"]?.GetValue<bool>() ?? false);
+        error = null;
+        return true;
     }
 
     /// <summary>
@@ -171,7 +206,8 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
         }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -244,7 +280,8 @@ public partial class McpServer
         DateTime? since = null;
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
             since = parsedSince;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
         // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
@@ -264,10 +301,21 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
-            var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
-                exact && effectiveQueries != null && effectiveQueries.Count > 0,
-                () => reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
-                r => r.Name);
+            var hasExactPredicate = exact && effectiveQueries is { Count: > 0 };
+            var exactSignal = reader.GetSymbolsExactQuerySignal();
+            var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
+            var exactZeroHint = multiNameExactHint
+                ? QueryCommandRunner.BuildExactZeroHint(
+                    exact,
+                    () => reader.AnySearchSymbols(effectiveQueries, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name)
+                : QueryCommandRunner.BuildExactZeroHint(
+                    exact && effectiveQueries != null && effectiveQueries.Count > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
+                    () => reader.CountSearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    () => reader.SearchSymbols(effectiveQueries, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                    r => r.Name);
             JsonNode? namesEcho = effectiveQueries == null ? null : JsonSerializer.SerializeToNode(effectiveQueries, _jsonOptions);
             if (results.Count == 0)
             {
@@ -282,6 +330,8 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                if (hasExactPredicate)
+                    AddExactGraphSignal(payload, exactSignal);
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No symbols found.", payload);
@@ -298,6 +348,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (hasExactPredicate)
+                AddExactGraphSignal(structured, exactSignal);
             return CreateToolResult(id, $"Found {results.Count} symbol(s).", structured);
         });
     }
@@ -321,14 +373,18 @@ public partial class McpServer
         DateTime? since = null;
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedDefSince))
             since = parsedDefSince;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var exactSignal = reader.GetDefinitionExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
-                () => reader.SearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
+                () => reader.CountSearchSymbols(query, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
+                () => reader.SearchSymbols(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false),
                 r => r.Name);
             var payload = new JsonObject
             {
@@ -341,6 +397,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (exact)
+                AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -366,7 +424,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -374,7 +433,9 @@ public partial class McpServer
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -417,7 +478,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "callers", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -425,7 +487,9 @@ public partial class McpServer
             var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CalleeName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -468,7 +532,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "callees", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -476,7 +541,9 @@ public partial class McpServer
             var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
+                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CallerName);
             bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
             var payload = new JsonObject
@@ -597,25 +664,51 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "analyze_symbol", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
+            AddExactSignalAliases(structured);
+            structured.Remove("exactZeroHint");
+            AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
-            return CreateToolResult(id, "Symbol analysis returned.", structured);
+            return CreateToolResult(id, BuildAnalyzeSymbolSummary(analysis), structured);
         });
     }
 
-    private static void AddExactGraphSignal(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    private static string BuildAnalyzeSymbolSummary(SymbolAnalysisResult analysis)
     {
-        payload["exactIndexAvailable"] = signal.ExactIndexAvailable;
+        if (analysis.ExactZeroHint != null)
+            return $"Symbol analysis returned. Substring would return {analysis.ExactZeroHint.RelaxedCount} similarly named symbol(s).";
+
+        return "Symbol analysis returned.";
+    }
+
+    private static void AddExactGraphSignal(JsonObject payload, ExactQuerySignal signal)
+    {
+        payload["exact_index_available"] = signal.ExactIndexAvailable;
         if (signal.DegradedReason != null)
-            payload["degradedReason"] = signal.DegradedReason;
+            payload["degraded_reason"] = signal.DegradedReason;
+        AddExactSignalAliases(payload);
+    }
+
+    private static void AddExactSignalAliases(JsonObject payload)
+    {
+        if (payload["exact_index_available"] is JsonNode snakeExact && payload["exactIndexAvailable"] is null)
+            payload["exactIndexAvailable"] = snakeExact.DeepClone();
+        else if (payload["exactIndexAvailable"] is JsonNode camelExact && payload["exact_index_available"] is null)
+            payload["exact_index_available"] = camelExact.DeepClone();
+
+        if (payload["degraded_reason"] is JsonNode snakeReason && payload["degradedReason"] is null)
+            payload["degradedReason"] = snakeReason.DeepClone();
+        else if (payload["degradedReason"] is JsonNode camelReason && payload["degraded_reason"] is null)
+            payload["degraded_reason"] = camelReason.DeepClone();
     }
 
     private JsonNode ExecuteStatus(JsonNode? id)
@@ -692,6 +785,52 @@ public partial class McpServer
         });
     }
 
+    private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var pathPatterns = ReadPathList(args, "path");
+        if (pathPatterns == null || pathPatterns.Count == 0)
+            return CreateToolErrorResponse(id, "Missing required parameter: path");
+
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var lang = args?["lang"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
+        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact);
+            var structured = new JsonObject
+            {
+                ["query"] = query,
+                ["path"] = PathEcho(pathPatterns),
+                ["excludeTests"] = excludeTests,
+                ["before"] = before,
+                ["after"] = after,
+                ["exact"] = exact,
+                ["count"] = results.Count,
+                ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
+            };
+            if (results.Count == 0)
+            {
+                AddFreshnessHint(structured, reader);
+                return CreateToolResult(id, "No matches found.", structured);
+            }
+
+            var fileCount = structured["fileCount"]!.GetValue<int>();
+            return CreateToolResult(id, $"Found {results.Count} in-file match(es) across {fileCount} file(s).", structured);
+        });
+    }
+
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
     {
         var queries = args?["queries"]?.AsArray();
@@ -733,6 +872,7 @@ public partial class McpServer
                     "callees" => ExecuteCallees(null, toolArgs),
                     "symbols" => ExecuteSymbols(null, toolArgs),
                     "files" => ExecuteFiles(null, toolArgs),
+                    "find_in_file" => ExecuteFindInFile(null, toolArgs),
                     "excerpt" => ExecuteExcerpt(null, toolArgs),
                     "map" => ExecuteMap(null, toolArgs),
                     "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
@@ -826,30 +966,65 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var (results, truncated) = reader.GetTransitiveCallers(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
-            var fileCount = results.Select(r => r.Path).Distinct().Count();
-            var maxActualDepth = results.Count > 0 ? results.Max(r => r.Depth) : 0;
+            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
+            var confirmedCount = analysis.Callers.Count;
+            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
+            var hintCount = analysis.FileImpacts.Count;
+            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+            var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints" && hintCount > 0;
+            var count = hasHeuristicHints ? hintCount : confirmedCount;
+            var fileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
+            var maxActualDepth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0;
             var payload = new JsonObject
             {
                 ["query"] = query,
-                ["count"] = results.Count,
+                ["resolved_name"] = analysis.ResolvedName,
+                ["count"] = count,
                 ["file_count"] = fileCount,
+                ["confirmed_count"] = confirmedCount,
+                ["confirmed_file_count"] = confirmedFileCount,
+                ["hint_count"] = hintCount,
+                ["hint_file_count"] = hintFileCount,
                 ["max_depth"] = maxDepth,
                 ["actual_depth"] = maxActualDepth,
-                ["truncated"] = truncated,
-                ["callers"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["truncated"] = analysis.Truncated,
+                ["impact_mode"] = analysis.ImpactMode,
+                ["heuristic"] = analysis.Heuristic,
+                ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, _jsonOptions),
+                ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, _jsonOptions),
+                ["definition_count"] = analysis.DefinitionCount,
+                ["definition_file_count"] = analysis.DefinitionFileCount,
+                ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
+                ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
+                ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
+                ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, _jsonOptions),
+                ["graph_table_available"] = analysis.GraphTableAvailable,
             };
-            var summary = results.Count > 0
-                ? $"Found {results.Count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
-                  + (truncated ? " Results truncated — increase limit for more." : "")
-                : "No transitive callers found.";
-            if (results.Count == 0)
+            if (analysis.ZeroResultReason != null)
+                payload["zero_result_reason"] = analysis.ZeroResultReason;
+            if (analysis.Suggestion != null)
+                payload["suggestion"] = analysis.Suggestion;
+
+            var summary = analysis.ImpactMode switch
+            {
+                "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {hintCount} possible file-level dependent(s) across {hintFileCount} files. These hints are heuristic only."
+                    + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
+                _ when count > 0 => $"Found {count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
+                    + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
+                _ => "No impact found.",
+            };
+
+            if (count == 0)
             {
                 AddFreshnessHint(payload, reader);
                 var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null);
                 if (graphReason != null)
                     payload["graph_support_reason"] = graphReason;
+                if (!analysis.GraphTableAvailable)
+                    payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
             }
+            else if (analysis.Heuristic)
+                payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -1105,6 +1280,7 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var foldReadyAfter = false;
+        string? foldReadyReason = null;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1114,14 +1290,28 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
+            var backfillReady = writer.AllFoldedColumnsBackfilled();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var canRestampExistingFoldTrust = priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint;
-            if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
+            var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
+            var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
+            var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
+            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
+            }
+            else if (!backfillReady)
+            {
+                foldReadyReason = "missing_fold_backfill";
+            }
+            else if (!foldVersionMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_version";
+            }
+            else if (!foldFingerprintMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_fingerprint";
             }
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -1143,12 +1333,18 @@ public partial class McpServer
             },
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
-            // run, prefer `backfill_fold`; full rebuild is the heavier fallback.
-            ["fold_ready"] = foldReadyAfter
+            ["fold_ready"] = foldReadyAfter,
+            ["fold_ready_reason"] = foldReadyReason
         };
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
-                ? "Indexing complete. Note: --exact Unicode fold path not active (legacy rows without name_folded remain). Run backfill_fold to upgrade without reparsing files, or do a full rebuild."
+                ? foldReadyReason switch
+                {
+                    "stale_fold_key_version" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "stale_fold_key_fingerprint" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry folded keys generated under an older runtime fingerprint. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "missing_fold_backfill" => "Indexing complete. Note: --exact Unicode fold path not active because legacy rows without name_folded remain. Run backfill_fold to upgrade without reparsing files, or do a full rebuild.",
+                    _ => "Indexing complete. Note: --exact Unicode fold path not active."
+                }
                 : "Indexing complete.",
             structured);
     }

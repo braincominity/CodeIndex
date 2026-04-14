@@ -92,6 +92,81 @@ public partial class DbReader
         return SearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
+    public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    {
+        return CountSearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+    }
+
+    public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    {
+        var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        if (validQueries == null || validQueries.Count == 0)
+            return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
+
+        foreach (var query in validQueries)
+        {
+            if (CountSearchSymbols([query], 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    {
+        var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        if (validQueries != null && validQueries.Count > 1)
+            return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact).Count;
+
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT 1
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE 1=1";
+
+        if (validQueries != null && validQueries.Count == 1)
+        {
+            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
+            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
+            innerSql += exact
+                ? $" AND {exactColumn} = @query0{exactSuffix}"
+                : " AND s.name LIKE @query0 ESCAPE '\\'";
+        }
+        if (kind != null)
+            innerSql += " AND s.kind = @kind";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            innerSql += " AND f.modified >= @since";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        innerSql += " LIMIT @limit";
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        if (validQueries != null && validQueries.Count == 1)
+        {
+            var value = validQueries[0];
+            var paramValue = !exact
+                ? $"%{EscapeLikeQuery(value)}%"
+                : _foldReady
+                    ? NameFold.Fold(value) ?? value
+                    : value;
+            cmd.Parameters.AddWithValue("@query0", paramValue);
+        }
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : Convert.ToInt32(raw);
+    }
+
     /// <summary>
     /// Search symbols by one or more name patterns (OR-joined). Empty/null list returns all symbols matching other filters.
     /// When <paramref name="exact"/> is true, names are matched case-insensitively for equality instead of substring.
@@ -177,7 +252,11 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND s.name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+        sql += $" ORDER BY CASE " +
+            "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
+            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 1 " +
+            "ELSE 2 END, " +
+            $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)
@@ -194,9 +273,11 @@ public partial class DbReader
                 cmd.Parameters.AddWithValue($"@query{idx}", paramValue);
             }
         }
-        var preferExactCase = exact && effectiveQueries != null && effectiveQueries.Count == 1;
-        cmd.Parameters.AddWithValue("@preferExactCase", preferExactCase ? 1 : 0);
-        cmd.Parameters.AddWithValue("@rawQuery", preferExactCase ? effectiveQueries![0] : string.Empty);
+        var preferLiteralExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
+        var preferCaseInsensitiveExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
+        cmd.Parameters.AddWithValue("@preferLiteralExactMatch", preferLiteralExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferCaseInsensitiveExactMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
@@ -352,13 +433,35 @@ public partial class DbReader
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
         // into references / callers / callees. See codex review of #83.
         // `exact` は bundle 内のすべての sub-query に伝播させ、leaf コマンドと precision を揃える。
-        var definitions = GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
-        var primaryDefinition = definitions.FirstOrDefault();
+        var definitionLimit = Math.Min(limit, 5);
+        DefinitionResult? primaryDefinition = null;
+        var definitions = GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
+        if (exact)
+        {
+            primaryDefinition = GetDefinitions(query, 1, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
+                .FirstOrDefault();
+            definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
+        }
+        primaryDefinition ??= definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
+        var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? file?.Lang;
         bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
-        var exactSignal = exact ? GetAnalyzeSymbolExactQuerySignal() : ((bool ExactIndexAvailable, string? DegradedReason)?)null;
+        var exactSignal = exact
+            ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
+            : (ExactQuerySignal?)null;
+        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
+            ? SearchSymbols(query, Math.Max(limit, 5), kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: false)
+            : null;
+        var exactZeroHint = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
+            ? ExactZeroHintResult.FromRelaxedMatches(
+                relaxedSymbols!.Count,
+                relaxedSymbols.Select(result => result.Name))
+            : null;
         var nearbySymbols = primaryDefinition != null
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
@@ -374,13 +477,38 @@ public partial class DbReader
             GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
-            References = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
-            Callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
-            Callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact),
+            References = references,
+            Callers = callers,
+            Callees = callees,
             GraphTableAvailable = _hasReferencesTable,
+            ExactZeroHint = exactZeroHint,
             ExactIndexAvailable = exactSignal?.ExactIndexAvailable,
+            ExactHasMissingIndex = exactSignal?.HasMissingIndex,
+            ExactHasMissingTable = exactSignal?.HasMissingTable,
             DegradedReason = exactSignal?.DegradedReason,
         };
+    }
+
+    private static List<DefinitionResult> BuildAnalysisDefinitions(DefinitionResult? primaryDefinition, List<DefinitionResult> definitions, int limit)
+    {
+        if (primaryDefinition == null || limit <= 0)
+            return definitions;
+
+        var ordered = definitions
+            .Where(definition => !IsSameDefinition(definition, primaryDefinition))
+            .Prepend(primaryDefinition)
+            .Take(limit)
+            .ToList();
+        return ordered;
+    }
+
+    private static bool IsSameDefinition(DefinitionResult left, DefinitionResult right)
+    {
+        return string.Equals(left.Path, right.Path, StringComparison.Ordinal)
+            && left.StartLine == right.StartLine
+            && left.EndLine == right.EndLine
+            && string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+            && string.Equals(left.Kind, right.Kind, StringComparison.Ordinal);
     }
 
     /// <summary>
