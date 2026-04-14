@@ -1097,21 +1097,35 @@ public partial class McpServer
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
         bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
 
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var bucketCounts = results
+                .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+                .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
+                ["graph_support_reason"] = graphSupportReason,
+                ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             var summary = results.Count > 0
-                ? $"Found {results.Count} potentially unused symbol(s). Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
-                summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";
+                summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
+            if (!reader._hasReferencesTable)
+            {
+                payload["graph_table_available"] = false;
+                payload["degraded"] = true;
+                payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                summary += " Warning: symbol_references table is missing in this index; zero-result unused output is degraded, not authoritative.";
+            }
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
@@ -1337,9 +1351,15 @@ public partial class McpServer
 
     private JsonNode ExecuteBackfillFold(JsonNode? id)
     {
-        var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(_dbPath))
-            return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
+        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
+        {
+            var detail = isNotFound
+                ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."
+                : $"Database is not an existing CodeIndex DB: {_dbPath}. Run 'cdidx index <projectPath>' first.";
+            if (validationMessage.StartsWith("database must be writable", StringComparison.Ordinal))
+                detail = $"Database must be writable for backfill_fold: {_dbPath}.";
+            return CreateToolErrorResponse(id, detail);
+        }
 
         try
         {
@@ -1348,8 +1368,11 @@ public partial class McpServer
             var writer = new DbWriter(db.Connection);
             var userVersionBefore = db.GetUserVersion();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
-            var rewriteAll = storedFoldVersion != currentFoldVersion;
+            var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+            var rewriteAll = storedFoldVersion != currentFoldVersion
+                || storedFoldFingerprint != currentFoldFingerprint;
             var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
             var verified = writer.AllFoldedColumnsBackfilled();
             if (!verified)

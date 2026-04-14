@@ -142,6 +142,239 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_RewritesAllWhenOnlyFingerprintDrifted()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_fp_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "bootstrap", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "CAFÉ_INIT",
+                        ReferenceKind = "call",
+                        Line = 2,
+                        Column = 5,
+                        Context = "CAFÉ_INIT()",
+                        ContainerKind = "function",
+                        ContainerName = "bootstrap",
+                    },
+                ]);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+                writer.MarkFoldReady();
+                writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(json.GetProperty("verified").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            verifyDb.TryMigrateForRead();
+            Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
+            var reader = new DbReader(verifyDb.Connection);
+            Assert.True(reader._foldReady);
+            Assert.Single(reader.SearchSymbols(["ＣＡＦÉ_ＩＮＩＴ"], limit: 10, exact: true));
+            Assert.Single(reader.GetCallers("ＣＡＦÉ_ＩＮＩＴ", limit: 10, exact: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_BlankFile_ReturnsDatabaseError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_blank_{Guid.NewGuid():N}.db");
+        File.WriteAllText(dbPath, string.Empty);
+
+        try
+        {
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("not an existing CodeIndex DB", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_NonexistentFileUri_ReturnsNotFound()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_missing_{Guid.NewGuid():N}.db");
+        var dbUri = new Uri(dbPath).AbsoluteUri;
+
+        JsonElement json;
+        int exitCode;
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbUri, "--json"], _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                json = document.RootElement.Clone();
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Contains("database not found", json.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void RunBackfillFold_LegacyDbWithoutCodeIndexMeta_Succeeds()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_legacy_no_meta_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "bootstrap", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "CAFÉ_INIT",
+                        ReferenceKind = "call",
+                        Line = 2,
+                        Column = 5,
+                        Context = "CAFÉ_INIT()",
+                        ContainerKind = "function",
+                        ContainerName = "bootstrap",
+                    },
+                ]);
+                using var dropMeta = db.Connection.CreateCommand();
+                dropMeta.CommandText = "DROP TABLE codeindex_meta; UPDATE symbols SET name_folded = NULL; UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL; PRAGMA user_version = 3";
+                dropMeta.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            verifyDb.TryMigrateForRead();
+            Assert.Equal(NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString("fold_key_version"));
+            Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
+            var reader = new DbReader(verifyDb.Connection);
+            Assert.True(reader._foldReady);
+            Assert.Single(reader.SearchSymbols(["ＣＡＦÉ_ＩＮＩＴ"], limit: 10, exact: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_AllowsProjectRelativePathsStartingWithDotDotName()
     {
         var projectRoot = CreateTempProject();

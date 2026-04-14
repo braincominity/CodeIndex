@@ -8,11 +8,88 @@ namespace CodeIndex.Database;
 /// </summary>
 public class DbContext : IDisposable
 {
+    private static readonly string[] RequiredCodeIndexTables =
+    [
+        "files",
+        "chunks",
+        "symbols",
+    ];
+
     private readonly SqliteConnection _connection;
     private readonly bool _isReadOnly;
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
+
+    public static bool TryValidateExistingCodeIndexDb(string dbPath, out string message, out bool isNotFound)
+    {
+        message = string.Empty;
+        isNotFound = false;
+
+        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && UriRequestsReadOnly(dbPath))
+        {
+            message = $"database must be writable for backfill-fold: {dbPath}";
+            return false;
+        }
+
+        var openTarget = dbPath;
+        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            var normalized = TryGetLocalPath(dbPath);
+            if (normalized != null)
+            {
+                if (!File.Exists(normalized))
+                {
+                    message = $"database not found: {dbPath}";
+                    isNotFound = true;
+                    return false;
+                }
+
+                openTarget = normalized;
+            }
+        }
+        else if (!File.Exists(dbPath))
+        {
+            message = $"database not found: {dbPath}";
+            isNotFound = true;
+            return false;
+        }
+
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = openTarget,
+                Mode = SqliteOpenMode.ReadWrite,
+            };
+            using var connection = new SqliteConnection(builder.ConnectionString);
+            connection.Open();
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
+            using var reader = cmd.ExecuteReader();
+            var tables = new HashSet<string>(StringComparer.Ordinal);
+            while (reader.Read())
+                tables.Add(reader.GetString(0));
+
+            if (RequiredCodeIndexTables.All(tables.Contains))
+                return true;
+
+            message = $"database is not an existing CodeIndex DB: {dbPath}";
+            return false;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 14)
+        {
+            message = $"database not found: {dbPath}";
+            isNotFound = true;
+            return false;
+        }
+        catch (SqliteException)
+        {
+            message = $"database is not an existing CodeIndex DB: {dbPath}";
+            return false;
+        }
+    }
 
     public DbContext(string dbPath)
     {

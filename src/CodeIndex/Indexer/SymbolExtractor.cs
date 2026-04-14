@@ -444,9 +444,10 @@ public static class SymbolExtractor
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
+            var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(line) : line;
             foreach (var pattern in patterns)
             {
-                var match = pattern.Regex.Match(line);
+                var match = pattern.Regex.Match(matchLine);
                 if (!match.Success)
                     continue;
 
@@ -617,6 +618,46 @@ public static class SymbolExtractor
         return bodyStartLine == null
             ? (startIndex + 1, null, null)
             : (lines.Length, bodyStartLine, lines.Length);
+    }
+
+    private static string StripLeadingCSharpAttributeLists(string line)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        if (index >= line.Length || line[index] != '[')
+            return line;
+
+        var cursor = index;
+        while (cursor < line.Length && line[cursor] == '[')
+        {
+            var depth = 0;
+            var sawBracket = false;
+            while (cursor < line.Length)
+            {
+                var ch = line[cursor++];
+                if (ch == '[')
+                {
+                    depth++;
+                    sawBracket = true;
+                }
+                else if (ch == ']')
+                {
+                    depth--;
+                    if (depth == 0 && sawBracket)
+                        break;
+                }
+            }
+
+            if (depth != 0)
+                return line;
+
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+        }
+
+        return cursor < line.Length ? line[cursor..] : line;
     }
 
     private static void AssignContainers(List<SymbolRecord> symbols)

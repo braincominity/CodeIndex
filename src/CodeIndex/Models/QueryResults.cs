@@ -34,6 +34,13 @@ public class SymbolResult
     public string? ReturnType { get; set; }
 }
 
+public class UnusedSymbolResult : SymbolResult
+{
+    public string UnusedBucket { get; set; } = string.Empty;
+    public string UnusedConfidence { get; set; } = string.Empty;
+    public string UnusedReason { get; set; } = string.Empty;
+}
+
 public class FileResult
 {
     public string Path { get; set; } = string.Empty;
