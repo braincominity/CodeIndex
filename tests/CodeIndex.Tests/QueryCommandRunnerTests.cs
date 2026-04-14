@@ -96,7 +96,7 @@ public class QueryCommandRunnerTests
         Assert.Contains("Hint: retry with `--before 0` or another non-negative integer.", options.ParseError);
         Assert.Contains("Error: --after requires a non-negative integer", options.ParseError);
         Assert.Contains("Error: --snippet-lines requires a positive integer", options.ParseError);
-        Assert.Contains("Warning: unknown option '--mystery' (ignored)", stderr);
+        Assert.Equal(string.Empty, stderr);
     }
 
     [Fact]
@@ -157,6 +157,48 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain("database not found", stderr);
     }
 
+    [Fact]
+    public void RunFiles_PathFilterAcceptsLeadingDashValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_path_leading_dash");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--path", "-foo", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ExcludePathFilterAcceptsLeadingDashValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_exclude_path_leading_dash");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--exclude-path", "-foo", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("--db", "/tmp/does-not-matter.db")]
     [InlineData("--mystery")]
@@ -171,6 +213,7 @@ public class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains($"Error: {flag} is not supported for languages.", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("languages")}", stderr);
+        Assert.DoesNotContain("Warning: unknown option", stderr);
     }
 
     [Theory]

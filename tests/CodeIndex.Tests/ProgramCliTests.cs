@@ -33,6 +33,16 @@ public class ProgramCliTests
         Assert.Equal(1, exitCode);
         Assert.Contains("Error: --json is not supported for mcp.", stderr);
         Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
+        Assert.DoesNotContain("Warning: unknown option", stderr);
+    }
+
+    [Fact]
+    public void Mcp_DbAcceptsLeadingDashPathValue()
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db", "--tmp.db"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("requires a value", stderr);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)

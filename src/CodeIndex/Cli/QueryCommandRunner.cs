@@ -37,6 +37,21 @@ public static class QueryCommandRunner
         "--exclude-path",
         "--depth",
     ];
+    private static readonly HashSet<string> FlagOnlyOptions =
+    [
+        "--json",
+        "--no-json",
+        "--fts",
+        "--body",
+        "--count",
+        "--no-dedup",
+        "--exact",
+        "--reverse",
+        "--help",
+        "-h",
+        "--version",
+        "-V",
+    ];
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -1631,9 +1646,7 @@ public static class QueryCommandRunner
                     break;
                 default:
                     if (args[i].StartsWith('-'))
-                    {
-                        Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
-                    }
+                        break;
                     else if (query == null)
                     {
                         query = args[i];
@@ -2171,7 +2184,7 @@ public static class QueryCommandRunner
         if (!TryReadRawOptionValue(args, ref index, optionName, out value, out error))
             return false;
 
-        if (value!.StartsWith("-", StringComparison.Ordinal))
+        if (IsRecognizedOptionToken(value!))
         {
             error = $"Error: {optionName} requires a value.";
             return false;
@@ -2179,6 +2192,9 @@ public static class QueryCommandRunner
 
         return true;
     }
+
+    private static bool IsRecognizedOptionToken(string value) =>
+        ValueTakingOptions.Contains(value) || FlagOnlyOptions.Contains(value);
 
     // Accepted ISO 8601 formats for --since / --sinceフィルタで受け付けるISO 8601書式
     private static readonly string[] Iso8601Formats =
