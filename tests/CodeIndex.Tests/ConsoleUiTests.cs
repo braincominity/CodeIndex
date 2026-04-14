@@ -37,6 +37,8 @@ public class ConsoleUiTests
         Assert.Contains("cdidx find <query> --path <pattern>", output);
         Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
         Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
+        Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
+        Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
@@ -60,7 +62,8 @@ public class ConsoleUiTests
         var output = CaptureUsageOutput(showBanner: false);
 
         Assert.Contains("Update workflows:", output);
-        Assert.Contains("Use --commits with a project path", output);
+        Assert.Contains("Use --commits with a project path after normal commits", output);
+        Assert.Contains("Use --files only for known in-place edits or new files", output);
         Assert.Contains("cdidx index ./myproject --commits abc123", output);
     }
 
