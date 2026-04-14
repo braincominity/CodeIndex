@@ -1042,9 +1042,44 @@ public static class QueryCommandRunner
                         : "";
                     Console.WriteLine($"  {sym.Line,5}  {indent}{vis}{sig} {ret}");
                 }
+
+                // AI-orientation hint for C# files that look like top-level-statements programs:
+                // no class / struct / interface / enum / namespace / record / delegate at all
+                // means the executable body lives between the imports and local functions and
+                // will not appear in outline at all. Emitting a short note on stderr keeps the
+                // main human-readable block clean while giving AI consumers a reason for the gap.
+                // AI向けヒント: C# のトップレベルステートメント想定のファイル
+                // （class / struct / interface / enum / namespace / record / delegate が一切無い）は、
+                // 実行本体が import と local function の間に書かれるため outline に現れない。
+                // 人間向け本体を汚さないよう、理由を短く stderr に出す。
+                if (LooksLikeCsharpTopLevelStatements(outline))
+                {
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine("Note: no type/namespace declarations found; this file likely uses C# top-level statements.");
+                    Console.Error.WriteLine("      Outline lists imports and local functions only; the executable body is not indexed as symbols.");
+                }
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    /// <summary>
+    /// Heuristic: a C# file with no type/namespace-scoped declarations is almost certainly
+    /// using top-level statements, so the executable body won't appear in outline.
+    /// Tiny files (snippets, partials under ~20 lines) are excluded to avoid noise.
+    /// ヒューリスティック: C# で型/名前空間宣言が一切無いファイルはトップレベルステートメント
+    /// の可能性が高く、実行本体が outline に出ない。20 行未満の小さい断片は誤検出回避のため除外。
+    /// </summary>
+    private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline)
+    {
+        if (outline.Lang != "csharp") return false;
+        if (outline.TotalLines < 20) return false;
+        foreach (var sym in outline.Symbols)
+        {
+            if (sym.Kind is "class" or "struct" or "interface" or "enum" or "namespace" or "delegate" or "record")
+                return false;
+        }
+        return true;
     }
 
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
