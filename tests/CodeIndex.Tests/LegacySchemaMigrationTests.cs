@@ -604,6 +604,40 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void WritableLegacyDb_MissingExactSymbolFallbackIndex_SelfHealsDuringReadMigration()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_symbol_exact_writable_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            SeedGraphDbWithoutExactFallbackIndexes(dbPath);
+            DropSymbolExactFallbackIndex(dbPath);
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+            var symbolsSignal = reader.GetSymbolsExactQuerySignal();
+            var definitionSignal = reader.GetDefinitionExactQuerySignal();
+
+            Assert.True(symbolsSignal.ExactIndexAvailable);
+            Assert.Null(symbolsSignal.DegradedReason);
+            Assert.True(definitionSignal.ExactIndexAvailable);
+            Assert.Null(definitionSignal.DegradedReason);
+
+            using var check = db.Connection.CreateCommand();
+            check.CommandText = "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_symbols_name_nocase'";
+            Assert.NotNull(check.ExecuteScalar());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void UpdateMode_OnLegacyDb_MustNotStampReadiness()
     {
         // Update mode (--commits / --files) touches only a subset of files, so stamping
