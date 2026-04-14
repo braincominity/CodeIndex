@@ -9,6 +9,7 @@ namespace CodeIndex.Tests;
 /// Performance smoke tests for large datasets (10K+ files).
 /// 大規模データ（10K+ファイル）のパフォーマンススモークテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class PerformanceTests : IDisposable
 {
     private readonly string _dbPath;

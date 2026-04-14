@@ -8,6 +8,7 @@ namespace CodeIndex.Tests;
 /// Tests for DbReader query operations.
 /// DbReaderクエリ操作のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class DbReaderTests : IDisposable
 {
     private readonly string _dbPath;

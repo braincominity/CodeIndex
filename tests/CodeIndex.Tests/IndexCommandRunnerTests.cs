@@ -10,6 +10,7 @@ namespace CodeIndex.Tests;
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class IndexCommandRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
