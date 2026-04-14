@@ -722,6 +722,40 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ExactOnReadOnlyLegacyDb_WithMissingSymbolIndexAndGraphTable_StillWarnsAboutIndex()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_symbol_and_table_missing");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/session.py",
+                "python",
+                "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            ForceLegacyExactFallbackMode(dbPath);
+            DropSymbolExactFallbackIndex(dbPath);
+            DropGraphTable(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", readOnlyUri, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Graph Table          : MISSING", stdout);
+            Assert.Contains("Exact Index          : DEGRADED", stdout);
+            Assert.Contains("idx_symbols_name_nocase", stdout);
+            Assert.Contains("WARN: --exact inspect bundle ran without all supporting indexes", stderr);
+            Assert.Contains("idx_symbols_name_nocase", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ExactZeroHumanOutput_PrintsExactZeroHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_exact_zero");
@@ -1307,6 +1341,16 @@ public class QueryCommandRunnerTests
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkIssuesReady();
-        SqliteConnection.ClearAllPools();
+    }
+
+    private static void DropGraphTable(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP TABLE IF EXISTS symbol_references;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
     }
 }

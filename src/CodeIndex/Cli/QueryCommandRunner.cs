@@ -232,10 +232,10 @@ public static class QueryCommandRunner
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
+                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (options.Json)
                     WriteGraphZeroJsonResult("references", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
+                        options.Exact ? exactSignal : (ExactQuerySignal?)null,
                         exactZeroHint);
                 else if (!options.Json)
                 {
@@ -306,10 +306,10 @@ public static class QueryCommandRunner
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
+                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (options.Json)
                     WriteGraphZeroJsonResult("callers", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
+                        options.Exact ? exactSignal : (ExactQuerySignal?)null,
                         exactZeroHint);
                 else if (!options.Json)
                 {
@@ -376,10 +376,10 @@ public static class QueryCommandRunner
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
+                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (options.Json)
                     WriteGraphZeroJsonResult("callees", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
+                        options.Exact ? exactSignal : (ExactQuerySignal?)null,
                         exactZeroHint);
                 else if (!options.Json)
                 {
@@ -743,9 +743,10 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+            var exactSignal = options.Exact ? reader.GetAnalyzeSymbolExactQuerySignal() : (ExactQuerySignal?)null;
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
-            WriteExactBundleWarningIfNeeded(options.Exact, options.Json,
-                (analysis.ExactIndexAvailable ?? true, analysis.DegradedReason));
+            if (exactSignal.HasValue)
+                WriteExactBundleWarningIfNeeded(options.Exact, options.Json, exactSignal.Value);
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
@@ -771,8 +772,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
                 if (!analysis.GraphTableAvailable)
                     Console.WriteLine("Graph Table          : MISSING — empty References/Callers/Callees are degraded, NOT real zero-hit results.");
-                if (options.Exact && analysis.GraphTableAvailable && analysis.ExactIndexAvailable == false && analysis.DegradedReason != null)
-                    Console.WriteLine($"Exact Index          : DEGRADED — {analysis.DegradedReason}. Results are correct but may be slow.");
+                if (exactSignal is ExactQuerySignal signal && signal.HasMissingIndex && signal.DegradedReason != null)
+                    Console.WriteLine($"Exact Index          : DEGRADED — {signal.DegradedReason}. Results are correct but may be slow.");
                 WriteExactZeroHint(analysis.ExactZeroHint);
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
@@ -1490,7 +1491,7 @@ public static class QueryCommandRunner
         string? resultsKey = null,
         bool? graphTableAvailable = null,
         bool? degraded = null,
-        (bool ExactIndexAvailable, string? DegradedReason)? exactSignal = null,
+        ExactQuerySignal? exactSignal = null,
         long? indexedFileCount = null,
         DateTime? indexedAt = null)
     {
@@ -1538,9 +1539,9 @@ public static class QueryCommandRunner
             Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return results{examples}. Drop --exact or use the exact indexed name.");
     }
 
-    private static void WriteExactSymbolWarningIfNeeded(bool exact, bool json, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    private static void WriteExactSymbolWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal)
     {
-        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null || !signal.HasMissingIndex)
             return;
 
         Console.Error.WriteLine($"WARN: --exact symbol query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
@@ -1593,7 +1594,7 @@ public static class QueryCommandRunner
     // read-only DB apart from a DB that genuinely has no callers for the query.
     // graph テーブル欠損による 0 と本物の 0 を JSON で区別できるようにする。
     private static void WriteDegradedGraphZeroResult(string resultsKey, bool json, bool graphAvailable, JsonSerializerOptions jsonOptions,
-        (bool ExactIndexAvailable, string? DegradedReason)? exactSignal = null)
+        ExactQuerySignal? exactSignal = null)
     {
         if (graphAvailable) return;
         if (json)
@@ -1620,22 +1621,18 @@ public static class QueryCommandRunner
         }
     }
 
-    private static void WriteExactGraphWarningIfNeeded(bool exact, bool json, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    private static void WriteExactGraphWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal)
     {
-        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
-            return;
-        if (signal.DegradedReason.Contains("table missing", StringComparison.OrdinalIgnoreCase))
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null || !signal.HasMissingIndex)
             return;
 
         Console.Error.WriteLine($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
         Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
     }
 
-    private static void WriteExactBundleWarningIfNeeded(bool exact, bool json, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    private static void WriteExactBundleWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal)
     {
-        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
-            return;
-        if (signal.DegradedReason.Contains("table missing", StringComparison.OrdinalIgnoreCase))
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null || !signal.HasMissingIndex)
             return;
 
         Console.Error.WriteLine($"WARN: --exact inspect bundle ran without all supporting indexes ({signal.DegradedReason}). Results are correct but may be slow.");
@@ -1643,7 +1640,7 @@ public static class QueryCommandRunner
     }
 
     private static void WriteGraphCountResult(int count, int files, QueryCommandOptions options, JsonSerializerOptions jsonOptions,
-        bool graphAvailable, (bool ExactIndexAvailable, string? DegradedReason) exactSignal, ExactZeroHintResult? exactZeroHint = null)
+        bool graphAvailable, ExactQuerySignal exactSignal, ExactZeroHintResult? exactZeroHint = null)
     {
         if (!options.Json)
         {
@@ -1669,7 +1666,7 @@ public static class QueryCommandRunner
     }
 
     private static void WriteGraphZeroJsonResult(string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
-        (bool ExactIndexAvailable, string? DegradedReason)? exactSignal, ExactZeroHintResult? exactZeroHint = null)
+        ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null)
     {
         var payload = new JsonObject
         {
@@ -1684,26 +1681,26 @@ public static class QueryCommandRunner
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteGraphJsonResult<T>(T result, (bool ExactIndexAvailable, string? DegradedReason) exactSignal, JsonSerializerOptions jsonOptions)
+    private static void WriteGraphJsonResult<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
     {
         var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
         AddExactJsonFields(payload, exactSignal);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteJsonResultWithExactSignal<T>(T result, (bool ExactIndexAvailable, string? DegradedReason) exactSignal, JsonSerializerOptions jsonOptions)
+    private static void WriteJsonResultWithExactSignal<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
     {
         var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
         AddExactJsonFields(payload, exactSignal);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void AddExactGraphJsonFields(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) exactSignal)
+    private static void AddExactGraphJsonFields(JsonObject payload, ExactQuerySignal exactSignal)
     {
         AddExactJsonFields(payload, exactSignal);
     }
 
-    private static void AddExactJsonFields(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) exactSignal)
+    private static void AddExactJsonFields(JsonObject payload, ExactQuerySignal exactSignal)
     {
         payload["exact_index_available"] = exactSignal.ExactIndexAvailable;
         if (exactSignal.DegradedReason != null)

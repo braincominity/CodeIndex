@@ -3,6 +3,12 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
 
+public readonly record struct ExactQuerySignal(
+    bool ExactIndexAvailable,
+    bool HasMissingIndex,
+    bool HasMissingTable,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -223,30 +229,30 @@ public partial class DbReader
             : $"{string.Join(", ", missing)} missing on {scope}";
     }
 
-    private (bool ExactIndexAvailable, string? DegradedReason) BuildExactGraphSignal(bool available, params string[] missingIndexes)
+    private ExactQuerySignal BuildExactGraphSignal(bool available, params string[] missingIndexes)
     {
         if (!_hasReferencesTable)
-            return (false, "symbol_references table missing in this index");
+            return new(false, HasMissingIndex: false, HasMissingTable: true, "symbol_references table missing in this index");
         if (available)
-            return (true, null);
-        return (false, BuildExactGraphIndexReason(missingIndexes));
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+        return new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missingIndexes));
     }
 
-    private (bool ExactIndexAvailable, string? DegradedReason) BuildExactSymbolSignal(bool available, params string[] missingIndexes)
+    private ExactQuerySignal BuildExactSymbolSignal(bool available, params string[] missingIndexes)
     {
         if (available)
-            return (true, null);
-        return (false, BuildExactGraphIndexReason(missingIndexes));
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+        return new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missingIndexes));
     }
 
-    private static (bool ExactIndexAvailable, string? DegradedReason) CombineExactSignals(params (bool ExactIndexAvailable, string? DegradedReason)?[] signals)
+    private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
     {
         var participating = signals.Where(signal => signal.HasValue).Select(signal => signal!.Value).ToList();
         if (participating.Count == 0)
-            return (true, null);
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
 
         if (participating.All(signal => signal.ExactIndexAvailable))
-            return (true, null);
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
 
         var reasons = participating
             .Where(signal => !signal.ExactIndexAvailable && !string.IsNullOrWhiteSpace(signal.DegradedReason))
@@ -254,39 +260,43 @@ public partial class DbReader
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return (false, reasons.Count == 0 ? null : string.Join("; ", reasons));
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: participating.Any(signal => signal.HasMissingIndex),
+            HasMissingTable: participating.Any(signal => signal.HasMissingTable),
+            DegradedReason: reasons.Count == 0 ? null : string.Join("; ", reasons));
     }
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetSymbolsExactQuerySignal() =>
+    public ExactQuerySignal GetSymbolsExactQuerySignal() =>
         BuildExactSymbolSignal(SymbolNameExactIndexAvailable,
             _foldReady ? "idx_symbols_name_folded" : "idx_symbols_name_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetDefinitionExactQuerySignal() =>
+    public ExactQuerySignal GetDefinitionExactQuerySignal() =>
         GetSymbolsExactQuerySignal();
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetReferencesExactQuerySignal() =>
+    public ExactQuerySignal GetReferencesExactQuerySignal() =>
         BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetCallersExactQuerySignal() =>
+    public ExactQuerySignal GetCallersExactQuerySignal() =>
         BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetCalleesExactQuerySignal() =>
+    public ExactQuerySignal GetCalleesExactQuerySignal() =>
         BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetAnalyzeSymbolExactQuerySignal()
+    public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal()
     {
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(),
             BuildAnalyzeGraphExactQuerySignal());
     }
 
-    private (bool ExactIndexAvailable, string? DegradedReason) BuildAnalyzeGraphExactQuerySignal()
+    private ExactQuerySignal BuildAnalyzeGraphExactQuerySignal()
     {
         if (!_hasReferencesTable)
-            return (false, "symbol_references table missing in this index");
+            return new(false, HasMissingIndex: false, HasMissingTable: true, "symbol_references table missing in this index");
 
         var missing = new List<string>();
         if (!SymbolNameExactGraphIndexAvailable)
@@ -295,8 +305,8 @@ public partial class DbReader
             missing.Add(_foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
         return missing.Count == 0
-            ? (true, null)
-            : (false, BuildExactGraphIndexReason(missing));
+            ? new(true, HasMissingIndex: false, HasMissingTable: false, null)
+            : new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missing));
     }
 
     internal static string EscapeLikeQuery(string input)

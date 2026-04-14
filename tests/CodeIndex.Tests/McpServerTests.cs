@@ -1479,6 +1479,5 @@ public class McpServerTests : IDisposable
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkIssuesReady();
-        SqliteConnection.ClearAllPools();
     }
 }

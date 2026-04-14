@@ -648,7 +648,7 @@ public partial class McpServer
         return "Symbol analysis returned.";
     }
 
-    private static void AddExactGraphSignal(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    private static void AddExactGraphSignal(JsonObject payload, ExactQuerySignal signal)
     {
         payload["exactIndexAvailable"] = signal.ExactIndexAvailable;
         if (signal.DegradedReason != null)
