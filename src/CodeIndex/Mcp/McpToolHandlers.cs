@@ -1155,9 +1155,15 @@ public partial class McpServer
 
     private JsonNode ExecuteBackfillFold(JsonNode? id)
     {
-        var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(_dbPath))
-            return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
+        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
+        {
+            var detail = isNotFound
+                ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."
+                : $"Database is not an existing CodeIndex DB: {_dbPath}. Run 'cdidx index <projectPath>' first.";
+            if (validationMessage.StartsWith("database must be writable", StringComparison.Ordinal))
+                detail = $"Database must be writable for backfill_fold: {_dbPath}.";
+            return CreateToolErrorResponse(id, detail);
+        }
 
         try
         {

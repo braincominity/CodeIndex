@@ -346,7 +346,7 @@ public partial class McpServer
                 IndexAnnotations()),
             CreateToolDefinition(
                 "backfill_fold",
-                "Upgrade folded-name keys in an existing DB without reparsing source files. Fills missing `name_folded` columns (or rewrites all keys after fold metadata drift such as version/fingerprint mismatch) and stamps FoldReady on success. / ソース再解析なしで既存DBの folded-name key を更新する。欠損 `name_folded` 列を埋めるか、fold metadata の drift（version / fingerprint 不一致など）時は全 key を再生成し、成功時に FoldReady を stamp する。",
+                "Upgrade folded-name keys in an existing CodeIndex DB without reparsing source files. Rejects missing or blank targets instead of creating a fresh DB. Fills missing `name_folded` columns (or rewrites all keys after fold metadata drift such as version/fingerprint mismatch) and stamps FoldReady on success. / ソース再解析なしで既存の CodeIndex DB の folded-name key を更新する。欠落したDBや空のDBを新規作成せず拒否し、欠損 `name_folded` 列を埋めるか、fold metadata の drift（version / fingerprint 不一致など）時は全 key を再生成し、成功時に FoldReady を stamp する。",
                 new JsonObject
                 {
                     ["type"] = "object",

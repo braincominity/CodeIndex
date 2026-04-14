@@ -927,6 +927,44 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BackfillFold_BlankFile_ReturnsError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_backfill_blank_{Guid.NewGuid():N}.db");
+        File.WriteAllText(dbPath, string.Empty);
+
+        try
+        {
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("not an existing CodeIndex DB", text);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_NonexistentFileUri_ReturnsError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_backfill_missing_{Guid.NewGuid():N}.db");
+        var dbUri = new Uri(dbPath).AbsoluteUri;
+        var server = new McpServer(dbUri, ConsoleUi.LoadVersion());
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Database not found", text);
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_IncludesConfidenceBuckets()
     {
         var writer = new DbWriter(_db.Connection);

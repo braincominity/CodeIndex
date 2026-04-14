@@ -182,9 +182,8 @@ public static class IndexCommandRunner
         if (options.ParseError != null)
             return WriteCommandError(options.Json, jsonOptions, options.ParseError, CommandExitCodes.UsageError);
 
-        var isUri = options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(options.DbPath))
-            return WriteCommandError(options.Json, jsonOptions, $"database not found: {options.DbPath}", CommandExitCodes.NotFound);
+        if (!DbContext.TryValidateExistingCodeIndexDb(options.DbPath, out var validationMessage, out var isNotFound))
+            return WriteCommandError(options.Json, jsonOptions, validationMessage, isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError);
 
         try
         {

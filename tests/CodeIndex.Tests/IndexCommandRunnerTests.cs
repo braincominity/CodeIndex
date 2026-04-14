@@ -224,6 +224,75 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_BlankFile_ReturnsDatabaseError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_blank_{Guid.NewGuid():N}.db");
+        File.WriteAllText(dbPath, string.Empty);
+
+        try
+        {
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("not an existing CodeIndex DB", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_NonexistentFileUri_ReturnsNotFound()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_missing_{Guid.NewGuid():N}.db");
+        var dbUri = new Uri(dbPath).AbsoluteUri;
+
+        JsonElement json;
+        int exitCode;
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbUri, "--json"], _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                json = document.RootElement.Clone();
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Contains("database not found", json.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void Run_UpdateFiles_AllowsProjectRelativePathsStartingWithDotDotName()
     {
         var projectRoot = CreateTempProject();

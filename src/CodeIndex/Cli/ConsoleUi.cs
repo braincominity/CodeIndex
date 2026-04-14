@@ -325,7 +325,7 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
-        Console.WriteLine("  backfill-fold              Upgrade folded-name columns without reparsing files");
+        Console.WriteLine("  backfill-fold              Upgrade folded-name columns in an existing index DB");
         Console.WriteLine("  search <query>             Full-text search across indexed chunks");
         Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
         Console.WriteLine("  references <query>         Find indexed references for a symbol");
