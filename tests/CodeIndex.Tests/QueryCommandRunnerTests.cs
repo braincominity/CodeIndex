@@ -122,6 +122,25 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("search-limit-tail", "Error: --limit requires a value.")]
+    [InlineData("search-top-tail", "Error: --limit requires a value.")]
+    [InlineData("search-db-tail", "Error: --db requires a value.")]
+    [InlineData("search-db-swallow", "Error: --db requires a value.")]
+    [InlineData("search-lang-swallow", "Error: --lang requires a value.")]
+    [InlineData("search-path-swallow", "Error: --path requires a value.")]
+    [InlineData("search-exclude-path-swallow", "Error: --exclude-path requires a value.")]
+    [InlineData("definition-kind-swallow", "Error: --kind requires a value.")]
+    public void QueryEntrypoints_MissingOrSwallowedOptionValuesReturnUsageError(string scenario, string expectedError)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithMissingOrSwallowedValue(scenario));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(expectedError, stderr);
+        Assert.DoesNotContain("database not found", stderr);
+        Assert.DoesNotContain("Warning: unknown option", stderr);
+    }
+
+    [Theory]
     [InlineData("definition")]
     [InlineData("references")]
     [InlineData("callers")]
@@ -2765,6 +2784,22 @@ public class QueryCommandRunnerTests
             "status" => QueryCommandRunner.RunStatus(args, _jsonOptions),
             "validate" => QueryCommandRunner.RunValidate(args, _jsonOptions),
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+    }
+
+    private int RunCommandWithMissingOrSwallowedValue(string scenario)
+    {
+        return scenario switch
+        {
+            "search-limit-tail" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--limit"], _jsonOptions),
+            "search-top-tail" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--top"], _jsonOptions),
+            "search-db-tail" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--db"], _jsonOptions),
+            "search-db-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--db", "--count"], _jsonOptions),
+            "search-lang-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--lang", "--count"], _jsonOptions),
+            "search-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--path", "--count"], _jsonOptions),
+            "search-exclude-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--exclude-path", "--count"], _jsonOptions),
+            "definition-kind-swallow" => QueryCommandRunner.RunDefinition(["QueryCommandRunner", "--kind", "--count"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
         };
     }
 
