@@ -2318,6 +2318,28 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RejectsFindOnlyQueryOption()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["RunFind", "--query", "PrepareFindArgs", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", "--count"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--query is only supported by 'find'", stderr);
+    }
+
+    [Fact]
+    public void RunExcerpt_RejectsFindOnlyQueryOption()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["src/CodeIndex/Cli/QueryCommandRunner.cs", "--start", "626", "--query", "src/CodeIndex/Cli/ConsoleUi.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--query is only supported by 'find'", stderr);
+    }
+
+    [Fact]
     public void RunFind_ZeroResultHintDoesNotSuggestRemovingRequiredPath()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_hint");

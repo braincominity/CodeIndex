@@ -411,19 +411,19 @@ cdidx map --path src/ --exclude-tests --json
 | `--json` | All commands | JSON output (for AI/machine use) |
 | `--limit <n>` | Query commands | Max results (default: 20; `map` uses it per section) |
 | `--lang <lang>` | Query commands | Filter by language |
-| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Restrict results to paths containing this text. Repeatable; multiple values are OR'd together |
-| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Exclude paths containing this text (repeatable) |
-| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | Exclude likely test files and prefer production code |
+| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Restrict results to paths containing this text. Repeatable; multiple values are OR'd together |
+| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude paths containing this text (repeatable) |
+| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
 | `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
-| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: case-sensitive exact substring (no FTS5). Symbol/graph commands (and `inspect` / MCP `analyze_symbol` — propagates to every bundled sub-query): NFKC + Unicode CaseFold exact name match (so `Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still stays distinct from plain `i`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` so AI clients can tell which path is active. When a read-only legacy DB is missing the fallback exact-match indexes, `symbols` / `definition` / `references` / `callers` / `callees` and `inspect --exact` print a WARN line in human-readable mode. CLI JSON and MCP `structuredContent` now both expose the snake_case fields `exact_index_available` / `degraded_reason`; MCP also keeps the legacy camelCase aliases `exactIndexAvailable` / `degradedReason` for backward compatibility. |
+| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search` / `find`: case-sensitive exact substring (no FTS5). Symbol/graph commands (and `inspect` / MCP `analyze_symbol` — propagates to every bundled sub-query): NFKC + Unicode CaseFold exact name match (so `Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still stays distinct from plain `i`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` so AI clients can tell which path is active. When a read-only legacy DB is missing the fallback exact-match indexes, `symbols` / `definition` / `references` / `callers` / `callees` and `inspect --exact` print a WARN line in human-readable mode. CLI JSON and MCP `structuredContent` now both expose the snake_case fields `exact_index_available` / `degraded_reason`; MCP also keeps the legacy camelCase aliases `exactIndexAvailable` / `degradedReason` for backward compatibility. |
 | `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/struct/interface/enum/property/event/delegate/namespace/import) |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
-| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files` | Return only the result count (with `--json`: `{"count": N, "files": M}`) |
+| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find` | Return only the result count (with `--json`: `{"count": N, "files": M}`) |
 | `--start <line>` | `excerpt` | Start line for excerpt reconstruction |
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`) |
-| `--before <n>` | `excerpt` | Include extra context lines before the requested excerpt |
-| `--after <n>` | `excerpt` | Include extra context lines after the requested excerpt |
+| `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match |
+| `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits |
@@ -1239,19 +1239,19 @@ cdidx map --path src/ --exclude-tests --json
 | `--json` | 全コマンド | JSON出力（AI/機械向け） |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20。`map` では各セクションごとの件数） |
 | `--lang <lang>` | クエリ系 | 言語でフィルタ |
-| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | 指定文字列を含むパスに結果を絞る。繰り返し指定可（複数値は OR で結合） |
-| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | 指定文字列を含むパスを除外（繰り返し指定可） |
-| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
+| `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | 指定文字列を含むパスに結果を絞る。繰り返し指定可（複数値は OR で結合） |
+| `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | 指定文字列を含むパスを除外（繰り返し指定可） |
+| `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
-| `--exact` | `search`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search`: 大文字小文字を区別する完全部分一致（FTS5 バイパス）。symbol / graph 系コマンドと `inspect` / MCP `analyze_symbol`（bundle 内の全 sub-query に伝播）: NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。DB に stale な fold metadata が残る間は ASCII `COLLATE NOCASE` に fallback するため、まず `cdidx backfill-fold`、または stale row を全置換できる通常の `cdidx index .`、それが無理なら `--rebuild` を使う（`status --json` の `fold_ready` で判定）。read-only な旧DBに fallback exact-match index が無い場合は、`symbols` / `definition` / `references` / `callers` / `callees` と `inspect --exact` が、人間向け出力で WARN を表示する。CLI JSON と MCP `structuredContent` は、どちらも snake_case の `exact_index_available` / `degraded_reason` を返す。MCP では後方互換のため、従来の camelCase alias `exactIndexAvailable` / `degradedReason` も引き続き返す。 |
+| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search` / `find`: 大文字小文字を区別する完全部分一致（FTS5 バイパス）。symbol / graph 系コマンドと `inspect` / MCP `analyze_symbol`（bundle 内の全 sub-query に伝播）: NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。DB に stale な fold metadata が残る間は ASCII `COLLATE NOCASE` に fallback するため、まず `cdidx backfill-fold`、または stale row を全置換できる通常の `cdidx index .`、それが無理なら `--rebuild` を使う（`status --json` の `fold_ready` で判定）。read-only な旧DBに fallback exact-match index が無い場合は、`symbols` / `definition` / `references` / `callers` / `callees` と `inspect --exact` が、人間向け出力で WARN を表示する。CLI JSON と MCP `structuredContent` は、どちらも snake_case の `exact_index_available` / `degraded_reason` を返す。MCP では後方互換のため、従来の camelCase alias `exactIndexAvailable` / `degradedReason` も引き続き返す。 |
 | `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/struct/interface/enum/property/event/delegate/namespace/import） |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
-| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files` | 結果のカウントだけを返す（`--json` 併用: `{"count": N, "files": M}`） |
+| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find` | 結果のカウントだけを返す（`--json` 併用: `{"count": N, "files": M}`） |
 | `--start <line>` | `excerpt` | 抜粋再構成の開始行 |
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ） |
-| `--before <n>` | `excerpt` | 指定範囲の前に追加する文脈行数 |
-| `--after <n>` | `excerpt` | 指定範囲の後に追加する文脈行数 |
+| `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数 |
+| `--after <n>` | `excerpt`, `find` | 指定範囲または一致箇所の後に追加する文脈行数 |
 | `--rebuild` | `index` | 既存DBを削除して再構築 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新 |

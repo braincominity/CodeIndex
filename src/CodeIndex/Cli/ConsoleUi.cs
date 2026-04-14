@@ -396,7 +396,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx callees AddToGitExclude                 Find callees used by a caller");
         Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
         Console.WriteLine("  cdidx find guard --path src/Auth.cs --after 2 Find literal matches inside a known file");
-        Console.WriteLine("  cdidx find -- --path --path README.md         Search a literal that starts with '-'");
+        Console.WriteLine("  cdidx find --path README.md -- --path         Search a literal that starts with '-'");
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");

@@ -88,6 +88,11 @@ public static class QueryCommandRunner
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: definition requires a symbol query argument");
@@ -187,6 +192,11 @@ public static class QueryCommandRunner
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: references requires a symbol query argument");
@@ -261,6 +271,11 @@ public static class QueryCommandRunner
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callers requires a symbol query argument");
@@ -331,6 +346,11 @@ public static class QueryCommandRunner
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callees requires a caller query argument");
@@ -580,6 +600,11 @@ public static class QueryCommandRunner
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: excerpt requires a path argument");
@@ -641,7 +666,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var options = ParseArgs(preparedFindArgs, jsonDefault: false);
+        var options = ParseArgs(preparedFindArgs, jsonDefault: false, allowNamedQuery: true);
         if (options.ParseError != null)
         {
             Console.Error.WriteLine(options.ParseError);
@@ -815,6 +840,11 @@ public static class QueryCommandRunner
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -879,6 +909,11 @@ public static class QueryCommandRunner
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: inspect requires a symbol query argument");
@@ -949,6 +984,11 @@ public static class QueryCommandRunner
 
         var filePath = cmdArgs[0].Replace('\\', '/');
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -991,6 +1031,11 @@ public static class QueryCommandRunner
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1067,6 +1112,11 @@ public static class QueryCommandRunner
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: impact requires a symbol query argument");
@@ -1264,6 +1314,11 @@ public static class QueryCommandRunner
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1303,6 +1358,11 @@ public static class QueryCommandRunner
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1356,6 +1416,11 @@ public static class QueryCommandRunner
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1413,6 +1478,11 @@ public static class QueryCommandRunner
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1499,7 +1569,7 @@ public static class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault)
+    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false)
     {
         string dbPath = Path.Combine(".cdidx", "codeindex.db");
         bool? json = null;
@@ -1548,8 +1618,16 @@ public static class QueryCommandRunner
                 case "--lang" when i + 1 < args.Length:
                     lang = args[++i];
                     break;
-                case "--query" when i + 1 < args.Length:
+                case "--query" when allowNamedQuery && i + 1 < args.Length:
                     query = args[++i];
+                    break;
+                case "--query" when allowNamedQuery:
+                    parseError = "Error: --query requires a value";
+                    break;
+                case "--query":
+                    parseError = "Error: --query is only supported by 'find'.";
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                        i++;
                     break;
                 case "--kind" when i + 1 < args.Length:
                     kind = args[++i];

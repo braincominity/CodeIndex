@@ -163,6 +163,28 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintUsage_ShowsWorkingFindDashedLiteralExample()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                ConsoleUi.PrintUsage();
+                var output = writer.ToString();
+                Assert.Contains("cdidx find --path README.md -- --path", output);
+                Assert.DoesNotContain("cdidx find -- --path --path README.md", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
     public void PrintCompletions_UnknownShell_ReturnsFalse()
     {
         lock (TestConsoleLock.Gate)
