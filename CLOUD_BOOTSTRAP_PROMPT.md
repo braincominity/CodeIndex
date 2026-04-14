@@ -212,7 +212,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp
 
 `cdidx --version` が `v0.0.0` を返すなら、バイナリの隣に `version.json` が
 ありません。どれかが `DllNotFoundException: Unable to load shared library
-'e_sqlite3'` で死んだら、ネイティブ SQLite ライブラリがバイナリの隣に
+'e_sqlite3'` で失敗した場合、ネイティブ SQLite ライブラリがバイナリの隣に
 インストールされていません。どちらもインストール経路のバグです — `install.sh`
 と `~/.local/bin/` のレイアウトを確認し、ダウンロード済み tarball を
 `tar tzf` で覗いて、リリースが配っている内容とインストーラが配置している
@@ -223,7 +223,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp
 公開バイナリは `PublishTrimmed=true` でビルドされているため、リフレクション
 ベースの `System.Text.Json` 直列化が無効化されています。CLI で `--json` を
 付けたコマンド（例: `cdidx index --json`、`cdidx status --json`）は現状
-以下で死にます:
+以下の例外で失敗します:
 
 > `InvalidOperationException: Reflection-based serialization has been
 > disabled for this application.`
