@@ -321,7 +321,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx impact <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]");
         Console.WriteLine("  cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]");
         Console.WriteLine("  cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]");
-        Console.WriteLine("  cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--group-by-name]");
         Console.WriteLine("  cdidx languages [--json]");
         Console.WriteLine("  cdidx mcp [--db <path>]");
         Console.WriteLine();
@@ -383,6 +383,7 @@ public static class ConsoleUi
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis (default: 5)");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
+        Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
