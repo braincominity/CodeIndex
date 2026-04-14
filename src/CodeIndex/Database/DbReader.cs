@@ -1,5 +1,6 @@
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Database;
 
@@ -9,6 +10,7 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[A-Za-z_][A-Za-z0-9_]*", RegexOptions.Compiled);
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
@@ -996,9 +998,65 @@ public partial class DbReader
 
     private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
-        return SearchSymbols(resolvedName, limit: 50, kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
-            .Where(symbol => ReferenceExtractor.SupportsLanguage(symbol.Lang))
-            .ToList();
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
+        var nameCondition = _foldReady
+            ? "s.name_folded = @resolvedNameFolded"
+            : "s.name = @resolvedName COLLATE NOCASE";
+        var sql = $@"
+            SELECT f.path, f.lang, s.kind, s.name, s.line,
+                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
+                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
+                   {GetSymbolColumnSql("signature")} AS signature,
+                   {GetSymbolColumnSql("container_kind")} AS container_kind,
+                   {GetSymbolColumnSql("container_name")} AS container_name,
+                   {GetSymbolColumnSql("visibility")} AS visibility,
+                   {GetSymbolColumnSql("return_type")} AS return_type
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE {nameCondition}
+              AND {supportedLangFilter}";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY CASE WHEN s.name = @resolvedName THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@resolvedName", resolvedName);
+        if (_foldReady)
+            cmd.Parameters.AddWithValue("@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        cmd.Parameters.AddWithValue("@limit", 50);
+
+        var results = new List<SymbolResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            results.Add(new SymbolResult
+            {
+                Path = reader.GetString(0),
+                Lang = reader.GetString(1),
+                Kind = reader.GetString(2),
+                Name = reader.GetString(3),
+                Line = reader.GetInt32(4),
+                StartLine = !reader.IsDBNull(5) ? reader.GetInt32(5) : reader.GetInt32(4),
+                EndLine = !reader.IsDBNull(6) ? reader.GetInt32(6) : reader.GetInt32(4),
+                BodyStartLine = !reader.IsDBNull(7) ? reader.GetInt32(7) : null,
+                BodyEndLine = !reader.IsDBNull(8) ? reader.GetInt32(8) : null,
+                Signature = !reader.IsDBNull(9) ? reader.GetString(9) : null,
+                ContainerKind = !reader.IsDBNull(10) ? reader.GetString(10) : null,
+                ContainerName = !reader.IsDBNull(11) ? reader.GetString(11) : null,
+                Visibility = !reader.IsDBNull(12) ? reader.GetString(12) : null,
+                ReturnType = !reader.IsDBNull(13) ? reader.GetString(13) : null,
+            });
+        }
+
+        return results;
     }
 
     private List<string> ResolveImpactFallbackNames(SymbolResult definition)
@@ -1037,7 +1095,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var innerSql = @"
-                SELECT src.path AS source_path, @impactTargetPath AS target_path,
+                SELECT src.id AS source_file_id, src.path AS source_path, @impactTargetPath AS target_path,
                        r.symbol_name AS symbol_name
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
@@ -1045,16 +1103,6 @@ public partial class DbReader
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
-        innerSql += @"
-              AND EXISTS (
-                    SELECT 1
-                    FROM symbols s
-                    WHERE s.file_id = src.id
-                      AND (
-                            (s.signature IS NOT NULL AND s.signature LIKE @impactTypeNamePattern ESCAPE '\')
-                            OR (s.return_type IS NOT NULL AND s.return_type = @impactTypeName COLLATE NOCASE)
-                          )
-                  )";
         var nameClauses = new List<string>(fallbackNames.Count);
         for (int i = 0; i < fallbackNames.Count; i++)
             nameClauses.Add($"r.symbol_name = @impactFallbackName{i}");
@@ -1076,41 +1124,105 @@ public partial class DbReader
             innerSql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
 
         cmd.CommandText = $@"
-            SELECT source_path, target_path,
+            SELECT source_file_id, source_path, target_path,
                    COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT symbol_name) AS symbols
             FROM ({innerSql}) edges
-            GROUP BY source_path, target_path
-            ORDER BY reference_count DESC, source_path, target_path
-            LIMIT @limit";
+            GROUP BY source_file_id, source_path, target_path
+            ORDER BY reference_count DESC, source_path, target_path";
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         cmd.Parameters.AddWithValue("@impactTargetPath", definition.Path);
-        cmd.Parameters.AddWithValue("@impactTypeName", definition.Name);
-        cmd.Parameters.AddWithValue("@impactTypeNamePattern", $"%{EscapeLikeQuery(definition.Name)}%");
         for (int i = 0; i < fallbackNames.Count; i++)
             cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit + 1);
 
-        var results = new List<FileDependencyResult>();
+        var candidates = new List<(long SourceFileId, FileDependencyResult Edge)>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            results.Add(new FileDependencyResult
-            {
-                SourcePath = reader.GetString(0),
-                TargetPath = reader.GetString(1),
-                ReferenceCount = reader.GetInt32(2),
-                Symbols = reader.GetString(3),
-            });
+            candidates.Add((
+                reader.GetInt64(0),
+                new FileDependencyResult
+                {
+                    SourcePath = reader.GetString(1),
+                    TargetPath = reader.GetString(2),
+                    ReferenceCount = reader.GetInt32(3),
+                    Symbols = reader.GetString(4),
+                }));
         }
 
-        var truncated = results.Count > limit;
-        if (truncated)
-            results.RemoveAt(results.Count - 1);
+        var evidenceCache = new Dictionary<long, bool>();
+        var filtered = new List<FileDependencyResult>();
+        foreach (var candidate in candidates)
+        {
+            if (!evidenceCache.TryGetValue(candidate.SourceFileId, out var hasEvidence))
+            {
+                hasEvidence = SourceFileHasStructuredTypeEvidence(candidate.SourceFileId, definition.Name);
+                evidenceCache[candidate.SourceFileId] = hasEvidence;
+            }
+            if (hasEvidence)
+                filtered.Add(candidate.Edge);
+        }
 
-        return (results, truncated);
+        var truncated = filtered.Count > limit;
+        if (truncated)
+            filtered.RemoveRange(limit, filtered.Count - limit);
+
+        return (filtered, truncated);
+    }
+
+    private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.name,
+                   " + GetSymbolColumnSql("signature") + @" AS signature,
+                   " + GetSymbolColumnSql("return_type") + @" AS return_type
+            FROM symbols s
+            WHERE s.file_id = @fileId";
+        cmd.Parameters.AddWithValue("@fileId", fileId);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var symbolName = reader.GetString(0);
+            var signature = !reader.IsDBNull(1) ? reader.GetString(1) : null;
+            var returnType = !reader.IsDBNull(2) ? reader.GetString(2) : null;
+            if (SymbolProvidesStructuredTypeEvidence(symbolName, signature, returnType, typeName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool SymbolProvidesStructuredTypeEvidence(string symbolName, string? signature, string? returnType, string typeName)
+    {
+        if (FoldedImpactNameEquals(returnType, typeName))
+            return true;
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        foreach (Match match in ImpactSignatureIdentifierRegex.Matches(signature))
+        {
+            var token = match.Value;
+            if (FoldedImpactNameEquals(token, symbolName))
+                continue;
+            if (FoldedImpactNameEquals(token, typeName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool FoldedImpactNameEquals(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            return false;
+
+        var leftFolded = NameFold.Fold(left) ?? left;
+        var rightFolded = NameFold.Fold(right) ?? right;
+        return string.Equals(leftFolded, rightFolded, StringComparison.Ordinal);
     }
 
     private static bool IsPreciseImpactFallbackKind(string? kind)
