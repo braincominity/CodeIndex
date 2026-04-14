@@ -12,6 +12,7 @@ namespace CodeIndex.Tests;
 /// leaves the newly added columns as NULL — reproducing the real-world #58 failure mode.
 /// レガシー symbol スキーマから read path 経由でアップグレードするシナリオを検証する。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class LegacySchemaMigrationTests : IDisposable
 {
     private readonly string _dbDir;
