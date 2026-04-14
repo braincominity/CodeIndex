@@ -1515,10 +1515,16 @@ public static class QueryCommandRunner
 
         for (int i = 0; i < args.Length; i++)
         {
-            switch (args[i])
+            var currentArg = args[i];
+            var inlineValue = TrySplitInlineOptionValue(currentArg, out var inlineOptionName)
+                ? currentArg[(inlineOptionName!.Length + 1)..]
+                : null;
+            var normalizedArg = inlineOptionName ?? currentArg;
+
+            switch (normalizedArg)
             {
                 case "--db":
-                    if (TryReadStringOptionValue(args, ref i, "--db", out var dbPathValue, out var dbPathError))
+                    if (TryReadStringOptionValue(args, ref i, "--db", inlineValue, out var dbPathValue, out var dbPathError))
                         dbPath = dbPathValue!;
                     else
                         AddParseError(dbPathError!);
@@ -1531,7 +1537,7 @@ public static class QueryCommandRunner
                     break;
                 case "--limit":
                 case "--top":
-                    if (!TryReadRawOptionValue(args, ref i, "--limit", out var limitValue, out var missingLimitError))
+                    if (!TryReadRawOptionValue(args, ref i, "--limit", inlineValue, out var limitValue, out var missingLimitError))
                         AddParseError(missingLimitError!);
                     else if (TryParsePositiveInt(limitValue!, "--limit", out var parsedLimit, out var limitError))
                         limit = parsedLimit;
@@ -1539,13 +1545,13 @@ public static class QueryCommandRunner
                         AddParseError(limitError!);
                     break;
                 case "--lang":
-                    if (TryReadStringOptionValue(args, ref i, "--lang", out var langValue, out var langError))
+                    if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, out var langValue, out var langError))
                         lang = langValue;
                     else
                         AddParseError(langError!);
                     break;
                 case "--kind":
-                    if (TryReadStringOptionValue(args, ref i, "--kind", out var kindValue, out var kindError))
+                    if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, out var kindValue, out var kindError))
                         kind = kindValue;
                     else
                         AddParseError(kindError!);
@@ -1566,7 +1572,7 @@ public static class QueryCommandRunner
                     exact = true;
                     break;
                 case "--depth":
-                    if (!TryReadRawOptionValue(args, ref i, "--depth", out var depthValue, out var missingDepthError))
+                    if (!TryReadRawOptionValue(args, ref i, "--depth", inlineValue, out var depthValue, out var missingDepthError))
                         AddParseError(missingDepthError!);
                     else if (TryParseNonNegativeInt(depthValue!, "--depth", out var parsedDepth, out var depthError))
                         contextAfter = parsedDepth; // reused as depth for impact / impact用に再利用
@@ -1576,13 +1582,13 @@ public static class QueryCommandRunner
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
                 case "--path":
-                    if (TryReadStringOptionValue(args, ref i, "--path", out var pathPattern, out var pathError))
+                    if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, out var pathPattern, out var pathError))
                         pathPatterns.Add(pathPattern!); // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
                     else
                         AddParseError(pathError!);
                     break;
                 case "--exclude-path":
-                    if (TryReadStringOptionValue(args, ref i, "--exclude-path", out var excludePath, out var excludePathError))
+                    if (TryReadStringOptionValue(args, ref i, "--exclude-path", inlineValue, out var excludePath, out var excludePathError))
                         excludePaths.Add(excludePath!);
                     else
                         AddParseError(excludePathError!);
@@ -1591,7 +1597,7 @@ public static class QueryCommandRunner
                     excludeTests = true;
                     break;
                 case "--since":
-                    if (!TryReadStringOptionValue(args, ref i, "--since", out var sinceValue, out var sinceError))
+                    if (!TryReadStringOptionValue(args, ref i, "--since", inlineValue, out var sinceValue, out var sinceError))
                         AddParseError(sinceError!);
                     else if (TryParseIso8601Since(sinceValue!, out var parsedSince))
                         since = parsedSince;
@@ -1599,7 +1605,7 @@ public static class QueryCommandRunner
                         AddParseError($"Error: could not parse --since value '{sinceValue}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
                 case "--start":
-                    if (!TryReadRawOptionValue(args, ref i, "--start", out var startValue, out var missingStartError))
+                    if (!TryReadRawOptionValue(args, ref i, "--start", inlineValue, out var startValue, out var missingStartError))
                         AddParseError(missingStartError!);
                     else if (TryParsePositiveInt(startValue!, "--start", out var parsedStart, out var startError))
                         startLine = parsedStart;
@@ -1607,7 +1613,7 @@ public static class QueryCommandRunner
                         AddParseError(startError!);
                     break;
                 case "--end":
-                    if (!TryReadRawOptionValue(args, ref i, "--end", out var endValue, out var missingEndError))
+                    if (!TryReadRawOptionValue(args, ref i, "--end", inlineValue, out var endValue, out var missingEndError))
                         AddParseError(missingEndError!);
                     else if (TryParsePositiveInt(endValue!, "--end", out var parsedEnd, out var endError))
                         endLine = parsedEnd;
@@ -1615,7 +1621,7 @@ public static class QueryCommandRunner
                         AddParseError(endError!);
                     break;
                 case "--before":
-                    if (!TryReadRawOptionValue(args, ref i, "--before", out var beforeValue, out var missingBeforeError))
+                    if (!TryReadRawOptionValue(args, ref i, "--before", inlineValue, out var beforeValue, out var missingBeforeError))
                         AddParseError(missingBeforeError!);
                     else if (TryParseNonNegativeInt(beforeValue!, "--before", out var parsedBefore, out var beforeError))
                         contextBefore = parsedBefore;
@@ -1623,7 +1629,7 @@ public static class QueryCommandRunner
                         AddParseError(beforeError!);
                     break;
                 case "--after":
-                    if (!TryReadRawOptionValue(args, ref i, "--after", out var afterValue, out var missingAfterError))
+                    if (!TryReadRawOptionValue(args, ref i, "--after", inlineValue, out var afterValue, out var missingAfterError))
                         AddParseError(missingAfterError!);
                     else if (TryParseNonNegativeInt(afterValue!, "--after", out var parsedAfter, out var afterError))
                         contextAfter = parsedAfter;
@@ -1631,13 +1637,13 @@ public static class QueryCommandRunner
                         AddParseError(afterError!);
                     break;
                 case "--name":
-                    if (TryReadStringOptionValue(args, ref i, "--name", out var extraName, out var nameError))
+                    if (TryReadStringOptionValue(args, ref i, "--name", inlineValue, out var extraName, out var nameError))
                         extraNames.Add(extraName!); // Repeatable; OR-joined with other --name values and extra positional names / 繰り返し可、他の --name や追加の positional 引数と OR 結合
                     else
                         AddParseError($"{nameError} / --name には値（シンボル名パターン）が必要です。");
                     break;
                 case "--snippet-lines":
-                    if (!TryReadRawOptionValue(args, ref i, "--snippet-lines", out var snippetLinesValue, out var missingSnippetLinesError))
+                    if (!TryReadRawOptionValue(args, ref i, "--snippet-lines", inlineValue, out var snippetLinesValue, out var missingSnippetLinesError))
                         AddParseError(missingSnippetLinesError!);
                     else if (TryParsePositiveInt(snippetLinesValue!, "--snippet-lines", out var parsedSnippetLines, out var snippetLinesError))
                         snippetLines = SearchSnippetFormatter.ClampSnippetLines(parsedSnippetLines);
@@ -1760,14 +1766,18 @@ public static class QueryCommandRunner
             if (!arg.StartsWith("-", StringComparison.Ordinal))
                 continue;
 
-            if (supported.Contains(arg))
+            var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
+                ? inlineOptionName!
+                : arg;
+
+            if (supported.Contains(normalizedArg))
             {
-                if (ValueTakingOptions.Contains(arg) && i + 1 < cmdArgs.Length)
+                if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
                     i++;
                 continue;
             }
 
-            if (ValueTakingOptions.Contains(arg) && i + 1 < cmdArgs.Length)
+            if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
                 i++;
 
             Console.Error.WriteLine($"Error: {arg} is not supported for {commandName}.");
@@ -2165,8 +2175,15 @@ public static class QueryCommandRunner
         return false;
     }
 
-    private static bool TryReadRawOptionValue(string[] args, ref int index, string optionName, out string? value, out string? error)
+    private static bool TryReadRawOptionValue(string[] args, ref int index, string optionName, string? inlineValue, out string? value, out string? error)
     {
+        if (inlineValue != null)
+        {
+            value = inlineValue;
+            error = null;
+            return true;
+        }
+
         if (index + 1 >= args.Length)
         {
             value = null;
@@ -2179,12 +2196,12 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static bool TryReadStringOptionValue(string[] args, ref int index, string optionName, out string? value, out string? error)
+    private static bool TryReadStringOptionValue(string[] args, ref int index, string optionName, string? inlineValue, out string? value, out string? error)
     {
-        if (!TryReadRawOptionValue(args, ref index, optionName, out value, out error))
+        if (!TryReadRawOptionValue(args, ref index, optionName, inlineValue, out value, out error))
             return false;
 
-        if (IsRecognizedOptionToken(value!))
+        if (inlineValue == null && IsRecognizedOptionToken(value!))
         {
             error = $"Error: {optionName} requires a value.";
             return false;
@@ -2195,6 +2212,21 @@ public static class QueryCommandRunner
 
     private static bool IsRecognizedOptionToken(string value) =>
         ValueTakingOptions.Contains(value) || FlagOnlyOptions.Contains(value);
+
+    private static bool TrySplitInlineOptionValue(string token, out string? optionName)
+    {
+        optionName = null;
+        var separator = token.IndexOf('=');
+        if (separator <= 0)
+            return false;
+
+        var candidate = token[..separator];
+        if (!ValueTakingOptions.Contains(candidate))
+            return false;
+
+        optionName = candidate;
+        return true;
+    }
 
     // Accepted ISO 8601 formats for --since / --sinceフィルタで受け付けるISO 8601書式
     private static readonly string[] Iso8601Formats =

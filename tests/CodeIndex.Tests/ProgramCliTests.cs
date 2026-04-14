@@ -45,6 +45,15 @@ public class ProgramCliTests
         Assert.DoesNotContain("requires a value", stderr);
     }
 
+    [Fact]
+    public void Mcp_DbAcceptsRecognizedOptionTokenViaInlineValue()
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db=--json"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("requires a value", stderr);
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo

@@ -199,6 +199,62 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunFiles_PathFilterAcceptsRecognizedOptionTokenViaInlineValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_path_inline_recognized_option");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/--json-dir/Demo.cs",
+                "csharp",
+                "class Demo {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                [$"--db={dbPath}", "--path=--json-dir", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ExcludePathFilterAcceptsRecognizedOptionTokenViaInlineValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_exclude_path_inline_recognized_option");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/--count-dir/Demo.cs",
+                "csharp",
+                "class Demo {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                [$"--db={dbPath}", "--exclude-path=--count-dir", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("--db", "/tmp/does-not-matter.db")]
     [InlineData("--mystery")]

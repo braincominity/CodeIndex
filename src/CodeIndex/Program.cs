@@ -106,6 +106,9 @@ int RunMcp(string[] cmdArgs)
 
     for (var i = 0; i < cmdArgs.Length; i++)
     {
+        if (cmdArgs[i].StartsWith("--db=", StringComparison.Ordinal))
+            continue;
+
         if (cmdArgs[i] == "--db")
         {
             i++;
