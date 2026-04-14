@@ -1754,6 +1754,118 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_AdjacentProperties_DoNotLeakAttributeContext()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_adjacent_fixture.cs",
+            Lang = "csharp",
+            Size = 400,
+            Lines = 16,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 14,
+                Content = """
+                using System.Runtime.Serialization;
+                using System.Text.Json.Serialization;
+
+                public class MixedDto
+                {
+                    [JsonPropertyName("decorated")]
+                    public string Decorated { get; set; } = string.Empty;
+                    public string Plain { get; set; } = string.Empty;
+                    [JsonIgnore]
+                    public string Ignored { get; set; } = string.Empty;
+                    [JsonPropertyName("tagged")]
+                    public string Tagged { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "MixedDto",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 11,
+                Signature = "public class MixedDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Decorated",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string Decorated { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "MixedDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Plain",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "public string Plain { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "MixedDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Ignored",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string Ignored { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "MixedDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Tagged",
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
+                Signature = "public string Tagged { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "MixedDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_adjacent_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Decorated").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "Plain").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "Ignored").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Tagged").UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_SmallLimitDiversifiesAcrossBuckets()
     {
         var fileId = _writer.UpsertFile(new FileRecord

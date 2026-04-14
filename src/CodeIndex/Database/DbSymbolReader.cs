@@ -777,26 +777,64 @@ public partial class DbReader
 
     private bool HasReflectionAttributeContext(string path, int startLine)
     {
-        var excerptStart = Math.Max(1, startLine - 3);
-        var excerpt = GetExcerpt(path, excerptStart, startLine);
+        if (startLine <= 1)
+            return false;
+
+        var excerptStart = Math.Max(1, startLine - 16);
+        var excerpt = GetExcerpt(path, excerptStart, startLine + 16);
         if (excerpt == null)
             return false;
 
-        var lines = excerpt.Content.Split('\n');
-        foreach (var line in lines)
-        {
-            var trimmed = line.Trim();
-            if (!trimmed.StartsWith("[", StringComparison.Ordinal))
-                continue;
+        var lines = excerpt.Content.Replace("\r", string.Empty, StringComparison.Ordinal).Split('\n');
+        var currentIndex = startLine - excerptStart;
+        if (currentIndex < 0 || currentIndex >= lines.Length)
+            return false;
 
-            var lowered = trimmed.ToLowerInvariant();
-            if (ReflectionIgnoreAttributeMarkers.Any(marker => lowered.Contains(marker, StringComparison.Ordinal)))
-                return false;
-            if (ReflectionAttributeMarkers.Any(marker => lowered.Contains(marker, StringComparison.Ordinal)))
-                return true;
+        var attributeLines = new List<string>();
+        var currentTrimmed = lines[currentIndex].Trim();
+        if (currentTrimmed.StartsWith("[", StringComparison.Ordinal))
+        {
+            var startIndex = currentIndex;
+            while (startIndex > 0 && IsBlankOrAttributeLine(lines[startIndex - 1]))
+                startIndex--;
+
+            var endIndex = currentIndex;
+            while (endIndex + 1 < lines.Length && IsBlankOrAttributeLine(lines[endIndex + 1]))
+                endIndex++;
+
+            for (int i = startIndex; i <= endIndex; i++)
+            {
+                var trimmed = lines[i].Trim();
+                if (trimmed.StartsWith("[", StringComparison.Ordinal))
+                    attributeLines.Add(trimmed.ToLowerInvariant());
+            }
+        }
+        else
+        {
+            for (int i = currentIndex - 1; i >= 0; i--)
+            {
+                var trimmed = lines[i].Trim();
+                if (trimmed.Length == 0)
+                    continue;
+                if (!trimmed.StartsWith("[", StringComparison.Ordinal))
+                    break;
+                attributeLines.Add(trimmed.ToLowerInvariant());
+            }
         }
 
-        return false;
+        if (attributeLines.Count == 0)
+            return false;
+
+        if (attributeLines.Any(line => ReflectionIgnoreAttributeMarkers.Any(marker => line.Contains(marker, StringComparison.Ordinal))))
+            return false;
+
+        return attributeLines.Any(line => ReflectionAttributeMarkers.Any(marker => line.Contains(marker, StringComparison.Ordinal)));
+    }
+
+    private static bool IsBlankOrAttributeLine(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.Length == 0 || trimmed.StartsWith("[", StringComparison.Ordinal);
     }
 
     private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
