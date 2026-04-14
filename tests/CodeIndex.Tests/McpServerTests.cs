@@ -558,6 +558,41 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_ClassAndNamespaceWithSameNameStillReturnsHeuristicHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            namespace FooService;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
+        Assert.True(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
+        Assert.Equal(2, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_ImpactAnalysis_ClassCollisionReturnsHeuristicHints()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
@@ -787,6 +822,38 @@ public class McpServerTests : IDisposable
         Assert.True(structured["truncated"]!.GetValue<bool>());
         Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
         Assert.Single(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_HeuristicHintsKeepActualReferenceCount()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(3, structured["file_impacts"]![0]!["referenceCount"]!.GetValue<int>());
+        Assert.Equal("ExecuteFolderDiffAsync", structured["file_impacts"]![0]!["symbols"]!.GetValue<string>());
     }
 
     [Fact]

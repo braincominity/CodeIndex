@@ -298,6 +298,56 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ClassAndNamespaceWithSameNameJsonStillReturnsHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_namespace_sibling");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                namespace FooService;
+
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("heuristic").GetBoolean());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_PartialClassJsonReturnsResolutionHintPayload()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_partial_hint");
@@ -698,6 +748,53 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("truncated").GetBoolean());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
             Assert.Equal(1, json.GetProperty("file_impacts").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_HeuristicHintsJsonKeepActualReferenceCount()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_hint_refcount");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                        service.ExecuteFolderDiffAsync();
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(3, json.GetProperty("file_impacts")[0].GetProperty("reference_count").GetInt32());
+            Assert.Equal("ExecuteFolderDiffAsync", json.GetProperty("file_impacts")[0].GetProperty("symbols").GetString());
         }
         finally
         {

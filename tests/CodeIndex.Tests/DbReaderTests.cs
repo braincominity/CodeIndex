@@ -1137,6 +1137,40 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_ClassAndNamespaceWithSameName_StillReturnsHeuristicHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            namespace FooService;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.Equal(1, analysis.HintCount);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
     public void AnalyzeImpact_PartialClassWithoutReverseEdges_ExplainsMultipleDefinitions()
     {
         InsertIndexedFile("src/Worker.Part1.cs", "csharp",
@@ -1419,6 +1453,37 @@ public class DbReaderTests : IDisposable
         Assert.True(analysis.Truncated);
         Assert.Single(analysis.FileImpacts);
         Assert.Equal(1, analysis.HintCount);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_HeuristicHintsKeepActualReferenceCount()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        var edge = Assert.Single(analysis.FileImpacts);
+        Assert.Equal(3, edge.ReferenceCount);
+        Assert.Equal("ExecuteFolderDiffAsync", edge.Symbols);
     }
 
     [Fact]

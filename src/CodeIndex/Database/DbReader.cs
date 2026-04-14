@@ -909,6 +909,12 @@ public partial class DbReader
         var fallbackDefinitions = definitions
             .Where(d => IsPreciseImpactFallbackKind(d.Kind))
             .ToList();
+        var fallbackDefinitionPaths = fallbackDefinitions
+            .Select(d => d.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var hasMultipleFallbackDefinitions = fallbackDefinitions.Count > 1;
+        var hasMultipleFallbackDefinitionFiles = fallbackDefinitionPaths.Count > 1;
         var hasClassLikeDefinitions = fallbackDefinitions.Count > 0;
         var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
 
@@ -929,10 +935,10 @@ public partial class DbReader
                     zeroResultReason = "non_callable_symbol_kind";
                     suggestion = "Try `cdidx definition <symbol>` and then run `impact` on a specific callable member instead.";
                 }
-                else if (hasMultipleDefinitions)
+                else if (hasMultipleFallbackDefinitions)
                 {
-                    zeroResultReason = definitionPaths.Count > 1 ? "multiple_definition_files" : "multiple_definitions";
-                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions, hasMultipleDefinitionFiles: definitionPaths.Count > 1);
+                    zeroResultReason = hasMultipleFallbackDefinitionFiles ? "multiple_definition_files" : "multiple_definitions";
+                    suggestion = BuildImpactSuggestion(fallbackDefinitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: hasMultipleFallbackDefinitionFiles);
                 }
                 else if (fallbackDefinitions.Count == 1)
                 {
@@ -951,6 +957,11 @@ public partial class DbReader
                         zeroResultReason = "class_symbol_no_symbol_callers";
                         suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: false, hasMultipleDefinitionFiles: false);
                     }
+                }
+                else if (hasMultipleDefinitions)
+                {
+                    zeroResultReason = definitionPaths.Count > 1 ? "multiple_definition_files" : "multiple_definitions";
+                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: true, hasMultipleDefinitionFiles: definitionPaths.Count > 1);
                 }
                 else if (definitions.Count == 0)
                 {
@@ -1027,7 +1038,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var innerSql = @"
-                SELECT DISTINCT src.path AS source_path, @impactTargetPath AS target_path,
+                SELECT src.path AS source_path, @impactTargetPath AS target_path,
                        r.symbol_name AS symbol_name
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
@@ -1058,7 +1069,7 @@ public partial class DbReader
         cmd.CommandText = $@"
             SELECT source_path, target_path,
                    COUNT(*) AS reference_count,
-                   GROUP_CONCAT(symbol_name) AS symbols
+                   GROUP_CONCAT(DISTINCT symbol_name) AS symbols
             FROM ({innerSql}) edges
             GROUP BY source_path, target_path
             ORDER BY reference_count DESC, source_path, target_path
