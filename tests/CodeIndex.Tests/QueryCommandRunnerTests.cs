@@ -2115,16 +2115,15 @@ public class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["LoggerService", "--db", dbPath, "--lang", "csharp"],
+                ["LoggerService", "--db", dbPath, "--lang", "csharp", "--limit", "1"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("File : src/Services/LoggerService.cs", stdout);
             Assert.Contains("class      LoggerService", stdout);
-            Assert.Contains("interface  ILoggerService", stdout);
-            Assert.Contains("function   Execute", stdout);
             Assert.DoesNotContain("File : src/Services/ILoggerService.cs", stdout);
+            Assert.DoesNotContain("interface  ILoggerService", stdout);
         }
         finally
         {

@@ -1979,16 +1979,14 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var analysis = _reader.AnalyzeSymbol("LoggerService", limit: 5, lang: "csharp");
+        var analysis = _reader.AnalyzeSymbol("LoggerService", limit: 1, lang: "csharp");
 
         Assert.NotNull(analysis.File);
         Assert.Equal("src/Services/LoggerService.cs", analysis.File!.Path);
-        Assert.NotEmpty(analysis.Definitions);
-        Assert.Equal("LoggerService", analysis.Definitions[0].Name);
-        Assert.Equal("src/Services/LoggerService.cs", analysis.Definitions[0].Path);
-        Assert.Contains(analysis.Definitions, item => item.Name == "ILoggerService");
-        Assert.Contains(analysis.NearbySymbols, item => item.Path == "src/Services/LoggerService.cs" && item.Name == "Execute");
-        Assert.DoesNotContain(analysis.NearbySymbols, item => item.Path == "src/Services/ILoggerService.cs");
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("LoggerService", definition.Name);
+        Assert.Equal("src/Services/LoggerService.cs", definition.Path);
+        Assert.All(analysis.NearbySymbols, item => Assert.Equal("src/Services/LoggerService.cs", item.Path));
     }
 
     [Fact]

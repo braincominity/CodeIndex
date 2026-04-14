@@ -387,10 +387,14 @@ public partial class DbReader
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
         // into references / callers / callees. See codex review of #83.
         // `exact` は bundle 内のすべての sub-query に伝播させ、leaf コマンドと precision を揃える。
-        var definitions = PreferExactNameAnalysisDefinitions(
-            query,
-            GetDefinitions(query, Math.Min(limit, 5), kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact));
-        var primaryDefinition = definitions.FirstOrDefault();
+        var definitionLimit = Math.Min(limit, 5);
+        var primaryDefinition = GetDefinitions(query, 1, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
+            .FirstOrDefault();
+        var definitions = BuildAnalysisDefinitions(
+            primaryDefinition,
+            GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact),
+            definitionLimit);
+        primaryDefinition ??= definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -437,35 +441,26 @@ public partial class DbReader
         };
     }
 
-    private static List<DefinitionResult> PreferExactNameAnalysisDefinitions(string query, List<DefinitionResult> definitions)
+    private static List<DefinitionResult> BuildAnalysisDefinitions(DefinitionResult? primaryDefinition, List<DefinitionResult> definitions, int limit)
     {
-        if (definitions.Count <= 1)
+        if (primaryDefinition == null || limit <= 0)
             return definitions;
 
-        var foldedQuery = NameFold.Fold(query) ?? query;
-        return definitions
-            .Select((definition, index) => new
-            {
-                Definition = definition,
-                Index = index,
-                Rank = GetAnalysisDefinitionAnchorRank(query, foldedQuery, definition.Name),
-            })
-            .OrderBy(item => item.Rank)
-            .ThenBy(item => item.Index)
-            .Select(item => item.Definition)
+        var ordered = definitions
+            .Where(definition => !IsSameDefinition(definition, primaryDefinition))
+            .Prepend(primaryDefinition)
+            .Take(limit)
             .ToList();
+        return ordered;
     }
 
-    private static int GetAnalysisDefinitionAnchorRank(string rawQuery, string foldedQuery, string candidateName)
+    private static bool IsSameDefinition(DefinitionResult left, DefinitionResult right)
     {
-        if (string.Equals(candidateName, rawQuery, StringComparison.Ordinal))
-            return 0;
-
-        var foldedCandidate = NameFold.Fold(candidateName) ?? candidateName;
-        if (string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal))
-            return 1;
-
-        return 2;
+        return string.Equals(left.Path, right.Path, StringComparison.Ordinal)
+            && left.StartLine == right.StartLine
+            && left.EndLine == right.EndLine
+            && string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+            && string.Equals(left.Kind, right.Kind, StringComparison.Ordinal);
     }
 
     /// <summary>
