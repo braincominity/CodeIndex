@@ -1372,10 +1372,6 @@ public partial class DbReader
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
-                var matchColumn = lineText.IndexOf(query, comparison);
-                if (matchColumn < 0)
-                    continue;
-
                 var snippetStart = Math.Max(1, lineNumber - before);
                 var snippetEnd = Math.Min(totalLines, lineNumber + after);
                 var snippetLineNumbers = Enumerable.Range(snippetStart, snippetEnd - snippetStart + 1)
@@ -1384,16 +1380,25 @@ public partial class DbReader
                 if (snippetLineNumbers.Count == 0)
                     continue;
 
-                results.Add(new FileFindResult
+                for (int searchStart = 0; searchStart < lineText.Length && results.Count < limit;)
                 {
-                    Path = path,
-                    Lang = fileLang,
-                    Line = lineNumber,
-                    Column = matchColumn + 1,
-                    StartLine = snippetLineNumbers[0],
-                    EndLine = snippetLineNumbers[^1],
-                    Snippet = string.Join("\n", snippetLineNumbers.Select(line => lineMap[line])),
-                });
+                    var matchColumn = lineText.IndexOf(query, searchStart, comparison);
+                    if (matchColumn < 0)
+                        break;
+
+                    results.Add(new FileFindResult
+                    {
+                        Path = path,
+                        Lang = fileLang,
+                        Line = lineNumber,
+                        Column = matchColumn + 1,
+                        StartLine = snippetLineNumbers[0],
+                        EndLine = snippetLineNumbers[^1],
+                        Snippet = string.Join("\n", snippetLineNumbers.Select(line => lineMap[line])),
+                    });
+
+                    searchStart = matchColumn + Math.Max(1, query.Length);
+                }
             }
         }
 
@@ -1404,7 +1409,7 @@ public partial class DbReader
     /// Reconstruct one indexed file into an ordered line map.
     /// 1つのインデックス済みファイルを順序付き行マップへ再構成する。
     /// </summary>
-    private bool TryLoadIndexedFileLines(string path, out string? lang, out int totalLines, out SortedDictionary<int, string> lineMap)
+    private bool TryLoadIndexedFileLines(string path, out string? lang, out int totalLines, out SortedDictionary<int, string> lineMap, int? startLine = null, int? endLine = null)
     {
         lang = null;
         totalLines = 0;
@@ -1424,13 +1429,22 @@ public partial class DbReader
         totalLines = fileReader.GetInt32(1);
 
         using var chunkCmd = _conn.CreateCommand();
-        chunkCmd.CommandText = @"
+        var chunkSql = @"
             SELECT c.start_line, c.end_line, c.content
             FROM chunks c
             JOIN files f ON c.file_id = f.id
-            WHERE f.path = @path
-            ORDER BY c.start_line, c.chunk_index";
+            WHERE f.path = @path";
+        if (startLine.HasValue)
+            chunkSql += " AND c.end_line >= @startLine";
+        if (endLine.HasValue)
+            chunkSql += " AND c.start_line <= @endLine";
+        chunkSql += " ORDER BY c.start_line, c.chunk_index";
+        chunkCmd.CommandText = chunkSql;
         chunkCmd.Parameters.AddWithValue("@path", path);
+        if (startLine.HasValue)
+            chunkCmd.Parameters.AddWithValue("@startLine", startLine.Value);
+        if (endLine.HasValue)
+            chunkCmd.Parameters.AddWithValue("@endLine", endLine.Value);
 
         using var chunkReader = chunkCmd.ExecuteTrackedReader();
         while (chunkReader.TrackedRead())
@@ -1468,9 +1482,9 @@ public partial class DbReader
             before = 0;
         if (after < 0)
             after = 0;
-        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap))
-            return null;
         var requestedStart = Math.Max(1, startLine - before);
+        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap, requestedStart, endLine + after))
+            return null;
         var requestedEnd = Math.Min(totalLines, endLine + after);
 
         var selectedLines = Enumerable.Range(requestedStart, requestedEnd - requestedStart + 1)

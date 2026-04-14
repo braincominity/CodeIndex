@@ -335,6 +335,18 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void FindInFiles_ReturnsEverySameLineOccurrence()
+    {
+        InsertIndexedFile("src/Sample.cs", "csharp", "alpha alpha alpha\n");
+
+        var results = _reader.FindInFiles("alpha", limit: 10, pathPatterns: ["src/Sample.cs"]);
+
+        Assert.Equal(3, results.Count);
+        Assert.Equal([1, 7, 13], results.Select(r => r.Column).ToArray());
+        Assert.All(results, result => Assert.Equal(1, result.Line));
+    }
+
+    [Fact]
     public void GetDefinitions_ReturnsDefinitionContentAndOptionalBody()
     {
         var results = _reader.GetDefinitions("authenticate", includeBody: true);
