@@ -429,8 +429,8 @@ cdidx map --path src/ --exclude-tests --json
 | `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
-| `--commits <id...>` | `index` | Update only files changed in specified commits |
-| `--files <path...>` | `index` | Update only the specified files |
+| `--commits <id...>` | `index` | Update only files changed in specified commits. Prefer this after a normal commit because git history includes rename/delete paths. |
+| `--files <path...>` | `index` | Update only the specified files. Safe for known in-place edits or new files; old rename/delete paths are not purged unless you also list them explicitly. |
 | `--since <datetime>` | `files` | Filter to files modified since this ISO 8601 timestamp |
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication for raw results |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
@@ -679,14 +679,18 @@ WHERE s.kind = 'function' AND s.name LIKE '%keyword%';
 Instead of re-indexing the entire project, AI agents can update only the files that changed:
 
 ```bash
-# Update only files changed in specific commits (e.g. in a post-merge hook)
+# Update only files changed in specific commits
+# Prefer this after a normal commit because git history also carries rename/delete paths
 cdidx ./myproject --commits abc123 def456
 
-# Update only specific files (e.g. after saving a file in an editor hook)
+# Update only specific files after known in-place edits or new-file additions
+# Old rename/delete paths are not purged unless you also list them explicitly
 cdidx ./myproject --files src/app.cs src/utils.cs
 ```
 
-These options make it practical to keep the index up-to-date in real time, even on large codebases.
+Prefer `--commits` for commit-driven automation. Use `--files` for editor/save hooks that only touch existing paths or add new files. After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, prefer a full `cdidx ./myproject --json` refresh so repo-wide stale paths are purged against the current checkout.
+
+These options make it practical to keep the index up-to-date in real time, even on large codebases, without pretending that every delta workflow purges stale paths equally.
 ````
 
 ### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
@@ -1509,14 +1513,18 @@ WHERE s.kind = 'function' AND s.name LIKE '%キーワード%';
 プロジェクト全体を再インデックスする代わりに、変更のあったファイルだけを更新できます:
 
 ```bash
-# 特定コミットの変更ファイルのみ更新（例: post-mergeフックで）
+# 特定コミットの変更ファイルのみ更新
+# 通常のコミット直後はこちらを優先。git 履歴に rename/delete path も含まれる
 cdidx ./myproject --commits abc123 def456
 
-# 特定ファイルのみ更新（例: エディタの保存フックで）
+# 特定ファイルのみ更新（in-place 編集や新規追加向け）
+# rename/delete の旧 path は、明示しない限り purge されない
 cdidx ./myproject --files src/app.cs src/utils.cs
 ```
 
-これらのオプションにより、大規模コードベースでもリアルタイムにインデックスを最新に保つことが実用的になります。
+コミット単位の自動化では `--commits` を優先してください。`--files` は既存 path の編集や新規ファイル追加だけを前提にした editor/save hook 向けです。`git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、repo 全体の stale path を掃除するために `cdidx ./myproject --json` のフル更新を優先してください。
+
+これらのオプションにより、大規模コードベースでもリアルタイムにインデックスを最新に保ちやすくなりますが、stale path を purge できる範囲は更新モードごとに異なります。
 ````
 
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）

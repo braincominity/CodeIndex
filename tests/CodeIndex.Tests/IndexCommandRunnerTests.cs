@@ -219,6 +219,82 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_DoesNotPurgeOldRenamePathUnlessExplicitlyListed()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var srcDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(srcDir);
+            var oldPath = Path.Combine(srcDir, "OldName.cs");
+            var newPath = Path.Combine(srcDir, "NewName.cs");
+
+            File.WriteAllText(oldPath, "public class OldName { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Move(oldPath, newPath);
+            File.WriteAllText(newPath, "public class NewName { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "src/NewName.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("src/OldName.cs", indexedPaths);
+            Assert.Contains("src/NewName.cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithCommits_PurgesOldRenamePath()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var srcDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(srcDir);
+            var oldPath = Path.Combine(srcDir, "OldName.cs");
+            var newPath = Path.Combine(srcDir, "NewName.cs");
+
+            File.WriteAllText(oldPath, "public class OldName { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Move(oldPath, newPath);
+            File.WriteAllText(newPath, "public class NewName { }\n");
+            RunGit(projectRoot, "add", "-A");
+            RunGit(projectRoot, "commit", "-m", "rename");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/OldName.cs", indexedPaths);
+            Assert.Contains("src/NewName.cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
     {
         var projectRoot = CreateTempProject();
@@ -1153,6 +1229,16 @@ public class IndexCommandRunnerTests
             Pooling = false,
         };
         return new SqliteConnection(builder.ToString());
+    }
+
+    private static HashSet<string> ReadIndexedPaths(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        db.TryMigrateForRead();
+        var reader = new DbReader(db.Connection, db.IsReadOnly);
+        return reader.ListFiles(limit: 1000)
+            .Select(file => file.Path)
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     private static string CreateTempProject()
