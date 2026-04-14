@@ -1299,6 +1299,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "validate"))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedValidateOptionError(cmdArgs))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1606,6 +1608,22 @@ public static class QueryCommandRunner
         Console.Error.WriteLine("Hint: remove `--since` and rerun, or use it with `search`, `definition`, `symbols`, or `files`.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
+    }
+
+    private static bool TryWriteUnsupportedValidateOptionError(string[] cmdArgs)
+    {
+        foreach (var arg in cmdArgs)
+        {
+            if (arg is "--lang" or "--limit" or "--top" or "--exclude-path" or "--exclude-tests")
+            {
+                Console.Error.WriteLine($"Error: {arg} is not supported for validate.");
+                Console.Error.WriteLine("Hint: validate supports `--kind` and `--path`; remove the unsupported filter and rerun.");
+                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow("validate")}");
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string GetUsageLineOrThrow(string commandName) =>

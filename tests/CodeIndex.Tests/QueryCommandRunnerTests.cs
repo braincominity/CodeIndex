@@ -170,6 +170,65 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain("database not found", stderr);
     }
 
+    [Theory]
+    [InlineData("--lang", "javascript")]
+    [InlineData("--exclude-path", "src/")]
+    [InlineData("--exclude-tests")]
+    [InlineData("--limit", "1")]
+    [InlineData("--top", "1")]
+    public void RunValidate_UnsupportedFiltersReturnUsageError(string flag, string? value = null)
+    {
+        var args = value == null
+            ? new[] { flag }
+            : new[] { flag, value };
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(args, _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: {flag} is not supported for validate.", stderr);
+        Assert.Contains("validate supports `--kind` and `--path`", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("validate")}", stderr);
+    }
+
+    [Fact]
+    public void RunValidate_KindFilterNarrowsIssues()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_kind_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllBytes(
+                Path.Combine(projectRoot, "src", "bom.cs"),
+                [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes("class Bom {}\n")]);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mixed.cs"),
+                "class Mixed {}\r\nclass Other {}\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--json", "--kind", "bom"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("bom", json.GetProperty("issues")[0].GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void BuildSymbolQueryList_TreatsPipeAsLiteralNameCharacter()
     {

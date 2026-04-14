@@ -27,15 +27,19 @@ public class ConsoleUiTests
         Assert.Contains("Usage:", output);
         Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
-        Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
-        Assert.Contains("cdidx references <query>", output);
-        Assert.Contains("cdidx callers <query>", output);
-        Assert.Contains("cdidx callees <query>", output);
-        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]", output);
+        Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count]", output);
+        Assert.Contains("cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count]", output);
+        Assert.Contains("cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count]", output);
+        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count] [--since <datetime>] [--no-dedup] [--exact]", output);
         Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
-        Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
+        Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]", output);
+        Assert.Contains("cdidx symbols [query] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <pattern>]", output);
+        Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
         Assert.Contains("backfill-fold", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
@@ -52,6 +56,18 @@ public class ConsoleUiTests
         Assert.Contains("Update workflows:", output);
         Assert.Contains("Use --commits with a project path", output);
         Assert.Contains("cdidx index ./myproject --commits abc123", output);
+    }
+
+    [Fact]
+    public void PrintUsage_QueryLinesMatchImplementedOptions()
+    {
+        var output = CaptureUsageOutput(showBanner: false);
+
+        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count] [--since <datetime>] [--no-dedup] [--exact]", output);
+        Assert.Contains("cdidx symbols [query] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
+        Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
     }
 
     [Fact]
