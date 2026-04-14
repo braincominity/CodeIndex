@@ -23,6 +23,19 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     return args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
 }
 
+if (args[0] is "--version" or "-V")
+{
+    Console.WriteLine($"cdidx v{appVersion}");
+    return CommandExitCodes.Success;
+}
+
+if (args[0] == "--completions" && args.Length >= 2)
+{
+    return ConsoleUi.PrintCompletions(args[1])
+        ? CommandExitCodes.Success
+        : CommandExitCodes.UsageError;
+}
+
 // Recognize --help / -h after a subcommand too (e.g. `cdidx unused --help`)
 // so that the near-universal help convention works everywhere. The scan is
 // option-arity aware: a `-h` / `--help` token that actually belongs to a
@@ -35,19 +48,6 @@ if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
 {
     ConsoleUi.PrintUsage(showBanner: true);
     return CommandExitCodes.Success;
-}
-
-if (args[0] is "--version" or "-V")
-{
-    Console.WriteLine($"cdidx v{appVersion}");
-    return CommandExitCodes.Success;
-}
-
-if (args[0] == "--completions" && args.Length >= 2)
-{
-    return ConsoleUi.PrintCompletions(args[1])
-        ? CommandExitCodes.Success
-        : CommandExitCodes.UsageError;
 }
 
 var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");

@@ -54,6 +54,28 @@ public class ProgramCliTests
         Assert.DoesNotContain("requires a value", stderr);
     }
 
+    [Fact]
+    public void Symbols_NameHelpLikeValueReturnsUsageError()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["symbols", "--name", "-h"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--name requires a value", stderr);
+        Assert.DoesNotContain("██████╗", stderr);
+    }
+
+    [Fact]
+    public void Completions_HelpLikeValueReturnsCompletionsError()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "-h"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("Unknown shell", stderr);
+        Assert.DoesNotContain("Usage:", stderr);
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
