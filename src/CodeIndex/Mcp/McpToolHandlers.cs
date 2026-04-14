@@ -54,11 +54,14 @@ public partial class McpServer
     /// </summary>
     private static void AddFreshnessHint(JsonObject payload, DbReader reader)
     {
-        var (fileCount, indexedAt) = reader.GetFreshnessHint();
-        payload["indexed_file_count"] = fileCount;
-        payload["indexed_at"] = indexedAt.HasValue
-            ? JsonSerializer.SerializeToNode(indexedAt.Value)
+        var freshness = reader.GetFreshnessHint();
+        payload["indexed_file_count"] = freshness.FileCount;
+        payload["indexed_at"] = freshness.IndexedAt.HasValue
+            ? JsonSerializer.SerializeToNode(freshness.IndexedAt.Value)
             : null;
+        payload["freshness_available"] = freshness.FreshnessAvailable;
+        if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
+            payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
     }
 
     private static void AddExactZeroHint(JsonObject payload, ExactZeroHintResult? exactZeroHint)

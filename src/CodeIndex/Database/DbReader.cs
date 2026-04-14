@@ -1145,12 +1145,19 @@ public partial class DbReader
     /// Return a lightweight freshness hint for zero-result MCP responses.
     /// 0件MCPレスポンス向けの軽量な鮮度ヒントを返す。
     /// </summary>
-    public (long FileCount, DateTime? IndexedAt) GetFreshnessHint()
+    public FreshnessHintResult GetFreshnessHint()
     {
+        var freshnessAvailable = _fileColumns.Contains("indexed_at");
         var fileCount = ExecuteScalar("SELECT COUNT(*) FROM files");
         var indexedAt = ExecuteNullableDateTime(
-            _fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null);
-        return (fileCount, indexedAt);
+            freshnessAvailable ? "SELECT MAX(indexed_at) FROM files" : null);
+        return new FreshnessHintResult
+        {
+            FileCount = fileCount,
+            IndexedAt = indexedAt,
+            FreshnessAvailable = freshnessAvailable,
+            FreshnessDegradedReason = freshnessAvailable ? null : "files.indexed_at column missing in this index",
+        };
     }
 
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()
