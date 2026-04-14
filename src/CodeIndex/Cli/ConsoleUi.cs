@@ -372,7 +372,9 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
-        Console.WriteLine("  --exact                    search: case-sensitive exact substring (no FTS5); symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (covers Ä/ä, sharp-S, Greek sigma, fullwidth/halfwidth; Turkish İ remains distinct by Unicode design). Legacy or stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready");
+        Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search and --exact-name for symbols/definition/references/callers/callees/inspect.");
+        Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
+        Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine("  --count                    Return only the visible result count (for AI preflight)");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
