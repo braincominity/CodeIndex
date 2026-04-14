@@ -464,6 +464,33 @@ The direct MCP graph tools (`references`, `callers`, `callees`) also emit `graph
 {"path":"src/auth.py","lang":"python","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":1,"snippet_end_line":6,"snippet":"def authenticate(user):\n    token = issue_token(user)\n    return token","match_lines":[2],"highlights":[{"line":2,"text":"    token = issue_token(user)","terms":["token"]}],"context_before":1,"context_after":3,"score":-1.5}
 ```
 
+## Release Workflow
+
+The version string has a single source of truth: `version.json` at the repository root.
+
+### Version flow
+
+1. **Build time.** `src/CodeIndex/CodeIndex.csproj` reads `version.json` and sets `<Version>`, so the NuGet package and self-contained binaries are stamped automatically.
+2. **Runtime.** The same project file copies `version.json` next to the published binary. `ConsoleUi.LoadVersion()` reads it from `AppContext.BaseDirectory`, which keeps `cdidx --version`, MCP `serverInfo.version`, and `status --json` aligned.
+3. **Install time.** `install.sh` places `version.json` beside `cdidx` and the native SQLite library. If it is missing, `cdidx --version` falls back to `v0.0.0`.
+
+There are no version constants in C#. Outside `version.json`, the only expected version strings are release headings and compare links in `CHANGELOG.md`.
+
+### Maintainer checklist
+
+0. **Triage every unmerged branch and open PR before bumping the version.**
+   Run `git fetch --all --prune`, then list all unmerged branches with `git branch -a --no-merged main` and all open PRs with `gh pr list --state open --limit 1000`. Do not pre-filter by branch name. For each entry, either merge it before release or explicitly note in the release PR description why it is deferred.
+1. Update `version.json` to the new version (for example `"version": "1.9.0"`).
+2. Promote `[Unreleased]` to `[1.9.0] - YYYY-MM-DD` in both the English and Japanese sections of `CHANGELOG.md`, and leave a fresh empty `[Unreleased]` section above it.
+3. Update the compare links at the bottom of `CHANGELOG.md`:
+   `[Unreleased]: .../compare/v1.9.0...HEAD`
+   `[1.9.0]: .../compare/v1.8.0...v1.9.0`
+4. Commit the version bump.
+5. Tag the commit `v1.9.0` and push the tag. `.github/workflows/release.yml` triggers on `v*` tags and builds the per-platform tarballs plus the NuGet package.
+6. After the release is published, run the one-liner installer on a clean machine and verify `cdidx --version` prints the released version before announcing it.
+
+If a clean install reports `cdidx v0.0.0`, treat it as a release regression: either the tarball did not bundle `version.json`, or `install.sh` did not copy it next to the binary. Use `CLOUD_BOOTSTRAP_PROMPT.md` for the clean-install smoke path.
+
 ## AI Feedback Implementation
 
 The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
@@ -1383,6 +1410,33 @@ MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に
 ```json
 {"path":"src/auth.py","lang":"python","chunk_start_line":1,"chunk_end_line":80,"snippet_start_line":1,"snippet_end_line":6,"snippet":"def authenticate(user):\n    token = issue_token(user)\n    return token","match_lines":[2],"highlights":[{"line":2,"text":"    token = issue_token(user)","terms":["token"]}],"context_before":1,"context_after":3,"score":-1.5}
 ```
+
+## リリース手順
+
+バージョン文字列の真実は、リポジトリ直下の `version.json` 1か所だけにある。
+
+### バージョンの流れ
+
+1. **ビルド時。** `src/CodeIndex/CodeIndex.csproj` が `version.json` を読み取り、`<Version>` を設定する。NuGet パッケージと self-contained バイナリは自動で正しいバージョンになる。
+2. **実行時。** 同じ project file が `version.json` を publish 済みバイナリの隣へコピーする。`ConsoleUi.LoadVersion()` が `AppContext.BaseDirectory` から読み取るため、`cdidx --version`、MCP `serverInfo.version`、`status --json` の `version` が一致する。
+3. **インストール時。** `install.sh` が `cdidx` とネイティブ SQLite ライブラリの隣へ `version.json` を配置する。これが欠けると `cdidx --version` は `v0.0.0` にフォールバックする。
+
+C# 側にバージョン定数は無い。`version.json` の外でバージョン文字列が出てくるのは、`CHANGELOG.md` のリリース見出しと compare リンクだけである。
+
+### メンテナ向けチェックリスト
+
+0. **バージョンを上げる前に、未マージブランチと open PR を必ず全件トリアージする。**
+   `git fetch --all --prune` を実行し、`git branch -a --no-merged main` で未マージブランチ、`gh pr list --state open --limit 1000` で open PR を列挙する。ブランチ名では事前フィルタしないこと。各項目について、リリース前にマージするか、リリース PR 説明で見送り理由を明記するかを必ず決める。
+1. `version.json` を新しいバージョンへ更新する（例: `"version": "1.9.0"`）。
+2. `CHANGELOG.md` の英語セクションと日本語セクションの両方で、`[Unreleased]` を `[1.9.0] - YYYY-MM-DD` に昇格し、その上に新しい空の `[Unreleased]` を残す。
+3. `CHANGELOG.md` 末尾の compare リンクを更新する:
+   `[Unreleased]: .../compare/v1.9.0...HEAD`
+   `[1.9.0]: .../compare/v1.8.0...v1.9.0`
+4. バージョンバンプをコミットする。
+5. コミットに `v1.9.0` タグを付けて push する。`.github/workflows/release.yml` は `v*` タグで起動し、各プラットフォームの tarball と NuGet パッケージをビルドする。
+6. リリース公開後、クリーンなマシンでワンライナーインストーラを実行し、`cdidx --version` が公開バージョンを返すことを確認してから告知する。
+
+クリーンインストールで `cdidx v0.0.0` が返る場合は、リリースの不具合として扱うこと。tarball に `version.json` が入っていないか、`install.sh` がそれをバイナリの隣へコピーしていない。クリーンインストールのスモーク経路は `CLOUD_BOOTSTRAP_PROMPT.md` を参照。
 
 ## AIフィードバックの実装
 
