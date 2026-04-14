@@ -239,6 +239,7 @@ cdidx search "authenticate"              # full-text search
 cdidx search "handleRequest" --lang go   # filter by language
 cdidx search "TODO" --limit 50           # more results
 cdidx search "auth*" --fts               # raw FTS5 syntax (prefix search)
+cdidx search "Run();" --exact-substring  # case-sensitive exact substring, no FTS5
 ```
 
 Output:
@@ -276,12 +277,12 @@ Use `--json` for machine-readable output (AI agents):
 cdidx symbols UserService              # find by name
 cdidx symbols UserService OrderService AuthService   # multi-name OR (positional)
 cdidx symbols --name UserService --name OrderService # multi-name OR (--name)
-cdidx symbols Run --exact              # exact name match (no `RunAsync` / `RunImpact` expansion)
+cdidx symbols Run --exact-name         # exact name match (no `RunAsync` / `RunImpact` expansion)
 cdidx symbols --kind class             # all classes
 cdidx symbols --kind function --lang python
 ```
 
-Use `--exact` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact` composes with `--name`, positional names, and all existing filters. (Note: `--exact` on `search` has different semantics — case-sensitive exact substring, FTS5 bypassed.) The fold is NFKC + Unicode CaseFold: common non-ASCII pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, ligatures, sharp-S (`Straße` / `STRASSE`), and Greek final sigma (`Σ` / `ς` / `σ`) now collapse correctly. Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still folds to `i\u0307` rather than plain `i`. DBs with stale fold metadata fall back to ASCII `COLLATE NOCASE` until the DB contains only current folded keys. Prefer `cdidx backfill-fold` to refresh stored folded keys without reparsing. A plain `cdidx index .` is also enough if the scan rewrites or purges every stale row; otherwise use `cdidx index . --rebuild`. Use `status --json` → `fold_ready` to detect which path is active.
+Use `--exact-name` when you already have a precise candidate list (e.g. names returned from an earlier `search` / `inspect` / `map` call). Names are compared case-insensitively for equality instead of substring, so `Run` will not also pull in `RunAsync`, `RunImpact`, etc. `--exact-name` composes with `--name`, positional names, and all existing filters. The older `--exact` spelling still works on these commands for backward compatibility, but `--exact-name` avoids the semantic clash with `search`. The fold is NFKC + Unicode CaseFold: common non-ASCII pairs such as `Ä` / `ä`, fullwidth `Ｒｕｎ` / `Run`, ligatures, sharp-S (`Straße` / `STRASSE`), and Greek final sigma (`Σ` / `ς` / `σ`) now collapse correctly. Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still folds to `i\u0307` rather than plain `i`. DBs with stale fold metadata fall back to ASCII `COLLATE NOCASE` until the DB contains only current folded keys. Prefer `cdidx backfill-fold` to refresh stored folded keys without reparsing. A plain `cdidx index .` is also enough if the scan rewrites or purges every stale row; otherwise use `cdidx index . --rebuild`. Use `status --json` → `fold_ready` to detect which path is active.
 
 Output:
 
@@ -416,7 +417,9 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
 | `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
-| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search` / `find`: case-sensitive exact substring (no FTS5). Symbol/graph commands (and `inspect` / MCP `analyze_symbol` — propagates to every bundled sub-query): NFKC + Unicode CaseFold exact name match (so `Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` still stays distinct from plain `i`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` so AI clients can tell which path is active. When a read-only legacy DB is missing the fallback exact-match indexes, `symbols` / `definition` / `references` / `callers` / `callees` and `inspect --exact` print a WARN line in human-readable mode. CLI JSON and MCP `structuredContent` now both expose the snake_case fields `exact_index_available` / `degraded_reason`; MCP also keeps the legacy camelCase aliases `exactIndexAvailable` / `degradedReason` for backward compatibility. |
+| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Backward-compatible shorthand. Prefer `--exact-substring` for `search`, keep `--exact` for `find`, and prefer `--exact-name` for symbol / graph commands plus `inspect`. JSON and MCP degraded-state metadata remain `exact_index_available` / `degraded_reason` (plus legacy camelCase aliases in MCP). |
+| `--exact-substring` | `search` | Preferred explicit name for search exactness: case-sensitive exact substring (FTS5 bypassed). |
+| `--exact-name` | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Preferred explicit name for symbol-name exactness: NFKC + Unicode CaseFold exact equality (`Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` is still distinct from plain `i`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` so AI clients can tell which path is active. When a read-only legacy DB is missing the fallback exact-match indexes, human-readable output warns and CLI JSON / MCP `structuredContent` expose degraded-state metadata. |
 | `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/struct/interface/enum/property/event/delegate/namespace/import) |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find` | Return only the result count (with `--json`: `{"count": N, "files": M}`) |
@@ -1067,6 +1070,7 @@ cdidx search "authenticate"              # 全文検索
 cdidx search "handleRequest" --lang go   # 言語でフィルタ
 cdidx search "TODO" --limit 50           # 結果数を増やす
 cdidx search "auth*" --fts               # 生のFTS5構文（前方一致検索）
+cdidx search "Run();" --exact-substring  # 大文字小文字区別の完全部分一致、FTS5 なし
 ```
 
 出力:
@@ -1104,12 +1108,12 @@ src/Auth/TokenService.cs:42-58
 cdidx symbols UserService              # 名前で検索
 cdidx symbols UserService OrderService AuthService   # 複数名を OR 結合（positional）
 cdidx symbols --name UserService --name OrderService # 複数名を OR 結合（--name）
-cdidx symbols Run --exact              # 名前の完全一致（`RunAsync` / `RunImpact` に広がらない）
+cdidx symbols Run --exact-name         # 名前の完全一致（`RunAsync` / `RunImpact` に広がらない）
 cdidx symbols --kind class             # すべてのクラス
 cdidx symbols --kind function --lang python
 ```
 
-`--exact` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact` は `--name`、positional 名、他の全フィルタと組み合わせ可能。（注: `search` の `--exact` は意味が異なる — 大文字小文字を区別する完全部分一致で、FTS5 はバイパスされる。）fold は NFKC 正規化 + Unicode CaseFold で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S（`Straße` / `STRASSE`）、Greek final sigma（`Σ` / `ς` / `σ`）などの非 ASCII 差分も正しく一致する。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は依然 plain `i` ではなく `i\u0307` に fold される。stale な fold metadata を含む DB は、DB 内が current folded key のみになるまで ASCII `COLLATE NOCASE` に黙ってフォールバックする。stored folded key を再解析なしで更新したいなら `cdidx backfill-fold` を優先し、scan が stale row をすべて rewrite / purge できるなら通常の `cdidx index .` でも復帰できる。stale row が残る場合だけ `cdidx index . --rebuild` が必要。`status --json` の `fold_ready` で現在の経路を判定可能。
+`--exact-name` は、すでに解決済みの候補リスト（例: `search` / `inspect` / `map` の結果）を渡して正確にその行だけ取り返したいときに使う。部分一致ではなく大文字小文字を無視した完全一致で比較するため、`Run` を指定しても `RunAsync`、`RunImpact` 等には広がらない。`--exact-name` は `--name`、positional 名、他の全フィルタと組み合わせ可能。従来の `--exact` も後方互換で引き続き使えるが、`search` と意味がぶつからない `--exact-name` を推奨する。fold は NFKC 正規化 + Unicode CaseFold で、`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S（`Straße` / `STRASSE`）、Greek final sigma（`Σ` / `ς` / `σ`）などの非 ASCII 差分も正しく一致する。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は依然 plain `i` ではなく `i\u0307` に fold される。stale な fold metadata を含む DB は、DB 内が current folded key のみになるまで ASCII `COLLATE NOCASE` に黙ってフォールバックする。stored folded key を再解析なしで更新したいなら `cdidx backfill-fold` を優先し、scan が stale row をすべて rewrite / purge できるなら通常の `cdidx index .` でも復帰できる。stale row が残る場合だけ `cdidx index . --rebuild` が必要。`status --json` の `fold_ready` で現在の経路を判定可能。
 
 出力:
 
@@ -1244,7 +1248,9 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
-| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `search` / `find`: 大文字小文字を区別する完全部分一致（FTS5 バイパス）。symbol / graph 系コマンドと `inspect` / MCP `analyze_symbol`（bundle 内の全 sub-query に伝播）: NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。DB に stale な fold metadata が残る間は ASCII `COLLATE NOCASE` に fallback するため、まず `cdidx backfill-fold`、または stale row を全置換できる通常の `cdidx index .`、それが無理なら `--rebuild` を使う（`status --json` の `fold_ready` で判定）。read-only な旧DBに fallback exact-match index が無い場合は、`symbols` / `definition` / `references` / `callers` / `callees` と `inspect --exact` が、人間向け出力で WARN を表示する。CLI JSON と MCP `structuredContent` は、どちらも snake_case の `exact_index_available` / `degraded_reason` を返す。MCP では後方互換のため、従来の camelCase alias `exactIndexAvailable` / `degradedReason` も引き続き返す。 |
+| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | 後方互換の短縮形。`search` では `--exact-substring`、`find` では `--exact` を使い、symbol / graph 系コマンドと `inspect` では `--exact-name` を推奨。JSON / MCP の縮退メタデータは従来どおり `exact_index_available` / `degraded_reason`（MCP は camelCase alias も維持）。 |
+| `--exact-substring` | `search` | `search` 用の推奨 explicit alias。大文字小文字を区別する完全部分一致（FTS5 バイパス）。 |
+| `--exact-name` | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | symbol-name exactness 用の推奨 explicit alias。NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。DB に stale な fold metadata が残る間は ASCII `COLLATE NOCASE` に fallback するため、まず `cdidx backfill-fold`、または stale row を全置換できる通常の `cdidx index .`、それが無理なら `--rebuild` を使う（`status --json` の `fold_ready` で判定）。read-only な旧DBに fallback exact-match index が無い場合は、人間向け出力が WARN を表示し、CLI JSON と MCP `structuredContent` が縮退メタデータを返す。 |
 | `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/struct/interface/enum/property/event/delegate/namespace/import） |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find` | 結果のカウントだけを返す（`--json` 併用: `{"count": N, "files": M}`） |

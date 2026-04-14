@@ -27,19 +27,23 @@ public class ConsoleUiTests
         Assert.Contains("Usage:", output);
         Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
-        Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
         Assert.Contains("cdidx references <query>", output);
         Assert.Contains("cdidx callers <query>", output);
         Assert.Contains("cdidx callees <query>", output);
-        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]", output);
+        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring] [--count]", output);
+        Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]", output);
+        Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]", output);
         Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
         Assert.Contains("cdidx find <query> --path <pattern>", output);
+        Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
+        Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
-        Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
+        Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
+        Assert.Contains("cdidx symbols Run --exact-name                Exact symbol-name match", output);
         Assert.Contains("backfill-fold", output);
         Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
-        Assert.Contains("search/find: case-sensitive exact substring", output);
+        Assert.Contains("Prefer --exact-substring for search, keep --exact for find", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
         Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
@@ -79,8 +83,11 @@ public class ConsoleUiTests
         Assert.Contains('.', version);
     }
 
-    [Fact]
-    public void PrintCompletions_KnownShell_ReturnsTrue()
+    [Theory]
+    [InlineData("bash")]
+    [InlineData("zsh")]
+    [InlineData("fish")]
+    public void PrintCompletions_KnownShell_ReturnsTrue(string shell)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -89,13 +96,20 @@ public class ConsoleUiTests
             try
             {
                 Console.SetOut(writer);
-                Assert.True(ConsoleUi.PrintCompletions("bash"));
+                Assert.True(ConsoleUi.PrintCompletions(shell));
                 var output = writer.ToString();
-                // Should contain dynamically generated languages, including newly added ones
-                // 動的生成の言語リストに新しく追加した言語が含まれているか検証
-                Assert.Contains("elixir", output);
-                Assert.Contains("graphql", output);
-                Assert.Contains("protobuf", output);
+                var exactSubstringToken = shell == "fish" ? "exact-substring" : "--exact-substring";
+                var exactNameToken = shell == "fish" ? "exact-name" : "--exact-name";
+                Assert.Contains(exactSubstringToken, output);
+                Assert.Contains(exactNameToken, output);
+                if (shell is "bash" or "zsh")
+                {
+                    // Should contain dynamically generated languages, including newly added ones
+                    // 動的生成の言語リストに新しく追加した言語が含まれているか検証
+                    Assert.Contains("elixir", output);
+                    Assert.Contains("graphql", output);
+                    Assert.Contains("protobuf", output);
+                }
             }
             finally
             {

@@ -638,6 +638,111 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void ReadOnlyDb_NonExactAnalyzeSymbol_DoesNotDependOnHiddenExactAnchor()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_symbol_nonexact_hidden_exact_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            using (var seedDb = new DbContext(dbPath))
+            {
+                seedDb.InitializeSchema();
+                var writer = new DbWriter(seedDb.Connection);
+
+                var aRunFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/arun.py",
+                    Lang = "python",
+                    Size = 40,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = aRunFileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = "def ARun(): pass\n",
+                    }
+                ]);
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = aRunFileId,
+                        Kind = "function",
+                        Name = "ARun",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Signature = "def ARun():",
+                    }
+                ]);
+
+                var runFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/run.py",
+                    Lang = "python",
+                    Size = 38,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = runFileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = "def Run(): pass\n",
+                    }
+                ]);
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = runFileId,
+                        Kind = "function",
+                        Name = "Run",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Signature = "def Run():",
+                    }
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            using var readOnlyDb = new DbContext(fileUri);
+            readOnlyDb.TryMigrateForRead();
+            var reader = new DbReader(readOnlyDb.Connection, readOnlyDb.IsReadOnly);
+
+            var expected = Assert.Single(reader.SearchSymbols("run", limit: 1, exact: false));
+            var bundle = reader.AnalyzeSymbol("run", limit: 1, exact: false);
+
+            Assert.Null(bundle.ExactIndexAvailable);
+            Assert.Null(bundle.DegradedReason);
+            Assert.NotNull(bundle.File);
+            Assert.Equal(expected.Path, bundle.File!.Path);
+            var definition = Assert.Single(bundle.Definitions);
+            Assert.Equal(expected.Name, definition.Name);
+            Assert.Equal(expected.Path, definition.Path);
+            Assert.Equal("Run", definition.Name);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void UpdateMode_OnLegacyDb_MustNotStampReadiness()
     {
         // Update mode (--commits / --files) touches only a subset of files, so stamping

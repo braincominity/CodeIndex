@@ -266,6 +266,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_FindsAliasQualifiedExplicitInterfaceImplementations()
+    {
+        InsertIndexedFile("src/impl.cs", "csharp",
+            """
+            public interface IFoo
+            {
+                string Name();
+                object Create();
+            }
+
+            public class Impl : IFoo
+            {
+                global::System.String IFoo.Name() => "x";
+                Alias::Type IFoo.Create() => default;
+            }
+            """);
+
+        var nameResults = _reader.SearchSymbols("Name", lang: "csharp");
+        var createResults = _reader.SearchSymbols("Create", lang: "csharp");
+
+        Assert.Contains(nameResults, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "global::System.String");
+        Assert.Contains(createResults, s => s.Kind == "function" && s.Name == "Create" && s.ReturnType == "Alias::Type");
+    }
+
+    [Fact]
     public void SearchSymbols_ReturnsRichMetadataWhenAvailable()
     {
         var results = _reader.SearchSymbols("fetchData");
@@ -2023,6 +2048,55 @@ public class DbReaderTests : IDisposable
         Assert.Contains("indexed", analysis.GraphSupportReason);
         Assert.Contains(analysis.NearbySymbols, item => item.Name == "ApiClient");
         Assert.Contains(analysis.Callees, item => item.CalleeName == "fetch");
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_PrefersExactDefinitionAsPrimaryAnchorWhenSubstringMatchesOverlap()
+    {
+        InsertIndexedFile("src/Services/ILoggerService.cs", "csharp",
+            """
+            public interface ILoggerService
+            {
+                void Log(string message);
+            }
+            """);
+        InsertIndexedFile("src/Services/LoggerService.cs", "csharp",
+            """
+            public class LoggerService : ILoggerService
+            {
+                public void Log(string message) { }
+                public void Execute() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeSymbol("loggerservice", limit: 1, lang: "csharp");
+
+        Assert.NotNull(analysis.File);
+        Assert.Equal("src/Services/LoggerService.cs", analysis.File!.Path);
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("LoggerService", definition.Name);
+        Assert.Equal("src/Services/LoggerService.cs", definition.Path);
+        Assert.All(analysis.NearbySymbols, item => Assert.Equal("src/Services/LoggerService.cs", item.Path));
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_NonExactDoesNotUseFoldOnlyExactAnchor()
+    {
+        InsertIndexedFile("src/Intl/FullwidthRun.cs", "csharp",
+            """
+            public class Holder
+            {
+                public void Ｒｕｎ() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeSymbol("Run", limit: 1, lang: "csharp", exact: false);
+
+        Assert.Null(analysis.File);
+        Assert.Empty(analysis.Definitions);
+        Assert.Empty(analysis.NearbySymbols);
+        Assert.Null(analysis.ExactIndexAvailable);
+        Assert.Null(analysis.DegradedReason);
     }
 
     [Fact]

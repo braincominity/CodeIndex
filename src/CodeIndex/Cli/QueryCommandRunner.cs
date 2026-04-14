@@ -28,16 +28,21 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(options.ParseError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: search requires a query argument");
-            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]");
+            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, options.Exact);
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -66,14 +71,14 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, options.Exact), jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact), jsonOptions));
             }
             else
             {
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
@@ -93,32 +98,37 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(options.ParseError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: definition requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]");
+            Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
+            var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
             var exactSignal = reader.GetDefinitionExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
-                options.Exact,
+                exact,
                 () => reader.CountSearchSymbols(options.Query, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
                 () => reader.CountSearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                 () => reader.SearchSymbols(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                 r => r.Name);
-            WriteExactSymbolWarningIfNeeded(options.Exact, options.Json, exactSignal);
+            WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHint, exactSignal: options.Exact ? exactSignal : null).ToJsonString(jsonOptions)
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHint, exactSignal: exact ? exactSignal : null).ToJsonString(jsonOptions)
                         : "0");
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "definitions", exactZeroHint: exactZeroHint, exactSignal: options.Exact ? exactSignal : null).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "definitions", exactZeroHint: exactZeroHint, exactSignal: exact ? exactSignal : null).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No definitions found.");
@@ -139,7 +149,7 @@ public static class QueryCommandRunner
                         ["count"] = results.Count,
                         ["files"] = fc,
                     };
-                    if (options.Exact)
+                    if (exact)
                         AddExactJsonFields(payload, exactSignal);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -154,7 +164,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    if (options.Exact)
+                    if (exact)
                         WriteJsonResultWithExactSignal(r, exactSignal, jsonOptions);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
@@ -197,33 +207,38 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(options.ParseError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: references requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
-                options.Exact && reader._hasReferencesTable,
+                exact && reader._hasReferencesTable,
                 () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.SymbolName);
-            WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
+            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "references", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : (ExactQuerySignal?)null);
+                    WriteDegradedGraphZeroResult(reader, "references", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (options.Json)
                     WriteGraphZeroJsonResult(reader, "references", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : (ExactQuerySignal?)null,
+                        exact ? exactSignal : (ExactQuerySignal?)null,
                         exactZeroHint);
                 else if (!options.Json)
                 {
@@ -247,7 +262,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    if (options.Exact)
+                    if (exact)
                         WriteGraphJsonResult(r, exactSignal, jsonOptions);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
@@ -276,33 +291,38 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(options.ParseError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callers requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+            var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
-                options.Exact && reader._hasReferencesTable,
+                exact && reader._hasReferencesTable,
                 () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CalleeName);
-            WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
+            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "callers", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : (ExactQuerySignal?)null);
+                    WriteDegradedGraphZeroResult(reader, "callers", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : (ExactQuerySignal?)null,
+                        exact ? exactSignal : (ExactQuerySignal?)null,
                         exactZeroHint);
                 else if (!options.Json)
                 {
@@ -326,7 +346,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    if (options.Exact)
+                    if (exact)
                         WriteGraphJsonResult(r, exactSignal, jsonOptions);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
@@ -351,33 +371,38 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(options.ParseError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callees requires a caller query argument");
-            Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+            var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
-                options.Exact && reader._hasReferencesTable,
+                exact && reader._hasReferencesTable,
                 () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CallerName);
-            WriteExactGraphWarningIfNeeded(options.Exact, options.Json, exactSignal);
+            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "callees", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : (ExactQuerySignal?)null);
+                    WriteDegradedGraphZeroResult(reader, "callees", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callees", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : (ExactQuerySignal?)null,
+                        exact ? exactSignal : (ExactQuerySignal?)null,
                         exactZeroHint);
                 else if (!options.Json)
                 {
@@ -401,7 +426,7 @@ public static class QueryCommandRunner
             {
                 foreach (var r in results)
                 {
-                    if (options.Exact)
+                    if (exact)
                         WriteGraphJsonResult(r, exactSignal, jsonOptions);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
@@ -446,6 +471,11 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(options.ParseError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryResolveNameExactMode(options, "symbols", out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
         var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
         if (hadExplicitInput && symbolQueries == null)
         {
@@ -463,18 +493,18 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, options.Exact);
-            var hasExactPredicate = options.Exact && symbolQueries is { Count: > 0 };
+            var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
+            var hasExactPredicate = exact && symbolQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal();
             var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
                 ? BuildExactZeroHint(
-                    options.Exact,
+                    exact,
                     () => reader.AnySearchSymbols(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     r => r.Name)
                 : BuildExactZeroHint(
-                    options.Exact && symbolQueries != null && symbolQueries.Count > 0,
+                    exact && symbolQueries != null && symbolQueries.Count > 0,
                     () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
                     () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
@@ -914,17 +944,22 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(options.ParseError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryResolveNameExactMode(options, "inspect", out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: inspect requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
+            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
-            var exactSignal = options.Exact && analysis.ExactIndexAvailable.HasValue
+            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var exactSignal = exact && analysis.ExactIndexAvailable.HasValue
                 ? new ExactQuerySignal(
                     analysis.ExactIndexAvailable.Value,
                     analysis.ExactHasMissingIndex ?? false,
@@ -933,7 +968,7 @@ public static class QueryCommandRunner
                 : (ExactQuerySignal?)null;
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
             if (exactSignal.HasValue)
-                WriteExactBundleWarningIfNeeded(options.Exact, options.Json, exactSignal.Value);
+                WriteExactBundleWarningIfNeeded(exact, options.Json, exactSignal.Value);
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
@@ -1591,6 +1626,8 @@ public static class QueryCommandRunner
         DateTime? since = null;
         bool noDedup = false;
         bool exact = false;
+        bool exactName = false;
+        bool exactSubstring = false;
         string? parseError = null;
         var extraNames = new List<string>();
 
@@ -1646,6 +1683,12 @@ public static class QueryCommandRunner
                     break;
                 case "--exact":
                     exact = true;
+                    break;
+                case "--exact-name":
+                    exactName = true;
+                    break;
+                case "--exact-substring":
+                    exactSubstring = true;
                     break;
                 case "--depth" when i + 1 < args.Length:
                     contextAfter = ParseNonNegativeInt(args[++i], "--depth"); // reused as depth for impact / impact用に再利用
@@ -1733,9 +1776,39 @@ public static class QueryCommandRunner
             Since = since,
             NoDedup = noDedup,
             Exact = exact,
+            ExactName = exactName,
+            ExactSubstring = exactSubstring,
             ExtraNames = extraNames,
             ParseError = parseError,
         };
+    }
+
+    private static bool TryResolveSearchExactMode(QueryCommandOptions options, out bool exact, out string? error)
+    {
+        if (options.ExactName)
+        {
+            exact = false;
+            error = "Error: --exact-name applies to name-based commands (symbols/definition/references/callers/callees/inspect), not search. Use --exact-substring for search, or keep --exact for backward compatibility.";
+            return false;
+        }
+
+        exact = options.Exact || options.ExactSubstring;
+        error = null;
+        return true;
+    }
+
+    private static bool TryResolveNameExactMode(QueryCommandOptions options, string commandName, out bool exact, out string? error)
+    {
+        if (options.ExactSubstring)
+        {
+            exact = false;
+            error = $"Error: --exact-substring only applies to search. Use --exact-name for {commandName}, or keep --exact for backward compatibility.";
+            return false;
+        }
+
+        exact = options.Exact || options.ExactName;
+        error = null;
+        return true;
     }
 
     private static int WithDb(string dbPath, Func<DbReader, int> action)
@@ -2182,6 +2255,8 @@ public sealed class QueryCommandOptions
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
     public bool Exact { get; init; }
+    public bool ExactName { get; init; }
+    public bool ExactSubstring { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }
 }

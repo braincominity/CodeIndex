@@ -277,6 +277,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_ExactAliasParametersAreExposed()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var symbolsTool = tools.First(t => t!["name"]!.GetValue<string>() == "symbols")!;
+
+        Assert.NotNull(searchTool["inputSchema"]!["properties"]!["exactSubstring"]);
+        Assert.NotNull(searchTool["inputSchema"]!["properties"]!["exact"]);
+        Assert.NotNull(symbolsTool["inputSchema"]!["properties"]!["exactName"]);
+        Assert.NotNull(symbolsTool["inputSchema"]!["properties"]!["exact"]);
+    }
+
+    [Fact]
     public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -1411,6 +1427,45 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_ExactSubstringAliasMatchesBackwardCompatibleExact()
+    {
+        InsertIndexedFile("src/search.cs", "csharp", "void Run() { }\nvoid RunAsync() { Run(); }\n");
+
+        var exactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run();","exact":true}}}""")!;
+        var aliasRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run();","exactSubstring":true}}}""")!;
+
+        var exactResponse = _server.HandleMessage(exactRequest)!;
+        var aliasResponse = _server.HandleMessage(aliasRequest)!;
+
+        Assert.Equal(
+            exactResponse["result"]!["structuredContent"]!.ToJsonString(),
+            aliasResponse["result"]!["structuredContent"]!.ToJsonString());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_RejectsExactNameAlias()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","exactName":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("exactSubstring", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_AllowsFalseExactNameAlias()
+    {
+        InsertIndexedFile("src/search_false_alias.cs", "csharp", "void Run() { }\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","exactName":false}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.NotNull(response["result"]!["structuredContent"]!["results"]);
+    }
+
+    [Fact]
     public void ToolsCall_Symbols_ReturnsResults()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App"}}}""")!;
@@ -1421,6 +1476,45 @@ public class McpServerTests : IDisposable
         Assert.Equal("App", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
         Assert.Equal("class", response["result"]!["structuredContent"]!["results"]![0]!["kind"]!.GetValue<string>());
         Assert.Equal("public class App { public void Run() { } }", response["result"]!["structuredContent"]!["results"]![0]!["signature"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_ExactNameAliasMatchesBackwardCompatibleExact()
+    {
+        InsertIndexedFile("src/exact.cs", "csharp", "public class ExactApp { public void Run() { } public void RunAsync() { } }");
+
+        var exactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exact":true}}}""")!;
+        var aliasRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exactName":true}}}""")!;
+
+        var exactResponse = _server.HandleMessage(exactRequest)!;
+        var aliasResponse = _server.HandleMessage(aliasRequest)!;
+
+        Assert.Equal(
+            exactResponse["result"]!["structuredContent"]!.ToJsonString(),
+            aliasResponse["result"]!["structuredContent"]!.ToJsonString());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_RejectsExactSubstringAlias()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exactSubstring":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("exactName", text);
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_AllowsFalseExactSubstringAlias()
+    {
+        InsertIndexedFile("src/symbol_false_alias.cs", "csharp", "public class ExactApp { public void Run() { } }\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exactSubstring":false}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.NotNull(response["result"]!["structuredContent"]!["results"]);
     }
 
     [Theory]
