@@ -97,6 +97,27 @@ static bool IsProjectPathArg(string arg) =>
 int RunMcp(string[] cmdArgs)
 {
     var options = QueryCommandRunner.ParseArgs(cmdArgs, jsonDefault: true);
+    if (options.ParseError != null)
+    {
+        Console.Error.WriteLine(options.ParseError);
+        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>]");
+        return CommandExitCodes.UsageError;
+    }
+
+    for (var i = 0; i < cmdArgs.Length; i++)
+    {
+        if (cmdArgs[i] == "--db")
+        {
+            i++;
+            continue;
+        }
+
+        Console.Error.WriteLine($"Error: {cmdArgs[i]} is not supported for mcp.");
+        Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, or run `cdidx mcp` to use the default DB.");
+        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>]");
+        return CommandExitCodes.UsageError;
+    }
+
     var server = new McpServer(options.DbPath, appVersion);
     server.RunAsync().GetAwaiter().GetResult();
     return CommandExitCodes.Success;
