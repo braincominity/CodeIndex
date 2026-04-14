@@ -258,6 +258,33 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_OutputReportsReadinessInJsonAndHumanModes()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var (jsonExitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            var (humanExitCode, output) = RunAndCaptureOutput([projectRoot]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("Graph   : ready", output);
+            Assert.Contains("Issues  : ready", output);
+            Assert.Contains("Fold    : ready", output);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_WithAbsoluteDbPathInsideProject_WritesRepoRelativePatternToGitExclude()
     {
         var projectRoot = CreateTempProject();
