@@ -42,7 +42,7 @@ public partial class McpServer
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
             + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
             + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
-            + "Use 'impact_analysis' to compute transitive callers of a symbol — the ripple effect of changing it. Returns callers at each BFS depth level. "
+            + "Use 'impact_analysis' to compute transitive callers of a symbol. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'. "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 

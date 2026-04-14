@@ -146,6 +146,9 @@ public class McpServerTests : IDisposable
         // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
         Assert.Contains("index", instructions);
         Assert.Contains("backfill_fold", instructions);
+        Assert.Contains("impact_mode", instructions);
+        Assert.Contains("file_impacts", instructions);
+        Assert.Contains("heuristic file-level dependency hints", instructions);
         // Verify language list comes from ReferenceExtractor / 言語リストがReferenceExtractorから来ることを検証
         foreach (var lang in ReferenceExtractor.GetSupportedLanguages())
         {
@@ -269,6 +272,24 @@ public class McpServerTests : IDisposable
         Assert.NotNull(properties["path"]);
         Assert.NotNull(properties["excludePaths"]);
         Assert.NotNull(properties["excludeTests"]);
+    }
+
+    [Fact]
+    public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var impactTool = tools.First(t => t!["name"]!.GetValue<string>() == "impact_analysis")!;
+        var description = impactTool["description"]!.GetValue<string>();
+        var limitDescription = impactTool["inputSchema"]!["properties"]!["limit"]!["description"]!.GetValue<string>();
+
+        Assert.Contains("heuristic file-level dependency hints", description);
+        Assert.Contains("impact_mode", description);
+        Assert.Contains("file_impacts", description);
+        Assert.Contains("heuristic file-level dependency hints", limitDescription);
+        Assert.Contains("truncated", limitDescription);
     }
 
     [Fact]
