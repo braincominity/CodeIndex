@@ -374,6 +374,10 @@ public class IndexCommandRunnerTests
             var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--files", "app.cs"], otherCwd);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("graph_table_available=false", errorOutput);
+            Assert.Contains("issues_table_available=false", errorOutput);
+            Assert.Contains("fold_ready=false", errorOutput);
             Assert.Contains($"cdidx status --db \"{dbPath}\" --json", errorOutput);
         }
         finally
@@ -416,6 +420,10 @@ public class IndexCommandRunnerTests
             var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--db", customDbPath, "--files", "app.cs"], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("graph_table_available=false", errorOutput);
+            Assert.Contains("issues_table_available=false", errorOutput);
+            Assert.Contains("fold_ready=false", errorOutput);
             Assert.Contains($"cdidx status --db \"{customDbPath}\" --json", errorOutput);
         }
         finally
@@ -450,6 +458,44 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot], projectRoot);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("fold_ready=false", errorOutput);
+            Assert.DoesNotContain("graph_table_available=false", errorOutput);
+            Assert.DoesNotContain("issues_table_available=false", errorOutput);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1096,12 +1142,20 @@ public class IndexCommandRunnerTests
 
     private static string GetBuiltCliDllPath()
     {
+        var tfm = new DirectoryInfo(AppContext.BaseDirectory).Name;
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name;
+        var fallbackConfigurations = new[] { configuration, "Debug", "Release" }
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.Ordinal);
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null)
         {
-            var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", "Debug", "net8.0", "cdidx.dll");
-            if (File.Exists(candidate))
-                return candidate;
+            foreach (var candidateConfiguration in fallbackConfigurations)
+            {
+                var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", candidateConfiguration!, tfm, "cdidx.dll");
+                if (File.Exists(candidate))
+                    return candidate;
+            }
             dir = dir.Parent;
         }
 
