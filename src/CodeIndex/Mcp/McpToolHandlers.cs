@@ -635,6 +635,7 @@ public partial class McpServer
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
+            AddExactSignalAliases(structured);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["lang"] = lang;
@@ -654,9 +655,23 @@ public partial class McpServer
 
     private static void AddExactGraphSignal(JsonObject payload, ExactQuerySignal signal)
     {
-        payload["exactIndexAvailable"] = signal.ExactIndexAvailable;
+        payload["exact_index_available"] = signal.ExactIndexAvailable;
         if (signal.DegradedReason != null)
-            payload["degradedReason"] = signal.DegradedReason;
+            payload["degraded_reason"] = signal.DegradedReason;
+        AddExactSignalAliases(payload);
+    }
+
+    private static void AddExactSignalAliases(JsonObject payload)
+    {
+        if (payload["exact_index_available"] is JsonNode snakeExact && payload["exactIndexAvailable"] is null)
+            payload["exactIndexAvailable"] = snakeExact.DeepClone();
+        else if (payload["exactIndexAvailable"] is JsonNode camelExact && payload["exact_index_available"] is null)
+            payload["exact_index_available"] = camelExact.DeepClone();
+
+        if (payload["degraded_reason"] is JsonNode snakeReason && payload["degradedReason"] is null)
+            payload["degradedReason"] = snakeReason.DeepClone();
+        else if (payload["degradedReason"] is JsonNode camelReason && payload["degraded_reason"] is null)
+            payload["degraded_reason"] = camelReason.DeepClone();
     }
 
     private JsonNode ExecuteStatus(JsonNode? id)
