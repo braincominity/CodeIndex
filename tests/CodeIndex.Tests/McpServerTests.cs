@@ -357,27 +357,28 @@ public class McpServerTests : IDisposable
     public void ToolsCall_Files_NoResults_OnEmptyIndex_EmitsNullIndexedAt()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
-        using var db = new DbContext(dbPath);
-        db.InitializeSchema();
-        var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
         try
         {
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
-            var response = server.HandleMessage(request)!;
-            using var document = JsonDocument.Parse(response.ToJsonString());
-            var structured = document.RootElement.GetProperty("result").GetProperty("structuredContent");
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
+                var response = server.HandleMessage(request)!;
+                using var document = JsonDocument.Parse(response.ToJsonString());
+                var structured = document.RootElement.GetProperty("result").GetProperty("structuredContent");
 
-            Assert.Equal(0, structured.GetProperty("count").GetInt32());
-            Assert.Equal(0, structured.GetProperty("results").GetArrayLength());
-            Assert.Equal(0, structured.GetProperty("indexed_file_count").GetInt64());
-            Assert.True(structured.GetProperty("freshness_available").GetBoolean());
-            Assert.True(structured.TryGetProperty("indexed_at", out var indexedAt));
-            Assert.Equal(JsonValueKind.Null, indexedAt.ValueKind);
+                Assert.Equal(0, structured.GetProperty("count").GetInt32());
+                Assert.Equal(0, structured.GetProperty("results").GetArrayLength());
+                Assert.Equal(0, structured.GetProperty("indexed_file_count").GetInt64());
+                Assert.True(structured.GetProperty("freshness_available").GetBoolean());
+                Assert.True(structured.TryGetProperty("indexed_at", out var indexedAt));
+                Assert.Equal(JsonValueKind.Null, indexedAt.ValueKind);
+            }
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -721,25 +722,25 @@ public class McpServerTests : IDisposable
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
         try
         {
-            using var db = new DbContext(dbPath);
-            db.InitializeSchema();
-            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
-            var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
-            var response = server.HandleMessage(request)!;
+                var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
+                var response = server.HandleMessage(request)!;
 
-            var structured = response["result"]!["structuredContent"]!;
-            Assert.Equal(0, structured["count"]!.GetValue<int>());
-            Assert.Equal(0, structured["indexed_file_count"]!.GetValue<long>());
-            Assert.True(structured.AsObject().ContainsKey("indexed_at"));
-            Assert.Null(structured["indexed_at"]);
-            Assert.Empty(structured[resultsKey]!.AsArray());
+                var structured = response["result"]!["structuredContent"]!;
+                Assert.Equal(0, structured["count"]!.GetValue<int>());
+                Assert.Equal(0, structured["indexed_file_count"]!.GetValue<long>());
+                Assert.True(structured.AsObject().ContainsKey("indexed_at"));
+                Assert.Null(structured["indexed_at"]);
+                Assert.Empty(structured[resultsKey]!.AsArray());
+            }
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -1479,24 +1480,31 @@ public class McpServerTests : IDisposable
 
     private void DeleteDbPath()
     {
-        if (!File.Exists(_dbPath))
+        DeleteFileRobust(_dbPath);
+    }
+
+    private static void DeleteFileRobust(string path)
+    {
+        if (!File.Exists(path))
             return;
 
-        try
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            File.Delete(_dbPath);
-        }
-        catch (IOException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
+            SqliteConnection.ClearAllPools();
+
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 
