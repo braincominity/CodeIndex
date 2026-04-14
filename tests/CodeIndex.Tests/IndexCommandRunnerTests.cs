@@ -60,6 +60,19 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_MissingDirectory_JsonIncludesHint()
+    {
+        var missingProject = Path.Combine(Path.GetTempPath(), $"cdidx_missing_project_{Guid.NewGuid():N}");
+
+        var (exitCode, json) = RunAndCaptureJson([missingProject, "--json"]);
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Contains("directory not found", json.GetProperty("message").GetString());
+        Assert.Contains("rerun `cdidx index <projectPath>`", json.GetProperty("hint").GetString());
+    }
+
+    [Fact]
     public void Run_RebuildWithCommits_PrintsActionableHint()
     {
         var projectRoot = CreateTempProject();
@@ -71,6 +84,25 @@ public class IndexCommandRunnerTests
             Assert.Contains("--rebuild cannot be used with --commits or --files", stderr);
             Assert.Contains("drop `--rebuild`", stderr);
             Assert.Contains("cdidx index <projectPath> --rebuild", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_RebuildWithCommits_JsonIncludesHint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("--rebuild cannot be used with --commits or --files", json.GetProperty("message").GetString());
+            Assert.Contains("cdidx index <projectPath> --rebuild", json.GetProperty("hint").GetString());
         }
         finally
         {
@@ -102,6 +134,33 @@ public class IndexCommandRunnerTests
             {
                 Console.SetOut(originalOut);
                 Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_MissingDb_JsonIncludesHint()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var stdout = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb, "--json"], _jsonOptions);
+                using var document = JsonDocument.Parse(stdout.ToString());
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Contains("database not found", json.GetProperty("message").GetString());
+                Assert.Contains("Point `--db` at an existing `codeindex.db`", json.GetProperty("hint").GetString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
             }
         }
     }
@@ -241,6 +300,52 @@ public class IndexCommandRunnerTests
         {
             if (File.Exists(outsideFile))
                 File.Delete(outsideFile);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_WithIndexingErrors_PrintsRecoveryWarning()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllBytes(Path.Combine(projectRoot, "huge.py"), new byte[10 * 1024 * 1024 + 1]);
+
+            var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot], projectRoot);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Some files failed to index", stderr);
+            Assert.Contains("rerun `cdidx index", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithIndexingErrors_PrintsRecoveryWarning()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllBytes(Path.Combine(projectRoot, "huge.py"), new byte[10 * 1024 * 1024 + 1]);
+
+            var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot, "--files", "huge.py"], projectRoot);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Some files failed to update", stderr);
+            Assert.Contains("rerun `cdidx index", stderr);
+        }
+        finally
+        {
             DeleteDirectory(projectRoot);
         }
     }
