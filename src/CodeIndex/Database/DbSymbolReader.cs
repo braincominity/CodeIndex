@@ -31,9 +31,11 @@ public partial class DbReader
         "[jsonignore",
         "[ignoredatamember",
     ];
+    private const int UnusedAttributeContextWindow = 16;
     private const int UnusedPublicOverfetchMultiplier = 16;
     private const int UnusedPublicOverfetchMinimum = 64;
     private const int UnusedPublicOverfetchMaximum = 1024;
+    private const int UnusedPublicCandidateBudget = 2048;
 
     /// <summary>
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
@@ -541,7 +543,10 @@ public partial class DbReader
         var publicBatchSize = Math.Min(
             Math.Max(targetCount * UnusedPublicOverfetchMultiplier, UnusedPublicOverfetchMinimum),
             UnusedPublicOverfetchMaximum);
-        while (publicOrExported.Count < targetCount || reflectionOrConfig.Count < targetCount)
+        var publicFetchBudget = Math.Max(publicBatchSize, UnusedPublicCandidateBudget);
+        var publicCandidatesFetched = 0;
+        while ((publicOrExported.Count < targetCount || reflectionOrConfig.Count < targetCount)
+            && publicCandidatesFetched < publicFetchBudget)
         {
             var batch = FetchUnusedCandidates(publicBatchSize, 2, publicBucketOffset, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
             if (batch.Count == 0)
@@ -556,6 +561,7 @@ public partial class DbReader
             }
 
             publicBucketOffset += batch.Count;
+            publicCandidatesFetched += batch.Count;
             if (batch.Count < publicBatchSize)
                 break;
         }
@@ -780,8 +786,8 @@ public partial class DbReader
         if (startLine <= 1)
             return false;
 
-        var excerptStart = Math.Max(1, startLine - 16);
-        var excerpt = GetExcerpt(path, excerptStart, startLine + 16);
+        var excerptStart = Math.Max(1, startLine - UnusedAttributeContextWindow);
+        var excerpt = GetExcerpt(path, excerptStart, startLine + UnusedAttributeContextWindow);
         if (excerpt == null)
             return false;
 
@@ -790,51 +796,104 @@ public partial class DbReader
         if (currentIndex < 0 || currentIndex >= lines.Length)
             return false;
 
-        var attributeLines = new List<string>();
-        var currentTrimmed = lines[currentIndex].Trim();
-        if (currentTrimmed.StartsWith("[", StringComparison.Ordinal))
-        {
-            var startIndex = currentIndex;
-            while (startIndex > 0 && IsBlankOrAttributeLine(lines[startIndex - 1]))
-                startIndex--;
-
-            var endIndex = currentIndex;
-            while (endIndex + 1 < lines.Length && IsBlankOrAttributeLine(lines[endIndex + 1]))
-                endIndex++;
-
-            for (int i = startIndex; i <= endIndex; i++)
-            {
-                var trimmed = lines[i].Trim();
-                if (trimmed.StartsWith("[", StringComparison.Ordinal))
-                    attributeLines.Add(trimmed.ToLowerInvariant());
-            }
-        }
-        else
-        {
-            for (int i = currentIndex - 1; i >= 0; i--)
-            {
-                var trimmed = lines[i].Trim();
-                if (trimmed.Length == 0)
-                    continue;
-                if (!trimmed.StartsWith("[", StringComparison.Ordinal))
-                    break;
-                attributeLines.Add(trimmed.ToLowerInvariant());
-            }
-        }
-
-        if (attributeLines.Count == 0)
+        var attributeBlock = GetAdjacentAttributeBlock(lines, currentIndex);
+        if (attributeBlock.Count == 0)
             return false;
 
-        if (attributeLines.Any(line => ReflectionIgnoreAttributeMarkers.Any(marker => line.Contains(marker, StringComparison.Ordinal))))
+        var loweredBlock = string.Join("\n", attributeBlock).ToLowerInvariant();
+        if (ReflectionIgnoreAttributeMarkers.Any(marker => loweredBlock.Contains(marker, StringComparison.Ordinal)))
             return false;
 
-        return attributeLines.Any(line => ReflectionAttributeMarkers.Any(marker => line.Contains(marker, StringComparison.Ordinal)));
+        return ReflectionAttributeMarkers.Any(marker => loweredBlock.Contains(marker, StringComparison.Ordinal));
     }
 
-    private static bool IsBlankOrAttributeLine(string line)
+    private static List<string> GetAdjacentAttributeBlock(string[] lines, int anchorIndex)
     {
-        var trimmed = line.Trim();
-        return trimmed.Length == 0 || trimmed.StartsWith("[", StringComparison.Ordinal);
+        var declarationIndex = anchorIndex;
+        if (LooksLikeAttributeBoundaryLine(lines[anchorIndex]))
+        {
+            declarationIndex = FindNextDeclarationLine(lines, anchorIndex + 1);
+            if (declarationIndex < 0)
+                return [];
+        }
+
+        var attributeBottom = FindPreviousNonBlankLine(lines, declarationIndex - 1);
+        if (attributeBottom < 0 || !LooksLikeAttributeBoundaryLine(lines[attributeBottom]))
+            return [];
+
+        var block = new List<string>();
+        var bracketDepth = 0;
+        var sawBracket = false;
+
+        for (int i = attributeBottom; i >= 0; i--)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.Length == 0)
+            {
+                if (sawBracket)
+                    block.Add(trimmed);
+                continue;
+            }
+
+            var hasBracketToken = LooksLikeAttributeBoundaryLine(trimmed);
+            if (!sawBracket)
+            {
+                if (!hasBracketToken)
+                    return [];
+                sawBracket = true;
+            }
+            else if (bracketDepth == 0 && !hasBracketToken)
+            {
+                break;
+            }
+
+            block.Add(trimmed);
+            bracketDepth += CountChar(trimmed, ']') - CountChar(trimmed, '[');
+            if (bracketDepth < 0)
+                bracketDepth = 0;
+        }
+
+        block.Reverse();
+        return block;
+    }
+
+    private static int FindNextDeclarationLine(string[] lines, int startIndex)
+    {
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            if (lines[i].Trim().Length > 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindPreviousNonBlankLine(string[] lines, int startIndex)
+    {
+        for (int i = startIndex; i >= 0; i--)
+        {
+            if (lines[i].Trim().Length > 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool LooksLikeAttributeBoundaryLine(string line)
+    {
+        return line.IndexOf('[') >= 0 || line.IndexOf(']') >= 0;
+    }
+
+    private static int CountChar(string text, char value)
+    {
+        var count = 0;
+        foreach (var ch in text)
+        {
+            if (ch == value)
+                count++;
+        }
+
+        return count;
     }
 
     private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)

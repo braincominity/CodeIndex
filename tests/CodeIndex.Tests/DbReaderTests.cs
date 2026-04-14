@@ -1673,6 +1673,72 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_MultilineReflectionAttribute_IsClassifiedAsSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_multiline_fixture.cs",
+            Lang = "csharp",
+            Size = 240,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 9,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName(
+                        "full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 7,
+                StartLine = 5,
+                EndLine = 7,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_multiline_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
+        Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_IgnoreAttributes_DoNotClassifyAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -2138,6 +2204,86 @@ public class DbReaderTests : IDisposable
             pathPatterns: ["reflection_noise_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Contains(unused, symbol => symbol.Name == "FullName" && symbol.UnusedBucket == "reflection_or_config_suspect");
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_BoundedPublicOverfetch_DoesNotScanLateReflectionSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_budget_fixture.cs",
+            Lang = "csharp",
+            Size = 12000,
+            Lines = 2600,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 2405,
+                EndLine = 2412,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class LateDto
+                {
+                    [JsonPropertyName("late_name")]
+                    public string LateName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+
+        var symbols = new List<SymbolRecord>();
+        for (var i = 0; i < 2200; i++)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = $"PublicNoise{i:D4}",
+                Line = 20 + i,
+                StartLine = 20 + i,
+                EndLine = 20 + i,
+                Signature = $"public class PublicNoise{i:D4}",
+                Visibility = "public",
+            });
+        }
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "class",
+            Name = "LateDto",
+            Line = 2407,
+            StartLine = 2407,
+            EndLine = 2410,
+            Signature = "public class LateDto",
+            Visibility = "public",
+        });
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "property",
+            Name = "LateName",
+            Line = 2409,
+            StartLine = 2409,
+            EndLine = 2409,
+            Signature = "public string LateName { get; set; } = string.Empty;",
+            Visibility = "public",
+            ContainerKind = "class",
+            ContainerName = "LateDto",
+        });
+        _writer.InsertSymbols(symbols);
+
+        var unused = _reader.GetUnusedSymbols(limit: 4, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_budget_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "LateName");
+        Assert.Equal(["public_or_exported_no_refs", "public_or_exported_no_refs", "public_or_exported_no_refs", "public_or_exported_no_refs"],
+            unused.Select(symbol => symbol.UnusedBucket).ToArray());
     }
 
     [Fact]
