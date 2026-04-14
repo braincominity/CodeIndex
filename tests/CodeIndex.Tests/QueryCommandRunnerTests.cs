@@ -338,6 +338,32 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonMarksQualifiedAndSuffixedAttributesAsSuspect()
+    {
+        var (projectRoot, dbPath) = CreateQualifiedReflectionUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", symbols["QualifiedName"].GetProperty("unused_bucket").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols["SuffixedName"].GetProperty("unused_bucket").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols["IgnoredName"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonDiversifiesReflectionSuspectBeforeLimit()
     {
         var (projectRoot, dbPath) = CreateReflectionDiversifiedUnusedFixtureDb();
@@ -503,6 +529,29 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_CountHumanMissingGraphTable_WarnsDegradedZero()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_count_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.Contains("degraded", stderr);
+            Assert.Contains("symbol_references table missing", stderr);
         }
         finally
         {
@@ -1485,6 +1534,102 @@ public class QueryCommandRunnerTests
                 StartLine = 7,
                 EndLine = 7,
                 Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateQualifiedReflectionUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_qualified");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_qualified_fixture.cs",
+            Lang = "csharp",
+            Size = 360,
+            Lines = 12,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 12,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [System.Text.Json.Serialization.JsonPropertyName("full_name")]
+                    public string QualifiedName { get; set; } = string.Empty;
+                    [JsonPropertyNameAttribute("display_name")]
+                    public string SuffixedName { get; set; } = string.Empty;
+                    [System.Text.Json.Serialization.JsonIgnoreAttribute]
+                    public string IgnoredName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 10,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "QualifiedName",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string QualifiedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "SuffixedName",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "public string SuffixedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "IgnoredName",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string IgnoredName { get; set; } = string.Empty;",
                 Visibility = "public",
                 ContainerKind = "class",
                 ContainerName = "UserDto",

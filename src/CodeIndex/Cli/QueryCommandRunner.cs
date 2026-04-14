@@ -985,6 +985,7 @@ public static class QueryCommandRunner
                 else
                 {
                     Console.WriteLine($"{countSummary.Count}");
+                    WriteDegradedGraphZeroResult("unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return CommandExitCodes.Success;
             }

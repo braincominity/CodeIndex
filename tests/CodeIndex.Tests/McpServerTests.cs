@@ -1193,6 +1193,108 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_ClassifiesQualifiedAndSuffixedAttributesAsSuspect()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_qualified_fixture.cs",
+            Lang = "csharp",
+            Size = 360,
+            Lines = 12,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 12,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [System.Text.Json.Serialization.JsonPropertyName("full_name")]
+                    public string QualifiedName { get; set; } = string.Empty;
+                    [JsonPropertyNameAttribute("display_name")]
+                    public string SuffixedName { get; set; } = string.Empty;
+                    [System.Text.Json.Serialization.JsonIgnoreAttribute]
+                    public string IgnoredName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 10,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "QualifiedName",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string QualifiedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "SuffixedName",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "public string SuffixedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "IgnoredName",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string IgnoredName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_qualified_fixture.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var symbols = response["result"]!["structuredContent"]!["symbols"]!
+            .AsArray()
+            .ToDictionary(symbol => symbol!["name"]!.GetValue<string>(), StringComparer.Ordinal);
+        Assert.Equal("reflection_or_config_suspect", symbols["QualifiedName"]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols["SuffixedName"]!["unusedBucket"]!.GetValue<string>());
+        Assert.Equal("public_or_exported_no_refs", symbols["IgnoredName"]!["unusedBucket"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_MissingGraphTable_MarksResponseDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_missing_graph");

@@ -1805,6 +1805,104 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_QualifiedAndSuffixedAttributes_AreClassifiedCorrectly()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_qualified_fixture.cs",
+            Lang = "csharp",
+            Size = 420,
+            Lines = 14,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 13,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [System.Text.Json.Serialization.JsonPropertyName("full_name")]
+                    public string QualifiedName { get; set; } = string.Empty;
+
+                    [JsonPropertyNameAttribute("display_name")]
+                    public string SuffixedName { get; set; } = string.Empty;
+
+                    [System.Text.Json.Serialization.JsonIgnoreAttribute]
+                    public string IgnoredName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 12,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "QualifiedName",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string QualifiedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "SuffixedName",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 9,
+                Signature = "public string SuffixedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "IgnoredName",
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
+                Signature = "public string IgnoredName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_qualified_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "QualifiedName").UnusedBucket);
+        Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "SuffixedName").UnusedBucket);
+        Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "IgnoredName").UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_IgnoreAttributes_DoNotClassifyAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord

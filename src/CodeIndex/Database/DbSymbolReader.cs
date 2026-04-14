@@ -13,24 +13,24 @@ public partial class DbReader
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
     private const string UnusedBucketReflectionOrConfig = "reflection_or_config_suspect";
-    private static readonly string[] ReflectionAttributeMarkers =
-    [
-        "[jsonpropertyname(",
-        "[jsonproperty(",
-        "[jsoninclude",
-        "[datamember",
-        "[bsonelement",
-        "[bsonid",
-        "[xmlelement",
-        "[xmlattribute",
-        "[yamlmember",
-        "[column(",
-    ];
-    private static readonly string[] ReflectionIgnoreAttributeMarkers =
-    [
-        "[jsonignore",
-        "[ignoredatamember",
-    ];
+    private static readonly HashSet<string> ReflectionAttributeNames = new(StringComparer.Ordinal)
+    {
+        "jsonpropertyname",
+        "jsonproperty",
+        "jsoninclude",
+        "datamember",
+        "bsonelement",
+        "bsonid",
+        "xmlelement",
+        "xmlattribute",
+        "yamlmember",
+        "column",
+    };
+    private static readonly HashSet<string> ReflectionIgnoreAttributeNames = new(StringComparer.Ordinal)
+    {
+        "jsonignore",
+        "ignoredatamember",
+    };
     private const int UnusedAttributeContextWindow = 16;
     private const int UnusedPublicOverfetchMultiplier = 16;
     private const int UnusedPublicOverfetchMinimum = 64;
@@ -800,11 +800,11 @@ public partial class DbReader
         if (attributeBlock.Count == 0)
             return false;
 
-        var loweredBlock = string.Join("\n", attributeBlock).ToLowerInvariant();
-        if (ReflectionIgnoreAttributeMarkers.Any(marker => loweredBlock.Contains(marker, StringComparison.Ordinal)))
+        var attributeNames = ExtractNormalizedAttributeNames(attributeBlock);
+        if (attributeNames.Overlaps(ReflectionIgnoreAttributeNames))
             return false;
 
-        return ReflectionAttributeMarkers.Any(marker => loweredBlock.Contains(marker, StringComparison.Ordinal));
+        return attributeNames.Overlaps(ReflectionAttributeNames);
     }
 
     private static List<string> GetAdjacentAttributeBlock(string[] lines, int anchorIndex)
@@ -887,6 +887,89 @@ public partial class DbReader
             || trimmed.StartsWith("/*", StringComparison.Ordinal)
             || trimmed == "*/"
             || trimmed.StartsWith('*');
+    }
+
+    private static HashSet<string> ExtractNormalizedAttributeNames(IReadOnlyList<string> attributeBlock)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var content = string.Join("\n", attributeBlock.Where(line => !IsTriviaLine(line)));
+        var parenDepth = 0;
+
+        for (int i = 0; i < content.Length; i++)
+        {
+            var ch = content[i];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+
+            if (parenDepth != 0 || (ch != '[' && ch != ','))
+                continue;
+
+            if (!TryReadAttributeIdentifier(content, ref i, out var identifier))
+                continue;
+
+            var normalized = NormalizeAttributeIdentifier(identifier);
+            if (normalized != null)
+                names.Add(normalized);
+        }
+
+        return names;
+    }
+
+    private static bool TryReadAttributeIdentifier(string content, ref int index, out string? identifier)
+    {
+        identifier = null;
+        var i = index + 1;
+        while (i < content.Length && char.IsWhiteSpace(content[i]))
+            i++;
+
+        var start = i;
+        while (i < content.Length && (char.IsLetterOrDigit(content[i]) || content[i] == '_' || content[i] == '.'))
+            i++;
+        if (i == start)
+            return false;
+
+        while (i < content.Length && char.IsWhiteSpace(content[i]))
+            i++;
+
+        // Skip attribute targets like `[property: JsonPropertyName]`.
+        if (i < content.Length && content[i] == ':')
+        {
+            i++;
+            while (i < content.Length && char.IsWhiteSpace(content[i]))
+                i++;
+            start = i;
+            while (i < content.Length && (char.IsLetterOrDigit(content[i]) || content[i] == '_' || content[i] == '.'))
+                i++;
+            if (i == start)
+                return false;
+        }
+
+        identifier = content[start..i];
+        index = i - 1;
+        return true;
+    }
+
+    private static string? NormalizeAttributeIdentifier(string? identifier)
+    {
+        if (string.IsNullOrWhiteSpace(identifier))
+            return null;
+
+        var lastDot = identifier.LastIndexOf('.');
+        var simpleName = lastDot >= 0 ? identifier[(lastDot + 1)..] : identifier;
+        if (simpleName.EndsWith("Attribute", StringComparison.OrdinalIgnoreCase))
+            simpleName = simpleName[..^"Attribute".Length];
+
+        return simpleName.Length == 0 ? null : simpleName.ToLowerInvariant();
     }
 
     private static bool LooksLikeAttributeBoundaryLine(string line)
