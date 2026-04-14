@@ -1191,6 +1191,16 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ZeroResultJsonPayloadRemainsStableAcrossRepeatedTempProjects()
+    {
+        for (var iteration = 0; iteration < 10; iteration++)
+        {
+            RunImpactPartialClassZeroResultIteration(iteration);
+            RunImpactImportOnlyZeroResultIteration(iteration);
+        }
+    }
+
+    [Fact]
     public void RunImpact_UnicodeTypeEvidenceStillReturnsHeuristicHints()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unicode_type_evidence");
@@ -3065,5 +3075,78 @@ public class QueryCommandRunnerTests
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();
+    }
+
+    private void RunImpactPartialClassZeroResultIteration(int iteration)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_impact_partial_stability_{iteration}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part1.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Start() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part2.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Stop() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Worker", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.True(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private void RunImpactImportOnlyZeroResultIteration(int iteration)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_impact_import_stability_{iteration}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.py", "python",
+                """
+                import requests
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["requests", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 }
