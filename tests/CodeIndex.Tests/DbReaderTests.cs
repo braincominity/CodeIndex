@@ -1979,7 +1979,7 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        var analysis = _reader.AnalyzeSymbol("LoggerService", limit: 1, lang: "csharp");
+        var analysis = _reader.AnalyzeSymbol("loggerservice", limit: 1, lang: "csharp");
 
         Assert.NotNull(analysis.File);
         Assert.Equal("src/Services/LoggerService.cs", analysis.File!.Path);

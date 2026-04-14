@@ -723,8 +723,8 @@ public class LegacySchemaMigrationTests : IDisposable
             readOnlyDb.TryMigrateForRead();
             var reader = new DbReader(readOnlyDb.Connection, readOnlyDb.IsReadOnly);
 
-            var expected = Assert.Single(reader.SearchSymbols("Run", limit: 1, exact: false));
-            var bundle = reader.AnalyzeSymbol("Run", limit: 1, exact: false);
+            var expected = Assert.Single(reader.SearchSymbols("run", limit: 1, exact: false));
+            var bundle = reader.AnalyzeSymbol("run", limit: 1, exact: false);
 
             Assert.Null(bundle.ExactIndexAvailable);
             Assert.Null(bundle.DegradedReason);
@@ -733,6 +733,7 @@ public class LegacySchemaMigrationTests : IDisposable
             var definition = Assert.Single(bundle.Definitions);
             Assert.Equal(expected.Name, definition.Name);
             Assert.Equal(expected.Path, definition.Path);
+            Assert.Equal("Run", definition.Name);
         }
         finally
         {

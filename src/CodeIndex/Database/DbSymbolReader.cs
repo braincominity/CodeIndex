@@ -212,7 +212,11 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+        sql += $" ORDER BY CASE " +
+            "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
+            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 1 " +
+            "ELSE 2 END, " +
+            $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)
@@ -230,7 +234,9 @@ public partial class DbReader
             }
         }
         var preferLiteralExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
+        var preferCaseInsensitiveExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
         cmd.Parameters.AddWithValue("@preferLiteralExactMatch", preferLiteralExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferCaseInsensitiveExactMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);

@@ -2115,7 +2115,7 @@ public class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["LoggerService", "--db", dbPath, "--lang", "csharp", "--limit", "1"],
+                ["loggerservice", "--db", dbPath, "--lang", "csharp", "--limit", "1"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
