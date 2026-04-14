@@ -293,6 +293,48 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void FindInFiles_ReturnsPathScopedLiteralMatchesWithContext()
+    {
+        InsertIndexedFile("src/Auth.cs", "csharp",
+            """
+            class Auth
+            {
+                void Guard() {}
+                void Next() {}
+            }
+            """);
+
+        var results = _reader.FindInFiles("guard", limit: 10, pathPatterns: ["src/Auth.cs"], before: 1, after: 1);
+
+        var match = Assert.Single(results);
+        Assert.Equal("src/Auth.cs", match.Path);
+        Assert.Equal(3, match.Line);
+        Assert.Equal(10, match.Column);
+        Assert.Equal(2, match.StartLine);
+        Assert.Equal(4, match.EndLine);
+        Assert.Contains("void Guard()", match.Snippet);
+        Assert.Contains("void Next()", match.Snippet);
+    }
+
+    [Fact]
+    public void FindInFiles_ExactModeIsCaseSensitive()
+    {
+        InsertIndexedFile("src/Auth.cs", "csharp",
+            """
+            class Auth
+            {
+                void Guard() {}
+            }
+            """);
+
+        var insensitive = _reader.FindInFiles("guard", limit: 10, pathPatterns: ["src/Auth.cs"]);
+        var exact = _reader.FindInFiles("guard", limit: 10, pathPatterns: ["src/Auth.cs"], exact: true);
+
+        Assert.Single(insensitive);
+        Assert.Empty(exact);
+    }
+
+    [Fact]
     public void GetDefinitions_ReturnsDefinitionContentAndOptionalBody()
     {
         var results = _reader.GetDefinitions("authenticate", includeBody: true);

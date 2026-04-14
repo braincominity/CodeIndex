@@ -182,6 +182,7 @@ public partial class McpServer
                 "callees" => ExecuteCallees(id, args),
                 "symbols" => ExecuteSymbols(id, args),
                 "files" => ExecuteFiles(id, args),
+                "find_in_file" => ExecuteFindInFile(id, args),
                 "excerpt" => ExecuteExcerpt(id, args),
                 "map" => ExecuteMap(id, args),
                 "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),

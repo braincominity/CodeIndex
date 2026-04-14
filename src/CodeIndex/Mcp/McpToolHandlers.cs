@@ -32,6 +32,7 @@ public partial class McpServer
             + "for other languages, use 'search' instead. "
             + "Use 'outline' to see the full symbol structure of a single file (functions, classes, properties, interfaces, enums with line numbers) without reading the file content. "
             + "Filter symbols by kind using the 'kind' parameter: function, class, struct, interface, enum, property, event, delegate, namespace, import. "
+            + "Use 'find_in_file' for literal substring navigation when the target file is already known. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results. "
             + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
@@ -748,6 +749,52 @@ public partial class McpServer
         });
     }
 
+    private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var pathPatterns = ReadPathList(args, "path");
+        if (pathPatterns == null || pathPatterns.Count == 0)
+            return CreateToolErrorResponse(id, "Missing required parameter: path");
+
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var lang = args?["lang"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
+        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact);
+            var structured = new JsonObject
+            {
+                ["query"] = query,
+                ["path"] = PathEcho(pathPatterns),
+                ["excludeTests"] = excludeTests,
+                ["before"] = before,
+                ["after"] = after,
+                ["exact"] = exact,
+                ["count"] = results.Count,
+                ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
+            };
+            if (results.Count == 0)
+            {
+                AddFreshnessHint(structured, reader);
+                return CreateToolResult(id, "No matches found.", structured);
+            }
+
+            var fileCount = structured["fileCount"]!.GetValue<int>();
+            return CreateToolResult(id, $"Found {results.Count} in-file match(es) across {fileCount} file(s).", structured);
+        });
+    }
+
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
     {
         var queries = args?["queries"]?.AsArray();
@@ -789,6 +836,7 @@ public partial class McpServer
                     "callees" => ExecuteCallees(null, toolArgs),
                     "symbols" => ExecuteSymbols(null, toolArgs),
                     "files" => ExecuteFiles(null, toolArgs),
+                    "find_in_file" => ExecuteFindInFile(null, toolArgs),
                     "excerpt" => ExecuteExcerpt(null, toolArgs),
                     "map" => ExecuteMap(null, toolArgs),
                     "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),

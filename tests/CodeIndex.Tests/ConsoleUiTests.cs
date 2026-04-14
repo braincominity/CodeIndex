@@ -33,11 +33,15 @@ public class ConsoleUiTests
         Assert.Contains("cdidx callees <query>", output);
         Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]", output);
         Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
+        Assert.Contains("cdidx find <query> --path <pattern>", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
         Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
         Assert.Contains("backfill-fold", output);
+        Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
+        Assert.Contains("search/find: case-sensitive exact substring", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
+        Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);

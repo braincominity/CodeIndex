@@ -622,6 +622,94 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (string.IsNullOrWhiteSpace(options.Query))
+        {
+            Console.Error.WriteLine("Error: find requires a query argument");
+            Console.Error.WriteLine("Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]");
+            return CommandExitCodes.UsageError;
+        }
+
+        if (options.PathPatterns.Count == 0)
+        {
+            Console.Error.WriteLine("Error: find requires at least one --path <pattern> to scope the search to known files");
+            Console.Error.WriteLine("Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]");
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact);
+            if (results.Count == 0)
+            {
+                if (options.CountOnly)
+                {
+                    if (options.Json)
+                    {
+                        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, extraFields: static payload =>
+                        {
+                            payload["file_count"] = 0;
+                        });
+                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                    }
+                }
+                else if (options.Json)
+                {
+                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", extraFields: payload =>
+                    {
+                        payload["query"] = options.Query;
+                        payload["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, jsonOptions);
+                        payload["exclude_tests"] = options.ExcludeTests;
+                        payload["before"] = options.ContextBefore;
+                        payload["after"] = options.ContextAfter;
+                        payload["exact"] = options.Exact;
+                        payload["file_count"] = 0;
+                    });
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.Error.WriteLine("No matches found.");
+                    WriteZeroResultHints(options, reader);
+                }
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc, file_count = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
+            }
+
+            if (options.Json)
+            {
+                foreach (var r in results)
+                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+            }
+            else
+            {
+                foreach (var r in results)
+                {
+                    Console.WriteLine($"{r.Path}:{r.Line}:{r.Column}");
+                    WriteNumberedExcerpt(r.StartLine, r.Snippet);
+                    Console.WriteLine();
+                }
+                var fileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} matches in {fileCount} files)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);

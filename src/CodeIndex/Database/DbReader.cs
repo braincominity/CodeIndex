@@ -1331,6 +1331,127 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Find literal substring matches inside path-scoped indexed files.
+    /// path で絞ったインデックス済みファイル内でリテラル部分文字列一致を探す。
+    /// </summary>
+    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false)
+    {
+        if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
+            return [];
+
+        before = Math.Max(0, before);
+        after = Math.Max(0, after);
+        var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        using var fileCmd = _conn.CreateCommand();
+        var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {PathBucketOrder}, f.path";
+        fileCmd.CommandText = sql;
+        if (lang != null)
+            fileCmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+
+        var results = new List<FileFindResult>();
+        using var fileReader = fileCmd.ExecuteTrackedReader();
+        while (fileReader.TrackedRead())
+        {
+            if (results.Count >= limit)
+                break;
+
+            var path = fileReader.GetString(0);
+            var fileLang = GetNullableString(fileReader, 1);
+            var totalLines = fileReader.GetInt32(2);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
+                continue;
+
+            for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
+            {
+                if (!lineMap.TryGetValue(lineNumber, out var lineText))
+                    continue;
+
+                var matchColumn = lineText.IndexOf(query, comparison);
+                if (matchColumn < 0)
+                    continue;
+
+                var snippetStart = Math.Max(1, lineNumber - before);
+                var snippetEnd = Math.Min(totalLines, lineNumber + after);
+                var snippetLineNumbers = Enumerable.Range(snippetStart, snippetEnd - snippetStart + 1)
+                    .Where(lineMap.ContainsKey)
+                    .ToList();
+                if (snippetLineNumbers.Count == 0)
+                    continue;
+
+                results.Add(new FileFindResult
+                {
+                    Path = path,
+                    Lang = fileLang,
+                    Line = lineNumber,
+                    Column = matchColumn + 1,
+                    StartLine = snippetLineNumbers[0],
+                    EndLine = snippetLineNumbers[^1],
+                    Snippet = string.Join("\n", snippetLineNumbers.Select(line => lineMap[line])),
+                });
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Reconstruct one indexed file into an ordered line map.
+    /// 1つのインデックス済みファイルを順序付き行マップへ再構成する。
+    /// </summary>
+    private bool TryLoadIndexedFileLines(string path, out string? lang, out int totalLines, out SortedDictionary<int, string> lineMap)
+    {
+        lang = null;
+        totalLines = 0;
+        lineMap = new SortedDictionary<int, string>();
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        using var fileCmd = _conn.CreateCommand();
+        fileCmd.CommandText = "SELECT lang, lines FROM files WHERE path = @path";
+        fileCmd.Parameters.AddWithValue("@path", path);
+
+        using var fileReader = fileCmd.ExecuteTrackedReader();
+        if (!fileReader.TrackedRead())
+            return false;
+
+        lang = GetNullableString(fileReader, 0);
+        totalLines = fileReader.GetInt32(1);
+
+        using var chunkCmd = _conn.CreateCommand();
+        chunkCmd.CommandText = @"
+            SELECT c.start_line, c.end_line, c.content
+            FROM chunks c
+            JOIN files f ON c.file_id = f.id
+            WHERE f.path = @path
+            ORDER BY c.start_line, c.chunk_index";
+        chunkCmd.Parameters.AddWithValue("@path", path);
+
+        using var chunkReader = chunkCmd.ExecuteTrackedReader();
+        while (chunkReader.TrackedRead())
+        {
+            var chunkStartLine = chunkReader.GetInt32(0);
+            var chunkEndLine = chunkReader.GetInt32(1);
+            var chunkLines = chunkReader.GetString(2).Split('\n');
+            var lineCount = chunkEndLine - chunkStartLine + 1;
+
+            for (int i = 0; i < chunkLines.Length && i < lineCount; i++)
+            {
+                var absoluteLine = chunkStartLine + i;
+                if (!lineMap.ContainsKey(absoluteLine))
+                    lineMap[absoluteLine] = chunkLines[i];
+            }
+        }
+
+        return lineMap.Count > 0;
+    }
+
+    /// <summary>
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>
@@ -1347,54 +1468,10 @@ public partial class DbReader
             before = 0;
         if (after < 0)
             after = 0;
-
-        using var fileCmd = _conn.CreateCommand();
-        fileCmd.CommandText = "SELECT lang, lines FROM files WHERE path = @path";
-        fileCmd.Parameters.AddWithValue("@path", path);
-
-        using var fileReader = fileCmd.ExecuteTrackedReader();
-        if (!fileReader.TrackedRead())
+        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap))
             return null;
-
-        var lang = GetNullableString(fileReader, 0);
-        var totalLines = fileReader.GetInt32(1);
         var requestedStart = Math.Max(1, startLine - before);
         var requestedEnd = Math.Min(totalLines, endLine + after);
-
-        using var chunkCmd = _conn.CreateCommand();
-        chunkCmd.CommandText = @"
-            SELECT c.start_line, c.end_line, c.content
-            FROM chunks c
-            JOIN files f ON c.file_id = f.id
-            WHERE f.path = @path
-              AND c.end_line >= @startLine
-              AND c.start_line <= @endLine
-            ORDER BY c.start_line, c.chunk_index";
-        chunkCmd.Parameters.AddWithValue("@path", path);
-        chunkCmd.Parameters.AddWithValue("@startLine", requestedStart);
-        chunkCmd.Parameters.AddWithValue("@endLine", requestedEnd);
-
-        var lineMap = new SortedDictionary<int, string>();
-        using var chunkReader = chunkCmd.ExecuteTrackedReader();
-        while (chunkReader.TrackedRead())
-        {
-            var chunkStartLine = chunkReader.GetInt32(0);
-            var chunkEndLine = chunkReader.GetInt32(1);
-            var chunkLines = chunkReader.GetString(2).Split('\n');
-            var lineCount = chunkEndLine - chunkStartLine + 1;
-
-            for (int i = 0; i < chunkLines.Length && i < lineCount; i++)
-            {
-                var absoluteLine = chunkStartLine + i;
-                if (absoluteLine < requestedStart || absoluteLine > requestedEnd)
-                    continue;
-                if (!lineMap.ContainsKey(absoluteLine))
-                    lineMap[absoluteLine] = chunkLines[i];
-            }
-        }
-
-        if (lineMap.Count == 0)
-            return null;
 
         var selectedLines = Enumerable.Range(requestedStart, requestedEnd - requestedStart + 1)
             .Where(lineMap.ContainsKey)

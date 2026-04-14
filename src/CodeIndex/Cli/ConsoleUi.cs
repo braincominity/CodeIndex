@@ -310,6 +310,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
         Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
         Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
+        Console.WriteLine("  cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]");
         Console.WriteLine("  cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
         Console.WriteLine("  cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]");
@@ -333,6 +334,7 @@ public static class ConsoleUi
         Console.WriteLine("  callees <query>            Find callees used by a caller");
         Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
         Console.WriteLine("  files [query]              List indexed files");
+        Console.WriteLine("  find <query>               Find literal substring matches inside known indexed files");
         Console.WriteLine("  excerpt <path>             Reconstruct a line-range excerpt from indexed chunks");
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
@@ -372,7 +374,7 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
-        Console.WriteLine("  --exact                    search: case-sensitive exact substring (no FTS5); symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (covers Ä/ä, sharp-S, Greek sigma, fullwidth/halfwidth; Turkish İ remains distinct by Unicode design). Legacy or stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready");
+        Console.WriteLine("  --exact                    search/find: case-sensitive exact substring (no FTS5); symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (covers Ä/ä, sharp-S, Greek sigma, fullwidth/halfwidth; Turkish İ remains distinct by Unicode design). Legacy or stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine("  --count                    Return only the visible result count (for AI preflight)");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
@@ -392,6 +394,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx callers ResolveGitCommonDir             Find callers");
         Console.WriteLine("  cdidx callees AddToGitExclude                 Find callees used by a caller");
         Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
+        Console.WriteLine("  cdidx find guard --path src/Auth.cs --after 2 Find literal matches inside a known file");
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
@@ -455,7 +458,7 @@ public static class ConsoleUi
     private static readonly string[] Commands =
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
-        "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp",
     ];
 

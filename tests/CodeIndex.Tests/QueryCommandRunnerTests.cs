@@ -2209,6 +2209,85 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_RequiresPathScope()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("requires at least one --path", stderr);
+    }
+
+    [Fact]
+    public void RunFind_WithJsonOutputsLineColumnAndSnippet()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "class Auth\n{\n    void Guard() {}\n    void Next() {}\n}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["guard", "--db", dbPath, "--path", "src/Auth.cs", "--json", "--before", "1", "--after", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/Auth.cs", json.GetProperty("path").GetString());
+            Assert.Equal(3, json.GetProperty("line").GetInt32());
+            Assert.Equal(10, json.GetProperty("column").GetInt32());
+            Assert.Equal(2, json.GetProperty("start_line").GetInt32());
+            Assert.Equal(4, json.GetProperty("end_line").GetInt32());
+            Assert.Contains("void Guard()", json.GetProperty("snippet").GetString());
+            Assert.Contains("void Next()", json.GetProperty("snippet").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_CountOnlyJsonIncludesVisibleMatchAndFileCounts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "guard one\nline two\nguard three\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["guard", "--db", dbPath, "--path", "src/Auth.cs", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_RequiresStartLine()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(

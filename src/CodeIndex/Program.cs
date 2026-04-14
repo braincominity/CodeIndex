@@ -69,6 +69,7 @@ return args[0] switch
     "callees" => QueryCommandRunner.RunCallees(args[1..], jsonOptions),
     "symbols" => QueryCommandRunner.RunSymbols(args[1..], jsonOptions),
     "files" => QueryCommandRunner.RunFiles(args[1..], jsonOptions),
+    "find" => QueryCommandRunner.RunFind(args[1..], jsonOptions),
     "excerpt" => QueryCommandRunner.RunExcerpt(args[1..], jsonOptions),
     "map" => QueryCommandRunner.RunMap(args[1..], jsonOptions),
     "inspect" => QueryCommandRunner.RunInspect(args[1..], jsonOptions),

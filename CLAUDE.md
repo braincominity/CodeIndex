@@ -27,6 +27,7 @@ cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>
 cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--json]
 cdidx symbols [query] [--name <name>] [--exact] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
 cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
+cdidx find <query> --path <pattern> [--db <path>] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--json]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--json]
@@ -52,7 +53,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/impact/unused/hotspots command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status/impact/unused/hotspots command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Cli/SuggestionStore.cs    — Local JSON storage for AI suggestions with SHA256 dedup
@@ -61,7 +62,7 @@ src/CodeIndex/
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbDebug.cs       — Opt-in reader diagnostics (CDIDX_DEBUG=1): tracks last SQL, params, and row snapshot, dumps to stderr on reader exceptions
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
-  Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, excerpt reconstruction, status, file-level deps)
+  Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, in-file literal find, excerpt reconstruction, status, file-level deps)
   Database/DbSearchReader.cs — Full-text search operations (FTS5 search, deduplication) (partial class)
   Database/DbSymbolReader.cs — Symbol query operations (symbol search, definitions, outline, analyze bundle) (partial class)
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
@@ -271,6 +272,7 @@ cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>
 cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--json]
 cdidx symbols [query] [--name <name>] [--exact] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
 cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
+cdidx find <query> --path <pattern> [--db <path>] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--json]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--json]
@@ -296,7 +298,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/unused/hotspotsコマンド実行とクエリ引数解析
+  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status/unused/hotspotsコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
   Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Cli/SuggestionStore.cs    — AI提案のSHA256重複排除付きローカルJSON蓄積
@@ -305,7 +307,7 @@ src/CodeIndex/
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbDebug.cs       — オプトインの reader 診断（CDIDX_DEBUG=1）: 直近 SQL・パラメータ・行スナップショットを追跡し、reader 例外時に stderr へ出力
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
-  Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、抜粋再構成、ステータス、ファイル間依存分析）
+  Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、既知ファイル内 literal find、抜粋再構成、ステータス、ファイル間依存分析）
   Database/DbSearchReader.cs — 全文検索操作（FTS5検索、重複排除）（partial class）
   Database/DbSymbolReader.cs — シンボルクエリ操作（シンボル検索、定義、アウトライン、分析バンドル）（partial class）
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化

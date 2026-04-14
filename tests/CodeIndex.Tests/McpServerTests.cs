@@ -222,7 +222,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(23, tools.Count);
+        Assert.Equal(24, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -233,6 +233,7 @@ public class McpServerTests : IDisposable
         Assert.Contains("callees", names);
         Assert.Contains("symbols", names);
         Assert.Contains("files", names);
+        Assert.Contains("find_in_file", names);
         Assert.Contains("excerpt", names);
         Assert.Contains("map", names);
         Assert.Contains("analyze_symbol", names);
@@ -312,7 +313,7 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        var queryToolNames = new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "excerpt", "map", "analyze_symbol", "status", "outline" };
+        var queryToolNames = new[] { "search", "definition", "references", "callers", "callees", "symbols", "files", "find_in_file", "excerpt", "map", "analyze_symbol", "status", "outline" };
 
         foreach (var name in queryToolNames)
         {
@@ -1645,6 +1646,46 @@ public class McpServerTests : IDisposable
         Assert.Contains("Excerpt returned", text);
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["path"]!.GetValue<string>());
         Assert.Contains("public class App", response["result"]!["structuredContent"]!["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_ReturnsLiteralMatchesWithContext()
+    {
+        InsertIndexedFile("src/Auth.cs", "csharp",
+            """
+            class Auth
+            {
+                void Guard() {}
+                void Next() {}
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"guard","path":"src/Auth.cs","before":1,"after":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["fileCount"]!.GetValue<int>());
+        Assert.Equal("src/Auth.cs", result["path"]!.GetValue<string>());
+        Assert.Equal(3, result["line"]!.GetValue<int>());
+        Assert.Equal(10, result["column"]!.GetValue<int>());
+        Assert.Equal(2, result["startLine"]!.GetValue<int>());
+        Assert.Equal(4, result["endLine"]!.GetValue<int>());
+        Assert.Contains("void Guard()", result["snippet"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_NoResultsIncludesFreshnessHints()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"missing","path":"src/app.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["fileCount"]!.GetValue<int>());
+        Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.True(structured["freshness_available"]!.GetValue<bool>());
     }
 
     [Fact]
