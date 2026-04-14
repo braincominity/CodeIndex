@@ -138,6 +138,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsInlinePropertyTargetAttributeWithWhitespace()
+    {
+        var content = """
+            using System.Text.Json.Serialization;
+
+            public class UserDto
+            {
+                [property : JsonPropertyName("full_name")] public string FullName { get; set; } = string.Empty;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "FullName");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNoVisibilityMembers()
     {
         // Classes/methods without explicit visibility (internal by default)

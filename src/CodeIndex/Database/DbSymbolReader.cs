@@ -1055,7 +1055,7 @@ public partial class DbReader
             i++;
 
         // Skip attribute targets like `[property: JsonPropertyName]`.
-        var leadingIdentifier = content[start..i];
+        var leadingIdentifier = content[start..i].Trim();
         if (i < content.Length && content[i] == ':' && (i + 1 >= content.Length || content[i + 1] != ':') && AttributeTargetNames.Contains(leadingIdentifier))
         {
             i++;

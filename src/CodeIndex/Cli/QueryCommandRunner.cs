@@ -994,7 +994,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult("unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return CommandExitCodes.NotFound;
+                return options.Json ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
             if (options.Json)

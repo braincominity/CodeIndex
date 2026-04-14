@@ -596,7 +596,7 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.GetProperty("graph_supported").GetBoolean());
             Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
@@ -647,7 +647,7 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
@@ -677,7 +677,7 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("graph_supported").GetBoolean());
@@ -706,7 +706,7 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.True(json.GetProperty("degraded").GetBoolean());
@@ -840,6 +840,95 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
             var fullName = Assert.Single(symbols, symbol => symbol.GetProperty("name").GetString() == "FullName");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", fullName.GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/user_dto.cs",
+                "csharp",
+                """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [property : JsonPropertyName("full_name")] public string FullName { get; set; } = string.Empty;
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var fullName = Assert.Single(
+                document.RootElement.GetProperty("symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() == "FullName");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", fullName.GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithPropertyTargetWhitespaceMultilineAttribute_ClassifiesPropertyAsReflectionSuspect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_multiline_attr");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/user_dto.cs",
+                "csharp",
+                """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [property : JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var fullName = Assert.Single(
+                document.RootElement.GetProperty("symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() == "FullName");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
