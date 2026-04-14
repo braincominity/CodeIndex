@@ -35,7 +35,7 @@ public static class QueryCommandRunner
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: search requires a query argument");
-            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]");
+            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring]");
             return CommandExitCodes.UsageError;
         }
 
@@ -77,7 +77,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
@@ -100,7 +100,7 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: definition requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]");
+            Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
@@ -204,7 +204,7 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: references requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
@@ -283,7 +283,7 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callers requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
@@ -358,7 +358,7 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: callees requires a caller query argument");
-            Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
@@ -727,7 +727,7 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: inspect requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
+            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 

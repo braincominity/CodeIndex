@@ -317,6 +317,35 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ExactSubstringHumanSnippetUsesCaseSensitiveFocusLine()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_human_snippet");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "void run() { }\nvoid Run() { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run()", "--db", dbPath, "--exact-substring", "--snippet-lines", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/app.cs:", stdout);
+            Assert.Contains("  void Run() { }", stdout);
+            Assert.DoesNotContain("  void run() { }", stdout);
+            Assert.Contains("(1 results in 1 files)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_RejectsExactNameAlias()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_wrong_exact_alias");
@@ -334,6 +363,24 @@ public class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunSearch_MissingQueryUsageMentionsExactSubstringAlias()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--exact|--exact-substring", stderr);
+    }
+
+    [Fact]
+    public void RunDefinition_MissingQueryUsageMentionsExactNameAlias()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--exact|--exact-name", stderr);
     }
 
     [Theory]

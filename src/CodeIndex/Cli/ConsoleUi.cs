@@ -303,16 +303,16 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx backfill-fold [--db <path>] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--json]");
         Console.WriteLine("  cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]");
-        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]");
-        Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]");
-        Console.WriteLine("  cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
-        Console.WriteLine("  cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
-        Console.WriteLine("  cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
-        Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
+        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring] [--count]");
+        Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
+        Console.WriteLine("  cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
+        Console.WriteLine("  cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
+        Console.WriteLine("  cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
+        Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
         Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
         Console.WriteLine("  cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
-        Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]");
+        Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
         Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
         Console.WriteLine("  cdidx status [--db <path>] [--json]");
         Console.WriteLine("  cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
@@ -389,11 +389,13 @@ public static class ConsoleUi
         Console.WriteLine("                                              Update DB from multiple commits");
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
+        Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
         Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
         Console.WriteLine("  cdidx callers ResolveGitCommonDir             Find callers");
         Console.WriteLine("  cdidx callees AddToGitExclude                 Find callees used by a caller");
-        Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
+        Console.WriteLine("  cdidx symbols Run --exact-name                Exact symbol-name match");
+        Console.WriteLine("  cdidx symbols UserService --kind class        Find class definitions");
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
@@ -514,7 +516,7 @@ public static class ConsoleUi
         --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
         --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
         --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
-        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --help"" -- ""$cur"")) ;;
+        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur"")) ;;
     esac
 }}
 complete -F _cdidx cdidx");
@@ -550,6 +552,9 @@ _cdidx() {{
                 '--count[Count only]' \
                 '--fts[Raw FTS5 syntax]' \
                 '--snippet-lines[Snippet length]:number' \
+                '--exact[Backward-compatible exact shorthand]' \
+                '--exact-substring[Search-only exact substring match]' \
+                '--exact-name[Exact symbol-name equality]' \
                 '*:query'
             ;;
     esac
@@ -576,6 +581,9 @@ _cdidx");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols inspect' -l exact -d 'Backward-compatible exact shorthand'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l exact-substring -d 'Search-only exact substring match'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition references callers callees symbols inspect' -l exact-name -d 'Exact symbol-name equality'");
     }
 
     // --- Helpers / ヘルパー ---
