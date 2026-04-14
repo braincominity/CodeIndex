@@ -230,15 +230,13 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            SqliteConnection.ClearAllPools();
-            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            using (var conn = OpenNonPoolingConnection(dbPath))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "PRAGMA user_version = 0";
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
 
             File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
@@ -253,7 +251,6 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -271,15 +268,13 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            SqliteConnection.ClearAllPools();
-            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            using (var conn = OpenNonPoolingConnection(dbPath))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "PRAGMA user_version = 0";
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
 
             File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
@@ -293,7 +288,6 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -311,8 +305,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            SqliteConnection.ClearAllPools();
-            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            using (var conn = OpenNonPoolingConnection(dbPath))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
@@ -323,7 +316,6 @@ public class IndexCommandRunnerTests
                     """;
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
 
             File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
@@ -338,7 +330,6 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -358,15 +349,13 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            SqliteConnection.ClearAllPools();
-            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            using (var conn = OpenNonPoolingConnection(dbPath))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "PRAGMA user_version = 0";
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
 
             File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
@@ -382,7 +371,6 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             if (Directory.Exists(otherCwd))
                 DeleteDirectory(otherCwd);
             DeleteDirectory(projectRoot);
@@ -404,15 +392,13 @@ public class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", customDbPath, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            SqliteConnection.ClearAllPools();
-            using (var conn = new SqliteConnection($"Data Source={customDbPath}"))
+            using (var conn = OpenNonPoolingConnection(customDbPath))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "PRAGMA user_version = 0";
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
 
             File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
@@ -428,7 +414,6 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             if (Directory.Exists(customDbDir))
                 DeleteDirectory(customDbDir);
             DeleteDirectory(projectRoot);
@@ -475,15 +460,13 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            SqliteConnection.ClearAllPools();
-            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            using (var conn = OpenNonPoolingConnection(dbPath))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
 
             var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot], projectRoot);
 
@@ -495,7 +478,6 @@ public class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1160,6 +1142,16 @@ public class IndexCommandRunnerTests
         }
 
         throw new InvalidOperationException("Could not locate built cdidx.dll from test output path / テスト出力パスから cdidx.dll を特定できませんでした");
+    }
+
+    private static SqliteConnection OpenNonPoolingConnection(string dbPath)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Pooling = false,
+        };
+        return new SqliteConnection(builder.ToString());
     }
 
     private static string CreateTempProject()
