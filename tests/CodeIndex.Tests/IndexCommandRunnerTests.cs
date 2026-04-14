@@ -218,6 +218,47 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_HumanOutputShowsDegradedReadinessWhenBitsStayDown()
     {
         var projectRoot = CreateTempProject();
@@ -258,6 +299,51 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_JsonPreservesGraphAndIssuesWhenOnlyFoldIsMissing()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = NULL;
+                    UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL;
+                    PRAGMA user_version = 3
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_DegradedWarningUsesResolvedProjectDbPathWhenCwdDiffers()
     {
         var projectRoot = CreateTempProject();
@@ -285,7 +371,7 @@ public class IndexCommandRunnerTests
             File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
 
-            var (exitCode, _, errorOutput) = RunAndCaptureConsole([projectRoot, "--files", "app.cs"], otherCwd);
+            var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--files", "app.cs"], otherCwd);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains($"cdidx status --db \"{dbPath}\" --json", errorOutput);
@@ -327,7 +413,7 @@ public class IndexCommandRunnerTests
             File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
             File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
 
-            var (exitCode, _, errorOutput) = RunAndCaptureConsole([projectRoot, "--db", customDbPath, "--files", "app.cs"]);
+            var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--db", customDbPath, "--files", "app.cs"], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains($"cdidx status --db \"{customDbPath}\" --json", errorOutput);
@@ -965,36 +1051,61 @@ public class IndexCommandRunnerTests
 
     private static (int ExitCode, string Output) RunAndCaptureOutput(string[] args)
     {
-        var (exitCode, stdOut, _) = RunAndCaptureConsole(args);
-        return (exitCode, stdOut);
-    }
-
-    private static (int ExitCode, string StdOut, string StdErr) RunAndCaptureConsole(string[] args, string? workingDirectory = null)
-    {
         lock (TestConsoleLock.Gate)
         {
             var originalOut = Console.Out;
             var originalErr = Console.Error;
-            var originalCwd = Directory.GetCurrentDirectory();
             using var writer = new StringWriter();
-            using var errorWriter = new StringWriter();
 
             try
             {
-                if (workingDirectory != null)
-                    Directory.SetCurrentDirectory(workingDirectory);
                 Console.SetOut(writer);
-                Console.SetError(errorWriter);
                 var exitCode = IndexCommandRunner.Run(args, new JsonSerializerOptions());
-                return (exitCode, writer.ToString(), errorWriter.ToString());
+                return (exitCode, writer.ToString());
             }
             finally
             {
                 Console.SetOut(originalOut);
                 Console.SetError(originalErr);
-                Directory.SetCurrentDirectory(originalCwd);
             }
         }
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, string workingDirectory)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(GetBuiltCliDllPath());
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cdidx subprocess / cdidx サブプロセスの起動に失敗");
+        var stdOut = process.StandardOutput.ReadToEnd();
+        var stdErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static string GetBuiltCliDllPath()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", "Debug", "net8.0", "cdidx.dll");
+            if (File.Exists(candidate))
+                return candidate;
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate built cdidx.dll from test output path / テスト出力パスから cdidx.dll を特定できませんでした");
     }
 
     private static string CreateTempProject()
