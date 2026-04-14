@@ -37,6 +37,8 @@ public class ConsoleUiTests
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
         Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]", output);
         Assert.Contains("backfill-fold", output);
+        Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
+        Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
         Assert.DoesNotContain("--random-spinner", output);

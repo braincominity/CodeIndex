@@ -102,6 +102,12 @@ public class McpServerTests : IDisposable
         writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void MarkFoldReady()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.MarkFoldReady();
+    }
+
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
@@ -141,6 +147,9 @@ public class McpServerTests : IDisposable
         // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
         Assert.Contains("index", instructions);
         Assert.Contains("backfill_fold", instructions);
+        Assert.Contains("impact_mode", instructions);
+        Assert.Contains("file_impacts", instructions);
+        Assert.Contains("heuristic file-level dependency hints", instructions);
         // Verify language list comes from ReferenceExtractor / 言語リストがReferenceExtractorから来ることを検証
         foreach (var lang in ReferenceExtractor.GetSupportedLanguages())
         {
@@ -264,6 +273,24 @@ public class McpServerTests : IDisposable
         Assert.NotNull(properties["path"]);
         Assert.NotNull(properties["excludePaths"]);
         Assert.NotNull(properties["excludeTests"]);
+    }
+
+    [Fact]
+    public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var impactTool = tools.First(t => t!["name"]!.GetValue<string>() == "impact_analysis")!;
+        var description = impactTool["description"]!.GetValue<string>();
+        var limitDescription = impactTool["inputSchema"]!["properties"]!["limit"]!["description"]!.GetValue<string>();
+
+        Assert.Contains("heuristic file-level dependency hints", description);
+        Assert.Contains("impact_mode", description);
+        Assert.Contains("file_impacts", description);
+        Assert.Contains("heuristic file-level dependency hints", limitDescription);
+        Assert.Contains("truncated", limitDescription);
     }
 
     [Fact]
@@ -549,6 +576,662 @@ public class McpServerTests : IDisposable
         Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_ClassSymbolReturnsHeuristicFileDependencyHints()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var fileImpacts = structured["file_impacts"]!.AsArray();
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_file_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+        Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.Equal("src/App.cs", fileImpacts[0]!["sourcePath"]!.GetValue<string>());
+        Assert.Equal("src/FolderDiffService.cs", fileImpacts[0]!["targetPath"]!.GetValue<string>());
+        Assert.True(structured["has_class_like_definitions"]!.GetValue<bool>());
+        Assert.Contains("heuristic hints only", structured["note"]!.GetValue<string>());
+        Assert.Contains("heuristic only", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_ClassAndNamespaceWithSameNameStillReturnsHeuristicHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            namespace FooService;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
+        Assert.True(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
+        Assert.Equal(2, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_HeuristicHintsUseVisibleCount()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["file_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["confirmed_file_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_file_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_FoldEquivalentClassDefinitionsReportAmbiguity()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/FullwidthFooService.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+        MarkFoldReady();
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.Equal(2, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal("multiple_definition_files", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_ClassCollisionWithoutTypeEvidenceReturnsNoHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/BarService.cs", "csharp",
+            """
+            public class BarService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(BarService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.False(structured["heuristic"]!.GetValue<bool>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
+        Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_CommentOnlyTypeMentionDoesNotProduceHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/OtherService.cs", "csharp",
+            """
+            public class OtherService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(OtherService service)
+                {
+                    service.Run(); // TODO: maybe replace with FooService later
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_StringLiteralTypeMentionDoesNotProduceHints()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/Worker.cs", "csharp",
+            """
+            public class Worker
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(Worker worker)
+                {
+                    var label = "FooService";
+                    worker.Execute();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_NamespaceStaysZero()
+    {
+        InsertIndexedFile("src/Services.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            namespace Acme;
+
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Acme"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal("non_callable_symbol_kind", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_ImportOnlyQueryReportsNonCallableSymbolKind()
+    {
+        InsertIndexedFile("src/app.py", "python",
+            """
+            import requests
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"requests"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal("non_callable_symbol_kind", structured["zero_result_reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_UnicodeTypeEvidenceStillReturnsHints()
+    {
+        InsertIndexedFile("src/ＦｏｏＳｅｒｖｉｃｅ.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(ＦｏｏＳｅｒｖｉｃｅ service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"ＦｏｏＳｅｒｖｉｃｅ"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_DuplicateDefinitionsInOneFileReportAmbiguity()
+    {
+        InsertIndexedFile("src/Services.cs", "csharp",
+            """
+            namespace A
+            {
+                public class FooService
+                {
+                    public void Run() { }
+                }
+            }
+
+            namespace B
+            {
+                public class FooService
+                {
+                    public void Run() { }
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(2, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["definition_file_count"]!.GetValue<int>());
+        Assert.True(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
+        Assert.Equal("multiple_definitions", structured["zero_result_reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_ExcludeTestsIgnoresOutOfScopeDuplicateDefinitions()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("tests/FooServiceTests.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService","excludeTests":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
+        Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
+        Assert.Equal(1, structured["definition_file_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("src/FooService.cs", structured["definitions"]![0]!["path"]!.GetValue<string>());
+        Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_IgnoresUnsupportedLanguageDuplicates()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/tools.sh", "shell",
+            """
+            FooService() {
+              :
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
+        Assert.False(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
+        Assert.Equal(1, structured["definition_file_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("src/FooService.cs", structured["definitions"]![0]!["path"]!.GetValue<string>());
+        Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_ExactDefinitionResolutionSkipsUnsupportedMatchesBeforeLimit()
+    {
+        for (int i = 0; i < 60; i++)
+        {
+            InsertIndexedFile($"scripts/Foo{i:D2}.sh", "shell",
+                """
+                Foo() {
+                  :
+                }
+                """);
+        }
+
+        InsertIndexedFile("src/Foo.cs", "csharp",
+            """
+            public class Foo
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(Foo service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Foo"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal("src/Foo.cs", structured["definitions"]![0]!["path"]!.GetValue<string>());
+        Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_SubstringTypeEvidenceDoesNotProduceHints()
+    {
+        InsertIndexedFile("src/Foo.cs", "csharp",
+            """
+            public class Foo
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Handle(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Foo"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_HeuristicHintsSetTruncatedWhenLimitReached()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App1.cs", "csharp",
+            """
+            public class App1
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+        InsertIndexedFile("src/App2.cs", "csharp",
+            """
+            public class App2
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService","limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["heuristic"]!.GetValue<bool>());
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+        Assert.Single(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_HeuristicHintsKeepActualReferenceCount()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(3, structured["file_impacts"]![0]!["referenceCount"]!.GetValue<int>());
+        Assert.Equal("ExecuteFolderDiffAsync", structured["file_impacts"]![0]!["symbols"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_UnresolvedExternalCallWithoutTypeEvidenceReturnsNoHints()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/ExternalConsumer.cs", "csharp",
+            """
+            public class ExternalConsumer
+            {
+                public void Boot()
+                {
+                    ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FolderDiffService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.False(structured["heuristic"]!.GetValue<bool>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("class_symbol_no_symbol_callers", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Empty(structured["file_impacts"]!.AsArray());
     }
 
     [Fact]

@@ -42,7 +42,7 @@ public partial class McpServer
             + "Use 'deps' to see file-level dependency edges — which files reference symbols from which other files. "
             + "Use 'unused_symbols' to find dead code — symbols defined but never referenced (only meaningful for graph-supported languages). "
             + "Use 'symbol_hotspots' to find the most-referenced symbols — central, high-impact code that changes may affect widely. "
-            + "Use 'impact_analysis' to compute transitive callers of a symbol — the ripple effect of changing it. Returns callers at each BFS depth level. "
+            + "Use 'impact_analysis' to compute transitive callers of a symbol. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, it may instead return heuristic file-level dependency hints; always inspect 'impact_mode', 'heuristic', and 'file_impacts'. "
             + "Use 'suggest_improvement' to report gaps or errors you notice (e.g. missing language support, poor ranking, crashes) — never include source code, only describe the issue in natural language.";
     }
 
@@ -867,30 +867,65 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var (results, truncated) = reader.GetTransitiveCallers(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
-            var fileCount = results.Select(r => r.Path).Distinct().Count();
-            var maxActualDepth = results.Count > 0 ? results.Max(r => r.Depth) : 0;
+            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
+            var confirmedCount = analysis.Callers.Count;
+            var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
+            var hintCount = analysis.FileImpacts.Count;
+            var hintFileCount = analysis.FileImpacts.Select(r => r.SourcePath).Distinct().Count();
+            var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints" && hintCount > 0;
+            var count = hasHeuristicHints ? hintCount : confirmedCount;
+            var fileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
+            var maxActualDepth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0;
             var payload = new JsonObject
             {
                 ["query"] = query,
-                ["count"] = results.Count,
+                ["resolved_name"] = analysis.ResolvedName,
+                ["count"] = count,
                 ["file_count"] = fileCount,
+                ["confirmed_count"] = confirmedCount,
+                ["confirmed_file_count"] = confirmedFileCount,
+                ["hint_count"] = hintCount,
+                ["hint_file_count"] = hintFileCount,
                 ["max_depth"] = maxDepth,
                 ["actual_depth"] = maxActualDepth,
-                ["truncated"] = truncated,
-                ["callers"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["truncated"] = analysis.Truncated,
+                ["impact_mode"] = analysis.ImpactMode,
+                ["heuristic"] = analysis.Heuristic,
+                ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, _jsonOptions),
+                ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, _jsonOptions),
+                ["definition_count"] = analysis.DefinitionCount,
+                ["definition_file_count"] = analysis.DefinitionFileCount,
+                ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
+                ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
+                ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
+                ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, _jsonOptions),
+                ["graph_table_available"] = analysis.GraphTableAvailable,
             };
-            var summary = results.Count > 0
-                ? $"Found {results.Count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
-                  + (truncated ? " Results truncated — increase limit for more." : "")
-                : "No transitive callers found.";
-            if (results.Count == 0)
+            if (analysis.ZeroResultReason != null)
+                payload["zero_result_reason"] = analysis.ZeroResultReason;
+            if (analysis.Suggestion != null)
+                payload["suggestion"] = analysis.Suggestion;
+
+            var summary = analysis.ImpactMode switch
+            {
+                "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {hintCount} possible file-level dependent(s) across {hintFileCount} files. These hints are heuristic only."
+                    + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
+                _ when count > 0 => $"Found {count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
+                    + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
+                _ => "No impact found.",
+            };
+
+            if (count == 0)
             {
                 AddFreshnessHint(payload, reader);
                 var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null);
                 if (graphReason != null)
                     payload["graph_support_reason"] = graphReason;
+                if (!analysis.GraphTableAvailable)
+                    payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
             }
+            else if (analysis.Heuristic)
+                payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
             return CreateToolResult(id, summary, payload);
         });
     }

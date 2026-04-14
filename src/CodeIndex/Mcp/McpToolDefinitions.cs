@@ -216,7 +216,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "impact_analysis",
-                "Compute the transitive caller chain for a symbol — the ripple effect of changing it. Returns callers at each depth level via BFS. / シンボルの推移的呼び出しチェーン（変更の波及効果）をBFSで算出。各深さレベルの呼び出し元を返す。",
+                "Compute the transitive caller chain for a symbol. When a scoped query resolves to a single class / struct / interface but no symbol-level callers exist, may return heuristic file-level dependency hints instead; check `impact_mode`, `heuristic`, and `file_impacts`. / シンボルの推移的呼び出しチェーンを算出。scoped query が単一の class / struct / interface に解決されても symbol-level caller が無い場合は、代わりに heuristic な file-level dependency hint を返すことがあるため、`impact_mode`・`heuristic`・`file_impacts` を確認すること。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -224,7 +224,7 @@ public partial class McpServer
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Symbol name to analyze impact for" },
                         ["maxDepth"] = new JsonObject { ["type"] = "integer", ["description"] = "Max BFS depth (default: 5)", ["default"] = 5 },
-                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max total callers to return (default: 50)", ["default"] = 50 },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max total callers or heuristic file-level dependency hints to return (default: 50). Check `truncated` when the limit is reached.", ["default"] = 50 },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },

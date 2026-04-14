@@ -534,6 +534,1011 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ClassSymbolJsonReturnsHeuristicFileDependencyHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_class_fallback");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Run(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("heuristic").GetBoolean());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_file_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
+            Assert.False(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.True(json.GetProperty("has_class_like_definitions").GetBoolean());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+            Assert.Equal("src/FolderDiffService.cs", json.GetProperty("file_impacts")[0].GetProperty("target_path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ClassAndNamespaceWithSameNameJsonStillReturnsHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_namespace_sibling");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                namespace FooService;
+
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("heuristic").GetBoolean());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_HeuristicHintsCountOnlyJsonUsesVisibleResultCount()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_hint_count_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Run(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_file_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_FoldEquivalentClassDefinitionsJsonReportAmbiguity()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_fold_siblings");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FullwidthFooService.cs", "csharp",
+                """
+                public class ＦｏｏＳｅｒｖｉｃｅ
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_PartialClassJsonReturnsResolutionHintPayload()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_partial_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part1.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Start() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part2.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Stop() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Worker", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.True(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
+            Assert.Contains("deps --path <definition-path> --reverse", json.GetProperty("suggestion").GetString());
+            Assert.Equal(2, json.GetProperty("definition_file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ClassCollisionWithoutTypeEvidenceReturnsNoHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/BarService.cs", "csharp",
+                """
+                public class BarService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(BarService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.False(json.GetProperty("heuristic").GetBoolean());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_CommentOnlyTypeMentionDoesNotProduceHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_comment_only_type_name");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/OtherService.cs", "csharp",
+                """
+                public class OtherService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(OtherService service)
+                    {
+                        service.Run(); // TODO: maybe replace with FooService later
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_StringLiteralTypeMentionDoesNotProduceHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_string_only_type_name");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Execute() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp",
+                """
+                public class Worker
+                {
+                    public void Execute() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(Worker worker)
+                    {
+                        var label = "FooService";
+                        worker.Execute();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_NamespaceJsonDoesNotFallbackToFileDependencies()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_namespace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Services.cs", "csharp",
+                """
+                namespace Acme;
+
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                namespace Acme;
+
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Acme", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ImportOnlyQueryJsonReportsNonCallableSymbolKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_import_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.py", "python",
+                """
+                import requests
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["requests", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+            Assert.Contains("definition <symbol>", json.GetProperty("suggestion").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_UnicodeTypeEvidenceStillReturnsHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unicode_type_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/ＦｏｏＳｅｒｖｉｃｅ.cs", "csharp",
+                """
+                public class ＦｏｏＳｅｒｖｉｃｅ
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(ＦｏｏＳｅｒｖｉｃｅ service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["ＦｏｏＳｅｒｖｉｃｅ", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ExcludeTestsJsonIgnoresOutOfScopeDuplicateDefinitions()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_exclude_tests_duplicate");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "tests/FooServiceTests.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--exclude-tests", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("heuristic").GetBoolean());
+            Assert.False(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal(1, json.GetProperty("definition_file_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("src/FooService.cs", json.GetProperty("definitions")[0].GetProperty("path").GetString());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_UnsupportedLanguageDuplicateDoesNotTriggerMultipleDefinitions()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unsupported_duplicate");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/tools.sh", "shell",
+                """
+                FooService() {
+                  :
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("heuristic").GetBoolean());
+            Assert.False(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal(1, json.GetProperty("definition_file_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal("src/FooService.cs", json.GetProperty("definitions")[0].GetProperty("path").GetString());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ExactDefinitionResolutionSkipsUnsupportedMatchesBeforeLimit()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unsupported_overflow");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (int i = 0; i < 60; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"scripts/Foo{i:D2}.sh", "shell",
+                    """
+                    Foo() {
+                      :
+                    }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp",
+                """
+                public class Foo
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(Foo service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Foo", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("src/Foo.cs", json.GetProperty("definitions")[0].GetProperty("path").GetString());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_SubstringTypeEvidenceDoesNotProduceHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_substring_type_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Foo.cs", "csharp",
+                """
+                public class Foo
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Handle(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Foo", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_DuplicateDefinitionsInOneFileJsonReportsAmbiguity()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_same_file_duplicate");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Services.cs", "csharp",
+                """
+                namespace A
+                {
+                    public class FooService
+                    {
+                        public void Run() { }
+                    }
+                }
+
+                namespace B
+                {
+                    public class FooService
+                    {
+                        public void Run() { }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("definition_file_count").GetInt32());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.False(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal("multiple_definitions", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_DuplicateDefinitionsInOneFileHumanOutputMentionsDefinitionAndFileCounts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_same_file_duplicate_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Services.cs", "csharp",
+                """
+                namespace A
+                {
+                    public class FooService
+                    {
+                        public void Run() { }
+                    }
+                }
+
+                namespace B
+                {
+                    public class FooService
+                    {
+                        public void Run() { }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.DoesNotContain("file_dependency_hints", stdout);
+            Assert.Contains("2 definition(s) across 1 file(s)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_HeuristicHintsJsonSetTruncatedAndReturnSuccess()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_hint_truncated");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App1.cs", "csharp",
+                """
+                public class App1
+                {
+                    public void Boot(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App2.cs", "csharp",
+                """
+                public class App2
+                {
+                    public void Boot(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--limit", "1", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_impacts").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_HeuristicHintsJsonKeepActualReferenceCount()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_hint_refcount");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FolderDiffService service)
+                    {
+                        service.ExecuteFolderDiffAsync();
+                        service.ExecuteFolderDiffAsync();
+                        service.ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(3, json.GetProperty("file_impacts")[0].GetProperty("reference_count").GetInt32());
+            Assert.Equal("ExecuteFolderDiffAsync", json.GetProperty("file_impacts")[0].GetProperty("symbols").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_UnresolvedExternalCallWithoutTypeEvidenceReturnsNoHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unresolved_external");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FolderDiffService.cs", "csharp",
+                """
+                public class FolderDiffService
+                {
+                    public void ExecuteFolderDiffAsync() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/ExternalConsumer.cs", "csharp",
+                """
+                public class ExternalConsumer
+                {
+                    public void Boot()
+                    {
+                        ExecuteFolderDiffAsync();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FolderDiffService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void BuildExactZeroHint_NoRelaxedMatch_DoesNotRunSampleQuery()
     {
         var sampleInvoked = false;
@@ -1569,6 +2574,14 @@ public class QueryCommandRunnerTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Last();
         return JsonDocument.Parse(jsonLine);
+    }
+
+    private static void MarkGraphAndFoldReady(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkFoldReady();
     }
 
     private static string CreateIndexedDbWithSingleFile(string projectRoot, bool markGraphReady = false)
