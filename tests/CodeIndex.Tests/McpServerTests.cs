@@ -1123,6 +1123,76 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_ClassifiesCommentSeparatedReflectionAttributeAsSuspect()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 220,
+            Lines = 8,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 8,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    // Bound from JSON payload.
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_comment_fixture.cs"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var symbols = response["result"]!["structuredContent"]!["symbols"]!.AsArray();
+        Assert.Equal("FullName", symbols[1]!["name"]!.GetValue<string>());
+        Assert.Equal("reflection_or_config_suspect", symbols[1]!["unusedBucket"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_MissingGraphTable_MarksResponseDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_missing_graph");

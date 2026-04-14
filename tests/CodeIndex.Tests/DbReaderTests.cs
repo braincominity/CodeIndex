@@ -1739,6 +1739,72 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_CommentBetweenAttributeAndProperty_IsClassifiedAsSuspect()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 260,
+            Lines = 11,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    /// Bound from JSON payload.
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
+        Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_IgnoreAttributes_DoNotClassifyAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord

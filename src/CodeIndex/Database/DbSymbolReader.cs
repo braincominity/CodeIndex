@@ -817,7 +817,7 @@ public partial class DbReader
                 return [];
         }
 
-        var attributeBottom = FindPreviousNonBlankLine(lines, declarationIndex - 1);
+        var attributeBottom = FindPreviousNonTriviaLine(lines, declarationIndex - 1);
         if (attributeBottom < 0 || !LooksLikeAttributeBoundaryLine(lines[attributeBottom]))
             return [];
 
@@ -828,7 +828,7 @@ public partial class DbReader
         for (int i = attributeBottom; i >= 0; i--)
         {
             var trimmed = lines[i].Trim();
-            if (trimmed.Length == 0)
+            if (IsTriviaLine(trimmed))
             {
                 if (sawBracket)
                     block.Add(trimmed);
@@ -861,22 +861,32 @@ public partial class DbReader
     {
         for (int i = startIndex; i < lines.Length; i++)
         {
-            if (lines[i].Trim().Length > 0)
+            if (!IsTriviaLine(lines[i].Trim()))
                 return i;
         }
 
         return -1;
     }
 
-    private static int FindPreviousNonBlankLine(string[] lines, int startIndex)
+    private static int FindPreviousNonTriviaLine(string[] lines, int startIndex)
     {
         for (int i = startIndex; i >= 0; i--)
         {
-            if (lines[i].Trim().Length > 0)
+            if (!IsTriviaLine(lines[i].Trim()))
                 return i;
         }
 
         return -1;
+    }
+
+    private static bool IsTriviaLine(string trimmed)
+    {
+        return trimmed.Length == 0
+            || trimmed.StartsWith("//", StringComparison.Ordinal)
+            || trimmed.StartsWith("///", StringComparison.Ordinal)
+            || trimmed.StartsWith("/*", StringComparison.Ordinal)
+            || trimmed == "*/"
+            || trimmed.StartsWith('*');
     }
 
     private static bool LooksLikeAttributeBoundaryLine(string line)

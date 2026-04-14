@@ -313,6 +313,31 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonMarksCommentSeparatedReflectionAttributeAsSuspect()
+    {
+        var (projectRoot, dbPath) = CreateReflectionCommentedUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("FullName", symbols[1].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[1].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonDiversifiesReflectionSuspectBeforeLimit()
     {
         var (projectRoot, dbPath) = CreateReflectionDiversifiedUnusedFixtureDb();
@@ -1394,6 +1419,73 @@ public class QueryCommandRunnerTests
                 EndLine = 8,
                 Signature = "internal void InternalOnly() { }",
                 Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateReflectionCommentedUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_commented");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 220,
+            Lines = 9,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 8,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    /// Bound from JSON payload.
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
                 ContainerKind = "class",
                 ContainerName = "UserDto",
             },
