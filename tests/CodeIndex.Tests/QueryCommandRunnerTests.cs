@@ -166,6 +166,7 @@ public class QueryCommandRunnerTests
         Assert.Contains($"Error: --since is not supported for {command}.", stderr);
         Assert.Contains("remove `--since` and rerun", stderr);
         Assert.Contains("`search`, `definition`, `symbols`, or `files`", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         Assert.DoesNotContain("database not found", stderr);
     }
 
@@ -2337,7 +2338,7 @@ public class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: inspect requires a symbol query argument", stderr);
         Assert.Contains("Hint: Add the symbol you want to inspect", stderr);
-        Assert.Contains("Usage: cdidx inspect <query>", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("inspect")}", stderr);
     }
 
     [Fact]

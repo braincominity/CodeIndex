@@ -31,7 +31,7 @@ public static class QueryCommandRunner
         {
             WriteUsageError(
                 "search requires a query argument",
-                "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]",
+                GetUsageLineOrThrow("search"),
                 "Add the text you want to search for after the command, for example: `cdidx search authenticate`.");
             return CommandExitCodes.UsageError;
         }
@@ -95,7 +95,7 @@ public static class QueryCommandRunner
         {
             WriteUsageError(
                 "definition requires a symbol query argument",
-                "cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]",
+                GetUsageLineOrThrow("definition"),
                 "Add the symbol name after the command, for example: `cdidx definition QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
@@ -194,13 +194,13 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "references", "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]"))
+        if (TryWriteUnsupportedSinceError(options, "references"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "references requires a symbol query argument",
-                "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]",
+                GetUsageLineOrThrow("references"),
                 "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
@@ -274,13 +274,13 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "callers", "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]"))
+        if (TryWriteUnsupportedSinceError(options, "callers"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "callers requires a symbol query argument",
-                "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]",
+                GetUsageLineOrThrow("callers"),
                 "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
@@ -350,13 +350,13 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "callees", "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]"))
+        if (TryWriteUnsupportedSinceError(options, "callees"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "callees requires a caller query argument",
-                "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]",
+                GetUsageLineOrThrow("callees"),
                 "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
             return CommandExitCodes.UsageError;
         }
@@ -605,13 +605,13 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "excerpt"))
             return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
             WriteUsageError(
                 "excerpt requires a path argument",
-                "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]",
+                GetUsageLineOrThrow("excerpt"),
                 "Pass the indexed file path after `excerpt`, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
             return CommandExitCodes.UsageError;
         }
@@ -661,7 +661,7 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "map", "cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "map"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -729,13 +729,13 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "inspect", "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]"))
+        if (TryWriteUnsupportedSinceError(options, "inspect"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "inspect requires a symbol query argument",
-                "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]",
+                GetUsageLineOrThrow("inspect"),
                 "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
@@ -798,7 +798,7 @@ public static class QueryCommandRunner
         {
             WriteUsageError(
                 "outline requires a file path.",
-                "cdidx outline <path> [--db <path>] [--json]",
+                GetUsageLineOrThrow("outline"),
                 "Pass the indexed file path, for example: `cdidx outline src/CodeIndex/Program.cs`.");
             return CommandExitCodes.UsageError;
         }
@@ -807,7 +807,7 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "outline", "cdidx outline <path> [--db <path>] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "outline"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -853,7 +853,7 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "status", "cdidx status [--db <path>] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "status"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -933,13 +933,13 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "impact", "cdidx impact <symbol> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]"))
+        if (TryWriteUnsupportedSinceError(options, "impact"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "impact requires a symbol query argument",
-                "cdidx impact <symbol> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]",
+                GetUsageLineOrThrow("impact"),
                 "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
@@ -1136,7 +1136,7 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "deps", "cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "deps"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1179,7 +1179,7 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "hotspots", "cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "hotspots"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1236,7 +1236,7 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "unused", "cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "unused"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1297,7 +1297,7 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "validate", "cdidx validate [--db <path>] [--kind <kind>] [--path <pattern>] [--json]"))
+        if (TryWriteUnsupportedSinceError(options, "validate"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1597,16 +1597,20 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static bool TryWriteUnsupportedSinceError(QueryCommandOptions options, string commandName, string usage)
+    private static bool TryWriteUnsupportedSinceError(QueryCommandOptions options, string commandName)
     {
         if (!options.Since.HasValue)
             return false;
 
         Console.Error.WriteLine($"Error: --since is not supported for {commandName}.");
         Console.Error.WriteLine("Hint: remove `--since` and rerun, or use it with `search`, `definition`, `symbols`, or `files`.");
-        Console.Error.WriteLine($"Usage: {usage}");
+        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
     }
+
+    private static string GetUsageLineOrThrow(string commandName) =>
+        ConsoleUi.GetUsageLine(commandName)
+        ?? throw new InvalidOperationException($"Missing usage line for command '{commandName}'.");
 
     private static void WriteUsageError(string message, string usage, string hint)
     {

@@ -8,6 +8,33 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class ConsoleUi
 {
+    private static readonly (string Command, string Usage)[] CommandUsageLines =
+    [
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]"),
+        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
+        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--json]"),
+        ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]"),
+        ("search", "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]"),
+        ("definition", "cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]"),
+        ("references", "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]"),
+        ("callers", "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]"),
+        ("callees", "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]"),
+        ("symbols", "cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]"),
+        ("files", "cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]"),
+        ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]"),
+        ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]"),
+        ("inspect", "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]"),
+        ("outline", "cdidx outline <path> [--db <path>] [--json]"),
+        ("status", "cdidx status [--db <path>] [--json]"),
+        ("validate", "cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]"),
+        ("impact", "cdidx impact <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]"),
+        ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]"),
+        ("unused", "cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]"),
+        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]"),
+        ("languages", "cdidx languages [--json]"),
+        ("mcp", "cdidx mcp [--db <path>]"),
+    ];
+
     private const int SpinnerFrameDelayMs = 100;
     private const int SpinnerStopDelayMs = 20;
     private const int ConsoleLineMargin = 1;
@@ -299,29 +326,8 @@ public static class ConsoleUi
 
         Console.WriteLine("Usage:");
         Console.WriteLine("  cdidx <projectPath>");
-        Console.WriteLine("  cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]");
-        Console.WriteLine("  cdidx backfill-fold [--db <path>] [--json]");
-        Console.WriteLine("  cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--json]");
-        Console.WriteLine("  cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--json]");
-        Console.WriteLine("  cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count]");
-        Console.WriteLine("  cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]");
-        Console.WriteLine("  cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
-        Console.WriteLine("  cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
-        Console.WriteLine("  cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
-        Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
-        Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
-        Console.WriteLine("  cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
-        Console.WriteLine("  cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
-        Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]");
-        Console.WriteLine("  cdidx outline <path> [--db <path>] [--json]");
-        Console.WriteLine("  cdidx status [--db <path>] [--json]");
-        Console.WriteLine("  cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
-        Console.WriteLine("  cdidx impact <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]");
-        Console.WriteLine("  cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]");
-        Console.WriteLine("  cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
-        Console.WriteLine("  cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
-        Console.WriteLine("  cdidx languages [--json]");
-        Console.WriteLine("  cdidx mcp [--db <path>]");
+        foreach (var (_, usage) in CommandUsageLines)
+            Console.WriteLine($"  {usage}");
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
@@ -406,6 +412,17 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
         Console.WriteLine("  cdidx languages                                Show supported languages");
+    }
+
+    public static string? GetUsageLine(string command)
+    {
+        foreach (var (name, usage) in CommandUsageLines)
+        {
+            if (string.Equals(name, command, StringComparison.Ordinal))
+                return usage;
+        }
+
+        return null;
     }
 
     // --- Did-you-mean / もしかして ---
