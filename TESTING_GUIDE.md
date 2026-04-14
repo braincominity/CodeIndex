@@ -21,7 +21,8 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Framework: xUnit
 - Target framework: `net8.0`
 - Main test project: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
-- Common support packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`
+- Common direct test-only packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`
+- These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
 - Test parallelism: disabled at the assembly level. The suite mutates process-global `Console.Out` / `Console.Error`, clears SQLite pools during cleanup, and opens many temporary databases, so serial execution is the stable default.
 
 ## Test Layout
@@ -169,7 +170,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - フレームワーク: xUnit
 - 対象フレームワーク: `net8.0`
 - メインのテストプロジェクト: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
-- 主な補助パッケージ: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`
+- 主な直接参照の test-only package: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`
+- これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
 - テスト並列実行: assembly 単位で無効。スイート全体で `Console.Out` / `Console.Error` の差し替え、SQLite pool のクリア、テンポラリ DB の大量 open/close を行うため、直列実行を既定の安定経路にしている。
 
 ## テスト構成
