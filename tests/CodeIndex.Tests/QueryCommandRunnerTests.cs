@@ -248,6 +248,90 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
+    {
+        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_zero_json_missing_graph");
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", readOnlyUri, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("symbol_references table missing", json.GetProperty("degraded_reason").GetString());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
+    {
+        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callers_zero_json_missing_graph");
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Run", "--db", readOnlyUri, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("symbol_references table missing", json.GetProperty("degraded_reason").GetString());
+            Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
+    {
+        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callees_zero_json_missing_graph");
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["Run", "--db", readOnlyUri, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("symbol_references table missing", json.GetProperty("degraded_reason").GetString());
+            Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonIncludesConfidenceBuckets()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();
@@ -2044,5 +2128,25 @@ public class QueryCommandRunnerTests
             """;
         cmd.ExecuteNonQuery();
         SqliteConnection.ClearAllPools();
+    }
+
+    private static (string ProjectRoot, string ReadOnlyUri) CreateReadOnlyMissingGraphTableDb(string projectName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(projectName);
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        using (var db = new DbContext(dbPath))
+        {
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = """
+                DROP TABLE symbol_references;
+                PRAGMA wal_checkpoint(TRUNCATE);
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+        return (projectRoot, new Uri(dbPath).AbsoluteUri + "?immutable=1");
     }
 }

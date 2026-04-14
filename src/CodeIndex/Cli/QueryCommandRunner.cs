@@ -179,6 +179,8 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : null);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
@@ -245,6 +247,8 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : null);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
@@ -307,6 +311,8 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
+                else if (options.Json && !reader._hasReferencesTable)
+                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : null);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");

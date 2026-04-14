@@ -781,7 +781,7 @@ All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempot
 
 | | `grep` / `rg` | `cdidx` |
 |---|---|---|
-| Output format | Plain text (needs parsing) | Structured JSON (`search`/`symbols`-style hits stream as JSON lines; summaries/counts use one object) |
+| Output format | Plain text (needs parsing) | Structured JSON (`search`/`symbols`-style hits stream as JSON lines; summaries/counts and degraded zero-result graph responses use one object) |
 | Search speed on large repos | Scans every file each time | Pre-built FTS5 index |
 | Symbol awareness | None | Functions, classes, imports |
 | Incremental update | N/A | `--commits`, `--files` |
@@ -1658,7 +1658,7 @@ cdidx backfill-fold
 
 | | `grep` / `rg` | `cdidx` |
 |---|---|---|
-| 出力形式 | プレーンテキスト（パース必要） | 構造化JSON（`search` / `symbols` 系のヒットは JSON ライン、summary/count は単一オブジェクト） |
+| 出力形式 | プレーンテキスト（パース必要） | 構造化JSON（`search` / `symbols` 系のヒットは JSON ライン、summary/count と degraded な graph 0件は単一オブジェクト） |
 | 大規模リポジトリでの検索速度 | 毎回全ファイルスキャン | 構築済みFTS5インデックス |
 | シンボル認識 | なし | 関数、クラス、インポート |
 | インクリメンタル更新 | N/A | `--commits`, `--files` |
