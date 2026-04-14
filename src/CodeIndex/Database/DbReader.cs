@@ -293,6 +293,28 @@ public partial class DbReader
             includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
     }
 
+    internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT 1
+            FROM files f
+            WHERE 1=1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphApplicableLang")}";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return cmd.ExecuteScalar() != null;
+    }
+
     private ExactQuerySignal BuildAnalyzeGraphExactQuerySignal()
     {
         if (!_hasReferencesTable)
