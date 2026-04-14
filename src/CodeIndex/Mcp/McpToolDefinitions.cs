@@ -374,7 +374,7 @@ public partial class McpServer
                 IndexAnnotations()),
             CreateToolDefinition(
                 "backfill_fold",
-                "Upgrade folded-name keys in an existing DB without reparsing source files. Fills missing `name_folded` columns (or rewrites all keys after a fold-version mismatch) and stamps FoldReady on success. / ソース再解析なしで既存DBの folded-name key を更新する。欠損 `name_folded` 列を埋めるか、fold version 不一致時は全 key を再生成し、成功時に FoldReady を stamp する。",
+                "Upgrade folded-name keys in an existing CodeIndex DB without reparsing source files. Rejects missing or blank targets instead of creating a fresh DB. Fills missing `name_folded` columns (or rewrites all keys after fold metadata drift such as version/fingerprint mismatch) and stamps FoldReady on success. / ソース再解析なしで既存の CodeIndex DB の folded-name key を更新する。欠落したDBや空のDBを新規作成せず拒否し、欠損 `name_folded` 列を埋めるか、fold metadata の drift（version / fingerprint 不一致など）時は全 key を再生成し、成功時に FoldReady を stamp する。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -404,9 +404,9 @@ public partial class McpServer
             CreateToolDefinition(
                 "unused_symbols",
                 "Find symbols that are defined but never referenced in the indexed codebase. "
-                + "Useful for dead code detection. Only meaningful for languages with reference extraction support. "
+                + "Useful for dead code detection. Results include confidence buckets so private hits rank ahead of public/exported suspects, and the lowest-confidence bucket is reserved for config-bound properties or C#-style attribute-adjacent reflection surfaces. Only meaningful for languages with reference extraction support. "
                 + "/ インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する。"
-                + "デッドコード検出に有用。参照抽出対応言語でのみ意味がある。",
+                + "デッドコード検出に有用。private 候補を public/exported suspect より前に返し、最低信頼 bucket は config-bound な property または C# 風 attribute 隣接の reflection surface 用に使う。参照抽出対応言語でのみ意味がある。",
                 new JsonObject
                 {
                     ["type"] = "object",
