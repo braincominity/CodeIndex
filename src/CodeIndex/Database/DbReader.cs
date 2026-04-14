@@ -997,8 +997,7 @@ public partial class DbReader
     private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         return SearchSymbols(resolvedName, limit: 50, kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
-            .Where(symbol => string.Equals(symbol.Name, resolvedName, StringComparison.OrdinalIgnoreCase)
-                && ReferenceExtractor.SupportsLanguage(symbol.Lang))
+            .Where(symbol => ReferenceExtractor.SupportsLanguage(symbol.Lang))
             .ToList();
     }
 

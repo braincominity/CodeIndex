@@ -348,6 +348,60 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_FoldEquivalentClassDefinitionsJsonReportAmbiguity()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_fold_siblings");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FooService.cs", "csharp",
+                """
+                public class FooService
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FullwidthFooService.cs", "csharp",
+                """
+                public class ＦｏｏＳｅｒｖｉｃｅ
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(FooService service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_PartialClassJsonReturnsResolutionHintPayload()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_partial_hint");

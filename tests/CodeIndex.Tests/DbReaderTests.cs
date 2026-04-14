@@ -1171,6 +1171,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_FoldEquivalentClassDefinitions_ReportAmbiguity()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/FullwidthFooService.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.False(analysis.Heuristic);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+    }
+
+    [Fact]
     public void AnalyzeImpact_PartialClassWithoutReverseEdges_ExplainsMultipleDefinitions()
     {
         InsertIndexedFile("src/Worker.Part1.cs", "csharp",

@@ -101,6 +101,12 @@ public class McpServerTests : IDisposable
         writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void MarkFoldReady()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.MarkFoldReady();
+    }
+
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
@@ -590,6 +596,46 @@ public class McpServerTests : IDisposable
         Assert.False(structured["has_multiple_definition_files"]!.GetValue<bool>());
         Assert.Equal(2, structured["definition_count"]!.GetValue<int>());
         Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_FoldEquivalentClassDefinitionsReportAmbiguity()
+    {
+        InsertIndexedFile("src/FooService.cs", "csharp",
+            """
+            public class FooService
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/FullwidthFooService.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(FooService service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+        MarkFoldReady();
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"FooService"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.True(structured["has_multiple_definitions"]!.GetValue<bool>());
+        Assert.Equal(2, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal("multiple_definition_files", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Equal(0, structured["hint_count"]!.GetValue<int>());
     }
 
     [Fact]
