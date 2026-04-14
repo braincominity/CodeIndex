@@ -19,14 +19,31 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
+    private static readonly HashSet<string> ValueTakingOptions =
+    [
+        "--db",
+        "--limit",
+        "--top",
+        "--lang",
+        "--kind",
+        "--since",
+        "--start",
+        "--end",
+        "--before",
+        "--after",
+        "--name",
+        "--snippet-lines",
+        "--path",
+        "--exclude-path",
+        "--depth",
+    ];
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
-        {
-            Console.Error.WriteLine(options.ParseError);
+        if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        }
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--fts", "--count", "--since", "--no-dedup", "--exact"]))
+            return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
             WriteUsageError(
@@ -90,6 +107,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("definition", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--kind", "--body", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -194,6 +213,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "references"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
@@ -274,6 +295,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "callers"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
@@ -349,6 +372,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "callees"))
             return CommandExitCodes.UsageError;
@@ -444,11 +469,10 @@ public static class QueryCommandRunner
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
-        {
-            Console.Error.WriteLine(options.ParseError);
+        if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        }
+        if (TryWriteUnsupportedOptionError("symbols", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--name"]))
+            return CommandExitCodes.UsageError;
         var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
         if (hadExplicitInput && symbolQueries == null)
         {
@@ -551,11 +575,10 @@ public static class QueryCommandRunner
     public static int RunFiles(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
-        {
-            Console.Error.WriteLine(options.ParseError);
+        if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        }
+        if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -604,6 +627,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, ["--db", "--json", "--no-json", "--start", "--end", "--before", "--after", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "excerpt"))
             return CommandExitCodes.UsageError;
@@ -660,6 +685,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("map", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "map"))
             return CommandExitCodes.UsageError;
@@ -728,6 +755,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--since", "--body", "--exact"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "inspect"))
             return CommandExitCodes.UsageError;
@@ -807,6 +836,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], ["--db", "--json", "--no-json", "--since"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "outline"))
             return CommandExitCodes.UsageError;
 
@@ -852,6 +883,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("status", cmdArgs, ["--db", "--json", "--no-json", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "status"))
             return CommandExitCodes.UsageError;
@@ -932,6 +965,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--depth"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "impact"))
             return CommandExitCodes.UsageError;
@@ -1136,6 +1171,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("deps", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--since", "--reverse"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "deps"))
             return CommandExitCodes.UsageError;
 
@@ -1178,6 +1215,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "hotspots"))
             return CommandExitCodes.UsageError;
@@ -1235,6 +1274,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("unused", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "unused"))
             return CommandExitCodes.UsageError;
@@ -1297,9 +1338,9 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "validate"))
+        if (TryWriteUnsupportedOptionError("validate", cmdArgs, ["--db", "--json", "--no-json", "--kind", "--path", "--since"]))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedValidateOptionError(cmdArgs))
+        if (TryWriteUnsupportedSinceError(options, "validate"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1409,8 +1450,14 @@ public static class QueryCommandRunner
         DateTime? since = null;
         bool noDedup = false;
         bool exact = false;
-        string? parseError = null;
+        List<string>? parseErrors = null;
         var extraNames = new List<string>();
+
+        void AddParseError(string error)
+        {
+            parseErrors ??= [];
+            parseErrors.Add(error);
+        }
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -1427,12 +1474,10 @@ public static class QueryCommandRunner
                     break;
                 case "--limit" when i + 1 < args.Length:
                 case "--top" when i + 1 < args.Length:
-                    if (!int.TryParse(args[++i], out limit) || limit <= 0)
-                    {
-                        Console.Error.WriteLine($"Error: --limit requires a positive integer, got '{args[i]}'");
-                        Console.Error.WriteLine("Hint: retry with `--limit 1` or another positive integer.");
-                        limit = 20;
-                    }
+                    if (TryParsePositiveInt(args[++i], "--limit", out var parsedLimit, out var limitError))
+                        limit = parsedLimit;
+                    else
+                        AddParseError(limitError!);
                     break;
                 case "--lang" when i + 1 < args.Length:
                     lang = args[++i];
@@ -1456,7 +1501,10 @@ public static class QueryCommandRunner
                     exact = true;
                     break;
                 case "--depth" when i + 1 < args.Length:
-                    contextAfter = ParseNonNegativeInt(args[++i], "--depth"); // reused as depth for impact / impact用に再利用
+                    if (TryParseNonNegativeInt(args[++i], "--depth", out var parsedDepth, out var depthError))
+                        contextAfter = parsedDepth; // reused as depth for impact / impact用に再利用
+                    else
+                        AddParseError(depthError!);
                     break;
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
@@ -1474,32 +1522,47 @@ public static class QueryCommandRunner
                     if (TryParseIso8601Since(args[++i], out var parsedSince))
                         since = parsedSince;
                     else
-                        parseError = $"Error: could not parse --since value '{args[i]}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+                        AddParseError($"Error: could not parse --since value '{args[i]}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
                 case "--since":
-                    parseError = "Error: --since requires a value. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+                    AddParseError("Error: --since requires a value. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
                 case "--start" when i + 1 < args.Length:
-                    startLine = ParsePositiveInt(args[++i], "--start");
+                    if (TryParsePositiveInt(args[++i], "--start", out var parsedStart, out var startError))
+                        startLine = parsedStart;
+                    else
+                        AddParseError(startError!);
                     break;
                 case "--end" when i + 1 < args.Length:
-                    endLine = ParsePositiveInt(args[++i], "--end");
+                    if (TryParsePositiveInt(args[++i], "--end", out var parsedEnd, out var endError))
+                        endLine = parsedEnd;
+                    else
+                        AddParseError(endError!);
                     break;
                 case "--before" when i + 1 < args.Length:
-                    contextBefore = ParseNonNegativeInt(args[++i], "--before");
+                    if (TryParseNonNegativeInt(args[++i], "--before", out var parsedBefore, out var beforeError))
+                        contextBefore = parsedBefore;
+                    else
+                        AddParseError(beforeError!);
                     break;
                 case "--after" when i + 1 < args.Length:
-                    contextAfter = ParseNonNegativeInt(args[++i], "--after");
+                    if (TryParseNonNegativeInt(args[++i], "--after", out var parsedAfter, out var afterError))
+                        contextAfter = parsedAfter;
+                    else
+                        AddParseError(afterError!);
                     break;
                 case "--name" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
                     // Repeatable; OR-joined with other --name values and extra positional names / 繰り返し可、他の --name や追加の positional 引数と OR 結合
                     extraNames.Add(args[++i]);
                     break;
                 case "--name":
-                    parseError = "Error: --name requires a value (symbol name pattern). / --name には値（シンボル名パターン）が必要です。";
+                    AddParseError("Error: --name requires a value (symbol name pattern). / --name には値（シンボル名パターン）が必要です。");
                     break;
                 case "--snippet-lines" when i + 1 < args.Length:
-                    snippetLines = SearchSnippetFormatter.ClampSnippetLines(ParsePositiveInt(args[++i], "--snippet-lines") ?? SearchSnippetFormatter.DefaultSnippetLines);
+                    if (TryParsePositiveInt(args[++i], "--snippet-lines", out var parsedSnippetLines, out var snippetLinesError))
+                        snippetLines = SearchSnippetFormatter.ClampSnippetLines(parsedSnippetLines);
+                    else
+                        AddParseError(snippetLinesError!);
                     break;
                 default:
                     if (args[i].StartsWith('-'))
@@ -1542,7 +1605,7 @@ public static class QueryCommandRunner
             NoDedup = noDedup,
             Exact = exact,
             ExtraNames = extraNames,
-            ParseError = parseError,
+            ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
 
@@ -1610,17 +1673,29 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static bool TryWriteUnsupportedValidateOptionError(string[] cmdArgs)
+    private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions)
     {
-        foreach (var arg in cmdArgs)
+        var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
+        for (var i = 0; i < cmdArgs.Length; i++)
         {
-            if (arg is "--lang" or "--limit" or "--top" or "--exclude-path" or "--exclude-tests")
+            var arg = cmdArgs[i];
+            if (!arg.StartsWith("-", StringComparison.Ordinal))
+                continue;
+
+            if (supported.Contains(arg))
             {
-                Console.Error.WriteLine($"Error: {arg} is not supported for validate.");
-                Console.Error.WriteLine("Hint: validate supports `--kind` and `--path`; remove the unsupported filter and rerun.");
-                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow("validate")}");
-                return true;
+                if (ValueTakingOptions.Contains(arg) && i + 1 < cmdArgs.Length)
+                    i++;
+                continue;
             }
+
+            if (ValueTakingOptions.Contains(arg) && i + 1 < cmdArgs.Length)
+                i++;
+
+            Console.Error.WriteLine($"Error: {arg} is not supported for {commandName}.");
+            Console.Error.WriteLine($"Hint: remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`.");
+            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            return true;
         }
 
         return false;
@@ -1960,28 +2035,30 @@ public static class QueryCommandRunner
             payload["degraded_reason"] = exactSignal.DegradedReason;
     }
 
-    private static int? ParsePositiveInt(string rawValue, string optionName)
+    private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
     {
-        if (!int.TryParse(rawValue, out var value) || value <= 0)
+        if (int.TryParse(rawValue, out value) && value > 0)
         {
-            Console.Error.WriteLine($"Error: {optionName} requires a positive integer, got '{rawValue}'");
-            Console.Error.WriteLine($"Hint: retry with `{optionName} 1` or another positive integer.");
-            return null;
+            error = null;
+            return true;
         }
 
-        return value;
+        value = 0;
+        error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
+        return false;
     }
 
-    private static int ParseNonNegativeInt(string rawValue, string optionName)
+    private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error)
     {
-        if (!int.TryParse(rawValue, out var value) || value < 0)
+        if (int.TryParse(rawValue, out value) && value >= 0)
         {
-            Console.Error.WriteLine($"Error: {optionName} requires a non-negative integer, got '{rawValue}'");
-            Console.Error.WriteLine($"Hint: retry with `{optionName} 0` or another non-negative integer.");
-            return 0;
+            error = null;
+            return true;
         }
 
-        return value;
+        value = 0;
+        error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
+        return false;
     }
 
     // Accepted ISO 8601 formats for --since / --sinceフィルタで受け付けるISO 8601書式

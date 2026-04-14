@@ -67,7 +67,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void ParseArgs_InvalidNumbersAndUnknownOptionsFallbackAndReportErrors()
+    public void ParseArgs_InvalidNumbersAndUnknownOptionsAccumulateParseErrors()
     {
         var (options, _, stderr) = CaptureConsole(() => QueryCommandRunner.ParseArgs(
         [
@@ -87,14 +87,15 @@ public class QueryCommandRunnerTests
         Assert.Equal(0, options.ContextBefore);
         Assert.Equal(0, options.ContextAfter);
         Assert.Equal(SearchSnippetFormatter.DefaultSnippetLines, options.SnippetLines);
-        Assert.Contains("Error: --limit requires a positive integer", stderr);
-        Assert.Contains("Hint: retry with `--limit 1` or another positive integer.", stderr);
-        Assert.Contains("Error: --start requires a positive integer", stderr);
-        Assert.Contains("Error: --end requires a positive integer", stderr);
-        Assert.Contains("Error: --before requires a non-negative integer", stderr);
-        Assert.Contains("Hint: retry with `--before 0` or another non-negative integer.", stderr);
-        Assert.Contains("Error: --after requires a non-negative integer", stderr);
-        Assert.Contains("Error: --snippet-lines requires a positive integer", stderr);
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("Error: --limit requires a positive integer", options.ParseError);
+        Assert.Contains("Hint: retry with `--limit 1` or another positive integer.", options.ParseError);
+        Assert.Contains("Error: --start requires a positive integer", options.ParseError);
+        Assert.Contains("Error: --end requires a positive integer", options.ParseError);
+        Assert.Contains("Error: --before requires a non-negative integer", options.ParseError);
+        Assert.Contains("Hint: retry with `--before 0` or another non-negative integer.", options.ParseError);
+        Assert.Contains("Error: --after requires a non-negative integer", options.ParseError);
+        Assert.Contains("Error: --snippet-lines requires a positive integer", options.ParseError);
         Assert.Contains("Warning: unknown option '--mystery' (ignored)", stderr);
     }
 
@@ -171,23 +172,46 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("--lang", "javascript")]
-    [InlineData("--exclude-path", "src/")]
-    [InlineData("--exclude-tests")]
-    [InlineData("--limit", "1")]
-    [InlineData("--top", "1")]
-    public void RunValidate_UnsupportedFiltersReturnUsageError(string flag, string? value = null)
+    [InlineData("map", "--count")]
+    [InlineData("inspect", "--count")]
+    [InlineData("status", "--count")]
+    [InlineData("validate", "--exact")]
+    [InlineData("validate", "--count")]
+    [InlineData("validate", "--lang", "javascript")]
+    [InlineData("validate", "--exclude-path", "src/")]
+    [InlineData("validate", "--exclude-tests")]
+    [InlineData("validate", "--limit", "1")]
+    [InlineData("validate", "--top", "1")]
+    public void QueryEntrypoints_UnsupportedOptionsReturnUsageError(string command, string flag, string? value = null)
     {
         var args = value == null
             ? new[] { flag }
             : new[] { flag, value };
 
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(args, _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithUnsupportedOption(command, args));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains($"Error: {flag} is not supported for validate.", stderr);
-        Assert.Contains("validate supports `--kind` and `--path`", stderr);
-        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("validate")}", stderr);
+        Assert.Contains($"Error: {flag} is not supported for {command}.", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        Assert.DoesNotContain("database not found", stderr);
+    }
+
+    [Theory]
+    [InlineData("search-limit", "--limit requires a positive integer")]
+    [InlineData("search-top", "--limit requires a positive integer")]
+    [InlineData("search-snippet-lines", "--snippet-lines requires a positive integer")]
+    [InlineData("impact-depth", "--depth requires a non-negative integer")]
+    [InlineData("excerpt-start", "--start requires a positive integer")]
+    [InlineData("excerpt-end", "--end requires a positive integer")]
+    [InlineData("excerpt-before", "--before requires a non-negative integer")]
+    [InlineData("excerpt-after", "--after requires a non-negative integer")]
+    public void QueryEntrypoints_InvalidNumericOptionsReturnUsageError(string scenario, string expectedErrorFragment)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithInvalidNumeric(scenario));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(expectedErrorFragment, stderr);
+        Assert.DoesNotContain("database not found", stderr);
     }
 
     [Fact]
@@ -2729,6 +2753,34 @@ public class QueryCommandRunnerTests
             "unused" => QueryCommandRunner.RunUnused(["--since", "9999-01-01", "--count"], _jsonOptions),
             "validate" => QueryCommandRunner.RunValidate(["--since", "9999-01-01"], _jsonOptions),
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+    }
+
+    private int RunCommandWithUnsupportedOption(string command, string[] args)
+    {
+        return command switch
+        {
+            "map" => QueryCommandRunner.RunMap(args, _jsonOptions),
+            "inspect" => QueryCommandRunner.RunInspect(["QueryCommandRunner", .. args], _jsonOptions),
+            "status" => QueryCommandRunner.RunStatus(args, _jsonOptions),
+            "validate" => QueryCommandRunner.RunValidate(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+    }
+
+    private int RunCommandWithInvalidNumeric(string scenario)
+    {
+        return scenario switch
+        {
+            "search-limit" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--limit", "nope"], _jsonOptions),
+            "search-top" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--top", "nope"], _jsonOptions),
+            "search-snippet-lines" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--snippet-lines", "nope"], _jsonOptions),
+            "impact-depth" => QueryCommandRunner.RunImpact(["QueryCommandRunner", "--depth", "nope", "--count"], _jsonOptions),
+            "excerpt-start" => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "--start", "nope"], _jsonOptions),
+            "excerpt-end" => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "--start", "1", "--end", "nope"], _jsonOptions),
+            "excerpt-before" => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "--start", "1", "--before", "nope"], _jsonOptions),
+            "excerpt-after" => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "--start", "1", "--after", "nope"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
         };
     }
 
