@@ -1123,6 +1123,64 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_MissingGraphTable_MarksResponseDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_missing_graph");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.cs",
+                    Lang = "csharp",
+                    Size = 42,
+                    Lines = 3,
+                    Modified = new DateTime(2024, 1, 1),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertChunks([new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 3,
+                    Content = "public class App\n{\n    public void Run() { }\n}",
+                }]);
+                writer.InsertSymbols([new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = "App",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 4,
+                    Signature = "public class App",
+                    Visibility = "public",
+                }]);
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp"}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.True(structured["degraded"]!.GetValue<bool>());
+            Assert.False(structured["graph_table_available"]!.GetValue<bool>());
+            Assert.Contains("missing", structured["note"]!.GetValue<string>());
+            Assert.Contains("degraded", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_DiversifiesReflectionSuspectBeforeLimit()
     {
         var writer = new DbWriter(_db.Connection);

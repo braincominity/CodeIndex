@@ -366,6 +366,63 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithJsonZeroResults_UsesUnusedSchema()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--path", "does-not-exist"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("indexed", json.GetProperty("graph_support_reason").GetString());
+            Assert.True(json.TryGetProperty("symbols", out var symbols));
+            Assert.Equal(0, symbols.GetArrayLength());
+            Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
+            Assert.Empty(bucketCounts.EnumerateObject());
+            Assert.False(json.TryGetProperty("unused", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonUnsupportedLanguageZeroResults_UsesUnusedSchema()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "markdown"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal(0, json.GetProperty("symbols").GetArrayLength());
+            Assert.Empty(json.GetProperty("returned_bucket_counts").EnumerateObject());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonMissingGraphTable_UsesUnusedSchema()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_json");

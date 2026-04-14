@@ -922,6 +922,7 @@ public partial class McpServer
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
         bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
 
         return WithDbReader(id, reader =>
         {
@@ -934,6 +935,7 @@ public partial class McpServer
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
+                ["graph_support_reason"] = graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
@@ -942,6 +944,13 @@ public partial class McpServer
                 : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";
+            if (!reader._hasReferencesTable)
+            {
+                payload["graph_table_available"] = false;
+                payload["degraded"] = true;
+                payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                summary += " Warning: symbol_references table is missing in this index; zero-result unused output is degraded, not authoritative.";
+            }
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);

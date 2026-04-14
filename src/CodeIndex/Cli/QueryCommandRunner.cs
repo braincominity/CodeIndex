@@ -992,21 +992,16 @@ public static class QueryCommandRunner
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (options.Json && !reader._hasReferencesTable)
+                if (options.Json)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(new
-                    {
-                        count = 0,
-                        graph_supported = graphSupported,
-                        graph_support_reason = graphSupportReason,
-                        returned_bucket_counts = new Dictionary<string, int>(),
-                        symbols = Array.Empty<object>(),
-                        graph_table_available = false,
-                        degraded = true,
-                        note = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative."
-                    }, jsonOptions));
+                    Console.WriteLine(BuildUnusedJsonPayload(
+                        Array.Empty<UnusedSymbolResult>(),
+                        graphSupported,
+                        graphSupportReason,
+                        reader._hasReferencesTable,
+                        jsonOptions));
                 }
-                else if (!options.Json)
+                else
                 {
                     Console.Error.WriteLine("No unused symbols found.");
                     WriteZeroResultHints(options, reader);
@@ -1019,14 +1014,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
-                    count = results.Count,
-                    graph_supported = graphSupported,
-                    graph_support_reason = graphSupportReason,
-                    returned_bucket_counts = BuildUnusedBucketCounts(results),
-                    symbols = results
-                }, jsonOptions));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, reader._hasReferencesTable, jsonOptions));
             }
             else
             {
@@ -1076,6 +1064,28 @@ public static class QueryCommandRunner
                 ordered[bucket] = count;
         }
         return ordered;
+    }
+
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, bool hasReferencesTable, JsonSerializerOptions jsonOptions)
+    {
+        var resultList = results as IReadOnlyCollection<UnusedSymbolResult> ?? results.ToArray();
+        var payload = new JsonObject
+        {
+            ["count"] = resultList.Count,
+            ["graph_supported"] = graphSupported,
+            ["graph_support_reason"] = graphSupportReason,
+            ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), jsonOptions),
+            ["symbols"] = JsonSerializer.SerializeToNode(resultList, jsonOptions)
+        };
+
+        if (!hasReferencesTable)
+        {
+            payload["graph_table_available"] = false;
+            payload["degraded"] = true;
+            payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+        }
+
+        return payload.ToJsonString(jsonOptions);
     }
 
     private static string GetUnusedBucketHeading(string bucket) => bucket switch
