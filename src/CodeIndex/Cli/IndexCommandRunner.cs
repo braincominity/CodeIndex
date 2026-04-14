@@ -49,18 +49,34 @@ public static class IndexCommandRunner
         if (!Directory.Exists(options.ProjectPath))
         {
             if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message = $"directory not found: {options.ProjectPath}" }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    status = "error",
+                    message = $"directory not found: {options.ProjectPath}",
+                    hint = "Check the project path and rerun `cdidx index <projectPath>` with an existing directory."
+                }, jsonOptions));
             else
+            {
                 Console.Error.WriteLine($"Error: directory not found: {options.ProjectPath}");
+                Console.Error.WriteLine("Hint: check the project path and rerun `cdidx index <projectPath>` with an existing directory.");
+            }
             return CommandExitCodes.NotFound;
         }
 
         if (options.Rebuild && isUpdateMode)
         {
             if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message = "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)" }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    status = "error",
+                    message = "--rebuild cannot be used with --commits or --files (rebuild requires a full rescan)",
+                    hint = "Drop `--rebuild` for partial updates, or rerun `cdidx index <projectPath> --rebuild` for a full rescan."
+                }, jsonOptions));
             else
+            {
                 Console.Error.WriteLine("Error: --rebuild cannot be used with --commits or --files (rebuild requires a full rescan)");
+                Console.Error.WriteLine("Hint: drop `--rebuild` for `--commits`/`--files`, or rerun `cdidx index <projectPath> --rebuild` for a full rescan.");
+            }
             return CommandExitCodes.UsageError;
         }
 
@@ -181,11 +197,21 @@ public static class IndexCommandRunner
         }
 
         if (options.ParseError != null)
-            return WriteCommandError(options.Json, jsonOptions, options.ParseError, CommandExitCodes.UsageError);
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                options.ParseError,
+                CommandExitCodes.UsageError,
+                "Run `cdidx backfill-fold --help` to see the supported command shape.");
 
         var isUri = options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(options.DbPath))
-            return WriteCommandError(options.Json, jsonOptions, $"database not found: {options.DbPath}", CommandExitCodes.NotFound);
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"database not found: {options.DbPath}",
+                CommandExitCodes.NotFound,
+                "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.");
 
         try
         {
@@ -209,7 +235,8 @@ public static class IndexCommandRunner
                     options.Json,
                     jsonOptions,
                     "folded-name backfill verification failed: some rows still have NULL folded values",
-                    CommandExitCodes.DatabaseError);
+                    CommandExitCodes.DatabaseError,
+                    "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.");
             }
 
             writer.MarkFoldReady();
@@ -243,7 +270,12 @@ public static class IndexCommandRunner
         }
         catch (Exception ex)
         {
-            return WriteCommandError(options.Json, jsonOptions, $"failed to backfill folded-name columns: {ex.Message}", CommandExitCodes.DatabaseError);
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"failed to backfill folded-name columns: {ex.Message}",
+                CommandExitCodes.DatabaseError,
+                "Retry `cdidx backfill-fold`. If this persists, rebuild the index with `cdidx index <projectPath> --rebuild`.");
         }
     }
 
@@ -411,7 +443,8 @@ public static class IndexCommandRunner
                     options.Json,
                     jsonOptions,
                     $"failed to resolve changed files from git commits: {ex.Message}",
-                    CommandExitCodes.UsageError);
+                    CommandExitCodes.UsageError,
+                    "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.");
             }
             finally
             {
@@ -433,7 +466,7 @@ public static class IndexCommandRunner
                 if (IsOutsideProjectRoot(relPath))
                 {
                     if (!options.Json)
-                        Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}");
+                        Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
                     continue;
                 }
                 targetPaths.Add(relPath);
@@ -631,6 +664,8 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
+            if (errors > 0)
+                ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
                 ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter, resolvedDbPath));
         }
@@ -641,12 +676,16 @@ public static class IndexCommandRunner
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
 
-    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode)
+    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
     {
         if (json)
-            Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message }, jsonOptions));
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "error", message, hint }, jsonOptions));
         else
+        {
             Console.Error.WriteLine($"Error: {message}");
+            if (hint != null)
+                Console.Error.WriteLine($"Hint: {hint}");
+        }
         return exitCode;
     }
 
@@ -876,6 +915,8 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
+            if (errors > 0)
+                ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
                 ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter, resolvedDbPath));
         }

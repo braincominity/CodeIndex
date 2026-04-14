@@ -116,6 +116,28 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Null(GitHubIssueReporter.ScrubInlineCode(null!));
     }
 
+    [Fact]
+    public void BuildSubmissionFailureMessage_IsActionable()
+    {
+        var message = GitHubIssueReporter.BuildSubmissionFailureMessage("network timeout");
+
+        Assert.Contains("GitHub issue creation failed: network timeout", message);
+        Assert.Contains("stays recorded locally", message);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", message);
+        Assert.Contains("retry `suggest_improvement`", message);
+    }
+
+    [Fact]
+    public void BuildApiFailureMessage_IsActionable()
+    {
+        var message = GitHubIssueReporter.BuildApiFailureMessage(403, "{\"message\":\"forbidden\"}");
+
+        Assert.Contains("GitHub API responded 403", message);
+        Assert.Contains("stays local", message);
+        Assert.Contains("repository permissions", message);
+        Assert.Contains("retry `suggest_improvement`", message);
+    }
+
     public void Dispose()
     {
         // Restore original env vars / 元の環境変数をリストア

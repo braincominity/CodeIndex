@@ -158,6 +158,37 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildOversizedMessageLog_IsActionable()
+    {
+        var message = McpServer.BuildOversizedMessageLog(1_234_567);
+
+        Assert.Contains("Message too large", message);
+        Assert.Contains("Split the request into smaller JSON-RPC messages", message);
+        Assert.Contains("retry", message);
+    }
+
+    [Fact]
+    public void BuildJsonParseErrorLog_IsActionable()
+    {
+        var message = McpServer.BuildJsonParseErrorLog("Expected ':'");
+
+        Assert.Contains("JSON parse error", message);
+        Assert.Contains("Send one UTF-8 JSON-RPC object per line", message);
+        Assert.Contains("retry", message);
+    }
+
+    [Fact]
+    public void BuildToolErrorLog_IsActionable()
+    {
+        var message = McpServer.BuildToolErrorLog("search", "bad db");
+
+        Assert.Contains("Tool error (search): bad db", message);
+        Assert.Contains("Fix the tool arguments", message);
+        Assert.Contains("refresh the index if needed", message);
+        Assert.Contains("retry", message);
+    }
+
+    [Fact]
     public void Notification_Initialized_ReturnsNull()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/initialized"}""")!;

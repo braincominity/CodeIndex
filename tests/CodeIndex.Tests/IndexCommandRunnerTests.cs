@@ -49,6 +49,64 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_MissingDirectory_PrintsActionableHint()
+    {
+        var missingProject = Path.Combine(Path.GetTempPath(), $"cdidx_missing_project_{Guid.NewGuid():N}");
+        var (exitCode, _, stderr) = RunAndCaptureStreams([missingProject]);
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Contains("Error: directory not found", stderr);
+        Assert.Contains("rerun `cdidx index <projectPath>` with an existing directory", stderr);
+    }
+
+    [Fact]
+    public void Run_RebuildWithCommits_PrintsActionableHint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--rebuild", "--commits", "HEAD"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--rebuild cannot be used with --commits or --files", stderr);
+            Assert.Contains("drop `--rebuild`", stderr);
+            Assert.Contains("cdidx index <projectPath> --rebuild", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_MissingDb_PrintsActionableHint()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb], _jsonOptions);
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Contains("database not found", stderr.ToString());
+                Assert.Contains("Point `--db` at an existing `codeindex.db`", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_BackfillsLegacyRowsAndStampsFoldReady()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_{Guid.NewGuid():N}.db");
@@ -1090,6 +1148,30 @@ public class IndexCommandRunnerTests
                 Console.SetOut(writer);
                 var exitCode = IndexCommandRunner.Run(args, new JsonSerializerOptions());
                 return (exitCode, writer.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.Run(args, new JsonSerializerOptions());
+                return (exitCode, stdout.ToString(), stderr.ToString());
             }
             finally
             {
