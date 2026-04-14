@@ -52,6 +52,8 @@ public static class QueryCommandRunner
                 "Add the text you want to search for after the command, for example: `cdidx search authenticate`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("search", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -118,6 +120,8 @@ public static class QueryCommandRunner
                 "Add the symbol name after the command, for example: `cdidx definition QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("definition", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -225,6 +229,8 @@ public static class QueryCommandRunner
                 "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("references", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -307,6 +313,8 @@ public static class QueryCommandRunner
                 "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("callers", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -385,6 +393,8 @@ public static class QueryCommandRunner
                 "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("callees", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -579,6 +589,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedExtraPositionals("files", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -640,6 +652,8 @@ public static class QueryCommandRunner
                 "Pass the indexed file path after `excerpt`, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("excerpt", options))
+            return CommandExitCodes.UsageError;
 
         if (options.StartLine == null)
         {
@@ -689,6 +703,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("map", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "map"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -768,6 +784,8 @@ public static class QueryCommandRunner
                 "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("inspect", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -840,6 +858,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "outline"))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("outline", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -887,6 +907,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("status", cmdArgs, ["--db", "--json", "--no-json", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "status"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -978,6 +1000,8 @@ public static class QueryCommandRunner
                 "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("impact", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1175,6 +1199,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "deps"))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("deps", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1219,6 +1245,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "hotspots"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1278,6 +1306,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("unused", cmdArgs, ["--db", "--json", "--no-json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "unused"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1342,6 +1372,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedSinceError(options, "validate"))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("validate", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1378,7 +1410,14 @@ public static class QueryCommandRunner
 
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var json = cmdArgs.Any(a => a == "--json");
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedOptionError("languages", cmdArgs, ["--json"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("languages", options))
+            return CommandExitCodes.UsageError;
+        var json = options.Json;
 
         var langExtensions = FileIndexer.GetLanguageExtensions();
         var symbolLangs = SymbolExtractor.GetSupportedLanguages();
@@ -1725,6 +1764,32 @@ public static class QueryCommandRunner
         }
 
         return false;
+    }
+
+    private static bool TryWriteUnexpectedExtraPositionals(string commandName, QueryCommandOptions options)
+    {
+        if (options.ExtraNames.Count == 0)
+            return false;
+
+        Console.Error.WriteLine($"Error: unexpected extra positional argument(s) for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
+        Console.Error.WriteLine("Hint: quote multi-word queries as a single argument, or remove the extra positional values.");
+        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        return true;
+    }
+
+    private static bool TryWriteUnexpectedPositionals(string commandName, QueryCommandOptions options)
+    {
+        var unexpected = new List<string>();
+        if (!string.IsNullOrWhiteSpace(options.Query))
+            unexpected.Add($"`{options.Query}`");
+        unexpected.AddRange(options.ExtraNames.Select(name => $"`{name}`"));
+        if (unexpected.Count == 0)
+            return false;
+
+        Console.Error.WriteLine($"Error: {commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.");
+        Console.Error.WriteLine("Hint: remove the extra positional argument(s) and use the documented flags only.");
+        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        return true;
     }
 
     private static string GetUsageLineOrThrow(string commandName) =>

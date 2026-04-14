@@ -141,6 +141,39 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("search-extra", "unexpected extra positional argument(s) for search")]
+    [InlineData("excerpt-extra", "unexpected extra positional argument(s) for excerpt")]
+    [InlineData("map-extra", "map does not accept positional arguments")]
+    [InlineData("outline-extra", "outline does not accept positional arguments")]
+    [InlineData("status-extra", "status does not accept positional arguments")]
+    [InlineData("validate-extra", "validate does not accept positional arguments")]
+    [InlineData("languages-extra", "languages does not accept positional arguments")]
+    public void QueryEntrypoints_UnexpectedPositionalsReturnUsageError(string scenario, string expectedError)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithUnexpectedPositionals(scenario));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(expectedError, stderr);
+        Assert.DoesNotContain("database not found", stderr);
+    }
+
+    [Theory]
+    [InlineData("--db", "/tmp/does-not-matter.db")]
+    [InlineData("--mystery")]
+    public void RunLanguages_UnsupportedOptionsReturnUsageError(string flag, string? value = null)
+    {
+        var args = value == null
+            ? new[] { flag }
+            : new[] { flag, value };
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(args, _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: {flag} is not supported for languages.", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("languages")}", stderr);
+    }
+
+    [Theory]
     [InlineData("definition")]
     [InlineData("references")]
     [InlineData("callers")]
@@ -2799,6 +2832,21 @@ public class QueryCommandRunnerTests
             "search-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--path", "--count"], _jsonOptions),
             "search-exclude-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--exclude-path", "--count"], _jsonOptions),
             "definition-kind-swallow" => QueryCommandRunner.RunDefinition(["QueryCommandRunner", "--kind", "--count"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+    }
+
+    private int RunCommandWithUnexpectedPositionals(string scenario)
+    {
+        return scenario switch
+        {
+            "search-extra" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "extra"], _jsonOptions),
+            "excerpt-extra" => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "extra", "--start", "1"], _jsonOptions),
+            "map-extra" => QueryCommandRunner.RunMap(["stray"], _jsonOptions),
+            "outline-extra" => QueryCommandRunner.RunOutline(["src/CodeIndex/Program.cs", "extra"], _jsonOptions),
+            "status-extra" => QueryCommandRunner.RunStatus(["stray"], _jsonOptions),
+            "validate-extra" => QueryCommandRunner.RunValidate(["stray"], _jsonOptions),
+            "languages-extra" => QueryCommandRunner.RunLanguages(["stray"], _jsonOptions),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
         };
     }
