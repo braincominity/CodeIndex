@@ -266,6 +266,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_FindsAliasQualifiedExplicitInterfaceImplementations()
+    {
+        InsertIndexedFile("src/impl.cs", "csharp",
+            """
+            public interface IFoo
+            {
+                string Name();
+                object Create();
+            }
+
+            public class Impl : IFoo
+            {
+                global::System.String IFoo.Name() => "x";
+                Alias::Type IFoo.Create() => default;
+            }
+            """);
+
+        var nameResults = _reader.SearchSymbols("Name", lang: "csharp");
+        var createResults = _reader.SearchSymbols("Create", lang: "csharp");
+
+        Assert.Contains(nameResults, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "global::System.String");
+        Assert.Contains(createResults, s => s.Kind == "function" && s.Name == "Create" && s.ReturnType == "Alias::Type");
+    }
+
+    [Fact]
     public void SearchSymbols_ReturnsRichMetadataWhenAvailable()
     {
         var results = _reader.SearchSymbols("fetchData");
