@@ -31,6 +31,7 @@ public static class IndexCommandRunner
         }
 
         var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
+        var resolvedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
         var stopwatch = Stopwatch.StartNew();
         var isUpdateMode = options.Commits.Count > 0 || options.UpdateFiles.Count > 0;
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
@@ -40,7 +41,7 @@ public static class IndexCommandRunner
             ConsoleUi.PrintBanner();
             Console.WriteLine();
             Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath)}");
-            Console.WriteLine($"  Output  : {Path.GetFullPath(dbPath)}");
+            Console.WriteLine($"  Output  : {resolvedDbPath}");
             Console.WriteLine($"  Mode    : {mode}");
             Console.WriteLine();
         }
@@ -166,8 +167,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
-            : RunFullScan(writer, indexer, projectRoot, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -379,6 +380,7 @@ public static class IndexCommandRunner
         DbWriter writer,
         FileIndexer indexer,
         string projectRoot,
+        string resolvedDbPath,
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
@@ -630,7 +632,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter));
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -652,6 +654,7 @@ public static class IndexCommandRunner
         DbWriter writer,
         FileIndexer indexer,
         string projectRoot,
+        string resolvedDbPath,
         IndexCommandOptions options,
         Stopwatch stopwatch,
         string[] spinnerFrames,
@@ -874,7 +877,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter));
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -900,7 +903,7 @@ public static class IndexCommandRunner
         return "--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` to rewrite folded keys in place, or use `cdidx index . --rebuild` to regenerate the whole DB.";
     }
 
-    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool foldReady)
+    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool foldReady, string resolvedDbPath)
     {
         var degradedParts = new List<string>();
         if (!graphTableAvailable)
@@ -910,7 +913,7 @@ public static class IndexCommandRunner
         if (!foldReady)
             degradedParts.Add("fold_ready=false");
 
-        return $"Index completed with degraded readiness ({string.Join(", ", degradedParts)}). Run `cdidx status --json` to inspect the current DB state.";
+        return $"Index completed with degraded readiness ({string.Join(", ", degradedParts)}). Run `cdidx status --db \"{resolvedDbPath}\" --json` to inspect the current DB state.";
     }
 
     private static void AddToGitExclude(string projectPath, string dbPath)

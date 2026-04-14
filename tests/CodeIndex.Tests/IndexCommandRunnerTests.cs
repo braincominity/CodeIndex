@@ -258,6 +258,90 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_DegradedWarningUsesResolvedProjectDbPathWhenCwdDiffers()
+    {
+        var projectRoot = CreateTempProject();
+        var otherCwd = Path.Combine(Path.GetTempPath(), $"cdidx_other_cwd_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(otherCwd);
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, _, errorOutput) = RunAndCaptureConsole([projectRoot, "--files", "app.cs"], otherCwd);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains($"cdidx status --db \"{dbPath}\" --json", errorOutput);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(otherCwd))
+                DeleteDirectory(otherCwd);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DegradedWarningUsesExplicitDbPath()
+    {
+        var projectRoot = CreateTempProject();
+        var customDbDir = Path.Combine(Path.GetTempPath(), $"cdidx_custom_db_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(customDbDir);
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            var customDbPath = Path.Combine(customDbDir, "custom-index.db");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", customDbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={customDbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA user_version = 0";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, _, errorOutput) = RunAndCaptureConsole([projectRoot, "--db", customDbPath, "--files", "app.cs"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains($"cdidx status --db \"{customDbPath}\" --json", errorOutput);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(customDbDir))
+                DeleteDirectory(customDbDir);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_OutputReportsReadinessInJsonAndHumanModes()
     {
         var projectRoot = CreateTempProject();
@@ -881,20 +965,34 @@ public class IndexCommandRunnerTests
 
     private static (int ExitCode, string Output) RunAndCaptureOutput(string[] args)
     {
+        var (exitCode, stdOut, _) = RunAndCaptureConsole(args);
+        return (exitCode, stdOut);
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunAndCaptureConsole(string[] args, string? workingDirectory = null)
+    {
         lock (TestConsoleLock.Gate)
         {
             var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            var originalCwd = Directory.GetCurrentDirectory();
             using var writer = new StringWriter();
+            using var errorWriter = new StringWriter();
 
             try
             {
+                if (workingDirectory != null)
+                    Directory.SetCurrentDirectory(workingDirectory);
                 Console.SetOut(writer);
+                Console.SetError(errorWriter);
                 var exitCode = IndexCommandRunner.Run(args, new JsonSerializerOptions());
-                return (exitCode, writer.ToString());
+                return (exitCode, writer.ToString(), errorWriter.ToString());
             }
             finally
             {
                 Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+                Directory.SetCurrentDirectory(originalCwd);
             }
         }
     }
