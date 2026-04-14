@@ -151,6 +151,7 @@ public class ImpactAnalysisResult
     public int DefinitionFileCount { get; set; }
     public int HintCount { get; set; }
     public bool HasClassLikeDefinitions { get; set; }
+    public bool HasMultipleDefinitions { get; set; }
     public bool HasMultipleDefinitionFiles { get; set; }
     public List<SymbolResult> Definitions { get; set; } = [];
     public List<ImpactResult> Callers { get; set; } = [];

@@ -905,6 +905,7 @@ public partial class DbReader
             .Select(d => d.Path)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var hasMultipleDefinitions = definitions.Count > 1;
         var fallbackDefinitions = definitions
             .Where(d => IsPreciseImpactFallbackKind(d.Kind))
             .ToList();
@@ -928,15 +929,17 @@ public partial class DbReader
                     zeroResultReason = "non_callable_symbol_kind";
                     suggestion = "Try `cdidx definition <symbol>` and then run `impact` on a specific callable member instead.";
                 }
-                else if (definitionPaths.Count > 1)
+                else if (hasMultipleDefinitions)
                 {
-                    zeroResultReason = "multiple_definition_files";
-                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitionFiles: true);
+                    zeroResultReason = definitionPaths.Count > 1 ? "multiple_definition_files" : "multiple_definitions";
+                    suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions, hasMultipleDefinitionFiles: definitionPaths.Count > 1);
                 }
                 else if (fallbackDefinitions.Count == 1)
                 {
                     var fallbackNames = ResolveImpactFallbackNames(fallbackDefinitions[0]);
-                    fileImpacts = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+                    fileImpacts = hintResults;
+                    truncated |= hintTruncated;
                     if (fileImpacts.Count > 0)
                     {
                         impactMode = "file_dependency_hints";
@@ -946,7 +949,7 @@ public partial class DbReader
                     else
                     {
                         zeroResultReason = "class_symbol_no_symbol_callers";
-                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitionFiles: false);
+                        suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: false, hasMultipleDefinitionFiles: false);
                     }
                 }
                 else if (definitions.Count == 0)
@@ -968,6 +971,7 @@ public partial class DbReader
             DefinitionFileCount = definitionPaths.Count,
             HintCount = fileImpacts.Count,
             HasClassLikeDefinitions = hasClassLikeDefinitions,
+            HasMultipleDefinitions = hasMultipleDefinitions,
             HasMultipleDefinitionFiles = definitionPaths.Count > 1,
             Definitions = definitions,
             Callers = callers,
@@ -1016,10 +1020,10 @@ public partial class DbReader
         return results;
     }
 
-    private List<FileDependencyResult> GetFileDependencyHintsToResolvedType(SymbolResult definition, IReadOnlyList<string> fallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    private (List<FileDependencyResult> Results, bool Truncated) GetFileDependencyHintsToResolvedType(SymbolResult definition, IReadOnlyList<string> fallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
     {
         if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || fallbackNames.Count == 0)
-            return new List<FileDependencyResult>();
+            return (new List<FileDependencyResult>(), false);
 
         using var cmd = _conn.CreateCommand();
         var innerSql = @"
@@ -1065,7 +1069,7 @@ public partial class DbReader
         for (int i = 0; i < fallbackNames.Count; i++)
             cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@limit", limit + 1);
 
         var results = new List<FileDependencyResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -1080,7 +1084,11 @@ public partial class DbReader
             });
         }
 
-        return results;
+        var truncated = results.Count > limit;
+        if (truncated)
+            results.RemoveAt(results.Count - 1);
+
+        return (results, truncated);
     }
 
     private static bool IsPreciseImpactFallbackKind(string? kind)
@@ -1088,17 +1096,19 @@ public partial class DbReader
         return kind is "class" or "struct" or "interface";
     }
 
-    private static string BuildImpactSuggestion(IReadOnlyList<string> definitionPaths, bool hasClassLikeDefinitions, bool hasMultipleDefinitionFiles)
+    private static string BuildImpactSuggestion(IReadOnlyList<string> definitionPaths, bool hasClassLikeDefinitions, bool hasMultipleDefinitions, bool hasMultipleDefinitionFiles)
     {
         if (hasClassLikeDefinitions)
         {
             if (hasMultipleDefinitionFiles)
                 return "Try `cdidx deps --path <definition-path> --reverse` for each definition file or query a member symbol instead.";
+            if (hasMultipleDefinitions)
+                return "Try a fully qualified or member symbol query, or inspect the overlapping definitions with `cdidx definition <symbol> --body`.";
             if (definitionPaths.Count > 0)
                 return $"Try `cdidx deps --path {definitionPaths[0]} --reverse` or query a member symbol instead.";
         }
 
-        if (hasMultipleDefinitionFiles)
+        if (hasMultipleDefinitions)
             return "Try a more specific symbol name or inspect each definition file with `cdidx definition <symbol> --body`.";
 
         return "Try `cdidx definition <symbol>` to confirm the indexed symbol and then query a more specific callable member.";

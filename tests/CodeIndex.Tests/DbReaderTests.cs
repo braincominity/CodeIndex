@@ -1127,6 +1127,7 @@ public class DbReaderTests : IDisposable
         Assert.True(analysis.Heuristic);
         Assert.Empty(analysis.Callers);
         Assert.True(analysis.HasClassLikeDefinitions);
+        Assert.False(analysis.HasMultipleDefinitions);
         Assert.False(analysis.HasMultipleDefinitionFiles);
         Assert.Equal(1, analysis.HintCount);
         var edge = Assert.Single(analysis.FileImpacts);
@@ -1159,9 +1160,45 @@ public class DbReaderTests : IDisposable
         Assert.Empty(analysis.Callers);
         Assert.Empty(analysis.FileImpacts);
         Assert.True(analysis.HasClassLikeDefinitions);
+        Assert.True(analysis.HasMultipleDefinitions);
         Assert.True(analysis.HasMultipleDefinitionFiles);
         Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
         Assert.Contains("deps --path <definition-path> --reverse", analysis.Suggestion);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_DuplicateDefinitionsInOneFile_ExplainsAmbiguity()
+    {
+        InsertIndexedFile("src/Services.cs", "csharp",
+            """
+            namespace A
+            {
+                public class FooService
+                {
+                    public void Run() { }
+                }
+            }
+
+            namespace B
+            {
+                public class FooService
+                {
+                    public void Run() { }
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.Equal(1, analysis.DefinitionFileCount);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("multiple_definitions", analysis.ZeroResultReason);
+        Assert.Contains("fully qualified or member symbol query", analysis.Suggestion);
     }
 
     [Fact]
@@ -1337,10 +1374,51 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         Assert.True(analysis.Heuristic);
+        Assert.False(analysis.HasMultipleDefinitions);
         Assert.False(analysis.HasMultipleDefinitionFiles);
         Assert.Equal(1, analysis.DefinitionFileCount);
         Assert.Equal("src/FooService.cs", Assert.Single(analysis.Definitions).Path);
         Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_HeuristicHintsSetTruncatedWhenLimitReached()
+    {
+        InsertIndexedFile("src/FolderDiffService.cs", "csharp",
+            """
+            public class FolderDiffService
+            {
+                public void ExecuteFolderDiffAsync() { }
+            }
+            """);
+        InsertIndexedFile("src/App1.cs", "csharp",
+            """
+            public class App1
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+        InsertIndexedFile("src/App2.cs", "csharp",
+            """
+            public class App2
+            {
+                public void Boot(FolderDiffService service)
+                {
+                    service.ExecuteFolderDiffAsync();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("FolderDiffService", maxDepth: 3, limit: 1);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.True(analysis.Truncated);
+        Assert.Single(analysis.FileImpacts);
+        Assert.Equal(1, analysis.HintCount);
     }
 
     [Fact]

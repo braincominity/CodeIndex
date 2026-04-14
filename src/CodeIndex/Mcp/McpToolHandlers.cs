@@ -877,6 +877,7 @@ public partial class McpServer
                 ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, _jsonOptions),
                 ["definition_count"] = analysis.DefinitionCount,
                 ["definition_file_count"] = analysis.DefinitionFileCount,
+                ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
                 ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
                 ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
                 ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, _jsonOptions),
@@ -889,7 +890,8 @@ public partial class McpServer
 
             var summary = analysis.ImpactMode switch
             {
-                "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {hintCount} possible file-level dependent(s) across {hintFileCount} files. These hints are heuristic only.",
+                "file_dependency_hints" => $"No symbol-level callers found for '{analysis.ResolvedName}'; found {hintCount} possible file-level dependent(s) across {hintFileCount} files. These hints are heuristic only."
+                    + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
                 _ when count > 0 => $"Found {count} transitive caller(s) across {fileCount} files (depth {maxActualDepth})."
                     + (analysis.Truncated ? " Results truncated — increase limit for more." : ""),
                 _ => "No impact found.",
