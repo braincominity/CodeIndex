@@ -63,7 +63,7 @@ public partial class McpServer
             // メモリ枯渇を防ぐため巨大メッセージを拒否
             if (line.Length > MaxLineLength)
             {
-                Console.Error.WriteLine($"[cdidx-mcp] Message too large ({line.Length} bytes), rejecting");
+                Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
                 var errorResponse = CreateErrorResponse(null, -32700, "Message too large");
                 await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
                 continue;
@@ -84,17 +84,17 @@ public partial class McpServer
             catch (JsonException ex)
             {
                 // Parse error / パースエラー
-                Console.Error.WriteLine($"[cdidx-mcp] JSON parse error: {ex.Message}");
+                Console.Error.WriteLine(BuildJsonParseErrorLog(ex.Message));
                 var errorResponse = CreateErrorResponse(null, -32700, "Parse error");
                 await writer.WriteLineAsync(errorResponse.ToJsonString(_jsonOptions));
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[cdidx-mcp] Error: {ex.Message}");
+                Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
             }
         }
 
-        Console.Error.WriteLine("[cdidx-mcp] Server stopped.");
+        Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
     /// <summary>
@@ -204,7 +204,7 @@ public partial class McpServer
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[cdidx-mcp] Tool error ({toolName}): {ex.Message}");
+            Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
             Database.DbDebug.DumpToStderr(ex);
             return CreateToolErrorResponse(id, $"Error executing {toolName}: {ex.Message}");
         }
@@ -213,6 +213,18 @@ public partial class McpServer
             Database.DbDebug.ResetContext();
         }
     }
+
+    internal static string BuildOversizedMessageLog(int lineLength) =>
+        $"[cdidx-mcp] Message too large ({lineLength} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
+
+    internal static string BuildJsonParseErrorLog(string detail) =>
+        $"[cdidx-mcp] JSON parse error: {detail}. Send one UTF-8 JSON-RPC object per line and retry.";
+
+    internal static string BuildUnhandledLoopErrorLog(string detail) =>
+        $"[cdidx-mcp] Error: {detail}. This request was skipped; fix the request or inspect the server environment, then retry.";
+
+    internal static string BuildToolErrorLog(string toolName, string detail) =>
+        $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
 
     // Tool implementations are in McpToolHandlers.cs / ツール実装は McpToolHandlers.cs に分離
 
