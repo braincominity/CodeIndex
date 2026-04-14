@@ -1961,6 +1961,37 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_PrefersExactDefinitionAsPrimaryAnchorWhenSubstringMatchesOverlap()
+    {
+        InsertIndexedFile("src/Services/ILoggerService.cs", "csharp",
+            """
+            public interface ILoggerService
+            {
+                void Log(string message);
+            }
+            """);
+        InsertIndexedFile("src/Services/LoggerService.cs", "csharp",
+            """
+            public class LoggerService : ILoggerService
+            {
+                public void Log(string message) { }
+                public void Execute() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeSymbol("LoggerService", limit: 5, lang: "csharp");
+
+        Assert.NotNull(analysis.File);
+        Assert.Equal("src/Services/LoggerService.cs", analysis.File!.Path);
+        Assert.NotEmpty(analysis.Definitions);
+        Assert.Equal("LoggerService", analysis.Definitions[0].Name);
+        Assert.Equal("src/Services/LoggerService.cs", analysis.Definitions[0].Path);
+        Assert.Contains(analysis.Definitions, item => item.Name == "ILoggerService");
+        Assert.Contains(analysis.NearbySymbols, item => item.Path == "src/Services/LoggerService.cs" && item.Name == "Execute");
+        Assert.DoesNotContain(analysis.NearbySymbols, item => item.Path == "src/Services/ILoggerService.cs");
+    }
+
+    [Fact]
     public void AnalyzeSymbol_UnsupportedLanguage_ReportsGraphSupportMetadata()
     {
         var analysis = _reader.AnalyzeSymbol("Heading", limit: 5, lang: "markdown");
