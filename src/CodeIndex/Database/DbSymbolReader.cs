@@ -391,9 +391,12 @@ public partial class DbReader
         var primaryDefinition = definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
+        var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? file?.Lang;
         bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
-        var exactSignal = exact ? GetAnalyzeSymbolExactQuerySignal() : ((bool ExactIndexAvailable, string? DegradedReason)?)null;
+        var exactSignal = exact
+            ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
+            : (ExactQuerySignal?)null;
         var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
@@ -426,6 +429,8 @@ public partial class DbReader
             GraphTableAvailable = _hasReferencesTable,
             ExactZeroHint = exactZeroHint,
             ExactIndexAvailable = exactSignal?.ExactIndexAvailable,
+            ExactHasMissingIndex = exactSignal?.HasMissingIndex,
+            ExactHasMissingTable = exactSignal?.HasMissingTable,
             DegradedReason = exactSignal?.DegradedReason,
         };
     }
