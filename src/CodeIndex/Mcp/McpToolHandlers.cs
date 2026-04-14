@@ -266,6 +266,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
+            var exactSignal = reader.GetSymbolsExactQuerySignal();
             var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
                 ? QueryCommandRunner.BuildExactZeroHint(
@@ -293,6 +294,8 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                if (exact)
+                    AddExactGraphSignal(payload, exactSignal);
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No symbols found.", payload);
@@ -309,6 +312,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (exact)
+                AddExactGraphSignal(structured, exactSignal);
             return CreateToolResult(id, $"Found {results.Count} symbol(s).", structured);
         });
     }
@@ -337,6 +342,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var exactSignal = reader.GetDefinitionExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
                 () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
@@ -354,6 +360,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (exact)
+                AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);

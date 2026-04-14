@@ -604,6 +604,63 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactOnReadOnlyLegacyDb_WarnsAboutMissingIndex()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_symbol_exact_warn");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", readOnlyUri, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Run", stdout);
+            Assert.Contains("WARN: --exact symbol query ran without the supporting index", stderr);
+            Assert.Contains("idx_symbols_name_nocase", stderr);
+            Assert.Contains("re-index with `cdidx index <projectPath>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_ExactJsonOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", readOnlyUri, "--exact", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", json.GetProperty("name").GetString());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("idx_symbols_name_nocase", json.GetProperty("degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_NonExactJsonOnReadOnlyLegacyDb_OmitsExactDegradedFields()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_nonexact");
@@ -1193,6 +1250,18 @@ public class QueryCommandRunnerTests
         cmd.CommandText = """
             DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
             DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static void DropSymbolExactFallbackIndex(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbols_name_nocase;
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();

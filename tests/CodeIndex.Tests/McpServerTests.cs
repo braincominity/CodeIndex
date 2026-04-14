@@ -551,6 +551,36 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Symbols_ExactOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+        DropSymbolExactFallbackIndex();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_ExactOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+        DropSymbolExactFallbackIndex();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactZeroHintWhenWholeBundleIsEmpty()
     {
         InsertIndexedFile("src/handler.cs", "csharp",
@@ -1409,6 +1439,17 @@ public class McpServerTests : IDisposable
         cmd.CommandText = """
             DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
             DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
+    private void DropSymbolExactFallbackIndex()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbols_name_nocase;
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();

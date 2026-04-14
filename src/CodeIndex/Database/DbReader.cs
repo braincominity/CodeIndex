@@ -13,6 +13,7 @@ public partial class DbReader
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
+    private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
@@ -95,6 +96,7 @@ public partial class DbReader
         _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
+        _symbolIndexes = LoadIndexes("symbols");
         int userVersion;
         using (var v = _conn.CreateCommand())
         {
@@ -191,7 +193,13 @@ public partial class DbReader
         return cmd.ExecuteScalar() != null;
     }
 
+    private bool HasSymbolIndex(string indexName) => _symbolIndexes.Contains(indexName);
     private bool HasReferenceIndex(string indexName) => _referenceIndexes.Contains(indexName);
+
+    private bool SymbolNameExactIndexAvailable =>
+        _foldReady
+            ? HasSymbolIndex("idx_symbols_name_folded")
+            : HasSymbolIndex("idx_symbols_name_nocase");
 
     private bool SymbolNameExactGraphIndexAvailable =>
         _foldReady
@@ -223,6 +231,20 @@ public partial class DbReader
             return (true, null);
         return (false, BuildExactGraphIndexReason(missingIndexes));
     }
+
+    private (bool ExactIndexAvailable, string? DegradedReason) BuildExactSymbolSignal(bool available, params string[] missingIndexes)
+    {
+        if (available)
+            return (true, null);
+        return (false, BuildExactGraphIndexReason(missingIndexes));
+    }
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetSymbolsExactQuerySignal() =>
+        BuildExactSymbolSignal(SymbolNameExactIndexAvailable,
+            _foldReady ? "idx_symbols_name_folded" : "idx_symbols_name_nocase");
+
+    public (bool ExactIndexAvailable, string? DegradedReason) GetDefinitionExactQuerySignal() =>
+        GetSymbolsExactQuerySignal();
 
     public (bool ExactIndexAvailable, string? DegradedReason) GetReferencesExactQuerySignal() =>
         BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
