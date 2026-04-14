@@ -743,7 +743,13 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
-            var exactSignal = options.Exact ? reader.GetAnalyzeSymbolExactQuerySignal() : (ExactQuerySignal?)null;
+            var exactSignal = options.Exact && analysis.ExactIndexAvailable.HasValue
+                ? new ExactQuerySignal(
+                    analysis.ExactIndexAvailable.Value,
+                    analysis.ExactHasMissingIndex ?? false,
+                    analysis.ExactHasMissingTable ?? false,
+                    analysis.DegradedReason)
+                : (ExactQuerySignal?)null;
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
             if (exactSignal.HasValue)
                 WriteExactBundleWarningIfNeeded(options.Exact, options.Json, exactSignal.Value);

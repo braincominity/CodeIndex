@@ -393,7 +393,9 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var graphLanguage = lang ?? file?.Lang;
         bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
-        var exactSignal = exact ? GetAnalyzeSymbolExactQuerySignal() : (ExactQuerySignal?)null;
+        var exactSignal = exact
+            ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: graphSupported != false)
+            : (ExactQuerySignal?)null;
         var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
@@ -426,6 +428,8 @@ public partial class DbReader
             GraphTableAvailable = _hasReferencesTable,
             ExactZeroHint = exactZeroHint,
             ExactIndexAvailable = exactSignal?.ExactIndexAvailable,
+            ExactHasMissingIndex = exactSignal?.HasMissingIndex,
+            ExactHasMissingTable = exactSignal?.HasMissingTable,
             DegradedReason = exactSignal?.DegradedReason,
         };
     }

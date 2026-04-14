@@ -286,11 +286,11 @@ public partial class DbReader
         BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
-    public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal()
+    public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(bool includeGraphSignal = true)
     {
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(),
-            BuildAnalyzeGraphExactQuerySignal());
+            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
     }
 
     private ExactQuerySignal BuildAnalyzeGraphExactQuerySignal()

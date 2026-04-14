@@ -283,6 +283,10 @@ public class SymbolAnalysisResult
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? ExactIndexAvailable { get; set; }
+    [JsonIgnore]
+    public bool? ExactHasMissingIndex { get; set; }
+    [JsonIgnore]
+    public bool? ExactHasMissingTable { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DegradedReason { get; set; }
 }
