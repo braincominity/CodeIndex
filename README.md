@@ -765,6 +765,14 @@ Once configured, the AI can directly call these tools:
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
 
+If you only need to upgrade an older `.cdidx/codeindex.db` for Unicode `--exact`, or to repair fold metadata drift by regenerating folded keys without reparsing source files, run:
+
+```bash
+cdidx backfill-fold
+```
+
+This recomputes persisted `name_folded` / `*_folded` columns from existing DB rows and stamps `fold_ready` when verification succeeds.
+
 Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
@@ -1634,7 +1642,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 
 CLAUDE.mdの設定やSQLテンプレートは不要 — AIがcdidxとネイティブに連携します。
 
-古い `.cdidx/codeindex.db` を Unicode `--exact` 対応へ上げたいだけなら、ソース再解析なしで次を実行できます:
+古い `.cdidx/codeindex.db` を Unicode `--exact` 対応へ上げたいだけ、または fold metadata の drift を folded key 再生成だけで解消したいなら、ソース再解析なしで次を実行できます:
 
 ```bash
 cdidx backfill-fold

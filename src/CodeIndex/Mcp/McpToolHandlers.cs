@@ -1166,8 +1166,11 @@ public partial class McpServer
             var writer = new DbWriter(db.Connection);
             var userVersionBefore = db.GetUserVersion();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
-            var rewriteAll = storedFoldVersion != currentFoldVersion;
+            var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+            var rewriteAll = storedFoldVersion != currentFoldVersion
+                || storedFoldFingerprint != currentFoldFingerprint;
             var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
             var verified = writer.AllFoldedColumnsBackfilled();
             if (!verified)
