@@ -1367,6 +1367,95 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_UnsupportedLanguageReturnsZero()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "script.sh",
+            Lang = "shell",
+            Size = 64,
+            Lines = 4,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "helper",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "helper() {",
+            },
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"shell"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.False(structured["graph_supported"]!.GetValue<bool>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Empty(structured["symbols"]!.AsArray());
+        Assert.Contains("unavailable", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_UnusedSymbols_LargePublicLimit_RespectsMcpClamp()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/large_public_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 16000,
+            Lines = 2600,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "public class PublicNoise0000 { }",
+            }
+        ]);
+
+        var symbols = new List<SymbolRecord>();
+        for (var i = 0; i < 2500; i++)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = $"PublicNoise{i:D4}",
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Signature = $"public class PublicNoise{i:D4} {{ }}",
+                Visibility = "public",
+            });
+        }
+        writer.InsertSymbols(symbols);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"large_public_unused_fixture.cs","limit":3000}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(200, structured["count"]!.GetValue<int>());
+        Assert.Equal(200, structured["symbols"]!.AsArray().Count);
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_MissingGraphTable_MarksResponseDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_missing_graph");

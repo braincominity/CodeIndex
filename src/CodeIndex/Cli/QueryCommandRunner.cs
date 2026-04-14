@@ -962,7 +962,7 @@ public static class QueryCommandRunner
         {
             // Warn if user specified an unsupported language / 未対応言語の場合は警告
             if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
-                Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Results may contain false positives.");
+                Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Unused results are unavailable for this language.");
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);

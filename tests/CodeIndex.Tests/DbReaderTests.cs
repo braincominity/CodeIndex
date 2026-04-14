@@ -1970,6 +1970,87 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_LargePublicLimit_IsNotCappedAtBudget()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/large_public_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 16000,
+            Lines = 2600,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "public class PublicNoise0000 { }",
+            }
+        ]);
+
+        var symbols = new List<SymbolRecord>();
+        for (var i = 0; i < 2500; i++)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = $"PublicNoise{i:D4}",
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Signature = $"public class PublicNoise{i:D4} {{ }}",
+                Visibility = "public",
+            });
+        }
+        _writer.InsertSymbols(symbols);
+
+        var unused = _reader.GetUnusedSymbols(limit: 3000, kind: null, lang: "csharp",
+            pathPatterns: ["large_public_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Equal(2500, unused.Count);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_UnsupportedLanguageReturnsEmpty()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "script.sh",
+            Lang = "shell",
+            Size = 64,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "helper",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "helper() {",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 20, kind: null, lang: "shell",
+            pathPatterns: null, excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: null, lang: "shell",
+            pathPatterns: null, excludePathPatterns: null, excludeTests: false);
+
+        Assert.Empty(unused);
+        Assert.Equal(0, count.Count);
+        Assert.Equal(0, count.FileCount);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_IgnoreAttributes_DoNotClassifyAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord

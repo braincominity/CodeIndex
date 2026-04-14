@@ -428,11 +428,37 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.GetProperty("graph_supported").GetBoolean());
             Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
-            Assert.Equal("helper", json.GetProperty("symbols")[0].GetProperty("name").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("symbols").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_CountJsonUnsupportedLanguage_ReturnsZero()
+    {
+        var (projectRoot, dbPath) = CreateUnsupportedLanguageUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "shell", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetInt32());
         }
         finally
         {
@@ -576,6 +602,30 @@ public class QueryCommandRunnerTests
             Assert.Equal("0", stdout.Trim());
             Assert.Contains("degraded", stderr);
             Assert.Contains("symbol_references table missing", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonLargePublicLimit_IsNotCappedAtBudget()
+    {
+        var (projectRoot, dbPath) = CreateLargePublicUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "3000"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2500, json.GetProperty("count").GetInt32());
+            Assert.Equal(2500, json.GetProperty("symbols").GetArrayLength());
         }
         finally
         {
@@ -1760,6 +1810,54 @@ public class QueryCommandRunnerTests
                 Signature = "helper() {",
             },
         ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateLargePublicUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_large_public");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/large_public_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 16000,
+            Lines = 2600,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "public class PublicNoise0000 { }",
+            }
+        ]);
+
+        var symbols = new List<SymbolRecord>();
+        for (var i = 0; i < 2500; i++)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = $"PublicNoise{i:D4}",
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Signature = $"public class PublicNoise{i:D4} {{ }}",
+                Visibility = "public",
+            });
+        }
+        writer.InsertSymbols(symbols);
         writer.MarkGraphReady();
         return (projectRoot, dbPath);
     }

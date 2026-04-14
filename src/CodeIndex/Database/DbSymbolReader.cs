@@ -541,6 +541,8 @@ public partial class DbReader
         // symbol_references が無いレガシー read-only DB では全シンボルが未使用扱いになってしまうため、
         // ノイズを返すより空を返す。
         if (!_hasReferencesTable) return new List<UnusedSymbolResult>();
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+            return [];
         // Restrict to graph-supported languages to avoid false positives
         // (unsupported languages have no references indexed, so all symbols appear unused)
         // グラフ対応言語に制限して偽陽性を防ぐ
@@ -555,7 +557,7 @@ public partial class DbReader
         var publicBatchSize = Math.Min(
             Math.Max(targetCount * UnusedPublicOverfetchMultiplier, UnusedPublicOverfetchMinimum),
             UnusedPublicOverfetchMaximum);
-        var publicFetchBudget = Math.Max(publicBatchSize, UnusedPublicCandidateBudget);
+        var publicFetchBudget = Math.Max(targetCount, Math.Max(publicBatchSize, UnusedPublicCandidateBudget));
         var publicCandidatesFetched = 0;
         while ((publicOrExported.Count < targetCount || reflectionOrConfig.Count < targetCount)
             && publicCandidatesFetched < publicFetchBudget)
@@ -752,6 +754,8 @@ public partial class DbReader
     public (int Count, int FileCount) CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable)
+            return (0, 0);
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
             return (0, 0);
 
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();

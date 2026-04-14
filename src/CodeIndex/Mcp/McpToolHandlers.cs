@@ -943,7 +943,7 @@ public partial class McpServer
                 ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
-                summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";
+                summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
             if (!reader._hasReferencesTable)
             {
                 payload["graph_table_available"] = false;
