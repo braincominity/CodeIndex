@@ -10,7 +10,7 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
-    private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[A-Za-z_][A-Za-z0-9_]*", RegexOptions.Compiled);
+    private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[\p{L}_][\p{L}\p{Nd}_]*", RegexOptions.Compiled);
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
@@ -932,7 +932,7 @@ public partial class DbReader
 
             if (_hasReferencesTable)
             {
-                if (definitions.Count > 0 && definitions.All(d => d.Kind == "namespace"))
+                if (definitions.Count > 0 && definitions.All(d => IsNonCallableImpactKind(d.Kind)))
                 {
                     zeroResultReason = "non_callable_symbol_kind";
                     suggestion = "Try `cdidx definition <symbol>` and then run `impact` on a specific callable member instead.";
@@ -1224,6 +1224,9 @@ public partial class DbReader
         var rightFolded = NameFold.Fold(right) ?? right;
         return string.Equals(leftFolded, rightFolded, StringComparison.Ordinal);
     }
+
+    private static bool IsNonCallableImpactKind(string? kind) =>
+        kind is "namespace" or "import";
 
     private static bool IsPreciseImpactFallbackKind(string? kind)
     {

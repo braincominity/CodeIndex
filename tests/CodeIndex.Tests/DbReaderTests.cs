@@ -1345,6 +1345,25 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_ImportOnlyQueryReportsNonCallableSymbolKind()
+    {
+        InsertIndexedFile("src/app.py", "python",
+            """
+            import requests
+            """);
+
+        var analysis = _reader.AnalyzeImpact("requests", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(1, analysis.DefinitionCount);
+        Assert.Equal("import", Assert.Single(analysis.Definitions).Kind);
+        Assert.Equal("non_callable_symbol_kind", analysis.ZeroResultReason);
+        Assert.Contains("definition <symbol>", analysis.Suggestion);
+    }
+
+    [Fact]
     public void AnalyzeImpact_UnresolvedExternalCallOnlyWithoutTypeEvidenceReturnsNoHints()
     {
         InsertIndexedFile("src/FolderDiffService.cs", "csharp",
@@ -1373,6 +1392,35 @@ public class DbReaderTests : IDisposable
         Assert.Equal(0, analysis.HintCount);
         Assert.Empty(analysis.FileImpacts);
         Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_UnicodeTypeEvidenceStillEnablesHeuristicHints()
+    {
+        InsertIndexedFile("src/ＦｏｏＳｅｒｖｉｃｅ.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(ＦｏｏＳｅｒｖｉｃｅ service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("ＦｏｏＳｅｒｖｉｃｅ", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.Equal(1, analysis.HintCount);
+        Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
     }
 
     [Fact]

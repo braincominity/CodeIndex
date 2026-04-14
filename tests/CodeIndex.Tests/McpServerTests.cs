@@ -853,6 +853,53 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_ImportOnlyQueryReportsNonCallableSymbolKind()
+    {
+        InsertIndexedFile("src/app.py", "python",
+            """
+            import requests
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"requests"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["definition_count"]!.GetValue<int>());
+        Assert.Equal("non_callable_symbol_kind", structured["zero_result_reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_UnicodeTypeEvidenceStillReturnsHints()
+    {
+        InsertIndexedFile("src/ＦｏｏＳｅｒｖｉｃｅ.cs", "csharp",
+            """
+            public class ＦｏｏＳｅｒｖｉｃｅ
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(ＦｏｏＳｅｒｖｉｃｅ service)
+                {
+                    service.Run();
+                }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"ＦｏｏＳｅｒｖｉｃｅ"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["hint_count"]!.GetValue<int>());
+        Assert.Equal("src/App.cs", structured["file_impacts"]![0]!["sourcePath"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_ImpactAnalysis_DuplicateDefinitionsInOneFileReportAmbiguity()
     {
         InsertIndexedFile("src/Services.cs", "csharp",

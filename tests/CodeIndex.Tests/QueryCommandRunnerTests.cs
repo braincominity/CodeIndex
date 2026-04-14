@@ -388,11 +388,11 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
             Assert.Equal(0, json.GetProperty("confirmed_count").GetInt32());
-            Assert.Equal(0, json.GetProperty("confirmed_files").GetInt32());
+            Assert.Equal(0, json.GetProperty("confirmed_file_count").GetInt32());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
-            Assert.Equal(1, json.GetProperty("hint_files").GetInt32());
+            Assert.Equal(1, json.GetProperty("hint_file_count").GetInt32());
         }
         finally
         {
@@ -704,6 +704,84 @@ public class QueryCommandRunnerTests
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
             Assert.Equal(0, json.GetProperty("file_impacts").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ImportOnlyQueryJsonReportsNonCallableSymbolKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_import_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.py", "python",
+                """
+                import requests
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["requests", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+            Assert.Contains("definition <symbol>", json.GetProperty("suggestion").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_UnicodeTypeEvidenceStillReturnsHeuristicHints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unicode_type_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/ＦｏｏＳｅｒｖｉｃｅ.cs", "csharp",
+                """
+                public class ＦｏｏＳｅｒｖｉｃｅ
+                {
+                    public void Run() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp",
+                """
+                public class App
+                {
+                    public void Boot(ＦｏｏＳｅｒｖｉｃｅ service)
+                    {
+                        service.Run();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["ＦｏｏＳｅｒｖｉｃｅ", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
         }
         finally
         {
