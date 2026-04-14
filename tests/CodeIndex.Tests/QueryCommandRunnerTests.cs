@@ -2220,6 +2220,28 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_RejectsUnsupportedFlags()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--path", "src/Auth.cs", "--since", "2099-01-01"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --since", stderr);
+    }
+
+    [Fact]
+    public void RunFind_InvalidSinceFailsClosedInsteadOfRunning()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--path", "src/Auth.cs", "--since", "not-a-date"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --since", stderr);
+    }
+
+    [Fact]
     public void RunFind_WithJsonOutputsLineColumnAndSnippet()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find");

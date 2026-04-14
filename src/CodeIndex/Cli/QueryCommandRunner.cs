@@ -19,6 +19,7 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
+    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -624,18 +625,32 @@ public static class QueryCommandRunner
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var findValidationError = ValidateFindArgs(cmdArgs);
+        if (findValidationError != null)
+        {
+            Console.Error.WriteLine(findValidationError);
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: find requires a query argument");
-            Console.Error.WriteLine("Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]");
+            Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
         if (options.PathPatterns.Count == 0)
         {
             Console.Error.WriteLine("Error: find requires at least one --path <pattern> to scope the search to known files");
-            Console.Error.WriteLine("Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]");
+            Console.Error.WriteLine(FindUsage);
             return CommandExitCodes.UsageError;
         }
 
@@ -708,6 +723,43 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static string? ValidateFindArgs(string[] args)
+    {
+        HashSet<string> allowedWithValues =
+        [
+            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after"
+        ];
+        HashSet<string> allowedFlags =
+        [
+            "--json", "--no-json", "--exclude-tests", "--count", "--exact"
+        ];
+
+        var positionalCount = 0;
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (allowedWithValues.Contains(arg))
+            {
+                if (i + 1 >= args.Length)
+                    return $"Error: {arg} requires a value";
+                i++;
+                continue;
+            }
+
+            if (allowedFlags.Contains(arg))
+                continue;
+
+            if (arg.StartsWith('-'))
+                return $"Error: unsupported option for find: {arg}";
+
+            positionalCount++;
+            if (positionalCount > 1)
+                return "Error: find accepts exactly one query argument";
+        }
+
+        return null;
     }
 
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
