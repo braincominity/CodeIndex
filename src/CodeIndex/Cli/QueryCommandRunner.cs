@@ -966,21 +966,33 @@ public static class QueryCommandRunner
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
-            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            if (results.Count == 0)
+            if (options.CountOnly)
             {
-                if (options.CountOnly)
-                    Console.WriteLine(options.Json ? JsonSerializer.Serialize(new
+                var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                if (options.Json)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(new
                     {
-                        count = 0,
-                        files = 0,
+                        count = countSummary.Count,
+                        files = countSummary.FileCount,
                         returned_bucket_counts = new Dictionary<string, int>(),
                         graph_supported = graphSupported,
                         graph_support_reason = graphSupportReason,
                         graph_table_available = reader._hasReferencesTable,
                         degraded = !reader._hasReferencesTable
-                    }, jsonOptions) : "0");
-                else if (options.Json && !reader._hasReferencesTable)
+                    }, jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{countSummary.Count}");
+                }
+                return CommandExitCodes.Success;
+            }
+
+            var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            if (results.Count == 0)
+            {
+                if (options.Json && !reader._hasReferencesTable)
                 {
                     Console.WriteLine(JsonSerializer.Serialize(new
                     {
@@ -1002,22 +1014,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult("unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new
-                    {
-                        count = countSummary.Count,
-                        files = countSummary.FileCount,
-                        graph_supported = graphSupported,
-                        graph_support_reason = graphSupportReason
-                    }, jsonOptions)
-                    : $"{countSummary.Count}");
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)

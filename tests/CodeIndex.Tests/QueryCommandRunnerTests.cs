@@ -398,6 +398,37 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_CountJson_DoesNotNeedChunksForReflectionClassification()
+    {
+        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "DROP TABLE chunks;";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_HumanOutputGroupsByConfidenceBucket()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();

@@ -531,6 +531,46 @@ public partial class DbReader
         // (unsupported languages have no references indexed, so all symbols appear unused)
         // グラフ対応言語に制限して偽陽性を防ぐ
         // （未対応言語は参照がインデックスされないため全シンボルが未使用に見える）
+        var targetCount = Math.Max(limit, 1);
+        var privateLike = FetchUnusedCandidates(targetCount, 0, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var maybeNonPublic = FetchUnusedCandidates(targetCount, 1, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var reflectionOrConfig = FetchUnusedCandidates(targetCount, 3, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+
+        var publicOrExported = new List<UnusedSymbolResult>();
+        var publicBucketOffset = 0;
+        var publicBatchSize = Math.Min(
+            Math.Max(targetCount * UnusedPublicOverfetchMultiplier, UnusedPublicOverfetchMinimum),
+            UnusedPublicOverfetchMaximum);
+        while (publicOrExported.Count < targetCount || reflectionOrConfig.Count < targetCount)
+        {
+            var batch = FetchUnusedCandidates(publicBatchSize, 2, publicBucketOffset, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+            if (batch.Count == 0)
+                break;
+
+            foreach (var candidate in batch)
+            {
+                if (candidate.UnusedBucket == UnusedBucketReflectionOrConfig)
+                    reflectionOrConfig.Add(candidate);
+                else
+                    publicOrExported.Add(candidate);
+            }
+
+            publicBucketOffset += batch.Count;
+            if (batch.Count < publicBatchSize)
+                break;
+        }
+
+        var merged = new List<UnusedSymbolResult>(privateLike.Count + maybeNonPublic.Count + publicOrExported.Count + reflectionOrConfig.Count);
+        merged.AddRange(privateLike);
+        merged.AddRange(maybeNonPublic);
+        merged.AddRange(publicOrExported);
+        merged.AddRange(reflectionOrConfig);
+        return DiversifyUnusedResults(merged, limit);
+    }
+
+    private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
         var containerNameSql = $"lower({GetSymbolColumnSql("container_name", "''")})";
@@ -564,10 +604,7 @@ public partial class DbReader
                 WHEN {visibilitySql} IN ('private', 'fileprivate') THEN 0
                 ELSE 1
             END";
-        var publicBucketLimit = Math.Min(
-            Math.Max(limit * UnusedPublicOverfetchMultiplier, UnusedPublicOverfetchMinimum),
-            UnusedPublicOverfetchMaximum);
-        var perBucketLimit = Math.Max(limit, 1);
+
         var sql = $@"
             WITH unused_candidates AS (
                 SELECT f.path, f.lang, s.kind, s.name, s.line,
@@ -578,9 +615,9 @@ public partial class DbReader
                        {GetSymbolColumnSql("return_type")} AS return_type,
                        {GetSymbolColumnSql("container_kind")} AS container_kind,
                        {GetSymbolColumnSql("container_name")} AS container_name,
-                       {provisionalBucketOrderSql} AS provisional_bucket_order,
                        CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
-                       CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect
+                       CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
+                       {provisionalBucketOrderSql} AS provisional_bucket_order
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')
@@ -589,44 +626,29 @@ public partial class DbReader
                   )";
 
         if (lang != null)
-        {
-            // If user specified a language, use it but warn if unsupported
-            // ユーザーが言語を指定した場合はそれを使うが、未対応なら警告
             sql += " AND f.lang = @lang";
-        }
         else
-        {
-            // Default: only graph-supported languages / デフォルト: グラフ対応言語のみ
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
-        }
+
         if (kind != null)
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += @"
-            ),
-            ranked_unused AS (
-                SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
-                       return_type, container_kind, container_name, is_public_or_exported,
-                       is_reflection_or_config_suspect, provisional_bucket_order,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY provisional_bucket_order
-                           ORDER BY path, line, name
-                       ) AS provisional_row_number
-                FROM unused_candidates
             )
             SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
                    return_type, container_kind, container_name, is_public_or_exported,
                    is_reflection_or_config_suspect
-            FROM ranked_unused
-            WHERE (provisional_bucket_order = 2 AND provisional_row_number <= @publicBucketLimit)
-               OR (provisional_bucket_order <> 2 AND provisional_row_number <= @perBucketLimit)
-            ORDER BY provisional_bucket_order, path, line, name";
+            FROM unused_candidates
+            WHERE provisional_bucket_order = @bucketOrder
+            ORDER BY path, line, name
+            LIMIT @limit OFFSET @offset";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@perBucketLimit", perBucketLimit);
-        cmd.Parameters.AddWithValue("@publicBucketLimit", publicBucketLimit);
+        cmd.Parameters.AddWithValue("@bucketOrder", provisionalBucketOrder);
+        cmd.Parameters.AddWithValue("@limit", fetchLimit);
+        cmd.Parameters.AddWithValue("@offset", offset);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         else
@@ -635,7 +657,8 @@ public partial class DbReader
             for (int i = 0; i < langList.Count; i++)
                 cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
         }
-        if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var results = new List<UnusedSymbolResult>();
@@ -651,10 +674,7 @@ public partial class DbReader
                 isReflectionOrConfigSuspect = HasReflectionAttributeContext(path, startLine);
 
             var visibility = GetNullableString(reader, 8);
-            var classification = ClassifyUnusedSymbol(
-                isPublicOrExported: isPublicOrExported,
-                isReflectionOrConfigSuspect: isReflectionOrConfigSuspect,
-                visibility: visibility);
+            var classification = ClassifyUnusedSymbol(isPublicOrExported, isReflectionOrConfigSuspect, visibility);
             results.Add(new UnusedSymbolResult
             {
                 Path = path,
@@ -674,7 +694,8 @@ public partial class DbReader
                 UnusedReason = classification.Reason,
             });
         }
-        return DiversifyUnusedResults(results, limit);
+
+        return results;
     }
 
     private static List<UnusedSymbolResult> DiversifyUnusedResults(List<UnusedSymbolResult> results, int limit)
