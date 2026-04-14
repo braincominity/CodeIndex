@@ -103,8 +103,6 @@ public static class QueryCommandRunner
                     Console.WriteLine(options.Json
                         ? JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, includeFiles: true), jsonOptions)
                         : "0");
-                else if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint), jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No definitions found.");
@@ -181,12 +179,6 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("references", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
-                else if (options.Json)
-                    WriteGraphZeroJsonResult("references", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
-                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
@@ -253,12 +245,6 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callers", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
-                else if (options.Json)
-                    WriteGraphZeroJsonResult("callers", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
-                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
@@ -321,12 +307,6 @@ public static class QueryCommandRunner
             {
                 if (options.CountOnly)
                     WriteGraphCountResult(0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult("callees", json: true, graphAvailable: false, jsonOptions, options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null);
-                else if (options.Json)
-                    WriteGraphZeroJsonResult("callees", jsonOptions, reader._hasReferencesTable,
-                        options.Exact ? exactSignal : ((bool ExactIndexAvailable, string? DegradedReason)?)null,
-                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
@@ -422,8 +402,6 @@ public static class QueryCommandRunner
                     Console.WriteLine(options.Json
                         ? JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint, includeFiles: true), jsonOptions)
                         : "0");
-                else if (options.Json)
-                    Console.WriteLine(JsonSerializer.Serialize(BuildJsonZeroResultPayload(exactZeroHint), jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No symbols found.");
@@ -1583,22 +1561,6 @@ public static class QueryCommandRunner
             payload["degraded"] = true;
         if (options.Exact)
             AddExactGraphJsonFields(payload, exactSignal);
-        if (exactZeroHint != null)
-            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
-    }
-
-    private static void WriteGraphZeroJsonResult(string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
-        (bool ExactIndexAvailable, string? DegradedReason)? exactSignal, ExactZeroHintResult? exactZeroHint = null)
-    {
-        var payload = new JsonObject
-        {
-            ["count"] = 0,
-            [resultsKey] = new JsonArray(),
-            ["graph_table_available"] = graphAvailable,
-        };
-        if (exactSignal != null)
-            AddExactGraphJsonFields(payload, exactSignal.Value);
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
