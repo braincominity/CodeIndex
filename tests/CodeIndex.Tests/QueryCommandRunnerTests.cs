@@ -144,6 +144,31 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain("No ", stderr);
     }
 
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("excerpt")]
+    [InlineData("map")]
+    [InlineData("inspect")]
+    [InlineData("outline")]
+    [InlineData("status")]
+    [InlineData("impact")]
+    [InlineData("deps")]
+    [InlineData("hotspots")]
+    [InlineData("unused")]
+    [InlineData("validate")]
+    public void QueryEntrypoints_UnsupportedSinceReturnUsageError(string command)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithUnsupportedSince(command));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error: --since is not supported for {command}.", stderr);
+        Assert.Contains("remove `--since` and rerun", stderr);
+        Assert.Contains("`search`, `definition`, `symbols`, or `files`", stderr);
+        Assert.DoesNotContain("database not found", stderr);
+    }
+
     [Fact]
     public void BuildSymbolQueryList_TreatsPipeAsLiteralNameCharacter()
     {
@@ -2622,6 +2647,27 @@ public class QueryCommandRunnerTests
             "hotspots" => QueryCommandRunner.RunHotspots(["--since", "nope", "--count"], _jsonOptions),
             "unused" => QueryCommandRunner.RunUnused(["--since", "nope", "--count"], _jsonOptions),
             "validate" => QueryCommandRunner.RunValidate(["--since", "nope"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+    }
+
+    private int RunCommandWithUnsupportedSince(string command)
+    {
+        return command switch
+        {
+            "references" => QueryCommandRunner.RunReferences(["QueryCommandRunner", "--since", "9999-01-01", "--count"], _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(["QueryCommandRunner", "--since", "9999-01-01", "--count"], _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(["QueryCommandRunner", "--since", "9999-01-01", "--count"], _jsonOptions),
+            "excerpt" => QueryCommandRunner.RunExcerpt(["src/CodeIndex/Program.cs", "--start", "1", "--since", "9999-01-01"], _jsonOptions),
+            "map" => QueryCommandRunner.RunMap(["--since", "9999-01-01"], _jsonOptions),
+            "inspect" => QueryCommandRunner.RunInspect(["QueryCommandRunner", "--since", "9999-01-01"], _jsonOptions),
+            "outline" => QueryCommandRunner.RunOutline(["src/CodeIndex/Program.cs", "--since", "9999-01-01"], _jsonOptions),
+            "status" => QueryCommandRunner.RunStatus(["--since", "9999-01-01"], _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(["QueryCommandRunner", "--since", "9999-01-01", "--count"], _jsonOptions),
+            "deps" => QueryCommandRunner.RunDeps(["--since", "9999-01-01"], _jsonOptions),
+            "hotspots" => QueryCommandRunner.RunHotspots(["--since", "9999-01-01", "--count"], _jsonOptions),
+            "unused" => QueryCommandRunner.RunUnused(["--since", "9999-01-01", "--count"], _jsonOptions),
+            "validate" => QueryCommandRunner.RunValidate(["--since", "9999-01-01"], _jsonOptions),
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
         };
     }

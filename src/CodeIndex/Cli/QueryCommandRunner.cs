@@ -194,6 +194,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "references", "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -272,6 +274,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "callers", "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -345,6 +349,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "callees", "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -599,6 +605,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]"))
+            return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
             WriteUsageError(
@@ -652,6 +660,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "map", "cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -718,6 +728,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "inspect", "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -795,6 +807,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "outline", "cdidx outline <path> [--db <path>] [--json]"))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -838,6 +852,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "status", "cdidx status [--db <path>] [--json]"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -916,6 +932,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "impact", "cdidx impact <symbol> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -1118,6 +1136,8 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
             return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "deps", "cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse] [--json]"))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1158,6 +1178,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "hotspots", "cdidx hotspots [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1213,6 +1235,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "unused", "cdidx unused [--db <path>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1272,6 +1296,8 @@ public static class QueryCommandRunner
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteParseError(options))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnsupportedSinceError(options, "validate", "cdidx validate [--db <path>] [--kind <kind>] [--path <pattern>] [--json]"))
             return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
@@ -1568,6 +1594,17 @@ public static class QueryCommandRunner
             return false;
 
         Console.Error.WriteLine(options.ParseError);
+        return true;
+    }
+
+    private static bool TryWriteUnsupportedSinceError(QueryCommandOptions options, string commandName, string usage)
+    {
+        if (!options.Since.HasValue)
+            return false;
+
+        Console.Error.WriteLine($"Error: --since is not supported for {commandName}.");
+        Console.Error.WriteLine("Hint: remove `--since` and rerun, or use it with `search`, `definition`, `symbols`, or `files`.");
+        Console.Error.WriteLine($"Usage: {usage}");
         return true;
     }
 
