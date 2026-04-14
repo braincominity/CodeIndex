@@ -8,6 +8,7 @@ namespace CodeIndex.Tests;
 /// Tests for concurrent database access patterns.
 /// 並行データベースアクセスパターンのテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class ConcurrencyTests : IDisposable
 {
     private readonly string _dbPath;

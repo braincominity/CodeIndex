@@ -8,6 +8,7 @@ namespace CodeIndex.Tests;
 /// Tests for database corruption recovery and graceful degradation.
 /// DB破損からの復旧とグレースフル劣化のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class DbRecoveryTests : IDisposable
 {
     private readonly string _dbPath;

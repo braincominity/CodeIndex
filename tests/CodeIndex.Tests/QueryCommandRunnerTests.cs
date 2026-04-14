@@ -9,6 +9,7 @@ namespace CodeIndex.Tests;
 /// Tests for query-style CLI command execution.
 /// クエリ系CLIコマンド実行のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class QueryCommandRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -3108,6 +3109,7 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, "callers");
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
             Assert.True(json.GetProperty("has_multiple_definition_files").GetBoolean());
@@ -3140,6 +3142,7 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, "callers");
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
             Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
