@@ -965,6 +965,32 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BackfillFold_LegacyDbWithoutCodeIndexMeta_Succeeds()
+    {
+        using (var dropMeta = _db.Connection.CreateCommand())
+        {
+            dropMeta.CommandText = "DROP TABLE codeindex_meta;";
+            dropMeta.ExecuteNonQuery();
+        }
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
+        Assert.True(structured["fold_ready"]!.GetValue<bool>());
+
+        using var verifyDb = new DbContext(_dbPath);
+        verifyDb.TryMigrateForRead();
+        Assert.Equal(NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString("fold_key_version"));
+        Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
+        var reader = new DbReader(verifyDb.Connection);
+        Assert.True(reader._foldReady);
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_IncludesConfidenceBuckets()
     {
         var writer = new DbWriter(_db.Connection);

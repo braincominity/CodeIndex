@@ -10,7 +10,6 @@ public class DbContext : IDisposable
 {
     private static readonly string[] RequiredCodeIndexTables =
     [
-        "codeindex_meta",
         "files",
         "chunks",
         "symbols",
