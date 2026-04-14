@@ -809,6 +809,49 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_WithInlineAttributedProperty_ClassifiesPropertyAsReflectionSuspect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_inline_attr_property");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/user_dto.cs",
+                "csharp",
+                """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")] public string FullName { get; set; } = string.Empty;
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
+            var fullName = Assert.Single(symbols, symbol => symbol.GetProperty("name").GetString() == "FullName");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", fullName.GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithJsonLargePublicLimit_IsNotCappedAtBudget()
     {
         var (projectRoot, dbPath) = CreateLargePublicUnusedFixtureDb();

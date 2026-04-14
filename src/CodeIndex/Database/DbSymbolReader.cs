@@ -834,8 +834,12 @@ public partial class DbReader
 
     private static List<string> GetAdjacentAttributeBlock(string[] lines, bool[] triviaMask, int anchorIndex)
     {
+        var anchorLine = lines[anchorIndex];
+        if (LineContainsInlineAttributeAndDeclaration(anchorLine))
+            return [anchorLine.Trim()];
+
         var declarationIndex = anchorIndex;
-        if (LooksLikeAttributeBoundaryLine(lines[anchorIndex]))
+        if (LooksLikeAttributeBoundaryLine(anchorLine))
         {
             declarationIndex = FindNextDeclarationLine(lines, triviaMask, anchorIndex + 1);
             if (declarationIndex < 0)
@@ -880,6 +884,14 @@ public partial class DbReader
 
         block.Reverse();
         return block;
+    }
+
+    private static bool LineContainsInlineAttributeAndDeclaration(string line)
+    {
+        if (!LooksLikeAttributeBoundaryLine(line))
+            return false;
+
+        return !string.IsNullOrWhiteSpace(StripLeadingCSharpAttributeLists(line));
     }
 
     private static int FindNextDeclarationLine(string[] lines, bool[] triviaMask, int startIndex)
@@ -984,6 +996,46 @@ public partial class DbReader
         }
 
         return names;
+    }
+
+    private static string StripLeadingCSharpAttributeLists(string line)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        if (index >= line.Length || line[index] != '[')
+            return line;
+
+        var cursor = index;
+        while (cursor < line.Length && line[cursor] == '[')
+        {
+            var depth = 0;
+            var sawBracket = false;
+            while (cursor < line.Length)
+            {
+                var ch = line[cursor++];
+                if (ch == '[')
+                {
+                    depth++;
+                    sawBracket = true;
+                }
+                else if (ch == ']')
+                {
+                    depth--;
+                    if (depth == 0 && sawBracket)
+                        break;
+                }
+            }
+
+            if (depth != 0)
+                return string.Empty;
+
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+        }
+
+        return cursor < line.Length ? line[cursor..] : string.Empty;
     }
 
     private static bool TryReadAttributeIdentifier(string content, ref int index, out string? identifier)
