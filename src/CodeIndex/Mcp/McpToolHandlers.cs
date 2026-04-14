@@ -54,10 +54,14 @@ public partial class McpServer
     /// </summary>
     private static void AddFreshnessHint(JsonObject payload, DbReader reader)
     {
-        var (fileCount, indexedAt) = reader.GetFreshnessHint();
-        payload["indexed_file_count"] = fileCount;
-        if (indexedAt.HasValue)
-            payload["indexed_at"] = JsonSerializer.SerializeToNode(indexedAt.Value);
+        var freshness = reader.GetFreshnessHint();
+        payload["indexed_file_count"] = freshness.FileCount;
+        payload["indexed_at"] = freshness.IndexedAt.HasValue
+            ? JsonSerializer.SerializeToNode(freshness.IndexedAt.Value)
+            : null;
+        payload["freshness_available"] = freshness.FreshnessAvailable;
+        if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
+            payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
     }
 
     private static void AddExactZeroHint(JsonObject payload, ExactZeroHintResult? exactZeroHint)
@@ -265,6 +269,8 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchSymbols(effectiveQueries, limit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact);
+            var hasExactPredicate = exact && effectiveQueries is { Count: > 0 };
+            var exactSignal = reader.GetSymbolsExactQuerySignal();
             var multiNameExactHint = effectiveQueries != null && effectiveQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
                 ? QueryCommandRunner.BuildExactZeroHint(
@@ -292,6 +298,8 @@ public partial class McpServer
                     ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                if (hasExactPredicate)
+                    AddExactGraphSignal(payload, exactSignal);
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No symbols found.", payload);
@@ -308,6 +316,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (hasExactPredicate)
+                AddExactGraphSignal(structured, exactSignal);
             return CreateToolResult(id, $"Found {results.Count} symbol(s).", structured);
         });
     }
@@ -336,6 +346,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var exactSignal = reader.GetDefinitionExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
                 () => reader.CountSearchSymbols(query, QueryCommandRunner.ExactZeroHintProbeLimit, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact: false) > 0,
@@ -353,6 +364,8 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (exact)
+                AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -639,7 +652,7 @@ public partial class McpServer
         return "Symbol analysis returned.";
     }
 
-    private static void AddExactGraphSignal(JsonObject payload, (bool ExactIndexAvailable, string? DegradedReason) signal)
+    private static void AddExactGraphSignal(JsonObject payload, ExactQuerySignal signal)
     {
         payload["exactIndexAvailable"] = signal.ExactIndexAvailable;
         if (signal.DegradedReason != null)
@@ -1154,6 +1167,7 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var foldReadyAfter = false;
+        string? foldReadyReason = null;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1163,14 +1177,28 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
+            var backfillReady = writer.AllFoldedColumnsBackfilled();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
-            var canRestampExistingFoldTrust = priorFoldVersion == currentFoldVersion
-                && priorFoldFingerprint == currentFoldFingerprint;
-            if (writer.AllFoldedColumnsBackfilled() && (skipped == 0 || canRestampExistingFoldTrust))
+            var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
+            var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
+            var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
+            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
+            }
+            else if (!backfillReady)
+            {
+                foldReadyReason = "missing_fold_backfill";
+            }
+            else if (!foldVersionMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_version";
+            }
+            else if (!foldFingerprintMatchesCurrent)
+            {
+                foldReadyReason = "stale_fold_key_fingerprint";
             }
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -1192,12 +1220,18 @@ public partial class McpServer
             },
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
-            // run, prefer `backfill_fold`; full rebuild is the heavier fallback.
-            ["fold_ready"] = foldReadyAfter
+            ["fold_ready"] = foldReadyAfter,
+            ["fold_ready_reason"] = foldReadyReason
         };
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
-                ? "Indexing complete. Note: --exact Unicode fold path not active (legacy rows without name_folded remain). Run backfill_fold to upgrade without reparsing files, or do a full rebuild."
+                ? foldReadyReason switch
+                {
+                    "stale_fold_key_version" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "stale_fold_key_fingerprint" => "Indexing complete. Note: --exact Unicode fold path not active because unchanged rows still carry folded keys generated under an older runtime fingerprint. Rewrite or purge those stale rows and rerun index, run backfill_fold, or do a full rebuild to upgrade.",
+                    "missing_fold_backfill" => "Indexing complete. Note: --exact Unicode fold path not active because legacy rows without name_folded remain. Run backfill_fold to upgrade without reparsing files, or do a full rebuild.",
+                    _ => "Indexing complete. Note: --exact Unicode fold path not active."
+                }
                 : "Indexing complete.",
             structured);
     }

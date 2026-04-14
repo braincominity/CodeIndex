@@ -4,6 +4,12 @@ using System.Text.RegularExpressions;
 
 namespace CodeIndex.Database;
 
+public readonly record struct ExactQuerySignal(
+    bool ExactIndexAvailable,
+    bool HasMissingIndex,
+    bool HasMissingTable,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -15,6 +21,7 @@ public partial class DbReader
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
     private readonly HashSet<string> _symbolColumns;
+    private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
@@ -97,6 +104,7 @@ public partial class DbReader
         _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
+        _symbolIndexes = LoadIndexes("symbols");
         int userVersion;
         using (var v = _conn.CreateCommand())
         {
@@ -193,7 +201,13 @@ public partial class DbReader
         return cmd.ExecuteScalar() != null;
     }
 
+    private bool HasSymbolIndex(string indexName) => _symbolIndexes.Contains(indexName);
     private bool HasReferenceIndex(string indexName) => _referenceIndexes.Contains(indexName);
+
+    private bool SymbolNameExactIndexAvailable =>
+        _foldReady
+            ? HasSymbolIndex("idx_symbols_name_folded")
+            : HasSymbolIndex("idx_symbols_name_nocase");
 
     private bool SymbolNameExactGraphIndexAvailable =>
         _foldReady
@@ -217,31 +231,96 @@ public partial class DbReader
             : $"{string.Join(", ", missing)} missing on {scope}";
     }
 
-    private (bool ExactIndexAvailable, string? DegradedReason) BuildExactGraphSignal(bool available, params string[] missingIndexes)
+    private ExactQuerySignal BuildExactGraphSignal(bool available, params string[] missingIndexes)
     {
         if (!_hasReferencesTable)
-            return (false, "symbol_references table missing in this index");
+            return new(false, HasMissingIndex: false, HasMissingTable: true, "symbol_references table missing in this index");
         if (available)
-            return (true, null);
-        return (false, BuildExactGraphIndexReason(missingIndexes));
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+        return new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missingIndexes));
     }
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetReferencesExactQuerySignal() =>
+    private ExactQuerySignal BuildExactSymbolSignal(bool available, params string[] missingIndexes)
+    {
+        if (available)
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+        return new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missingIndexes));
+    }
+
+    private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
+    {
+        var participating = signals.Where(signal => signal.HasValue).Select(signal => signal!.Value).ToList();
+        if (participating.Count == 0)
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+
+        if (participating.All(signal => signal.ExactIndexAvailable))
+            return new(true, HasMissingIndex: false, HasMissingTable: false, null);
+
+        var reasons = participating
+            .Where(signal => !signal.ExactIndexAvailable && !string.IsNullOrWhiteSpace(signal.DegradedReason))
+            .Select(signal => signal.DegradedReason!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: participating.Any(signal => signal.HasMissingIndex),
+            HasMissingTable: participating.Any(signal => signal.HasMissingTable),
+            DegradedReason: reasons.Count == 0 ? null : string.Join("; ", reasons));
+    }
+
+    public ExactQuerySignal GetSymbolsExactQuerySignal() =>
+        BuildExactSymbolSignal(SymbolNameExactIndexAvailable,
+            _foldReady ? "idx_symbols_name_folded" : "idx_symbols_name_nocase");
+
+    public ExactQuerySignal GetDefinitionExactQuerySignal() =>
+        GetSymbolsExactQuerySignal();
+
+    public ExactQuerySignal GetReferencesExactQuerySignal() =>
         BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetCallersExactQuerySignal() =>
+    public ExactQuerySignal GetCallersExactQuerySignal() =>
         BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetCalleesExactQuerySignal() =>
+    public ExactQuerySignal GetCalleesExactQuerySignal() =>
         BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
             _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
-    public (bool ExactIndexAvailable, string? DegradedReason) GetAnalyzeSymbolExactQuerySignal()
+    public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(bool includeGraphSignal = true)
+    {
+        return CombineExactSignals(
+            GetDefinitionExactQuerySignal(),
+            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
+    }
+
+    internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT 1
+            FROM files f
+            WHERE 1=1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphApplicableLang")}";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private ExactQuerySignal BuildAnalyzeGraphExactQuerySignal()
     {
         if (!_hasReferencesTable)
-            return (false, "symbol_references table missing in this index");
+            return new(false, HasMissingIndex: false, HasMissingTable: true, "symbol_references table missing in this index");
 
         var missing = new List<string>();
         if (!SymbolNameExactGraphIndexAvailable)
@@ -250,8 +329,8 @@ public partial class DbReader
             missing.Add(_foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
 
         return missing.Count == 0
-            ? (true, null)
-            : (false, BuildExactGraphIndexReason(missing));
+            ? new(true, HasMissingIndex: false, HasMissingTable: false, null)
+            : new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missing));
     }
 
     internal static string EscapeLikeQuery(string input)
@@ -1426,12 +1505,19 @@ public partial class DbReader
     /// Return a lightweight freshness hint for zero-result MCP responses.
     /// 0件MCPレスポンス向けの軽量な鮮度ヒントを返す。
     /// </summary>
-    public (long FileCount, DateTime? IndexedAt) GetFreshnessHint()
+    public FreshnessHintResult GetFreshnessHint()
     {
+        var freshnessAvailable = _fileColumns.Contains("indexed_at");
         var fileCount = ExecuteScalar("SELECT COUNT(*) FROM files");
         var indexedAt = ExecuteNullableDateTime(
-            _fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null);
-        return (fileCount, indexedAt);
+            freshnessAvailable ? "SELECT MAX(indexed_at) FROM files" : null);
+        return new FreshnessHintResult
+        {
+            FileCount = fileCount,
+            IndexedAt = indexedAt,
+            FreshnessAvailable = freshnessAvailable,
+            FreshnessDegradedReason = freshnessAvailable ? null : "files.indexed_at column missing in this index",
+        };
     }
 
     private (DateTime? IndexedAt, DateTime? LatestModified) GetWorkspaceFreshness()

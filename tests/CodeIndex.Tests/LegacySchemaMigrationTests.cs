@@ -176,6 +176,18 @@ public class LegacySchemaMigrationTests : IDisposable
         SqliteConnection.ClearAllPools();
     }
 
+    private static void DropSymbolExactFallbackIndex(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbols_name_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
     [Fact]
     public void TryMigrateForRead_LegacyDb_ReadPathsDoNotCrash()
     {
@@ -548,6 +560,75 @@ public class LegacySchemaMigrationTests : IDisposable
             var nonExactBundle = reader.AnalyzeSymbol("Run", exact: false);
             Assert.Null(nonExactBundle.ExactIndexAvailable);
             Assert.Null(nonExactBundle.DegradedReason);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void ReadOnlyDb_MissingExactSymbolFallbackIndex_SurfacesDegradedSignal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_symbol_exact_signal_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            SeedGraphDbWithoutExactFallbackIndexes(dbPath);
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            using var db = new DbContext(fileUri);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+            var symbolsSignal = reader.GetSymbolsExactQuerySignal();
+            var definitionSignal = reader.GetDefinitionExactQuerySignal();
+            var symbolResults = reader.SearchSymbols("Run", exact: true);
+            var definitionResults = reader.GetDefinitions("Run", exact: true);
+
+            Assert.False(symbolsSignal.ExactIndexAvailable);
+            Assert.Contains("idx_symbols_name_nocase", symbolsSignal.DegradedReason);
+            Assert.False(definitionSignal.ExactIndexAvailable);
+            Assert.Contains("idx_symbols_name_nocase", definitionSignal.DegradedReason);
+            Assert.Single(symbolResults);
+            Assert.Single(definitionResults);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void WritableLegacyDb_MissingExactSymbolFallbackIndex_SelfHealsDuringReadMigration()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_symbol_exact_writable_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            SeedGraphDbWithoutExactFallbackIndexes(dbPath);
+            DropSymbolExactFallbackIndex(dbPath);
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+            var symbolsSignal = reader.GetSymbolsExactQuerySignal();
+            var definitionSignal = reader.GetDefinitionExactQuerySignal();
+
+            Assert.True(symbolsSignal.ExactIndexAvailable);
+            Assert.Null(symbolsSignal.DegradedReason);
+            Assert.True(definitionSignal.ExactIndexAvailable);
+            Assert.Null(definitionSignal.DegradedReason);
+
+            using var check = db.Connection.CreateCommand();
+            check.CommandText = "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_symbols_name_nocase'";
+            Assert.NotNull(check.ExecuteScalar());
         }
         finally
         {

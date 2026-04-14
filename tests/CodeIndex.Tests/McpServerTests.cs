@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -375,7 +376,37 @@ public class McpServerTests : IDisposable
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         // Zero-result responses include freshness hint / 0件時に鮮度ヒントを含む
         Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0);
+        Assert.True(structured["freshness_available"]!.GetValue<bool>());
         Assert.NotNull(structured["indexed_at"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Files_NoResults_OnEmptyIndex_EmitsNullIndexedAt()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
+                var response = server.HandleMessage(request)!;
+                using var document = JsonDocument.Parse(response.ToJsonString());
+                var structured = document.RootElement.GetProperty("result").GetProperty("structuredContent");
+
+                Assert.Equal(0, structured.GetProperty("count").GetInt32());
+                Assert.Equal(0, structured.GetProperty("results").GetArrayLength());
+                Assert.Equal(0, structured.GetProperty("indexed_file_count").GetInt64());
+                Assert.True(structured.GetProperty("freshness_available").GetBoolean());
+                Assert.True(structured.TryGetProperty("indexed_at", out var indexedAt));
+                Assert.Equal(JsonValueKind.Null, indexedAt.ValueKind);
+            }
+        }
+        finally
+        {
+            DeleteFileRobust(dbPath);
+        }
     }
 
     [Fact]
@@ -1234,6 +1265,101 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Symbols_ExactOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+        DropSymbolExactFallbackIndex();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_ExactWithoutQuery_OnReadOnlyLegacyDb_OmitsExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n");
+        DropSymbolExactFallbackIndex();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"exact":true,"limit":1}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Null(structured["exactIndexAvailable"]);
+        Assert.Null(structured["degradedReason"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_ExactOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+        DropSymbolExactFallbackIndex();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_WithMissingSymbolFallbackIndex_IncludesBundleSignal()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+        ForceLegacyExactFallbackMode();
+        DropSymbolExactFallbackIndex();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.Equal("Run", response["result"]!["structuredContent"]!["definitions"]![0]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_UnsupportedGraphLanguage_SkipsGraphDegradedSignal()
+    {
+        InsertIndexedFile("docs/guide.md", "markdown", "# Heading\n\nSee also `Run`.\n");
+        ForceLegacyExactFallbackMode();
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"markdown","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Null(structured["degradedReason"]);
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_PathOnlyUnsupportedSlice_SkipsGraphDegradedSignal()
+    {
+        InsertIndexedFile("docs/guide.md", "markdown", "# Heading\n\nSee also `Run`.\n");
+        ForceLegacyExactFallbackMode();
+        DropGraphExactFallbackIndexes();
+        var readOnlyServer = new McpServer(new Uri(_dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","path":"docs/","exact":true}}}""")!;
+        var response = readOnlyServer.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Null(structured["degradedReason"]);
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactZeroHintWhenWholeBundleIsEmpty()
     {
         InsertIndexedFile("src/handler.cs", "csharp",
@@ -1336,7 +1462,64 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         Assert.True(structured["indexed_file_count"]!.GetValue<long>() > 0, $"{toolName} should include indexed_file_count");
+        Assert.True(structured["freshness_available"]!.GetValue<bool>());
         Assert.NotNull(structured["indexed_at"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Files_NoResults_OnLegacyReadOnlyDb_EmitsFreshnessDegradedSignal()
+    {
+        var dbPath = CreateLegacyDbWithoutIndexedAt();
+        try
+        {
+            var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"files","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
+            var response = readOnlyServer.HandleMessage(request)!;
+            using var document = JsonDocument.Parse(response.ToJsonString());
+            var structured = document.RootElement.GetProperty("result").GetProperty("structuredContent");
+
+            Assert.Equal(0, structured.GetProperty("count").GetInt32());
+            Assert.Equal(0, structured.GetProperty("results").GetArrayLength());
+            Assert.Equal(1, structured.GetProperty("indexed_file_count").GetInt64());
+            Assert.False(structured.GetProperty("freshness_available").GetBoolean());
+            Assert.Contains("files.indexed_at column missing", structured.GetProperty("freshness_degraded_reason").GetString());
+            Assert.Equal(JsonValueKind.Null, structured.GetProperty("indexed_at").ValueKind);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(dbPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("search", """{"query":"nonexistent_xyz_123"}""", "results")]
+    [InlineData("files", """{"query":"nonexistent_xyz_123"}""", "results")]
+    public void ToolsCall_ZeroResults_EmptyIndexIncludesNullFreshnessTimestamp(string toolName, string argsJson, string resultsKey)
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+                var request = JsonNode.Parse($$$"""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{toolName}}}","arguments":{{{argsJson}}}}}""")!;
+                var response = server.HandleMessage(request)!;
+
+                var structured = response["result"]!["structuredContent"]!;
+                Assert.Equal(0, structured["count"]!.GetValue<int>());
+                Assert.Equal(0, structured["indexed_file_count"]!.GetValue<long>());
+                Assert.True(structured.AsObject().ContainsKey("indexed_at"));
+                Assert.Null(structured["indexed_at"]);
+                Assert.Empty(structured[resultsKey]!.AsArray());
+            }
+        }
+        finally
+        {
+            DeleteFileRobust(dbPath);
+        }
     }
 
     [Theory]
@@ -1655,6 +1838,179 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_version_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_version_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Straße() { } }");
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(firstIndex)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = 'straße' WHERE name = 'Straße';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(Path.Combine(fixtureDir, "new.cs"), "public class NewFile { }");
+
+            var secondIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 2,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var secondResponse = server.HandleMessage(secondIndex)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.False(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
+            Assert.Equal("stale_fold_key_version", secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]!.GetValue<string>());
+            var text = secondResponse["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("older fold-key version", text);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RestampsFoldReadyWhenFoldKeyVersionMismatchesButAllRowsAreRewritten()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_version_rewrite_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_version_rewrite_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "intl.py"), "def Straße():\n    pass\n");
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(firstIndex)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            SqliteConnection.ClearAllPools();
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name_folded = 'straße' WHERE name = 'Straße';
+                    UPDATE files SET modified = '2000-01-01T00:00:00.0000000Z' WHERE path = 'intl.py';
+                    UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var rewrittenPath = Path.Combine(fixtureDir, "intl.py");
+            File.WriteAllText(rewrittenPath, "def Straße():\n    return 1\n");
+
+            var secondIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 2,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var secondResponse = server.HandleMessage(secondIndex)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(secondResponse["result"]!["structuredContent"]!["fold_ready"]!.GetValue<bool>());
+            Assert.Null(secondResponse["result"]!["structuredContent"]!["fold_ready_reason"]);
+
+            using var verify = new SqliteConnection($"Data Source={dbPath}");
+            verify.Open();
+            using var userVerCmd = verify.CreateCommand();
+            userVerCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)userVerCmd.ExecuteScalar()!;
+            Assert.NotEqual(0, userVersion & DbContext.FoldReadyFlag);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'fold_key_version'";
+            var storedVersion = versionCmd.ExecuteScalar() as string;
+            Assert.Equal(NameFold.Version.ToString(), storedVersion);
+
+            var reader = new DbReader(verify);
+            Assert.Single(reader.SearchSymbols(new[] { "STRASSE" }, limit: 10, exact: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_UnknownTool_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}""")!;
@@ -1854,6 +2210,46 @@ public class McpServerTests : IDisposable
         Assert.Contains("not allowed in batch_query", results[0]!["error"]!.GetValue<string>());
     }
 
+    private static string CreateLegacyDbWithoutIndexedAt()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_legacy_{Guid.NewGuid():N}.db");
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        using var conn = new SqliteConnection(builder.ConnectionString);
+        conn.Open();
+
+        using (var create = conn.CreateCommand())
+        {
+            create.CommandText = """
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    lang TEXT,
+                    size INTEGER,
+                    lines INTEGER,
+                    modified DATETIME
+                );
+                CREATE TABLE symbols (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL,
+                    name TEXT NOT NULL
+                );
+                """;
+            create.ExecuteNonQuery();
+        }
+
+        using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO files (path, lang, size, lines, modified)
+                VALUES ('src/legacy.cs', 'csharp', 42, 3, '2026-01-01T00:00:00Z');
+                """;
+            insert.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+        return dbPath;
+    }
+
     public void Dispose()
     {
         _db.Dispose();
@@ -1862,24 +2258,31 @@ public class McpServerTests : IDisposable
 
     private void DeleteDbPath()
     {
-        if (!File.Exists(_dbPath))
+        DeleteFileRobust(_dbPath);
+    }
+
+    private static void DeleteFileRobust(string path)
+    {
+        if (!File.Exists(path))
             return;
 
-        try
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            File.Delete(_dbPath);
-        }
-        catch (IOException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
+            SqliteConnection.ClearAllPools();
+
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 
@@ -1893,5 +2296,25 @@ public class McpServerTests : IDisposable
             """;
         cmd.ExecuteNonQuery();
         SqliteConnection.ClearAllPools();
+    }
+
+    private void DropSymbolExactFallbackIndex()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbols_name_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
+    private void ForceLegacyExactFallbackMode()
+    {
+        using var db = new DbContext(_dbPath);
+        db.ClearReadyFlags();
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkIssuesReady();
     }
 }

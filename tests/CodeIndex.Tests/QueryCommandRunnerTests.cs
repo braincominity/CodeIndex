@@ -224,6 +224,293 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("search", "results")]
+    [InlineData("files", "files")]
+    [InlineData("symbols", "symbols")]
+    [InlineData("definition", "definitions")]
+    public void ZeroResultJson_SymbolAndTextCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, resultsKey);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("references", "references")]
+    [InlineData("callers", "callers")]
+    [InlineData("callees", "callees")]
+    public void ZeroResultJson_GraphCommands_EmitEnvelopeGraphFlagsAndFreshness(string command, string resultsKey)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, resultsKey);
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("deps", "edges")]
+    [InlineData("unused", "symbols")]
+    [InlineData("hotspots", "hotspots")]
+    public void ZeroResultJson_AggregateCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, resultsKey);
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImpact_ZeroJson_EmitsEnvelopeAndFreshness()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_impact");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["DefinitelyMissingSymbol", "--db", dbPath, "--json", "--depth", "3"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, "callers");
+            Assert.Equal("DefinitelyMissingSymbol", json.GetProperty("query").GetString());
+            Assert.Equal(3, json.GetProperty("max_depth").GetInt32());
+            Assert.False(json.GetProperty("truncated").GetBoolean());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ZeroJson_OnEmptyIndex_EmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_empty_index");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["definitely-missing-path", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt64());
+            Assert.True(json.GetProperty("freshness_available").GetBoolean());
+            Assert.True(json.TryGetProperty("indexed_at", out var indexedAt));
+            Assert.Equal(JsonValueKind.Null, indexedAt.ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ZeroJson_OnLegacyReadOnlyDb_EmitsFreshnessDegradedSignal()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_legacy_freshness");
+        try
+        {
+            var dbPath = CreateLegacyDbWithoutIndexedAt(projectRoot);
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["definitely-missing-path", "--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetArrayLength());
+            Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt64());
+            Assert.False(json.GetProperty("freshness_available").GetBoolean());
+            Assert.Contains("files.indexed_at column missing", json.GetProperty("freshness_degraded_reason").GetString());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ZeroResultJson_EmitsStructuredPayloadWithFreshnessHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "class App { void Target() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingTarget", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("results").GetArrayLength());
+            Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.True(json.TryGetProperty("indexed_at", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ZeroResultJson_EmptyIndexEmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_zero_json_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingTarget", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("results").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ZeroResultJson_CountOnlyEmitsFreshnessHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_zero_json_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "class App { void Target() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingTarget", "--db", dbPath, "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.True(json.TryGetProperty("indexed_at", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ZeroResultJson_CountOnlyEmptyIndexEmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_zero_json_count_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingTarget", "--db", dbPath, "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetInt32());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunReferences_UnsupportedLanguageWithoutMatches_PrintsGraphSupportHint()
     {
@@ -1487,6 +1774,93 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactOnReadOnlyLegacyDb_WarnsAboutMissingIndex()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_symbol_exact_warn");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", readOnlyUri, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Run", stdout);
+            Assert.Contains("WARN: --exact symbol query ran without the supporting index", stderr);
+            Assert.Contains("idx_symbols_name_nocase", stderr);
+            Assert.Contains("re-index with `cdidx index <projectPath>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_ExactWithoutQuery_OnReadOnlyLegacyDb_OmitsExactSignalAndWarning()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_symbol_exact_no_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n");
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", readOnlyUri, "--exact", "--json", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", json.GetProperty("name").GetString());
+            Assert.False(json.TryGetProperty("exact_index_available", out _));
+            Assert.False(json.TryGetProperty("degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_ExactJsonOnReadOnlyLegacyDb_IncludesExactIndexSignal()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", readOnlyUri, "--exact", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", json.GetProperty("name").GetString());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("idx_symbols_name_nocase", json.GetProperty("degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_NonExactJsonOnReadOnlyLegacyDb_OmitsExactDegradedFields()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_nonexact");
@@ -1507,6 +1881,141 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.TryGetProperty("exact_index_available", out _));
+            Assert.False(json.TryGetProperty("degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactOnReadOnlyLegacyDb_WithMissingSymbolFallbackIndex_WarnsAtBundleLevel()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_symbol_exact_warn");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/session.py",
+                "python",
+                "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            ForceLegacyExactFallbackMode(dbPath);
+            DropSymbolExactFallbackIndex(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", readOnlyUri, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Exact Index          : DEGRADED", stdout);
+            Assert.Contains("idx_symbols_name_nocase", stdout);
+            Assert.Contains("WARN: --exact inspect bundle ran without all supporting indexes", stderr);
+            Assert.Contains("idx_symbols_name_nocase", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactOnReadOnlyLegacyDb_WithMissingSymbolIndexAndGraphTable_StillWarnsAboutIndex()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_symbol_and_table_missing");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/session.py",
+                "python",
+                "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
+            ForceLegacyExactFallbackMode(dbPath);
+            DropSymbolExactFallbackIndex(dbPath);
+            DropGraphTable(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", readOnlyUri, "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Graph Table          : MISSING", stdout);
+            Assert.Contains("Exact Index          : DEGRADED", stdout);
+            Assert.Contains("idx_symbols_name_nocase", stdout);
+            Assert.Contains("WARN: --exact inspect bundle ran without all supporting indexes", stderr);
+            Assert.Contains("idx_symbols_name_nocase", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactOnReadOnlyLegacyDb_UnsupportedGraphLanguage_DoesNotReportFalseDegradedSignal()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_markdown_exact_ok");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "docs/guide.md",
+                "markdown",
+                "# Heading\n\nSee also `Run`.\n");
+            ForceLegacyExactFallbackMode(dbPath);
+            DropGraphExactFallbackIndexes(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Heading", "--db", readOnlyUri, "--exact", "--lang", "markdown", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactOnReadOnlyLegacyDb_PathOnlyUnsupportedSlice_DoesNotReportFalseDegradedSignal()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_path_only_exact_ok");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "docs/guide.md",
+                "markdown",
+                "# Heading\n\nSee also `Run`.\n");
+            ForceLegacyExactFallbackMode(dbPath);
+            DropGraphExactFallbackIndexes(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Run", "--db", readOnlyUri, "--exact", "--path", "docs/", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
             Assert.False(json.TryGetProperty("degraded_reason", out _));
         }
         finally
@@ -1721,6 +2230,118 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Contains("No files found", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ZeroResultJson_EmitsStructuredPayloadWithFreshnessHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file-fragment", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetArrayLength());
+            Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.True(json.TryGetProperty("indexed_at", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ZeroResultJson_EmptyIndexEmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_zero_json_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file-fragment", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetArrayLength());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ZeroResultJson_CountOnlyEmitsFreshnessHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_zero_json_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file-fragment", "--db", dbPath, "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.True(json.TryGetProperty("indexed_at", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_ZeroResultJson_CountOnlyEmptyIndexEmitsNullIndexedAt()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_zero_json_count_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["missing-file-fragment", "--db", dbPath, "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("indexed_file_count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("indexed_at").ValueKind);
         }
         finally
         {
@@ -1963,6 +2584,102 @@ public class QueryCommandRunnerTests
         writer.MarkFoldReady();
     }
 
+    private static string CreateIndexedDbWithSingleFile(string projectRoot, bool markGraphReady = false)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/app.cs",
+            "csharp",
+            """
+            public class App
+            {
+                public void HandleRequest() { }
+            }
+            """);
+
+        if (markGraphReady)
+        {
+            using var db = new DbContext(dbPath);
+            var writer = new DbWriter(db.Connection);
+            writer.MarkGraphReady();
+        }
+
+        return dbPath;
+    }
+
+    private static string CreateLegacyDbWithoutIndexedAt(string projectRoot)
+    {
+        var dbPath = Path.Combine(projectRoot, "legacy.db");
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+        using var conn = new SqliteConnection(builder.ConnectionString);
+        conn.Open();
+
+        using (var create = conn.CreateCommand())
+        {
+            create.CommandText = """
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    lang TEXT,
+                    size INTEGER,
+                    lines INTEGER,
+                    modified DATETIME
+                );
+                CREATE TABLE symbols (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL,
+                    name TEXT NOT NULL
+                );
+                """;
+            create.ExecuteNonQuery();
+        }
+
+        using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO files (path, lang, size, lines, modified)
+                VALUES ('src/legacy.cs', 'csharp', 42, 3, '2026-01-01T00:00:00Z');
+                """;
+            insert.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+        return dbPath;
+    }
+
+    private int RunZeroResultCommand(string command, string dbPath)
+    {
+        return command switch
+        {
+            "search" => QueryCommandRunner.RunSearch(["DefinitelyMissingSymbol", "--db", dbPath, "--json"], _jsonOptions),
+            "files" => QueryCommandRunner.RunFiles(["definitely-missing-path", "--db", dbPath, "--json"], _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(["DefinitelyMissingSymbol", "--db", dbPath, "--json"], _jsonOptions),
+            "definition" => QueryCommandRunner.RunDefinition(["DefinitelyMissingSymbol", "--db", dbPath, "--json"], _jsonOptions),
+            "references" => QueryCommandRunner.RunReferences(["DefinitelyMissingSymbol", "--db", dbPath, "--json"], _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(["DefinitelyMissingSymbol", "--db", dbPath, "--json"], _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(["DefinitelyMissingSymbol", "--db", dbPath, "--json"], _jsonOptions),
+            "deps" => QueryCommandRunner.RunDeps(["--db", dbPath, "--json"], _jsonOptions),
+            "unused" => QueryCommandRunner.RunUnused(["--db", dbPath, "--json", "--kind", "delegate"], _jsonOptions),
+            "hotspots" => QueryCommandRunner.RunHotspots(["--db", dbPath, "--json", "--kind", "delegate"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+    }
+
+    private static void AssertZeroResultPayload(JsonElement json, string resultsKey)
+    {
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.True(json.TryGetProperty(resultsKey, out var results));
+        Assert.Equal(JsonValueKind.Array, results.ValueKind);
+        Assert.Equal(0, results.GetArrayLength());
+        Assert.True(json.TryGetProperty("indexed_file_count", out var indexedFileCount));
+        Assert.True(indexedFileCount.GetInt64() > 0);
+        Assert.True(json.GetProperty("freshness_available").GetBoolean());
+        Assert.True(json.TryGetProperty("indexed_at", out var indexedAt));
+        Assert.Equal(JsonValueKind.String, indexedAt.ValueKind);
+        Assert.False(string.IsNullOrWhiteSpace(indexedAt.GetString()));
+    }
+
     private static void DropGraphExactFallbackIndexes(string dbPath)
     {
         using var db = new DbContext(dbPath);
@@ -1976,5 +2693,37 @@ public class QueryCommandRunnerTests
             """;
         cmd.ExecuteNonQuery();
         SqliteConnection.ClearAllPools();
+    }
+
+    private static void DropSymbolExactFallbackIndex(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP INDEX IF EXISTS idx_symbols_name_nocase;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static void ForceLegacyExactFallbackMode(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        db.ClearReadyFlags();
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkIssuesReady();
+    }
+
+    private static void DropGraphTable(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP TABLE IF EXISTS symbol_references;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            """;
+        cmd.ExecuteNonQuery();
     }
 }
