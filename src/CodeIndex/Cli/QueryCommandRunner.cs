@@ -19,7 +19,7 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
-    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]";
+    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -625,7 +625,15 @@ public static class QueryCommandRunner
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var findValidationError = ValidateFindArgs(cmdArgs);
+        var preparedFindArgs = PrepareFindArgs(cmdArgs, out var preparationError);
+        if (preparationError != null)
+        {
+            Console.Error.WriteLine(preparationError);
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+
+        var findValidationError = ValidateFindArgs(preparedFindArgs);
         if (findValidationError != null)
         {
             Console.Error.WriteLine(findValidationError);
@@ -633,7 +641,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(preparedFindArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
             Console.Error.WriteLine(options.ParseError);
@@ -729,14 +737,14 @@ public static class QueryCommandRunner
     {
         HashSet<string> allowedWithValues =
         [
-            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after"
+            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after", "--query"
         ];
         HashSet<string> allowedFlags =
         [
             "--json", "--no-json", "--exclude-tests", "--count", "--exact"
         ];
 
-        var positionalCount = 0;
+        var queryCount = 0;
         for (int i = 0; i < args.Length; i++)
         {
             var arg = args[i];
@@ -744,6 +752,17 @@ public static class QueryCommandRunner
             {
                 if (i + 1 >= args.Length)
                     return $"Error: {arg} requires a value";
+                var value = args[i + 1];
+                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
+                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
+                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
+                if (arg == "--query")
+                {
+                    queryCount++;
+                    if (queryCount > 1)
+                        return "Error: find accepts exactly one query argument";
+                }
                 i++;
                 continue;
             }
@@ -754,12 +773,43 @@ public static class QueryCommandRunner
             if (arg.StartsWith('-'))
                 return $"Error: unsupported option for find: {arg}";
 
-            positionalCount++;
-            if (positionalCount > 1)
+            queryCount++;
+            if (queryCount > 1)
                 return "Error: find accepts exactly one query argument";
         }
 
         return null;
+    }
+
+    private static string[] PrepareFindArgs(string[] args, out string? error)
+    {
+        var normalized = new List<string>(args.Length);
+        error = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: -- requires a following literal query for find";
+                    return args;
+                }
+
+                if (i + 2 < args.Length)
+                {
+                    error = "Error: find accepts exactly one query argument after --";
+                    return args;
+                }
+
+                normalized.Add("--query");
+                normalized.Add(args[i + 1]);
+                return [.. normalized];
+            }
+
+            normalized.Add(args[i]);
+        }
+
+        return [.. normalized];
     }
 
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -1497,6 +1547,9 @@ public static class QueryCommandRunner
                     break;
                 case "--lang" when i + 1 < args.Length:
                     lang = args[++i];
+                    break;
+                case "--query" when i + 1 < args.Length:
+                    query = args[++i];
                     break;
                 case "--kind" when i + 1 < args.Length:
                     kind = args[++i];

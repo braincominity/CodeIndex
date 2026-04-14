@@ -311,6 +311,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx symbols [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact]");
         Console.WriteLine("  cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]");
+        Console.WriteLine("  cdidx find --query <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]");
         Console.WriteLine("  cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
         Console.WriteLine("  cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]");
         Console.WriteLine("  cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]");
@@ -395,6 +396,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx callees AddToGitExclude                 Find callees used by a caller");
         Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
         Console.WriteLine("  cdidx find guard --path src/Auth.cs --after 2 Find literal matches inside a known file");
+        Console.WriteLine("  cdidx find -- --path --path README.md         Search a literal that starts with '-'");
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
@@ -502,8 +504,10 @@ public static class ConsoleUi
         var langs = GetCompletionLangs();
         Console.WriteLine($@"_cdidx() {{
     local cur prev commands
+    local cmd
     cur=""${{COMP_WORDS[COMP_CWORD]}}""
     prev=""${{COMP_WORDS[COMP_CWORD-1]}}""
+    cmd=""${{COMP_WORDS[1]}}""
     commands=""{cmds}""
 
     if [ $COMP_CWORD -eq 1 ]; then
@@ -515,7 +519,13 @@ public static class ConsoleUi
         --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
         --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
         --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
-        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --help"" -- ""$cur"")) ;;
+        *)
+            if [ ""$cmd"" = ""find"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --no-json --limit --top --lang --path --exclude-path --exclude-tests --before --after --exact --count --query --help --"" -- ""$cur""))
+            else
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --help"" -- ""$cur""))
+            fi
+            ;;
     esac
 }}
 complete -F _cdidx cdidx");
@@ -538,20 +548,41 @@ _cdidx() {{
     case $state in
         cmds) _describe 'command' commands ;;
         args)
-            _arguments \
-                '--db[Database path]:file:_files' \
-                '--json[JSON output]' \
-                '--limit[Max results]:number' \
-                '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                '--path[Path filter]:pattern' \
-                '--exclude-path[Exclude path]:pattern' \
-                '--exclude-tests[Exclude tests]' \
-                '--body[Include body]' \
-                '--count[Count only]' \
-                '--fts[Raw FTS5 syntax]' \
-                '--snippet-lines[Snippet length]:number' \
-                '*:query'
+            local subcmd
+            subcmd=$words[2]
+            if [[ $subcmd == find ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--no-json[Disable JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--top[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--before[Context lines before]:number' \
+                    '--after[Context lines after]:number' \
+                    '--exact[Exact match]' \
+                    '--count[Count only]' \
+                    '--query[Literal query]' \
+                    '*:query'
+            else
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--body[Include body]' \
+                    '--count[Count only]' \
+                    '--fts[Raw FTS5 syntax]' \
+                    '--snippet-lines[Snippet length]:number' \
+                    '*:query'
+            fi
             ;;
     esac
 }}
@@ -574,6 +605,7 @@ _cdidx");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l path -r -d 'Path filter'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-path -r -d 'Exclude path'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-tests -d 'Exclude tests'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search find' -l exact -d 'Exact match'");

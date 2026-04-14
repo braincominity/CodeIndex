@@ -2231,6 +2231,28 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_RejectsInvalidNumericOptions()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["FindUsage", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", "--before", "-1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--before requires a non-negative integer", stderr);
+    }
+
+    [Fact]
+    public void RunFind_RejectsInvalidLimit()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["FindUsage", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", "--limit", "nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--limit requires a positive integer", stderr);
+    }
+
+    [Fact]
     public void RunFind_InvalidSinceFailsClosedInsteadOfRunning()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
@@ -2239,6 +2261,60 @@ public class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("unsupported option for find: --since", stderr);
+    }
+
+    [Fact]
+    public void RunFind_AllowsDashedLiteralViaQueryFlag()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_query_flag");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--json appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["--query", "--json", "--db", dbPath, "--path", "README.md", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", stdout.Trim());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllowsDashedLiteralViaDoubleDash()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_double_dash");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--path appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["--db", dbPath, "--path", "README.md", "--count", "--", "--path"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", stdout.Trim());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
