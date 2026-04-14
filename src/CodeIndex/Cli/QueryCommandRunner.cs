@@ -127,8 +127,6 @@ public static class QueryCommandRunner
                     Console.WriteLine(options.Json
                         ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHint, exactSignal: exact ? exactSignal : null).ToJsonString(jsonOptions)
                         : "0");
-                else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "definitions", exactZeroHint: exactZeroHint, exactSignal: exact ? exactSignal : null).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No definitions found.");
@@ -236,10 +234,6 @@ public static class QueryCommandRunner
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "references", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
-                else if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, reader._hasReferencesTable,
-                        exact ? exactSignal : (ExactQuerySignal?)null,
-                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
@@ -320,10 +314,6 @@ public static class QueryCommandRunner
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "callers", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
-                else if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, reader._hasReferencesTable,
-                        exact ? exactSignal : (ExactQuerySignal?)null,
-                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
@@ -400,10 +390,6 @@ public static class QueryCommandRunner
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
                 else if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "callees", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
-                else if (options.Json)
-                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, reader._hasReferencesTable,
-                        exact ? exactSignal : (ExactQuerySignal?)null,
-                        exactZeroHint);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
@@ -516,8 +502,6 @@ public static class QueryCommandRunner
                     Console.WriteLine(options.Json
                         ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHint, exactSignal: hasExactPredicate ? exactSignal : null).ToJsonString(jsonOptions)
                         : "0");
-                else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "symbols", exactZeroHint: exactZeroHint, exactSignal: hasExactPredicate ? exactSignal : null).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No symbols found.");
@@ -1461,18 +1445,47 @@ public static class QueryCommandRunner
         {
             // Warn if user specified an unsupported language / 未対応言語の場合は警告
             if (options.Lang != null && !ReferenceExtractor.SupportsLanguage(options.Lang) && !options.Json)
-                Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Results may contain false positives.");
+                Console.Error.WriteLine($"Warning: '{options.Lang}' does not support reference extraction. Unused results are unavailable for this language.");
+
+            bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
+            var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
+            if (options.CountOnly)
+            {
+                var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                if (options.Json)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(new
+                    {
+                        count = countSummary.Count,
+                        files = countSummary.FileCount,
+                        returned_bucket_counts = new Dictionary<string, int>(),
+                        graph_supported = graphSupported,
+                        graph_support_reason = graphSupportReason,
+                        graph_table_available = reader._hasReferencesTable,
+                        degraded = !reader._hasReferencesTable
+                    }, jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{countSummary.Count}");
+                    WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                }
+                return CommandExitCodes.Success;
+            }
 
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, new ExactQuerySignal(true, HasMissingIndex: false, HasMissingTable: false, null));
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "symbols", json: true, graphAvailable: false, jsonOptions);
-                else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "symbols", graphTableAvailable: true, degraded: false).ToJsonString(jsonOptions));
-                else if (!options.Json)
+                if (options.Json)
+                {
+                    Console.WriteLine(BuildUnusedJsonPayload(
+                        Array.Empty<UnusedSymbolResult>(),
+                        graphSupported,
+                        graphSupportReason,
+                        reader._hasReferencesTable,
+                        jsonOptions));
+                }
+                else
                 {
                     Console.Error.WriteLine("No unused symbols found.");
                     WriteZeroResultHints(options, reader);
@@ -1480,35 +1493,93 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
-                    : $"{results.Count}");
-                return CommandExitCodes.Success;
+                return options.Json ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, symbols = results }, jsonOptions));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, reader._hasReferencesTable, jsonOptions));
             }
             else
             {
-                foreach (var s in results)
+                var bucketCounts = BuildUnusedBucketCounts(results);
+                foreach (var bucket in OrderedUnusedBuckets)
                 {
-                    var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                    var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
-                    Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
+                    var bucketResults = results.Where(s => s.UnusedBucket == bucket).ToList();
+                    if (bucketResults.Count == 0)
+                        continue;
+
+                    Console.WriteLine($"{GetUnusedBucketHeading(bucket)} ({bucketResults.Count})");
+                    foreach (var s in bucketResults)
+                    {
+                        var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
+                        var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
+                        Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
+                        Console.WriteLine($"             confidence={s.UnusedConfidence} reason={s.UnusedReason}");
+                    }
+                    Console.WriteLine();
                 }
-                Console.Error.WriteLine($"({results.Count} potentially unused symbols)");
+                var summaryBuckets = OrderedUnusedBuckets
+                    .Where(bucketCounts.ContainsKey)
+                    .Select(bucket => $"{GetUnusedBucketHeading(bucket)}: {bucketCounts[bucket]}");
+                Console.Error.WriteLine($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
             }
             return CommandExitCodes.Success;
         });
     }
+
+    private static readonly string[] OrderedUnusedBuckets =
+    [
+        "likely_unused_private",
+        "maybe_unused_nonpublic",
+        "public_or_exported_no_refs",
+        "reflection_or_config_suspect",
+    ];
+
+    private static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            if (grouped.TryGetValue(bucket, out var count))
+                ordered[bucket] = count;
+        }
+        return ordered;
+    }
+
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, bool hasReferencesTable, JsonSerializerOptions jsonOptions)
+    {
+        var resultList = results as IReadOnlyCollection<UnusedSymbolResult> ?? results.ToArray();
+        var payload = new JsonObject
+        {
+            ["count"] = resultList.Count,
+            ["graph_supported"] = graphSupported,
+            ["graph_support_reason"] = graphSupportReason,
+            ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), jsonOptions),
+            ["symbols"] = JsonSerializer.SerializeToNode(resultList, jsonOptions)
+        };
+
+        if (!hasReferencesTable)
+        {
+            payload["graph_table_available"] = false;
+            payload["degraded"] = true;
+            payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+        }
+
+        return payload.ToJsonString(jsonOptions);
+    }
+
+    private static string GetUnusedBucketHeading(string bucket) => bucket switch
+    {
+        "likely_unused_private" => "Likely unused private",
+        "maybe_unused_nonpublic" => "Maybe unused non-public",
+        "public_or_exported_no_refs" => "Public/exported with no refs",
+        "reflection_or_config_suspect" => "Reflection/config suspects",
+        _ => bucket,
+    };
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -2134,21 +2205,10 @@ public static class QueryCommandRunner
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteGraphZeroJsonResult(DbReader reader, string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
-        ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null)
-    {
-        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: graphAvailable);
-        if (exactSignal != null)
-            AddExactGraphJsonFields(payload, exactSignal.Value);
-        if (exactZeroHint != null)
-            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
-    }
-
     private static void WriteGraphJsonResult<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
     {
         var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
-        AddExactJsonFields(payload, exactSignal);
+        AddExactGraphJsonFields(payload, exactSignal);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 

@@ -25,6 +25,7 @@ public partial class DbReader
     private readonly HashSet<string> _referenceIndexes;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
+    internal readonly bool _hasChunksTable;
     // #86: True when every symbols / symbol_references row has name_folded populated and
     // the Unicode fold path is safe to use for `--exact`. Legacy / partial-backfill DBs
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
@@ -112,6 +113,7 @@ public partial class DbReader
             var raw = v.ExecuteScalar();
             userVersion = raw is long l ? (int)l : (raw is int i ? i : 0);
         }
+        _hasChunksTable = HasTable("chunks");
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
         _referenceIndexes = LoadIndexes("symbol_references");

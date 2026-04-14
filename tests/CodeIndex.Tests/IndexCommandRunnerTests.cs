@@ -50,6 +50,123 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_MissingDirectory_PrintsActionableHint()
+    {
+        var missingProject = Path.Combine(Path.GetTempPath(), $"cdidx_missing_project_{Guid.NewGuid():N}");
+        var (exitCode, _, stderr) = RunAndCaptureStreams([missingProject]);
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Contains("Error: directory not found", stderr);
+        Assert.Contains("rerun `cdidx index <projectPath>` with an existing directory", stderr);
+    }
+
+    [Fact]
+    public void Run_MissingDirectory_JsonIncludesHint()
+    {
+        var missingProject = Path.Combine(Path.GetTempPath(), $"cdidx_missing_project_{Guid.NewGuid():N}");
+
+        var (exitCode, json) = RunAndCaptureJson([missingProject, "--json"]);
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Contains("directory not found", json.GetProperty("message").GetString());
+        Assert.Contains("rerun `cdidx index <projectPath>`", json.GetProperty("hint").GetString());
+    }
+
+    [Fact]
+    public void Run_RebuildWithCommits_PrintsActionableHint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--rebuild", "--commits", "HEAD"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--rebuild cannot be used with --commits or --files", stderr);
+            Assert.Contains("drop `--rebuild`", stderr);
+            Assert.Contains("cdidx index <projectPath> --rebuild", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_RebuildWithCommits_JsonIncludesHint()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("--rebuild cannot be used with --commits or --files", json.GetProperty("message").GetString());
+            Assert.Contains("cdidx index <projectPath> --rebuild", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_MissingDb_PrintsActionableHint()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb], _jsonOptions);
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Contains("database not found", stderr.ToString());
+                Assert.Contains("Point `--db` at an existing `codeindex.db`", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_MissingDb_JsonIncludesHint()
+    {
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var stdout = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                var exitCode = IndexCommandRunner.RunBackfillFold(["--db", missingDb, "--json"], _jsonOptions);
+                using var document = JsonDocument.Parse(stdout.ToString());
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Contains("database not found", json.GetProperty("message").GetString());
+                Assert.Contains("Point `--db` at an existing `codeindex.db`", json.GetProperty("hint").GetString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_BackfillsLegacyRowsAndStampsFoldReady()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_{Guid.NewGuid():N}.db");
@@ -142,6 +259,239 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_RewritesAllWhenOnlyFingerprintDrifted()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_fp_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "bootstrap", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "CAFÉ_INIT",
+                        ReferenceKind = "call",
+                        Line = 2,
+                        Column = 5,
+                        Context = "CAFÉ_INIT()",
+                        ContainerKind = "function",
+                        ContainerName = "bootstrap",
+                    },
+                ]);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+                writer.MarkFoldReady();
+                writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(json.GetProperty("verified").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            verifyDb.TryMigrateForRead();
+            Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
+            var reader = new DbReader(verifyDb.Connection);
+            Assert.True(reader._foldReady);
+            Assert.Single(reader.SearchSymbols(["ＣＡＦÉ_ＩＮＩＴ"], limit: 10, exact: true));
+            Assert.Single(reader.GetCallers("ＣＡＦÉ_ＩＮＩＴ", limit: 10, exact: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_BlankFile_ReturnsDatabaseError()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_blank_{Guid.NewGuid():N}.db");
+        File.WriteAllText(dbPath, string.Empty);
+
+        try
+        {
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("not an existing CodeIndex DB", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_NonexistentFileUri_ReturnsNotFound()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_missing_{Guid.NewGuid():N}.db");
+        var dbUri = new Uri(dbPath).AbsoluteUri;
+
+        JsonElement json;
+        int exitCode;
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbUri, "--json"], _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                json = document.RootElement.Clone();
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Contains("database not found", json.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void RunBackfillFold_LegacyDbWithoutCodeIndexMeta_Succeeds()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_legacy_no_meta_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "bootstrap", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "CAFÉ_INIT",
+                        ReferenceKind = "call",
+                        Line = 2,
+                        Column = 5,
+                        Context = "CAFÉ_INIT()",
+                        ContainerKind = "function",
+                        ContainerName = "bootstrap",
+                    },
+                ]);
+                using var dropMeta = db.Connection.CreateCommand();
+                dropMeta.CommandText = "DROP TABLE codeindex_meta; UPDATE symbols SET name_folded = NULL; UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL; PRAGMA user_version = 3";
+                dropMeta.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            verifyDb.TryMigrateForRead();
+            Assert.Equal(NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString("fold_key_version"));
+            Assert.Equal(NameFold.Fingerprint(), verifyDb.GetMetaString("fold_key_fingerprint"));
+            var reader = new DbReader(verifyDb.Connection);
+            Assert.True(reader._foldReady);
+            Assert.Single(reader.SearchSymbols(["ＣＡＦÉ_ＩＮＩＴ"], limit: 10, exact: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_AllowsProjectRelativePathsStartingWithDotDotName()
     {
         var projectRoot = CreateTempProject();
@@ -184,6 +534,52 @@ public class IndexCommandRunnerTests
         {
             if (File.Exists(outsideFile))
                 File.Delete(outsideFile);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_WithIndexingErrors_PrintsRecoveryWarning()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllBytes(Path.Combine(projectRoot, "huge.py"), new byte[10 * 1024 * 1024 + 1]);
+
+            var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot], projectRoot);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Some files failed to index", stderr);
+            Assert.Contains("rerun `cdidx index", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithIndexingErrors_PrintsRecoveryWarning()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllBytes(Path.Combine(projectRoot, "huge.py"), new byte[10 * 1024 * 1024 + 1]);
+
+            var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot, "--files", "huge.py"], projectRoot);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Some files failed to update", stderr);
+            Assert.Contains("rerun `cdidx index", stderr);
+        }
+        finally
+        {
             DeleteDirectory(projectRoot);
         }
     }
@@ -1167,6 +1563,30 @@ public class IndexCommandRunnerTests
                 Console.SetOut(writer);
                 var exitCode = IndexCommandRunner.Run(args, new JsonSerializerOptions());
                 return (exitCode, writer.ToString());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+            }
+        }
+    }
+
+    private static (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            var originalErr = Console.Error;
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                var exitCode = IndexCommandRunner.Run(args, new JsonSerializerOptions());
+                return (exitCode, stdout.ToString(), stderr.ToString());
             }
             finally
             {

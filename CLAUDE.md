@@ -165,12 +165,12 @@ tests/CodeIndex.Tests/
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
 - Documentation (README, CHANGELOG) is structured: English first, then Japanese.
 - **Never mix languages within a section.** English sections must contain only English text; Japanese sections must contain only Japanese text. Bilingual inline code comments (`// Enable WAL mode / WALモードを有効化`) are the only exception. When adding bilingual content (e.g. CLAUDE.md rules), write the English paragraph in the English section and the Japanese paragraph in the Japanese section — never both in the same section.
-- No unnecessary packages — `System.CommandLine` was removed in favor of manual arg parsing.
+- No unnecessary production packages — `System.CommandLine` was removed in favor of manual arg parsing. Test-only packages under `tests/CodeIndex.Tests/` are a separate concern and do not relax the production dependency rule.
 
 ## Rules for changes (important)
 
 ### Dependency rule
-The only production dependency is **Microsoft.Data.Sqlite** — keep it that way. Do not add NuGet packages without explicit user approval. If a package would enable a significant improvement aligned with SELF_IMPROVEMENT.md goals, propose it to the user with a clear rationale before adding it.
+The only production/runtime dependency is **Microsoft.Data.Sqlite** — keep it that way. This rule applies to the shipping product under `src/CodeIndex/`; test-only packages under `tests/CodeIndex.Tests/` are allowed when justified for the test harness and do not weaken the production dependency policy. Do not add new production NuGet packages without explicit user approval. If a package would enable a significant improvement aligned with SELF_IMPROVEMENT.md goals, propose it to the user with a clear rationale before adding it.
 
 ### Absolute prohibition
 Code review uses the **locally built binary** from the current commit (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) to search and verify the codebase. This means the reviewer sees exactly what the code actually does — not what tests claim it does, not what documentation says it does, but what the running binary produces. **It is strictly forbidden to intentionally implement incomplete, hollow, or deceptive code that passes tests or review on paper but fails in practice.** Every feature must work correctly when exercised by the binary itself. Cutting corners to "pass review" defeats the purpose of the self-improvement loop and will be caught by dogfooding.
@@ -408,12 +408,12 @@ tests/CodeIndex.Tests/
 - コメントは英日併記（例: `// Enable WAL mode / WALモードを有効化`）
 - ドキュメント（README, CHANGELOG）は前半英語、後半日本語の構成。
 - **セクション内で言語を混在させない。** 英語セクションには英語のみ、日本語セクションには日本語のみを記載する。バイリンガルのインラインコードコメント（`// Enable WAL mode / WALモードを有効化`）は唯一の例外。バイリンガルコンテンツ（CLAUDE.md のルール等）を追加するときは、英語パラグラフを英語セクションに、日本語パラグラフを日本語セクションに書く — 同一セクションに両方を入れない。
-- 不要なパッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。
+- 不要な本番パッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。`tests/CodeIndex.Tests/` 配下の test-only package は別扱いであり、本番依存のルールを緩めるものではない。
 
 ## 変更時のルール（重要）
 
 ### 依存関係ルール
-本番依存は **Microsoft.Data.Sqlite** の1個のみ — これを維持すること。ユーザーの明示的な承認なしに NuGet パッケージを追加しないこと。SELF_IMPROVEMENT.md の目的に沿った大きな改善を可能にするパッケージがある場合は、明確な理由を添えてユーザーに提案してから追加すること。
+本番/runtime 依存は `src/CodeIndex/` では **Microsoft.Data.Sqlite** の1個のみ — これを維持すること。このルールは出荷物に適用されるもので、`tests/CodeIndex.Tests/` の test-only package はテストハーネス用途として妥当な範囲で許容されるが、本番依存の方針を緩めるものではない。ユーザーの明示的な承認なしに新しい本番 NuGet パッケージを追加しないこと。SELF_IMPROVEMENT.md の目的に沿った大きな改善を可能にするパッケージがある場合は、明確な理由を添えてユーザーに提案してから追加すること。
 
 ### 絶対禁止事項
 コードレビューは現在のコミットから**ローカルビルドしたバイナリ**（`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`）を使ってコードベースを検索・検証します。つまりレビュアーは、テストが主張する動作でもドキュメントが述べる動作でもなく、実行中のバイナリが実際に出す結果を見ます。**テストやレビューを表面上パスするが実際には動作しない、不完全・中身のない・欺瞞的なコードを意図的に実装することは厳禁です。** すべての機能はバイナリ自身で実行したときに正しく動作しなければなりません。「レビューを通す」ための手抜きは自己改善ループの目的を損ない、ドッグフーディングで必ず発覚します。
