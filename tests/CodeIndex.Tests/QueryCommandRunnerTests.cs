@@ -88,9 +88,11 @@ public class QueryCommandRunnerTests
         Assert.Equal(0, options.ContextAfter);
         Assert.Equal(SearchSnippetFormatter.DefaultSnippetLines, options.SnippetLines);
         Assert.Contains("Error: --limit requires a positive integer", stderr);
+        Assert.Contains("Hint: retry with `--limit 1` or another positive integer.", stderr);
         Assert.Contains("Error: --start requires a positive integer", stderr);
         Assert.Contains("Error: --end requires a positive integer", stderr);
         Assert.Contains("Error: --before requires a non-negative integer", stderr);
+        Assert.Contains("Hint: retry with `--before 0` or another non-negative integer.", stderr);
         Assert.Contains("Error: --after requires a non-negative integer", stderr);
         Assert.Contains("Error: --snippet-lines requires a positive integer", stderr);
         Assert.Contains("Warning: unknown option '--mystery' (ignored)", stderr);
@@ -2285,6 +2287,8 @@ public class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: inspect requires a symbol query argument", stderr);
+        Assert.Contains("Hint: Add the symbol you want to inspect", stderr);
+        Assert.Contains("Usage: cdidx inspect <query>", stderr);
     }
 
     [Fact]
@@ -2549,7 +2553,7 @@ public class QueryCommandRunnerTests
         Assert.Contains("Error: database not found at", stderr);
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
-        Assert.Contains("Run 'cdidx index <projectPath>' first to create the index.", stderr);
+        Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
     }
 
     private static (T Result, string Stdout, string Stderr) CaptureConsole<T>(Func<T> action)

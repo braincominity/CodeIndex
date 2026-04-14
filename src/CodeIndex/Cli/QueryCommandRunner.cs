@@ -29,8 +29,10 @@ public static class QueryCommandRunner
         }
         if (options.Query == null)
         {
-            Console.Error.WriteLine("Error: search requires a query argument");
-            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]");
+            WriteUsageError(
+                "search requires a query argument",
+                "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts]",
+                "Add the text you want to search for after the command, for example: `cdidx search authenticate`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -89,8 +91,10 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: definition requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]");
+            WriteUsageError(
+                "definition requires a symbol query argument",
+                "cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--body]",
+                "Add the symbol name after the command, for example: `cdidx definition QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -188,8 +192,10 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: references requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            WriteUsageError(
+                "references requires a symbol query argument",
+                "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]",
+                "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -262,8 +268,10 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: callers requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            WriteUsageError(
+                "callers requires a symbol query argument",
+                "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]",
+                "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -332,8 +340,10 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: callees requires a caller query argument");
-            Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]");
+            WriteUsageError(
+                "callees requires a caller query argument",
+                "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>]",
+                "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -581,21 +591,27 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.Query == null)
         {
-            Console.Error.WriteLine("Error: excerpt requires a path argument");
-            Console.Error.WriteLine("Usage: cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
+            WriteUsageError(
+                "excerpt requires a path argument",
+                "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]",
+                "Pass the indexed file path after `excerpt`, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
             return CommandExitCodes.UsageError;
         }
 
         if (options.StartLine == null)
         {
-            Console.Error.WriteLine("Error: excerpt requires --start <line>");
+            WriteValidationError(
+                "excerpt requires --start <line>",
+                "Add a starting line number, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
             return CommandExitCodes.UsageError;
         }
 
         var endLine = options.EndLine ?? options.StartLine.Value;
         if (endLine < options.StartLine.Value)
         {
-            Console.Error.WriteLine($"Error: --start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).");
+            WriteValidationError(
+                $"--start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).",
+                "Use `--start` less than or equal to `--end`, or omit `--end` to read a single line.");
             return CommandExitCodes.UsageError;
         }
 
@@ -691,8 +707,10 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: inspect requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]");
+            WriteUsageError(
+                "inspect requires a symbol query argument",
+                "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body]",
+                "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -752,8 +770,10 @@ public static class QueryCommandRunner
     {
         if (cmdArgs.Length == 0 || cmdArgs[0].StartsWith('-'))
         {
-            Console.Error.WriteLine("Error: outline requires a file path.");
-            Console.Error.WriteLine("Usage: cdidx outline <path> [--db <path>] [--json]");
+            WriteUsageError(
+                "outline requires a file path.",
+                "cdidx outline <path> [--db <path>] [--json]",
+                "Pass the indexed file path, for example: `cdidx outline src/CodeIndex/Program.cs`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -879,8 +899,10 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: impact requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx impact <symbol> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]");
+            WriteUsageError(
+                "impact requires a symbol query argument",
+                "cdidx impact <symbol> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]",
+                "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
 
@@ -1352,6 +1374,7 @@ public static class QueryCommandRunner
                     if (!int.TryParse(args[++i], out limit) || limit <= 0)
                     {
                         Console.Error.WriteLine($"Error: --limit requires a positive integer, got '{args[i]}'");
+                        Console.Error.WriteLine("Hint: retry with `--limit 1` or another positive integer.");
                         limit = 20;
                     }
                     break;
@@ -1479,7 +1502,7 @@ public static class QueryCommandRunner
         if (!isUri && !File.Exists(dbPath))
         {
             Console.Error.WriteLine($"Error: database not found at {Path.GetFullPath(dbPath)}");
-            Console.Error.WriteLine("Run 'cdidx index <projectPath>' first to create the index.");
+            Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
             return CommandExitCodes.DatabaseError;
         }
 
@@ -1494,6 +1517,7 @@ public static class QueryCommandRunner
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error: database error: {ex.Message}");
+            Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
             Database.DbDebug.DumpToStderr(ex);
             return CommandExitCodes.DatabaseError;
         }
@@ -1508,6 +1532,19 @@ public static class QueryCommandRunner
         var lines = content.Split('\n');
         for (int i = 0; i < lines.Length; i++)
             Console.WriteLine($"  {startLine + i,4}: {lines[i]}");
+    }
+
+    private static void WriteUsageError(string message, string usage, string hint)
+    {
+        Console.Error.WriteLine($"Error: {message}");
+        Console.Error.WriteLine($"Hint: {hint}");
+        Console.Error.WriteLine($"Usage: {usage}");
+    }
+
+    private static void WriteValidationError(string message, string hint)
+    {
+        Console.Error.WriteLine($"Error: {message}");
+        Console.Error.WriteLine($"Hint: {hint}");
     }
 
     private static void WriteRepoMapSection(string title, IEnumerable<string> rows)
@@ -1832,6 +1869,7 @@ public static class QueryCommandRunner
         if (!int.TryParse(rawValue, out var value) || value <= 0)
         {
             Console.Error.WriteLine($"Error: {optionName} requires a positive integer, got '{rawValue}'");
+            Console.Error.WriteLine($"Hint: retry with `{optionName} 1` or another positive integer.");
             return null;
         }
 
@@ -1843,6 +1881,7 @@ public static class QueryCommandRunner
         if (!int.TryParse(rawValue, out var value) || value < 0)
         {
             Console.Error.WriteLine($"Error: {optionName} requires a non-negative integer, got '{rawValue}'");
+            Console.Error.WriteLine($"Hint: retry with `{optionName} 0` or another non-negative integer.");
             return 0;
         }
 
