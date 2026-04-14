@@ -105,6 +105,32 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintCompletions_FishIncludesFindOptions()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions("fish"));
+                var output = writer.ToString();
+                Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find", output);
+                Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
+                Assert.Contains("__fish_seen_subcommand_from search find", output);
+                Assert.Contains("-l before -r -d 'Context lines before'", output);
+                Assert.Contains("-l after -r -d 'Context lines after'", output);
+                Assert.Contains("-l exact -d 'Exact match'", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
     public void PrintCompletions_UnknownShell_ReturnsFalse()
     {
         lock (TestConsoleLock.Gate)

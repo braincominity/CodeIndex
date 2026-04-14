@@ -691,7 +691,7 @@ public static class QueryCommandRunner
                 else
                 {
                     Console.Error.WriteLine("No matches found.");
-                    WriteZeroResultHints(options, reader);
+                    WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
             }
@@ -1666,7 +1666,7 @@ public static class QueryCommandRunner
     /// Write actionable hints when a query returns zero results.
     /// 0件時に実行可能なヒントを出力する。
     /// </summary>
-    private static void WriteZeroResultHints(QueryCommandOptions options, DbReader reader, string? alternativeHint = null)
+    private static void WriteZeroResultHints(QueryCommandOptions options, DbReader reader, string? alternativeHint = null, string? filterHint = null)
     {
         var freshness = reader.GetFreshnessHint();
         if (freshness.FileCount == 0)
@@ -1676,7 +1676,7 @@ public static class QueryCommandRunner
         }
 
         if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludePaths.Count > 0)
-            Console.Error.WriteLine("Hint: try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search.");
+            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search."}");
 
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");

@@ -2242,6 +2242,35 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_ZeroResultHintDoesNotSuggestRemovingRequiredPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "hello world\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["qqq__no_such_token__zzz", "--db", dbPath, "--path", "README.md"],
+                _jsonOptions));
+            var normalizedStderr = stderr.ToLowerInvariant();
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No matches found.", stderr);
+            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.DoesNotContain("try removing --lang, --path", normalizedStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_WithJsonOutputsLineColumnAndSnippet()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find");

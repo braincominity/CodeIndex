@@ -621,7 +621,7 @@ If the checkout changed because of `git reset`, `git rebase`, `git commit --amen
 - Add `--exclude-tests` unless you are explicitly investigating tests.
 - Add `--path <text>` and repeatable `--exclude-path <text>` before broad searches so results stay inside the relevant module.
 - Add `--snippet-lines <n>` to `search` when you need tighter JSON output before handing results to another model or tool.
-- Use `files` to discover candidate paths, then `excerpt` to fetch only the needed lines instead of opening entire files.
+- Use `files` to discover candidate paths, `find` to re-locate exact text inside known files, then `excerpt` to fetch only the needed lines instead of opening entire files.
 - Use `deps` to understand file-level dependencies — which files reference symbols from other files. Add `--reverse` to find what depends on a given file (impact analysis).
 - Use `unused` to find potentially dead code — symbols defined but never referenced (only meaningful for graph-supported languages).
 - Use `hotspots` to find the most-referenced symbols — central, high-impact code that changes may affect widely.
