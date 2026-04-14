@@ -67,6 +67,18 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ParsesExactAliases()
+    {
+        var search = QueryCommandRunner.ParseArgs(["needle", "--exact-substring"], jsonDefault: false);
+        Assert.True(search.ExactSubstring);
+        Assert.False(search.ExactName);
+
+        var symbols = QueryCommandRunner.ParseArgs(["Run", "--exact-name"], jsonDefault: false);
+        Assert.True(symbols.ExactName);
+        Assert.False(symbols.ExactSubstring);
+    }
+
+    [Fact]
     public void ParseArgs_InvalidNumbersAndUnknownOptionsFallbackAndReportErrors()
     {
         var (options, _, stderr) = CaptureConsole(() => QueryCommandRunner.ParseArgs(
@@ -188,6 +200,56 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameAliasMatchesBackwardCompatibleExact()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App\n{\n    public void Run() { }\n    public void RunAsync() { }\n}\n");
+
+            var exact = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+            var alias = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(exact.Result, alias.Result);
+            Assert.Equal(exact.Stdout, alias.Stdout);
+            Assert.Equal(exact.Stderr, alias.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_RejectsExactSubstringAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_wrong_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--exact-substring"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--exact-name", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_WithJsonOutputsCompactSnippetMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search");
@@ -222,6 +284,103 @@ public class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunSearch_ExactSubstringAliasMatchesBackwardCompatibleExact()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "void Run() { }\nvoid RunAsync() { Run(); }\nvoid run() { }\n");
+
+            var exact = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run();", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+            var alias = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run();", "--db", dbPath, "--json", "--exact-substring"],
+                _jsonOptions));
+
+            Assert.Equal(exact.Result, alias.Result);
+            Assert.Equal(exact.Stdout, alias.Stdout);
+            Assert.Equal(exact.Stderr, alias.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExactSubstringHumanSnippetUsesCaseSensitiveFocusLine()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_human_snippet");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "void run() { }\nvoid Run() { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run()", "--db", dbPath, "--exact-substring", "--snippet-lines", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/app.cs:", stdout);
+            Assert.Contains("  void Run() { }", stdout);
+            Assert.DoesNotContain("  void run() { }", stdout);
+            Assert.Contains("(1 results in 1 files)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RejectsExactNameAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_wrong_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run", "--db", dbPath, "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--exact-substring", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MissingQueryUsageMentionsExactSubstringAlias()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--exact|--exact-substring", stderr);
+    }
+
+    [Fact]
+    public void RunDefinition_MissingQueryUsageMentionsExactNameAlias()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--exact|--exact-name", stderr);
     }
 
     [Theory]

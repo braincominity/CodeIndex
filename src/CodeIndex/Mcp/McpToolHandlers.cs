@@ -35,7 +35,8 @@ public partial class McpServer
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results. "
             + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
-            + "Use 'search' with 'exact: true' for case-sensitive substring matching when FTS5 returns too many results. "
+            + "Use 'search' with 'exactSubstring: true' for case-sensitive substring matching when FTS5 returns too many results; "
+            + "use 'exactName: true' on symbols/definition/references/callers/callees/analyze_symbol for exact symbol-name equality. "
             + "If 'status' reports fold_ready=false and Unicode exact-name matching matters, use 'backfill_fold' to upgrade folded keys without reparsing files. "
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
@@ -96,6 +97,34 @@ public partial class McpServer
                 .Cast<string>()
                 .ToList()
             : [];
+    }
+
+    private static bool TryResolveSearchExactArgument(JsonNode? args, out bool exact, out string? error)
+    {
+        if (args?["exactName"]?.GetValue<bool>() ?? false)
+        {
+            exact = false;
+            error = "Search does not accept 'exactName'. Use 'exactSubstring' for search, or keep 'exact' for backward compatibility.";
+            return false;
+        }
+
+        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactSubstring"]?.GetValue<bool>() ?? false);
+        error = null;
+        return true;
+    }
+
+    private static bool TryResolveNameExactArgument(JsonNode? args, string toolName, out bool exact, out string? error)
+    {
+        if (args?["exactSubstring"]?.GetValue<bool>() ?? false)
+        {
+            exact = false;
+            error = $"Tool '{toolName}' does not accept 'exactSubstring'. Use 'exactName', or keep 'exact' for backward compatibility.";
+            return false;
+        }
+
+        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactName"]?.GetValue<bool>() ?? false);
+        error = null;
+        return true;
     }
 
     /// <summary>
@@ -176,7 +205,8 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
         }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -249,7 +279,8 @@ public partial class McpServer
         DateTime? since = null;
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
             since = parsedSince;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
         // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
@@ -341,7 +372,8 @@ public partial class McpServer
         DateTime? since = null;
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedDefSince))
             since = parsedDefSince;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -391,7 +423,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -444,7 +477,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "callers", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -497,7 +531,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "callees", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -628,7 +663,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "analyze_symbol", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
