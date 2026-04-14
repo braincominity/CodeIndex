@@ -2086,6 +2086,52 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_PrefersExactDefinitionFileWhenSubstringDefinitionsOverlap()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_exact_anchor");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Services/ILoggerService.cs",
+                "csharp",
+                """
+                public interface ILoggerService
+                {
+                    void Log(string message);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Services/LoggerService.cs",
+                "csharp",
+                """
+                public class LoggerService : ILoggerService
+                {
+                    public void Log(string message) { }
+                    public void Execute() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["loggerservice", "--db", dbPath, "--lang", "csharp", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("File : src/Services/LoggerService.cs", stdout);
+            Assert.Contains("class      LoggerService", stdout);
+            Assert.DoesNotContain("File : src/Services/ILoggerService.cs", stdout);
+            Assert.DoesNotContain("interface  ILoggerService", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ExactZeroHumanOutput_PrintsExactZeroHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_exact_zero");
