@@ -19,6 +19,7 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
+    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -92,6 +93,11 @@ public static class QueryCommandRunner
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -196,6 +202,11 @@ public static class QueryCommandRunner
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -275,6 +286,11 @@ public static class QueryCommandRunner
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -350,6 +366,11 @@ public static class QueryCommandRunner
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -609,6 +630,11 @@ public static class QueryCommandRunner
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: excerpt requires a path argument");
@@ -652,9 +678,203 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var preparedFindArgs = PrepareFindArgs(cmdArgs, out var preparationError);
+        if (preparationError != null)
+        {
+            Console.Error.WriteLine(preparationError);
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+
+        var findValidationError = ValidateFindArgs(preparedFindArgs);
+        if (findValidationError != null)
+        {
+            Console.Error.WriteLine(findValidationError);
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+
+        var options = ParseArgs(preparedFindArgs, jsonDefault: false, allowNamedQuery: true);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+        if (string.IsNullOrWhiteSpace(options.Query))
+        {
+            Console.Error.WriteLine("Error: find requires a query argument");
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+
+        if (options.PathPatterns.Count == 0)
+        {
+            Console.Error.WriteLine("Error: find requires at least one --path <pattern> to scope the search to known files");
+            Console.Error.WriteLine(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+
+        return WithDb(options.DbPath, reader =>
+        {
+            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact);
+            if (results.Count == 0)
+            {
+                if (options.CountOnly)
+                {
+                    if (options.Json)
+                    {
+                        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, extraFields: static payload =>
+                        {
+                            payload["file_count"] = 0;
+                        });
+                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                    }
+                }
+                else if (options.Json)
+                {
+                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", extraFields: payload =>
+                    {
+                        payload["query"] = options.Query;
+                        payload["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, jsonOptions);
+                        payload["exclude_tests"] = options.ExcludeTests;
+                        payload["before"] = options.ContextBefore;
+                        payload["after"] = options.ContextAfter;
+                        payload["exact"] = options.Exact;
+                        payload["file_count"] = 0;
+                    });
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.Error.WriteLine("No matches found.");
+                    WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
+                }
+                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+            }
+
+            if (options.CountOnly)
+            {
+                var fc = results.Select(r => r.Path).Distinct().Count();
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc, file_count = fc }, jsonOptions)
+                    : $"{results.Count}");
+                return CommandExitCodes.Success;
+            }
+
+            if (options.Json)
+            {
+                foreach (var r in results)
+                    Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+            }
+            else
+            {
+                foreach (var r in results)
+                {
+                    Console.WriteLine($"{r.Path}:{r.Line}:{r.Column}");
+                    WriteNumberedExcerpt(r.StartLine, r.Snippet);
+                    Console.WriteLine();
+                }
+                var fileCount = results.Select(r => r.Path).Distinct().Count();
+                Console.Error.WriteLine($"({results.Count} matches in {fileCount} files)");
+            }
+            return CommandExitCodes.Success;
+        });
+    }
+
+    private static string? ValidateFindArgs(string[] args)
+    {
+        HashSet<string> allowedWithValues =
+        [
+            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after", "--query"
+        ];
+        HashSet<string> allowedFlags =
+        [
+            "--json", "--no-json", "--exclude-tests", "--count", "--exact"
+        ];
+
+        var queryCount = 0;
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (allowedWithValues.Contains(arg))
+            {
+                if (i + 1 >= args.Length)
+                    return $"Error: {arg} requires a value";
+                var value = args[i + 1];
+                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
+                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
+                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
+                if (arg == "--query")
+                {
+                    queryCount++;
+                    if (queryCount > 1)
+                        return "Error: find accepts exactly one query argument";
+                }
+                i++;
+                continue;
+            }
+
+            if (allowedFlags.Contains(arg))
+                continue;
+
+            if (arg.StartsWith('-'))
+                return $"Error: unsupported option for find: {arg}";
+
+            queryCount++;
+            if (queryCount > 1)
+                return "Error: find accepts exactly one query argument";
+        }
+
+        return null;
+    }
+
+    private static string[] PrepareFindArgs(string[] args, out string? error)
+    {
+        var normalized = new List<string>(args.Length);
+        error = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: -- requires a following literal query for find";
+                    return args;
+                }
+
+                if (i + 2 < args.Length)
+                {
+                    error = "Error: find accepts exactly one query argument after --";
+                    return args;
+                }
+
+                normalized.Add("--query");
+                normalized.Add(args[i + 1]);
+                return [.. normalized];
+            }
+
+            normalized.Add(args[i]);
+        }
+
+        return [.. normalized];
+    }
+
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -719,6 +939,11 @@ public static class QueryCommandRunner
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (!TryResolveNameExactMode(options, "inspect", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -794,6 +1019,11 @@ public static class QueryCommandRunner
 
         var filePath = cmdArgs[0].Replace('\\', '/');
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -836,6 +1066,11 @@ public static class QueryCommandRunner
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -912,6 +1147,11 @@ public static class QueryCommandRunner
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: impact requires a symbol query argument");
@@ -1109,6 +1349,11 @@ public static class QueryCommandRunner
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1148,6 +1393,11 @@ public static class QueryCommandRunner
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1201,6 +1451,11 @@ public static class QueryCommandRunner
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1258,6 +1513,11 @@ public static class QueryCommandRunner
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1344,7 +1604,7 @@ public static class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault)
+    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false)
     {
         string dbPath = Path.Combine(".cdidx", "codeindex.db");
         bool? json = null;
@@ -1394,6 +1654,17 @@ public static class QueryCommandRunner
                     break;
                 case "--lang" when i + 1 < args.Length:
                     lang = args[++i];
+                    break;
+                case "--query" when allowNamedQuery && i + 1 < args.Length:
+                    query = args[++i];
+                    break;
+                case "--query" when allowNamedQuery:
+                    parseError = "Error: --query requires a value";
+                    break;
+                case "--query":
+                    parseError = "Error: --query is only supported by 'find'.";
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                        i++;
                     break;
                 case "--kind" when i + 1 < args.Length:
                     kind = args[++i];
@@ -1599,7 +1870,7 @@ public static class QueryCommandRunner
     /// Write actionable hints when a query returns zero results.
     /// 0件時に実行可能なヒントを出力する。
     /// </summary>
-    private static void WriteZeroResultHints(QueryCommandOptions options, DbReader reader, string? alternativeHint = null)
+    private static void WriteZeroResultHints(QueryCommandOptions options, DbReader reader, string? alternativeHint = null, string? filterHint = null)
     {
         var freshness = reader.GetFreshnessHint();
         if (freshness.FileCount == 0)
@@ -1609,7 +1880,7 @@ public static class QueryCommandRunner
         }
 
         if (options.Lang != null || options.PathPatterns.Count > 0 || options.ExcludeTests || options.ExcludePaths.Count > 0)
-            Console.Error.WriteLine("Hint: try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search.");
+            Console.Error.WriteLine($"Hint: {filterHint ?? "try removing --lang, --path, --exclude-path, or --exclude-tests to broaden the search."}");
 
         if (alternativeHint != null)
             Console.Error.WriteLine($"Hint: {alternativeHint}");

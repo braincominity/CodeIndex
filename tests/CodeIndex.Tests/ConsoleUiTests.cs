@@ -34,6 +34,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]", output);
         Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]", output);
         Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
+        Assert.Contains("cdidx find <query> --path <pattern>", output);
         Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
         Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
         Assert.Contains("cdidx excerpt <path> --start <line>", output);
@@ -41,7 +42,10 @@ public class ConsoleUiTests
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
         Assert.Contains("cdidx symbols Run --exact-name                Exact symbol-name match", output);
         Assert.Contains("backfill-fold", output);
+        Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
+        Assert.Contains("Prefer --exact-substring for search, keep --exact for find", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
+        Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
@@ -106,6 +110,86 @@ public class ConsoleUiTests
                     Assert.Contains("graphql", output);
                     Assert.Contains("protobuf", output);
                 }
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
+    public void PrintCompletions_FishIncludesFindOptions()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions("fish"));
+                var output = writer.ToString();
+                Assert.Contains("__fish_seen_subcommand_from search definition references callers callees symbols files find", output);
+                Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
+                Assert.Contains("__fish_seen_subcommand_from search find", output);
+                Assert.Contains("-l query -r -d 'Literal query'", output);
+                Assert.Contains("-l before -r -d 'Context lines before'", output);
+                Assert.Contains("-l after -r -d 'Context lines after'", output);
+                Assert.Contains("-l exact -d 'Exact match'", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("bash")]
+    [InlineData("zsh")]
+    public void PrintCompletions_BashAndZshIncludeFindSpecificOptions(string shell)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions(shell));
+                var output = writer.ToString();
+                Assert.Contains("find", output);
+                Assert.Contains("--before", output);
+                Assert.Contains("--after", output);
+                Assert.Contains("--exact", output);
+                Assert.Contains("--query", output);
+                if (shell == "bash")
+                    Assert.Contains("if [ \"$cmd\" = \"find\" ]", output);
+                else
+                    Assert.Contains("if [[ $subcmd == find ]]; then", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
+    public void PrintUsage_ShowsWorkingFindDashedLiteralExample()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                ConsoleUi.PrintUsage();
+                var output = writer.ToString();
+                Assert.Contains("cdidx find --path README.md -- --path", output);
+                Assert.DoesNotContain("cdidx find -- --path --path README.md", output);
             }
             finally
             {

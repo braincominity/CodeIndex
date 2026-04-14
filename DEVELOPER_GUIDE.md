@@ -23,13 +23,13 @@ src/CodeIndex/
     DbPathResolver.cs         — Default DB path resolution for index commands
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
     IndexCommandRunner.cs     — Index command execution, update/full-scan flows, backfill-fold upgrade path
-    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status execution and query arg parsing
+    QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
     WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Database/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
-    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, excerpt reconstruction, outline, inspect bundles, file listing, status, file-level deps
+    DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, in-file literal find, excerpt reconstruction, outline, inspect bundles, file listing, status, file-level deps
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
@@ -970,13 +970,13 @@ src/CodeIndex/
     DbPathResolver.cs         — indexコマンド用の既定DBパス解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
     IndexCommandRunner.cs     — indexコマンド実行、更新/フルスキャンフロー、backfill-fold アップグレード経路
-    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status実行とクエリ引数解析
+    QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status実行とクエリ引数解析
     SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペット整形
     WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Database/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ、参照書き込み
-    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、抜粋再構成、アウトライン、inspect向け集約、ファイル一覧、ステータス
+    DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、既知ファイル内 literal find、抜粋再構成、アウトライン、inspect向け集約、ファイル一覧、ステータス
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
