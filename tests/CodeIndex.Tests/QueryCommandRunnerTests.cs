@@ -1678,6 +1678,67 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    public void GraphCommands_ExactZeroJson_RespectRequestedLimitAndCapSamples(string command)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_{command}_exact_zero_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SeedGraphExactZeroFixture(dbPath, command);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
+                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: null),
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(6, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
+            Assert.Equal(5, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    public void GraphCommands_ExactZeroJson_OmitHintWhenRelaxedQueryStillReturnsZero(string command)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_{command}_exact_zero_miss");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            SeedGraphExactZeroFixture(dbPath, command);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
+                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: "DefinitelyMissing"),
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.TryGetProperty("exact_zero_hint", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunSymbols_MultiNameExactZeroJson_OmitsRelaxedCountButReturnsSamples()
     {
@@ -2467,6 +2528,80 @@ public class QueryCommandRunnerTests
                 Console.SetError(originalError);
             }
         }
+    }
+
+    private static int RunGraphCommand(string command, string[] args, JsonSerializerOptions jsonOptions) => command switch
+    {
+        "references" => QueryCommandRunner.RunReferences(args, jsonOptions),
+        "callers" => QueryCommandRunner.RunCallers(args, jsonOptions),
+        "callees" => QueryCommandRunner.RunCallees(args, jsonOptions),
+        _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
+    };
+
+    private static string[] GetExactZeroArgs(string command, string dbPath, int limit, string? queryOverride)
+    {
+        var query = queryOverride ?? command switch
+        {
+            "references" => "Target",
+            "callers" => "Target",
+            "callees" => "Caller",
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
+        };
+
+        return [query, "--db", dbPath, "--json", "--exact", "--limit", limit.ToString()];
+    }
+
+    private static void SeedGraphExactZeroFixture(string dbPath, string command)
+    {
+        var content = command switch
+        {
+            "references" or "callers" => """
+                public class App
+                {
+                    public void TargetWork1() { }
+                    public void TargetWork2() { }
+                    public void TargetWork3() { }
+                    public void TargetWork4() { }
+                    public void TargetWork5() { }
+                    public void TargetWork6() { }
+                    public void TargetWork7() { }
+
+                    public void Caller1() { TargetWork1(); }
+                    public void Caller2() { TargetWork2(); }
+                    public void Caller3() { TargetWork3(); }
+                    public void Caller4() { TargetWork4(); }
+                    public void Caller5() { TargetWork5(); }
+                    public void Caller6() { TargetWork6(); }
+                    public void Caller7() { TargetWork7(); }
+                }
+                """,
+            "callees" => """
+                public class App
+                {
+                    public void Called1() { }
+                    public void Called2() { }
+                    public void Called3() { }
+                    public void Called4() { }
+                    public void Called5() { }
+                    public void Called6() { }
+                    public void Called7() { }
+
+                    public void CallerWork1() { Called1(); }
+                    public void CallerWork2() { Called2(); }
+                    public void CallerWork3() { Called3(); }
+                    public void CallerWork4() { Called4(); }
+                    public void CallerWork5() { Called5(); }
+                    public void CallerWork6() { Called6(); }
+                    public void CallerWork7() { Called7(); }
+                }
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
+        };
+
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
     }
 
     // --- TryParseIso8601Since tests / TryParseIso8601Sinceテスト ---
