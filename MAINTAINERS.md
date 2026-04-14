@@ -14,7 +14,7 @@ this page — `README.md` is enough.
 
 - **Releasing a new version of cdidx.** Only the owner has release push
   permissions, but a forker bumping their own fork needs the same steps.
-  → [README.md → "Releasing a new version"](README.md#releasing-a-new-version)
+  → [DEVELOPER_GUIDE.md → "Release Workflow"](DEVELOPER_GUIDE.md#release-workflow)
 - **Bootstrapping a Claude Code cloud session with no local .NET SDK.** Only
   useful to someone who wants to run Claude Code *against this repo* from a
   SDK-less container (owner workflow; forkers can reuse the same prompt).
@@ -50,7 +50,7 @@ end-user documentation surface* so that:
 ## このページが扱う範囲
 
 - **cdidx の新バージョンリリース。** リリースの push 権限を持つのは Maintainer だけですが、fork して自分のリリースを切る人にも同じ手順が必要です。
-  → [README.md → 「新バージョンのリリース」](README.md#新バージョンのリリース)
+  → [DEVELOPER_GUIDE.md → 「リリース手順」](DEVELOPER_GUIDE.md#リリース手順)
 - **.NET SDK のないコンテナから Claude Code Cloud セッションを bootstrap する。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code を走らせたい人（Maintainer のワークフロー。forker も同じプロンプトを流用可）に限って有用。
   → [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) — 初回投入用のプロンプト。
   → [DEVELOPER_GUIDE.md → 「Cloud Claude Code bootstrap（.NET SDK なし）」](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrapnet-sdk-なし) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。
