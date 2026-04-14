@@ -29,7 +29,7 @@ The loop is not just "suggest ideas". It is:
 4. verify it
 5. commit it
 6. rebuild `cdidx`
-7. refresh `.cdidx/codeindex.db` with the newly built binary
+7. refresh `.cdidx/codeindex.db` with the newly built binary, usually via delta updates first
 8. use the refreshed index to guide the next improvement
 
 ## Hard Rules
@@ -39,6 +39,7 @@ The loop is not just "suggest ideas". It is:
 - Before every commit, explicitly work through the `CLAUDE.md` per-commit checklist.
 - Before every commit, review README `# Code Search Rules` and `# コードベース検索ルール`; strengthen them if AI behavior should change.
 - After every commit, rebuild `cdidx` from the latest local source and refresh `.cdidx/codeindex.db` using that freshly built binary.
+- Prefer the lightest truthful refresh mode: use `--files` while iterating on known local edits, use `--commits HEAD` after a normal commit, and reserve a full `cdidx . --json` scan for cases where the checkout itself changed broadly or stale files must be purged repo-wide.
 - Prefer the **locally built latest binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) over an older globally installed `cdidx` whenever the repository code has changed. **Never fall back to a global `cdidx`** — the global version may have an older DB schema, missing query features, or stale extraction logic that silently produces wrong results. This is enforced at the Claude Code harness level via the repo-tracked `.claude/settings.json`, which denies the full set of shell code-search and file-discovery commands: `rg`, `grep`, `egrep`, `fgrep`, `zgrep`, `rgrep`, `ripgrep`, `ag`, `ack`, `ack-grep`, `git grep`, `find`, `locate`, `mlocate`, `mdfind`, and `cdidx`. Use the built-in Grep / Glob tools or the locally built binary instead.
 - After `git reset`, `git rebase`, `git commit --amend`, `git switch`, or `git merge`, re-index with the **locally built binary** using `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .` (full scan, not `--commits HEAD`) so stale files are purged against the current checkout.
 - When searching and navigating code to investigate bugs, plan fixes, or verify changes, always use the **locally built binary** — not the globally installed version. This ensures query results reflect the latest extraction rules and DB schema from this branch.
@@ -92,8 +93,19 @@ dotnet build
 
 Use the binary produced from the current commit, not an older global tool, so the database shape and query features match the code you are editing.
 
+Prefer delta refreshes during normal iteration, and use a full scan only when you need a whole-checkout resync.
+
+Choose the one refresh mode that matches your situation:
+
 ```bash
+# First sync on a checkout, or after history-moving git operations
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
+
+# During local edits, refresh only the files you touched
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/Cli/QueryCommandRunner.cs tests/CodeIndex.Tests/QueryCommandRunnerTests.cs --json
+
+# After a normal commit, refresh from that commit's diff
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
 ```
 
 If you prefer `dotnet run`, that is also acceptable:
@@ -114,7 +126,7 @@ If `status --json` reports `fold_ready: false` and you only need Unicode-aware `
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --json
 ```
 
-Use a full `cdidx . --json` rebuild only when you also need a fresh source scan.
+Use a full `cdidx . --json` rebuild only when you need a fresh source scan, when checkout-shaping git operations just happened, or when repo-wide stale-file purge matters more than speed. In the ordinary commit-to-commit loop, keep preferring `--files` and `--commits`.
 
 Typical sequence:
 
@@ -190,8 +202,16 @@ Then commit one coherent task.
 
 This is mandatory. The next round must start from the newest binary and newest DB.
 
+Build first, then choose the lightest refresh mode that keeps the DB truthful:
+
 ```bash
 dotnet build
+
+# Default post-commit path: refresh from the last commit's diff
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
+
+# Escalate to a full scan after git reset/rebase/amend/switch/merge,
+# or whenever files outside the last commit may have gone stale
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 ```
 
@@ -279,7 +299,7 @@ Read `SELF_IMPROVEMENT.md` and start implementing the next non-breaking improvem
 If the user wants more direction:
 
 ```markdown
-Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db`, and continue from the refreshed index. Ask before any breaking change.
+Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db` with `--files` / `--commits` when possible and use a full scan only when checkout-changing git operations require it, and continue from the refreshed index. Ask before any breaking change.
 ```
 
 ---
@@ -312,7 +332,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 4. 検証する
 5. コミットする
 6. `cdidx` を再ビルドする
-7. その新しいバイナリで `.cdidx/codeindex.db` を更新する
+7. その新しいバイナリで `.cdidx/codeindex.db` を更新する（通常は差分更新を優先する）
 8. 更新済みインデックスを使って次の改善を決める
 
 ## 絶対ルール
@@ -322,6 +342,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - 毎コミット前に、`CLAUDE.md` の「コミットごとのチェックリスト」を明示的に確認する。
 - 毎コミット前に、README の `# Code Search Rules` と `# コードベース検索ルール` を見直し、AIの検索行動を変えるべきなら強化する。
 - 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
+- 更新モードは「正しさを保てる範囲で最も軽いもの」を優先する。把握している手元編集の反映には `--files`、通常のコミット直後には `--commits HEAD` を使い、checkout 全体が大きく動いた場合や repo 全体で stale file を掃除したい場合だけ `cdidx . --json` のフルスキャンへ上げる。
 - リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。このルールはリポジトリ追跡の `.claude/settings.json` で harness レベルでも強制されており、shell のコード検索・ファイル探索系コマンドを網羅的に deny している（`rg`、`grep`、`egrep`、`fgrep`、`zgrep`、`rgrep`、`ripgrep`、`ag`、`ack`、`ack-grep`、`git grep`、`find`、`locate`、`mlocate`、`mdfind`、`cdidx`）。代わりに組み込みの Grep / Glob ツールかローカルビルド版を使うこと。
 - `git reset`、`git rebase`、`git commit --amend`、`git switch`、`git merge` の後は、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll .`（フルスキャン。`--commits HEAD` ではない）を実行し、現在の checkout に対する stale file を掃除する。
 - バグ調査、修正計画、変更検証のためにコード検索・ナビゲーションを行うときも、常に **ローカルビルド版** を使う。グローバルインストール版は使わない。これにより、このブランチの最新の抽出ルールと DB スキーマを反映した検索結果が得られる。
@@ -374,8 +395,17 @@ dotnet build
 
 編集中のコードと DB 形状と検索機能を一致させるため、古いグローバルツールではなく、**現在のコミットからビルドしたバイナリ** を使います。
 
+状況に合う更新モードを1つ選んでください:
+
 ```bash
+# checkout 直後の初回同期や、履歴を動かす git 操作の直後
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
+
+# 手元で触ったファイルだけを反映
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/Cli/QueryCommandRunner.cs tests/CodeIndex.Tests/QueryCommandRunnerTests.cs --json
+
+# 通常のコミット直後は、そのコミット差分だけを反映
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
 ```
 
 `dotnet run` でも構いません:
@@ -396,7 +426,7 @@ dotnet run --project src/CodeIndex -- . --json
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --json
 ```
 
-ソース再走査も必要なときだけ、`cdidx . --json` のフル更新を使います。
+ソース再走査も必要なとき、checkout を変える git 操作の直後、または repo 全体で stale file を掃除したいときだけ、`cdidx . --json` のフル更新を使います。通常のコミット間ループでは、`--files` と `--commits` を優先してください。
 
 典型例:
 
@@ -470,8 +500,16 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 
 これは必須です。次のラウンドは、必ず最新バイナリと最新DBから始めてください。
 
+まずビルドし、そのうえで DB の正しさを保てる最も軽い更新モードを選びます:
+
 ```bash
 dotnet build
+
+# 通常の post-commit 経路: 直前コミットの差分を反映
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits HEAD --json
+
+# git reset/rebase/amend/switch/merge の後や、
+# 直前コミット外の stale file が疑われる場合はフル更新
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 ```
 
@@ -559,5 +597,5 @@ Read `SELF_IMPROVEMENT.md` and start implementing the next non-breaking improvem
 少し具体化したいなら:
 
 ```markdown
-Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db`, and continue from the refreshed index. Ask before any breaking change.
+Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify the next high-value non-breaking improvement for AI friendliness or adoption, implement it, verify it, commit exactly one task, rebuild cdidx from the latest commit, refresh `.cdidx/codeindex.db` with `--files` / `--commits` when possible and use a full scan only when checkout-changing git operations require it, and continue from the refreshed index. Ask before any breaking change.
 ```
