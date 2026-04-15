@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.Versioning;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -1402,6 +1403,79 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_DoesNotPurgeFilesFromUnreadableDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DoesNotRemoveUnreadableExtensionlessScript()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(toolPath, UnixFileMode.None);
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "tool", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("tool", indexedPaths);
+        }
+        finally
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            if (File.Exists(toolPath))
+                SetUnixPermissions(toolPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
     {
         var projectRoot = CreateTempProject();
@@ -2468,6 +2542,12 @@ public class IndexCommandRunnerTests
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void SetUnixPermissions(string path, UnixFileMode mode)
+    {
+        File.SetUnixFileMode(path, mode);
     }
 
     private static void CreateUnixFifo(string path)

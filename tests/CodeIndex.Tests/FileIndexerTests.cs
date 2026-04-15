@@ -131,6 +131,24 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void DetectLanguage_LeadingWhitespacePseudoShebang_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "tool");
+            File.WriteAllText(path, "  #!/usr/bin/env bash\necho hi\n");
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
         // Create a temp directory structure to test scanning

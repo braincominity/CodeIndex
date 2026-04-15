@@ -568,7 +568,23 @@ public static class IndexCommandRunner
                     continue;
                 }
 
-                if (!FileIndexer.CanIndexFile(absPath) || FileIndexer.DetectLanguage(absPath) == null)
+                var indexability = FileIndexer.GetFileIndexability(absPath);
+                var detection = FileIndexer.TryDetectLanguage(absPath);
+                if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+                {
+                    errors++;
+                    errorList.Add(new { file = relPath, message = "Could not probe file for indexability/language." });
+                    if (!options.Json)
+                    {
+                        if (options.Verbose)
+                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                        else
+                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                    }
+                    continue;
+                }
+
+                if (indexability != FileIndexer.FileProbeStatus.Supported || detection.Status != FileIndexer.FileProbeStatus.Supported)
                 {
                     if (!writer.HasFileAtPath(relPath))
                     {
@@ -810,7 +826,8 @@ public static class IndexCommandRunner
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
-        var files = indexer.ScanFiles();
+        var scanResult = indexer.ScanFilesDetailed();
+        var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
         if (!options.Json)
         {
@@ -829,15 +846,21 @@ public static class IndexCommandRunner
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
-        var retainedPaths = files
-            .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
-            .ToHashSet(StringComparer.Ordinal);
-        var purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+        var purged = scanResult.HadErrors
+            ? 0
+            : writer.PurgeFilesOutsideRetainedSet(files
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .ToHashSet(StringComparer.Ordinal));
         if (purged > 0)
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
-        if (purged > 0 && !options.Json)
-            Console.WriteLine($"  Purged {purged:N0} stale files (missing or no longer indexable)");
+        if (!options.Json)
+        {
+            if (purged > 0)
+                Console.WriteLine($"  Purged {purged:N0} stale files (missing or no longer indexable)");
+            if (scanResult.HadErrors)
+                ConsoleUi.PrintWarning("Skipped authoritative purge because some paths could not be scanned.");
+        }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -847,7 +870,7 @@ public static class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         if (!options.Json)
             indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
-        int processed = 0, skipped = 0, errors = 0;
+        int processed = 0, skipped = 0, errors = scanResult.HadErrors ? 1 : 0;
         var errorList = new List<object>();
         bool indexSpinnerStopped = false;
 

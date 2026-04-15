@@ -10,6 +10,17 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public class FileIndexer
 {
+    internal enum FileProbeStatus
+    {
+        Supported,
+        Unsupported,
+        ProbeFailed,
+    }
+
+    internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
+
+    public readonly record struct ScanFilesResult(IReadOnlyList<string> Files, bool HadErrors);
+
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -152,29 +163,39 @@ public class FileIndexer
     }
 
     public static string? DetectLanguage(string filePath)
+        => TryDetectLanguage(filePath).Language;
+
+    internal static LanguageDetectionResult TryDetectLanguage(string filePath)
     {
         var ext = Path.GetExtension(filePath);
         if (LangMap.TryGetValue(ext, out var lang))
-            return lang;
+            return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
 
         // Fall back to exact file name matching / ファイル名の完全一致で言語を検出
         var fileName = Path.GetFileName(filePath);
         if (FileNameMap.TryGetValue(fileName, out var nameLang))
-            return nameLang;
+            return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
 
         if (!string.IsNullOrEmpty(ext))
-            return null;
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
         return TryDetectLanguageFromShebang(filePath);
     }
 
     internal static bool CanIndexFile(string filePath)
+        => GetFileIndexability(filePath) == FileProbeStatus.Supported;
+
+    internal static FileProbeStatus GetFileIndexability(string filePath)
     {
         if (OperatingSystem.IsWindows())
-            return true;
+            return FileProbeStatus.Supported;
 
-        return UnixFileStatus.TryGetFileMode(filePath, out var mode)
-            && (mode & UnixFileStatus.FileTypeMask) == UnixFileStatus.RegularFile;
+        if (!UnixFileStatus.TryGetFileMode(filePath, out var mode))
+            return FileProbeStatus.ProbeFailed;
+
+        return (mode & UnixFileStatus.FileTypeMask) == UnixFileStatus.RegularFile
+            ? FileProbeStatus.Supported
+            : FileProbeStatus.Unsupported;
     }
 
     /// <summary>
@@ -182,24 +203,28 @@ public class FileIndexer
     /// プロジェクトルート以下のインデックス対象ファイルを列挙する。
     /// </summary>
     public IReadOnlyList<string> ScanFiles()
+        => ScanFilesDetailed().Files;
+
+    internal ScanFilesResult ScanFilesDetailed()
     {
         var files = new List<string>();
-        EnumerateDirectory(_projectRoot, files);
-        return files;
+        var hadErrors = EnumerateDirectory(_projectRoot, files);
+        return new ScanFilesResult(files, hadErrors);
     }
 
-    private void ScanDirectory(string dir, List<string> results)
+    private bool ScanDirectory(string dir, List<string> results)
     {
         // Check for skip directories / スキップ対象ディレクトリかチェック
         var dirName = Path.GetFileName(dir);
         if (SkipDirs.Contains(dirName))
-            return;
+            return false;
 
-        EnumerateDirectory(dir, results);
+        return EnumerateDirectory(dir, results);
     }
 
-    private void EnumerateDirectory(string dir, List<string> results)
+    private bool EnumerateDirectory(string dir, List<string> results)
     {
+        var hadErrors = false;
         try
         {
             foreach (var file in Directory.EnumerateFiles(dir))
@@ -212,28 +237,46 @@ public class FileIndexer
 
                 // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
                 // Unix では通常ファイルのみをインデックス対象にする。FIFO/socket/device でのブロックを避ける。
-                if (!CanIndexFile(file))
+                var indexability = GetFileIndexability(file);
+                if (indexability == FileProbeStatus.ProbeFailed)
+                {
+                    hadErrors = true;
+                    continue;
+                }
+
+                if (indexability != FileProbeStatus.Supported)
                     continue;
 
                 // Include files with a known extension/filename or an extensionless recognized shebang
                 // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
-                if (DetectLanguage(file) != null)
+                var language = TryDetectLanguage(file);
+                if (language.Status == FileProbeStatus.ProbeFailed)
+                {
+                    hadErrors = true;
+                    continue;
+                }
+
+                if (language.Status == FileProbeStatus.Supported)
                     results.Add(file);
             }
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                ScanDirectory(subDir, results);
+                hadErrors |= ScanDirectory(subDir, results);
             }
         }
         catch (UnauthorizedAccessException)
         {
             // Skip inaccessible directories / アクセス不可ディレクトリはスキップ
+            hadErrors = true;
         }
         catch (IOException)
         {
             // Skip on I/O errors / I/Oエラー時はスキップ
+            hadErrors = true;
         }
+
+        return hadErrors;
     }
 
     /// <summary>
@@ -254,7 +297,8 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath)
     {
-        if (!CanIndexFile(absolutePath))
+        var indexability = GetFileIndexability(absolutePath);
+        if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
@@ -295,7 +339,7 @@ public class FileIndexer
         var record = new FileRecord
         {
             Path = relativePath.Replace('\\', '/'),
-            Lang = DetectLanguage(absolutePath),
+            Lang = TryDetectLanguage(absolutePath).Language,
             Size = info.Length,
             Lines = lines.Length,
             Checksum = checksum,
@@ -403,51 +447,56 @@ public class FileIndexer
     /// This is a cheap fallback used only after extension and exact-filename checks fail.
     /// 拡張子・完全一致ファイル名で判定できない場合だけ、拡張子なしスクリプトの shebang から言語を推定する。
     /// </summary>
-    private static string? TryDetectLanguageFromShebang(string filePath)
+    private static LanguageDetectionResult TryDetectLanguageFromShebang(string filePath)
     {
-        if (!CanIndexFile(filePath))
-            return null;
+        if (GetFileIndexability(filePath) != FileProbeStatus.Supported)
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
         try
         {
             using var stream = File.OpenRead(filePath);
             if (!stream.CanRead)
-                return null;
+                return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
 
             Span<byte> buffer = stackalloc byte[256];
             var bytesRead = stream.Read(buffer);
             if (bytesRead <= 0)
-                return null;
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var firstLine = Encoding.UTF8.GetString(buffer[..bytesRead])
-                .Split(['\r', '\n'], 2)[0]
-                .TrimStart('\uFEFF', ' ', '\t');
+                .Split(['\r', '\n'], 2)[0];
+
+            if (firstLine.StartsWith('\uFEFF'))
+                firstLine = firstLine[1..];
 
             if (!firstLine.StartsWith("#!", StringComparison.Ordinal))
-                return null;
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var commandLine = firstLine[2..].Trim();
             if (string.IsNullOrWhiteSpace(commandLine))
-                return null;
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var tokens = commandLine
                 .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (tokens.Length == 0)
-                return null;
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var interpreter = ResolveShebangInterpreter(tokens);
             if (interpreter == null)
-                return null;
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            return MapShebangInterpreterToLanguage(interpreter);
+            var language = MapShebangInterpreterToLanguage(interpreter);
+            return language != null
+                ? new LanguageDetectionResult(FileProbeStatus.Supported, language)
+                : new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
         catch (IOException)
         {
-            return null;
+            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
         }
         catch (UnauthorizedAccessException)
         {
-            return null;
+            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
         }
     }
 
