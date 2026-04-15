@@ -57,12 +57,25 @@ public static class SymbolExtractor
         string SanitizedLine,
         JavaScriptLexState EndState);
 
+    private readonly record struct JavaScriptClassScanTarget(
+        int StartIndex,
+        int ScanStartIndex,
+        int ScanEndExclusive);
+
     private static readonly Regex JavaScriptBareMethodRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{",
         RegexOptions.Compiled);
 
     private static readonly Regex TypeScriptBareMethodRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptAnonymousDefaultClassRegex = new(
+        @"^\s*export\s+default\s+class(?=\s+extends\b|\s*\{)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptClassExpressionRegex = new(
+        @"^\s*(?:(?:export)\s+)?(?:const|let|var)\s+\w+\s*=\s*class\b",
         RegexOptions.Compiled);
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
@@ -77,7 +90,7 @@ public static class SymbolExtractor
         [
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["typescript"] =
@@ -85,7 +98,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
             // 名前空間・モジュール — 識別子形式と引用符付きアンビエント形式の両方に対応
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -534,14 +547,54 @@ public static class SymbolExtractor
     private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols)
     {
         var methodRegex = lang == "javascript" ? JavaScriptBareMethodRegex : TypeScriptBareMethodRegex;
-        var classSymbols = symbols
+        var classScanTargets = CollectJavaScriptTypeScriptClassScanTargets(lang, lines, symbols);
+
+        foreach (var classScanTarget in classScanTargets)
+            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lang, lines, symbols, classScanTarget, methodRegex);
+    }
+
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
+    {
+        var targets = symbols
             .Where(s => s.Kind == "class" && s.BodyStartLine != null && s.BodyEndLine != null)
             .OrderBy(s => s.StartLine)
             .ThenByDescending(s => s.EndLine)
+            .Select(s => new JavaScriptClassScanTarget(
+                s.StartLine - 1,
+                s.BodyStartLine!.Value,
+                s.BodyEndLine!.Value - 1))
             .ToList();
 
-        foreach (var classSymbol in classSymbols)
-            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lang, lines, symbols, classSymbol, methodRegex);
+        var lexState = new JavaScriptLexState();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+
+            if (!JavaScriptTypeScriptAnonymousDefaultClassRegex.IsMatch(sanitizedLine)
+                && !JavaScriptTypeScriptClassExpressionRegex.IsMatch(sanitizedLine))
+            {
+                continue;
+            }
+
+            var (_, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang);
+            if (bodyStartLine == null || bodyEndLine == null)
+                continue;
+
+            var candidate = new JavaScriptClassScanTarget(i, bodyStartLine.Value, bodyEndLine.Value - 1);
+            if (!targets.Any(t => t.StartIndex == candidate.StartIndex
+                && t.ScanStartIndex == candidate.ScanStartIndex
+                && t.ScanEndExclusive == candidate.ScanEndExclusive))
+            {
+                targets.Add(candidate);
+            }
+        }
+
+        return targets
+            .OrderBy(t => t.StartIndex)
+            .ThenByDescending(t => t.ScanEndExclusive)
+            .ToList();
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInClass(
@@ -549,14 +602,14 @@ public static class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        SymbolRecord classSymbol,
+        JavaScriptClassScanTarget classScanTarget,
         Regex methodRegex)
     {
-        if (classSymbol.BodyStartLine == null || classSymbol.BodyEndLine == null)
+        if (classScanTarget.ScanStartIndex >= classScanTarget.ScanEndExclusive)
             return;
 
-        var scanStartIndex = classSymbol.BodyStartLine.Value;
-        var scanEndExclusive = classSymbol.BodyEndLine.Value - 1;
+        var scanStartIndex = classScanTarget.ScanStartIndex;
+        var scanEndExclusive = classScanTarget.ScanEndExclusive;
         var nestedBraceDepth = 0;
         var lexState = new JavaScriptLexState();
 

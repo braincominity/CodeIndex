@@ -73,6 +73,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotInventExtendsAsAnonymousDefaultClassName()
+    {
+        var content = """
+            export default class extends Base {
+                run() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotInventExtendsAsAnonymousDefaultDerivedClassName()
+    {
+        var content = """
+            export default class extends mixin(Base) {
+                run() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassExpressionMethods()
+    {
+        var content = """
+            const Service = class NamedService {
+                run() {}
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotTreatControlFlowBlocksAsFunctions()
     {
         var content = """
@@ -288,6 +329,47 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultTs");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotInventExtendsAsAnonymousDefaultClassName()
+    {
+        var content = """
+            export default class extends Base {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotInventExtendsAsAnonymousDefaultDerivedClassName()
+    {
+        var content = """
+            export default class extends mixin(Base) {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "extends");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassExpressionMethods()
+    {
+        var content = """
+            const Service = class NamedService {
+                run(): void {}
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
