@@ -1413,7 +1413,7 @@ public static class SymbolExtractor
                         {
                             FileId = fileId,
                             Kind = "function",
-                            Name = methodHeader.Name,
+                            Name = GetJavaScriptTypeScriptMethodNameFromSource(line, absoluteMethodStartColumn) ?? methodHeader.Name,
                             Line = startLine,
                             StartLine = startLine,
                             EndLine = Math.Max(startLine, endLine),
@@ -2643,6 +2643,30 @@ public static class SymbolExtractor
             return false;
 
         var tokenStart = index;
+        if (sanitizedLine[index] == '[')
+        {
+            var bracketDepth = 0;
+            while (index < sanitizedLine.Length)
+            {
+                if (sanitizedLine[index] == '[')
+                    bracketDepth++;
+                else if (sanitizedLine[index] == ']')
+                {
+                    bracketDepth--;
+                    if (bracketDepth == 0)
+                    {
+                        index++;
+                        name = sanitizedLine[tokenStart..index];
+                        return true;
+                    }
+                }
+
+                index++;
+            }
+
+            return false;
+        }
+
         if (sanitizedLine[index] == '#')
         {
             index++;
@@ -2659,6 +2683,175 @@ public static class SymbolExtractor
             index++;
 
         name = sanitizedLine[tokenStart..index];
+        return true;
+    }
+
+    private static string? GetJavaScriptTypeScriptMethodNameFromSource(string line, int startColumn)
+    {
+        var index = Math.Max(0, startColumn);
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        while (index < line.Length)
+        {
+            if (!TryReadJavaScriptTypeScriptSourceMethodToken(line, ref index, out var token))
+                return null;
+
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (TypeScriptBareMethodModifiers.Contains(token)
+                && CanTreatJavaScriptTypeScriptMethodTokenAsModifier(line, index))
+            {
+                continue;
+            }
+
+            var isGenerator = token == "*";
+            if (!isGenerator && index < line.Length && line[index] == '*')
+            {
+                isGenerator = true;
+                index++;
+                while (index < line.Length && char.IsWhiteSpace(line[index]))
+                    index++;
+            }
+
+            if (isGenerator)
+                return TryReadJavaScriptTypeScriptSourceMethodName(line, ref index, out var generatorName) ? generatorName : null;
+
+            return token;
+        }
+
+        return null;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptSourceMethodToken(string line, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= line.Length)
+            return false;
+
+        if (line[index] == '*')
+        {
+            token = "*";
+            index++;
+            return true;
+        }
+
+        return TryReadJavaScriptTypeScriptSourceMethodName(line, ref index, out token);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptSourceMethodName(string line, ref int index, out string name)
+    {
+        name = string.Empty;
+        if (index >= line.Length)
+            return false;
+
+        var tokenStart = index;
+        if (line[index] == '[')
+        {
+            var bracketDepth = 0;
+            var inSingleQuote = false;
+            var inDoubleQuote = false;
+            var inTemplateString = false;
+            var escapeNext = false;
+            while (index < line.Length)
+            {
+                var ch = line[index];
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    index++;
+                    continue;
+                }
+
+                if (inSingleQuote)
+                {
+                    if (ch == '\\')
+                        escapeNext = true;
+                    else if (ch == '\'')
+                        inSingleQuote = false;
+                    index++;
+                    continue;
+                }
+
+                if (inDoubleQuote)
+                {
+                    if (ch == '\\')
+                        escapeNext = true;
+                    else if (ch == '"')
+                        inDoubleQuote = false;
+                    index++;
+                    continue;
+                }
+
+                if (inTemplateString)
+                {
+                    if (ch == '\\')
+                        escapeNext = true;
+                    else if (ch == '`')
+                        inTemplateString = false;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inSingleQuote = true;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    inDoubleQuote = true;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '`')
+                {
+                    inTemplateString = true;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']')
+                {
+                    bracketDepth--;
+                    if (bracketDepth == 0)
+                    {
+                        index++;
+                        name = line[tokenStart..index];
+                        return true;
+                    }
+                }
+
+                index++;
+            }
+
+            return false;
+        }
+
+        if (line[index] == '#')
+        {
+            index++;
+            if (index >= line.Length || !IsJavaScriptTypeScriptIdentifierStart(line[index]))
+                return false;
+        }
+        else if (!IsJavaScriptTypeScriptIdentifierStart(line[index]))
+        {
+            return false;
+        }
+
+        index++;
+        while (index < line.Length && IsJavaScriptTypeScriptIdentifierPart(line[index]))
+            index++;
+
+        name = line[tokenStart..index];
         return true;
     }
 
@@ -2691,7 +2884,7 @@ public static class SymbolExtractor
         while (index < sanitizedLine.Length)
         {
             var ch = sanitizedLine[index];
-            if (ch != '#' && ch != '*' && !IsJavaScriptTypeScriptIdentifierStart(ch))
+            if (ch != '#' && ch != '*' && ch != '[' && !IsJavaScriptTypeScriptIdentifierStart(ch))
             {
                 index++;
                 continue;
