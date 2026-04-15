@@ -277,6 +277,89 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "generated"));
+
+            var srcFile = Path.Combine(tempDir, "src", "Api.Part1.cs");
+            var generatedFile = Path.Combine(tempDir, "generated", "Api.Part2.cs");
+            File.WriteAllText(srcFile, "public partial class Api {}");
+            File.WriteAllText(generatedFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src", indexer.GetFamilyScopeKey(srcFile, "csharp"));
+            Assert.Equal("generated", indexer.GetFamilyScopeKey(generatedFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MarkerlessRootLevelFilesShareRootScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            var firstFile = Path.Combine(tempDir, "Api.Part1.cs");
+            var secondFile = Path.Combine(tempDir, "Api.Part2.cs");
+            File.WriteAllText(firstFile, "public partial class Api {}");
+            File.WriteAllText(secondFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal(".", indexer.GetFamilyScopeKey(firstFile, "csharp"));
+            Assert.Equal(".", indexer.GetFamilyScopeKey(secondFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var srcDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(Path.Combine(srcDir, "ProjA"));
+            Directory.CreateDirectory(Path.Combine(srcDir, "ProjB"));
+            File.WriteAllText(Path.Combine(srcDir, "ProjectA.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "ProjectB.csproj"), "<Project />");
+
+            var projAFile = Path.Combine(srcDir, "ProjA", "Api.Part1.cs");
+            var projBFile = Path.Combine(srcDir, "ProjB", "Api.Part1.cs");
+            var ambiguousFile = Path.Combine(srcDir, "Api.Part1.cs");
+            File.WriteAllText(projAFile, "public partial class Api {}");
+            File.WriteAllText(projBFile, "public partial class Api {}");
+            File.WriteAllText(ambiguousFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src/ProjA", indexer.GetFamilyScopeKey(projAFile, "csharp"));
+            Assert.Equal("src/ProjB", indexer.GetFamilyScopeKey(projBFile, "csharp"));
+            Assert.Equal("src/__file__/Api.Part1.cs", indexer.GetFamilyScopeKey(ambiguousFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_CreatesCorrectRecord()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

@@ -1596,20 +1596,50 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var hotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, new ExactQuerySignal(true, HasMissingIndex: false, HasMissingTable: false, null));
+                {
+                    if (!options.Json)
+                    {
+                        Console.WriteLine("0");
+                        if (!reader._hasReferencesTable)
+                            Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
+                        WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
+                    }
+                    else
+                    {
+                        var payload = new JsonObject
+                        {
+                            ["count"] = 0,
+                            ["files"] = 0,
+                            ["graph_table_available"] = reader._hasReferencesTable,
+                        };
+                        if (!reader._hasReferencesTable)
+                            payload["degraded"] = true;
+                        AddHotspotFamilyJsonFields(payload, hotspotSignal);
+                        AddFreshnessHint(payload, reader);
+                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    }
+                }
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions);
+                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, extraFields: payload => AddHotspotFamilyJsonFields(payload, hotspotSignal));
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "hotspots", graphTableAvailable: true, degraded: false).ToJsonString(jsonOptions));
+                    Console.WriteLine(BuildJsonZeroResultPayload(
+                        reader,
+                        jsonOptions,
+                        resultsKey: "hotspots",
+                        graphTableAvailable: true,
+                        degraded: !hotspotSignal.Ready,
+                        extraFields: payload => AddHotspotFamilyJsonFields(payload, hotspotSignal)).ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No symbol hotspots found.");
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
+                    WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
                     WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
@@ -1618,16 +1648,35 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var fc = results.Select(r => r.Symbol.Path).Distinct().Count();
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
-                    : $"{results.Count}");
+                if (options.Json)
+                {
+                    var payload = new JsonObject
+                    {
+                        ["count"] = results.Count,
+                        ["files"] = fc,
+                        ["graph_table_available"] = reader._hasReferencesTable,
+                    };
+                    AddHotspotFamilyJsonFields(payload, hotspotSignal);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{results.Count}");
+                    WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
+                }
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
                 var items = results.Select(r => new { name = r.Symbol.Name, kind = r.Symbol.Kind, path = r.Symbol.Path, line = r.Symbol.Line, reference_count = r.ReferenceCount, visibility = r.Symbol.Visibility, container = r.Symbol.ContainerName });
-                Console.WriteLine(JsonSerializer.Serialize(new { count = results.Count, hotspots = items }, jsonOptions));
+                var payload = new JsonObject
+                {
+                    ["count"] = results.Count,
+                    ["hotspots"] = JsonSerializer.SerializeToNode(items, jsonOptions)
+                };
+                AddHotspotFamilyJsonFields(payload, hotspotSignal);
+                Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
             {
@@ -1637,6 +1686,7 @@ public static class QueryCommandRunner
                     Console.WriteLine($"{refCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
                 Console.Error.WriteLine($"({results.Count} symbol hotspots)");
+                WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
             }
             return CommandExitCodes.Success;
         });
@@ -2680,6 +2730,26 @@ public static class QueryCommandRunner
         payload["exact_index_available"] = exactSignal.ExactIndexAvailable;
         if (exactSignal.DegradedReason != null)
             payload["degraded_reason"] = exactSignal.DegradedReason;
+    }
+
+    private static void AddHotspotFamilyJsonFields(JsonObject payload, HotspotFamilySignal signal)
+    {
+        payload["hotspot_family_ready"] = signal.Ready;
+        if (!signal.Ready)
+        {
+            payload["degraded"] = true;
+            if (signal.DegradedReason != null)
+                payload["hotspot_family_degraded_reason"] = signal.DegradedReason;
+        }
+    }
+
+    private static void WriteHotspotFamilyWarningIfNeeded(bool json, HotspotFamilySignal signal)
+    {
+        if (json || signal.Ready || signal.DegradedReason == null)
+            return;
+
+        Console.Error.WriteLine($"WARN: {signal.DegradedReason}");
+        Console.Error.WriteLine("Hint: rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
     }
 
     private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)

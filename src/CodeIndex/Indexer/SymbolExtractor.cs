@@ -9,12 +9,15 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static class SymbolExtractor
 {
+    private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private enum BodyStyle
     {
         None,
         Brace,
         Indent,
         RubyEnd,
+        VisualBasicEnd,
     }
 
     private sealed record SymbolPattern(
@@ -266,10 +269,10 @@ public static class SymbolExtractor
         ["vb"] =
         [
             new("function", new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Shared|Overrides|Overridable|MustOverride|Async)\s+)*(?:Sub|Function)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("interface", new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*Interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("interface", new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*Interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("enum",     new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*Enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("struct",   new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Partial)\s+)*Structure\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("class",    new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Partial|MustInherit|NotInheritable)\s+)*(?:Class|Module)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("struct",   new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Partial)\s+)*Structure\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Partial|MustInherit|NotInheritable)\s+)*(?:Class|Module)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("import",   new Regex(@"^\s*Imports\s+(?<name>.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["scala"] =
@@ -429,6 +432,8 @@ public static class SymbolExtractor
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
+    private static readonly Regex VisualBasicContainerStartRegex = new(@"^(?:(?:Public|Private|Protected|Friend)\s+)*(?:(?:Partial|MustInherit|NotInheritable)\s+)*(?:Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -494,6 +499,17 @@ public static class SymbolExtractor
         return symbols;
     }
 
+    public static void ApplyFamilyScope(IEnumerable<SymbolRecord> symbols, string scopeKey)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (string.IsNullOrWhiteSpace(symbol.FamilyKey))
+                continue;
+
+            symbol.FamilyKey = $"{scopeKey}|{symbol.FamilyKey}";
+        }
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle)
     {
         return bodyStyle switch
@@ -501,6 +517,7 @@ public static class SymbolExtractor
             BodyStyle.Brace => FindBraceRange(lines, startIndex),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
+            BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
     }
@@ -625,6 +642,47 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindVisualBasicRange(string[] lines, int startIndex)
+    {
+        int depth = 0;
+        int? bodyStartLine = null;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            if (VisualBasicContainerStartRegex.IsMatch(trimmed))
+            {
+                depth++;
+                if (i > startIndex && bodyStartLine == null)
+                    bodyStartLine = i + 1;
+                continue;
+            }
+
+            if (VisualBasicContainerEndRegex.IsMatch(trimmed))
+            {
+                depth--;
+                if (depth <= 0)
+                {
+                    if (bodyStartLine == null || bodyStartLine > i + 1)
+                        return (i + 1, null, null);
+
+                    return (i + 1, bodyStartLine, i + 1);
+                }
+            }
+            else if (i > startIndex && bodyStartLine == null)
+            {
+                bodyStartLine = i + 1;
+            }
+        }
+
+        return bodyStartLine == null
+            ? (startIndex + 1, null, null)
+            : (lines.Length, bodyStartLine, lines.Length);
+    }
+
     private static string StripLeadingCSharpAttributeLists(string line)
     {
         var index = 0;
@@ -675,7 +733,7 @@ public static class SymbolExtractor
         var stack = new Stack<SymbolRecord>();
         foreach (var symbol in ordered)
         {
-            while (stack.Count > 0 && symbol.StartLine > stack.Peek().EndLine)
+            while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
             while (stack.Count > 0 && !ContainsSymbol(stack.Peek(), symbol))
@@ -686,23 +744,74 @@ public static class SymbolExtractor
                 var container = stack.Peek();
                 symbol.ContainerKind = container.Kind;
                 symbol.ContainerName = container.Name;
+                var qualifiedContainerName = BuildQualifiedContainerName(stack);
+                symbol.ContainerQualifiedName = qualifiedContainerName;
+                symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
             }
+
+            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, stack);
 
             if (CanContainSymbols(symbol))
                 stack.Push(symbol);
         }
     }
 
+    private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)
+    {
+        var names = containers
+            .Reverse()
+            .Select(container => container.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+
+        return names.Count > 0
+            ? string.Join(".", names)
+            : null;
+    }
+
+    private static string? BuildInheritedFamilyKey(SymbolRecord container, string? qualifiedContainerName) =>
+        SupportsCrossFileFamily(container)
+            ? qualifiedContainerName
+            : null;
+
+    private static string? BuildSelfFamilyKey(SymbolRecord symbol, IEnumerable<SymbolRecord> containers)
+    {
+        if (!SupportsCrossFileFamily(symbol))
+            return null;
+
+        var names = containers
+            .Reverse()
+            .Select(container => container.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Append(symbol.Name)
+            .ToList();
+
+        return names.Count > 0
+            ? string.Join(".", names)
+            : null;
+    }
+
+    private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
+        symbol.Kind is "class" or "interface" or "struct"
+        && !string.IsNullOrWhiteSpace(symbol.Signature)
+        && PartialModifierRegex.IsMatch(symbol.Signature);
+
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
         if (!ContainerKinds.Contains(symbol.Kind))
             return false;
+
+        if (IsFileScopedNamespace(symbol))
+            return true;
 
         return symbol.BodyStartLine != null && symbol.BodyEndLine != null;
     }
 
     private static bool ContainsSymbol(SymbolRecord container, SymbolRecord candidate)
     {
+        if (IsFileScopedNamespace(container))
+            return candidate.StartLine > container.StartLine;
+
         if (container.BodyStartLine == null || container.BodyEndLine == null)
             return false;
 
@@ -710,6 +819,11 @@ public static class SymbolExtractor
             && candidate.StartLine <= container.BodyEndLine
             && candidate.StartLine > container.StartLine;
     }
+
+    private static bool IsFileScopedNamespace(SymbolRecord symbol) =>
+        symbol.Kind == "namespace" &&
+        symbol.BodyStartLine == null &&
+        symbol.BodyEndLine == null;
 
     private static int CountIndent(string line)
     {
