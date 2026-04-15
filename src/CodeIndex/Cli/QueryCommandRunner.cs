@@ -921,7 +921,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            WorkspaceMetadataEnricher.Enrich(map, options.DbPath);
+            WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
 
             // Return not-found only when a narrowing filter is active and produces zero files.
             // Unfiltered empty indexes return success (valid state for health probes).
@@ -1011,7 +1011,7 @@ public static class QueryCommandRunner
                     analysis.ExactHasMissingTable ?? false,
                     analysis.DegradedReason)
                 : (ExactQuerySignal?)null;
-            WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath, options.DbPathExplicit);
             if (exactSignal.HasValue)
                 WriteExactBundleWarningIfNeeded(exact, options.Json, exactSignal.Value);
             if (options.Json)
@@ -1124,7 +1124,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, options.DbPath);
+            WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
@@ -1779,6 +1779,7 @@ public static class QueryCommandRunner
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
+        bool dbPathExplicit = false;
         var extraNames = new List<string>();
 
         void AddParseError(string error)
@@ -1799,7 +1800,10 @@ public static class QueryCommandRunner
             {
                 case "--db":
                     if (TryReadStringOptionValue(args, ref i, "--db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dbPathValue, out var dbPathError))
+                    {
                         dbPath = dbPathValue!;
+                        dbPathExplicit = true;
+                    }
                     else
                         AddParseError(dbPathError!);
                     break;
@@ -1958,6 +1962,7 @@ public static class QueryCommandRunner
         return new QueryCommandOptions
         {
             DbPath = dbPath,
+            DbPathExplicit = dbPathExplicit,
             Json = json ?? jsonDefault,
             Limit = limit,
             Lang = lang,
@@ -2644,6 +2649,7 @@ public static class QueryCommandRunner
 public sealed class QueryCommandOptions
 {
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
+    public bool DbPathExplicit { get; init; }
     public bool Json { get; init; }
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }

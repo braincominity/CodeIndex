@@ -116,7 +116,7 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
-        var server = new McpServer(options.DbPath, appVersion);
+        var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit);
         server.RunAsync().GetAwaiter().GetResult();
         return CommandExitCodes.Success;
     }

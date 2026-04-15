@@ -634,7 +634,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
-            WorkspaceMetadataEnricher.Enrich(map, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             structured["limit"] = limit;
             structured["lang"] = lang;
@@ -670,7 +670,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
-            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             AddExactSignalAliases(structured);
             structured.Remove("exactZeroHint");
@@ -716,7 +716,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
@@ -1207,6 +1207,7 @@ public partial class McpServer
         using var db = new DbContext(_dbPath);
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1224,6 +1225,31 @@ public partial class McpServer
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
+        var normalizedProjectPath = Path.GetFullPath(projectPath);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
+
+        static bool PathsEqual(string? left, string? right)
+        {
+            if (left == null || right == null)
+                return false;
+
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(left, right, comparison);
+        }
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
+            projectRootWritten = true;
+        }
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -1231,6 +1257,8 @@ public partial class McpServer
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
+        if (purged > 0)
+            WriteProjectRootOnce();
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -1264,6 +1292,7 @@ public partial class McpServer
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                WriteProjectRootOnce();
                 txn.Commit();
             }
             catch
@@ -1313,6 +1342,11 @@ public partial class McpServer
             {
                 foldReadyReason = "stale_fold_key_fingerprint";
             }
+
+            // Successful no-op MCP full scans should repair explicit-DB roots only after
+            // readiness is stamped, preserving the failure-path safety contract.
+            // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
+            WriteProjectRootOnce();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 

@@ -17,17 +17,20 @@ namespace CodeIndex.Tests;
 public class McpServerTests : IDisposable
 {
     private readonly string _dbPath;
+    private readonly string _projectRoot;
     private readonly DbContext _db;
     private readonly McpServer _server;
 
     public McpServerTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_{Guid.NewGuid():N}.db");
+        _projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_workspace");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
 
         // Seed test data / テストデータを投入
         var writer = new DbWriter(_db.Connection);
+        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, _projectRoot);
         // Stamp graph + issues ready so reads trust the seeded references like a completed index run.
         // seed したデータを完了 index と同等に扱うため readiness を stamp しておく。
         writer.MarkGraphReady();
@@ -1862,6 +1865,217 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Status_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_uri");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_{Guid.NewGuid():N}.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
+
+            var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = readOnlyServer.HandleMessage(request)!;
+
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_CustomDbUnderCdidx_UsesPersistedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_custom_db");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_custom_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "shared.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ExplicitProjectLocalDb_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_project_local_explicit");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ExplicitProjectLocalReadOnlyUri_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_project_local_uri");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var server = new McpServer(dbUri, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ExplicitExternalCodeIndexDb_UsesPersistedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_codeindex_db");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_codeindex_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Ping_ReturnsVersionAndTimestamp()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
@@ -2025,6 +2239,146 @@ public class McpServerTests : IDisposable
         {
             if (Directory.Exists(fixtureDir))
                 Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_FailedFirstMutation_DoesNotRewriteIndexedProjectRootMetadata()
+    {
+        var projectRootA = TestProjectHelper.CreateTempProject("cdidx_mcp_index_root_a");
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_root_b_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_root_{Guid.NewGuid():N}.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRootA);
+            var sourcePathA = Path.Combine(projectRootA, "app.cs");
+            File.WriteAllText(sourcePathA, "public class AppA { public void Run() { } }\n");
+            TestProjectHelper.RunGit(projectRootA, "add", "app.cs");
+            TestProjectHelper.RunGit(projectRootA, "commit", "-m", "init-a");
+            var headA = TestProjectHelper.RunGit(projectRootA, "rev-parse", "HEAD").Trim();
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            });
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TRIGGER fail_update
+                    BEFORE UPDATE ON files
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            Directory.CreateDirectory(fixtureDir);
+            TestProjectHelper.InitializeGitRepo(fixtureDir);
+            var sourcePathB = Path.Combine(fixtureDir, "app.cs");
+            File.WriteAllText(sourcePathB, "public class AppB { public void Run() { } public void Extra() { } }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "init-b");
+            File.SetLastWriteTimeUtc(sourcePathB, DateTime.UtcNow.AddSeconds(2));
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var indexRequest = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var indexResponse = server.HandleMessage(indexRequest)!;
+            Assert.Equal(1, indexResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+
+            var statusRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var statusResponse = server.HandleMessage(statusRequest)!;
+
+            Assert.Equal(projectRootA, statusResponse["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(headA, statusResponse["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRootA);
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_SuccessfulNoOpBackfillsMissingIndexedProjectRootMetadata()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_noop_{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            TestProjectHelper.InitializeGitRepo(fixtureDir);
+            var sourcePath = Path.Combine(fixtureDir, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "init");
+            var expectedHead = TestProjectHelper.RunGit(fixtureDir, "rev-parse", "HEAD").Trim();
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var indexRequest = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(indexRequest)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+
+            var secondResponse = server.HandleMessage(indexRequest)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Equal(1, secondResponse["result"]!["structuredContent"]!["summary"]!["skipped"]!.GetValue<int>());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(fixtureDir), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var statusRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var statusResponse = server.HandleMessage(statusRequest)!;
+
+            Assert.Equal(Path.GetFullPath(fixtureDir), statusResponse["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, statusResponse["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -3420,6 +3774,7 @@ public class McpServerTests : IDisposable
     {
         _db.Dispose();
         DeleteDbPath();
+        TestProjectHelper.DeleteDirectory(_projectRoot);
     }
 
     private void DeleteDbPath()
