@@ -72,6 +72,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedRawString_KeepsInterpolationCallReferences()
+    {
+        const string content = """"
+            public class FixtureHost
+            {
+                public string Run() => "ok";
+
+                public string UsesRawFixture()
+                {
+                    return $"""
+                        value = {Run()}
+                        literal = function main()
+                        """;
+                }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("Run", reference.SymbolName);
+        Assert.Equal("call", reference.ReferenceKind);
+        Assert.Equal("UsesRawFixture", reference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored

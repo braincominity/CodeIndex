@@ -6,6 +6,18 @@ namespace CodeIndex.Indexer;
 /// </summary>
 internal static class StructuralLineMasker
 {
+    private sealed class RawStringState
+    {
+        public required int DelimiterLength { get; init; }
+        public required int InterpolationBraceCount { get; init; }
+        public bool InInterpolation { get; set; }
+        public int InterpolationDepth { get; set; }
+        public bool HoleInBlockComment { get; set; }
+        public bool HoleInRegularString { get; set; }
+        public bool HoleInVerbatimString { get; set; }
+        public bool HoleInCharLiteral { get; set; }
+    }
+
     internal static string[] MaskLines(string? lang, string[] originalLines)
     {
         var maskedLines = (string[])originalLines.Clone();
@@ -18,7 +30,7 @@ internal static class StructuralLineMasker
 
     private static void MaskCSharpRawStringContents(string[] lines)
     {
-        int? activeDelimiterLength = null;
+        RawStringState? activeRawString = null;
         var inBlockComment = false;
         var inRegularString = false;
         var inVerbatimString = false;
@@ -35,14 +47,156 @@ internal static class StructuralLineMasker
 
             while (searchStart < line.Length)
             {
-                if (activeDelimiterLength != null)
+                if (activeRawString != null)
                 {
-                    var closeLength = CountQuoteRun(line, searchStart);
-                    if (closeLength >= activeDelimiterLength.Value)
+                    if (activeRawString.InInterpolation)
                     {
-                        ReplaceWithSpaces(masked, searchStart, closeLength);
-                        searchStart += closeLength;
-                        activeDelimiterLength = null;
+                        if (activeRawString.HoleInBlockComment)
+                        {
+                            if (StartsWith(line, searchStart, "*/"))
+                            {
+                                activeRawString.HoleInBlockComment = false;
+                                searchStart += 2;
+                                continue;
+                            }
+
+                            searchStart++;
+                            continue;
+                        }
+
+                        if (activeRawString.HoleInRegularString)
+                        {
+                            if (line[searchStart] == '\\')
+                            {
+                                searchStart += Math.Min(2, line.Length - searchStart);
+                                continue;
+                            }
+
+                            if (line[searchStart] == '"')
+                                activeRawString.HoleInRegularString = false;
+
+                            searchStart++;
+                            continue;
+                        }
+
+                        if (activeRawString.HoleInVerbatimString)
+                        {
+                            if (line[searchStart] == '"' && searchStart + 1 < line.Length && line[searchStart + 1] == '"')
+                            {
+                                searchStart += 2;
+                                continue;
+                            }
+
+                            if (line[searchStart] == '"')
+                                activeRawString.HoleInVerbatimString = false;
+
+                            searchStart++;
+                            continue;
+                        }
+
+                        if (activeRawString.HoleInCharLiteral)
+                        {
+                            if (line[searchStart] == '\\')
+                            {
+                                searchStart += Math.Min(2, line.Length - searchStart);
+                                continue;
+                            }
+
+                            if (line[searchStart] == '\'')
+                                activeRawString.HoleInCharLiteral = false;
+
+                            searchStart++;
+                            continue;
+                        }
+
+                        if (StartsWith(line, searchStart, "//"))
+                            break;
+
+                        if (StartsWith(line, searchStart, "/*"))
+                        {
+                            activeRawString.HoleInBlockComment = true;
+                            searchStart += 2;
+                            continue;
+                        }
+
+                        if (IsInterpolatedVerbatimStringStart(line, searchStart))
+                        {
+                            activeRawString.HoleInVerbatimString = true;
+                            searchStart += 3;
+                            continue;
+                        }
+
+                        if (StartsWith(line, searchStart, "@\""))
+                        {
+                            activeRawString.HoleInVerbatimString = true;
+                            searchStart += 2;
+                            continue;
+                        }
+
+                        var closeBraceRun = CountRun(line, searchStart, '}');
+                        if (activeRawString.InterpolationDepth == 0 && closeBraceRun >= activeRawString.InterpolationBraceCount)
+                        {
+                            ReplaceWithSpaces(masked, searchStart, activeRawString.InterpolationBraceCount);
+                            searchStart += activeRawString.InterpolationBraceCount;
+                            activeRawString.InInterpolation = false;
+                            continue;
+                        }
+
+                        if (line[searchStart] == '{')
+                        {
+                            activeRawString.InterpolationDepth++;
+                            searchStart++;
+                            continue;
+                        }
+
+                        if (line[searchStart] == '}' && activeRawString.InterpolationDepth > 0)
+                        {
+                            activeRawString.InterpolationDepth--;
+                            searchStart++;
+                            continue;
+                        }
+
+                        if (line[searchStart] == '"')
+                        {
+                            activeRawString.HoleInRegularString = true;
+                            searchStart++;
+                            continue;
+                        }
+
+                        if (line[searchStart] == '\'')
+                        {
+                            activeRawString.HoleInCharLiteral = true;
+                            searchStart++;
+                            continue;
+                        }
+
+                        searchStart++;
+                        continue;
+                    }
+
+                    if (activeRawString.InterpolationBraceCount > 0)
+                    {
+                        var openBraceRun = CountRun(line, searchStart, '{');
+                        if (openBraceRun >= activeRawString.InterpolationBraceCount)
+                        {
+                            ReplaceWithSpaces(masked, searchStart, activeRawString.InterpolationBraceCount);
+                            searchStart += activeRawString.InterpolationBraceCount;
+                            activeRawString.InInterpolation = true;
+                            activeRawString.InterpolationDepth = 0;
+                            activeRawString.HoleInBlockComment = false;
+                            activeRawString.HoleInRegularString = false;
+                            activeRawString.HoleInVerbatimString = false;
+                            activeRawString.HoleInCharLiteral = false;
+                            continue;
+                        }
+                    }
+
+                    var closeLength = CountQuoteRun(line, searchStart);
+                    if (closeLength >= activeRawString.DelimiterLength)
+                    {
+                        ReplaceWithSpaces(masked, searchStart, activeRawString.DelimiterLength);
+                        searchStart += activeRawString.DelimiterLength;
+                        activeRawString = null;
                         continue;
                     }
 
@@ -132,12 +286,34 @@ internal static class StructuralLineMasker
                     continue;
                 }
 
+                var rawInterpolationDollarCount = CountRawInterpolationDollarRun(line, searchStart);
+                if (rawInterpolationDollarCount > 0)
+                {
+                    var rawQuoteStart = searchStart + rawInterpolationDollarCount;
+                    var rawDelimiterLength = CountQuoteRun(line, rawQuoteStart);
+                    if (rawDelimiterLength >= 3)
+                    {
+                        ReplaceWithSpaces(masked, searchStart, rawInterpolationDollarCount + rawDelimiterLength);
+                        searchStart += rawInterpolationDollarCount + rawDelimiterLength;
+                        activeRawString = new RawStringState
+                        {
+                            DelimiterLength = rawDelimiterLength,
+                            InterpolationBraceCount = rawInterpolationDollarCount,
+                        };
+                        continue;
+                    }
+                }
+
                 var openLength = CountQuoteRun(line, searchStart);
                 if (openLength >= 3)
                 {
                     ReplaceWithSpaces(masked, searchStart, openLength);
                     searchStart += openLength;
-                    activeDelimiterLength = openLength;
+                    activeRawString = new RawStringState
+                    {
+                        DelimiterLength = openLength,
+                        InterpolationBraceCount = 0,
+                    };
                     continue;
                 }
 
@@ -164,14 +340,7 @@ internal static class StructuralLineMasker
 
     private static int CountQuoteRun(string line, int startIndex)
     {
-        if (startIndex >= line.Length || line[startIndex] != '"')
-            return 0;
-
-        var length = 1;
-        while (startIndex + length < line.Length && line[startIndex + length] == '"')
-            length++;
-
-        return length;
+        return CountRun(line, startIndex, '"');
     }
 
     private static bool StartsWith(string line, int startIndex, string value)
@@ -190,6 +359,27 @@ internal static class StructuralLineMasker
 
     private static bool IsInterpolatedVerbatimStringStart(string line, int startIndex) =>
         StartsWith(line, startIndex, "$@\"") || StartsWith(line, startIndex, "@$\"");
+
+    private static int CountRawInterpolationDollarRun(string line, int startIndex)
+    {
+        var dollarCount = CountRun(line, startIndex, '$');
+        if (dollarCount == 0)
+            return 0;
+
+        return CountQuoteRun(line, startIndex + dollarCount) >= 3 ? dollarCount : 0;
+    }
+
+    private static int CountRun(string line, int startIndex, char value)
+    {
+        if (startIndex >= line.Length || line[startIndex] != value)
+            return 0;
+
+        var length = 1;
+        while (startIndex + length < line.Length && line[startIndex + length] == value)
+            length++;
+
+        return length;
+    }
 
     private static void ReplaceWithSpaces(char[] buffer, int start, int length)
     {

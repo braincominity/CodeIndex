@@ -1045,6 +1045,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpInterpolatedRawStringPreservesCallSite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_interpolated_raw");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "app.cs"),
+                """"
+                public class App
+                {
+                    private string Run() => "ok";
+
+                    public string Render()
+                    {
+                        return $"""
+                            value = {Run()}
+                            literal = function main()
+                        """;
+                    }
+                }
+                """");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", json.GetProperty("symbol_name").GetString());
+            Assert.Equal("src/app.cs", json.GetProperty("path").GetString());
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("Render", json.GetProperty("container_name").GetString());
+            Assert.Equal(8, json.GetProperty("line").GetInt32());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callers_zero_json_missing_graph");
