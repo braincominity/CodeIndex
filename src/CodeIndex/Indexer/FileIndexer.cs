@@ -170,8 +170,11 @@ public class FileIndexer
             var currentDir = Path.GetDirectoryName(Path.GetFullPath(absolutePath));
             while (!string.IsNullOrEmpty(currentDir))
             {
-                if (Directory.EnumerateFiles(currentDir, projectMarkerPattern, SearchOption.TopDirectoryOnly).Any())
+                var markerCount = Directory.EnumerateFiles(currentDir, projectMarkerPattern, SearchOption.TopDirectoryOnly).Take(2).Count();
+                if (markerCount == 1)
                     return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
+                if (markerCount > 1)
+                    return DeriveAmbiguousProjectScopeKey(Path.GetFullPath(absolutePath), currentDir);
 
                 if (PathsEqual(currentDir, _projectRoot))
                     break;
@@ -185,17 +188,7 @@ public class FileIndexer
     }
 
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
-    {
-        var normalized = relativePath.Replace('\\', '/').Trim('/');
-        if (string.IsNullOrEmpty(normalized))
-            return ".";
-
-        var firstSeparator = normalized.IndexOf('/');
-        if (firstSeparator < 0)
-            return ".";
-
-        return normalized[..firstSeparator];
-    }
+        => ".";
 
     private static string NormalizeScopeKey(string relativePath)
     {
@@ -203,6 +196,28 @@ public class FileIndexer
         return string.IsNullOrEmpty(normalized) || normalized == "."
             ? "."
             : normalized;
+    }
+
+    private string DeriveAmbiguousProjectScopeKey(string absolutePath, string anchorDir)
+    {
+        var anchorScope = NormalizeScopeKey(Path.GetRelativePath(_projectRoot, anchorDir));
+        var relativeFromAnchor = NormalizeScopeKey(Path.GetRelativePath(anchorDir, absolutePath));
+        if (relativeFromAnchor == ".")
+            return anchorScope;
+
+        var firstSeparator = relativeFromAnchor.IndexOf('/');
+        if (firstSeparator < 0)
+            return JoinScope(anchorScope, $"__file__/{relativeFromAnchor}");
+
+        return JoinScope(anchorScope, relativeFromAnchor[..firstSeparator]);
+    }
+
+    private static string JoinScope(string left, string right)
+    {
+        if (left == ".")
+            return right;
+
+        return $"{left}/{right}";
     }
 
     private static string? GetProjectMarkerPattern(string? lang) => lang switch

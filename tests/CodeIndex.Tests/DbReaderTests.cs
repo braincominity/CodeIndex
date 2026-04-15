@@ -96,7 +96,7 @@ public class DbReaderTests : IDisposable
         InsertIndexedFile("docs/notes.md", "markdown", "# Notes\n\nSome documentation text.");
     }
 
-    private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
+    private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null, string? familyScopeKey = null)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -119,7 +119,7 @@ public class DbReaderTests : IDisposable
         }]);
 
         var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
-        SymbolExtractor.ApplyFamilyScope(symbols, FileIndexer.DeriveFallbackFamilyScopeKey(path));
+        SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey ?? FileIndexer.DeriveFallbackFamilyScopeKey(path));
         _writer.InsertSymbols(symbols);
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
@@ -1177,7 +1177,8 @@ public class DbReaderTests : IDisposable
                     Run(1);
                 }
             }
-            """);
+            """,
+            familyScopeKey: "projA");
         InsertIndexedFile("projA/src/Api.Part2.cs", "csharp",
             """
             namespace Shared;
@@ -1186,7 +1187,8 @@ public class DbReaderTests : IDisposable
             {
                 public void Run(int value) { }
             }
-            """);
+            """,
+            familyScopeKey: "projA");
         InsertIndexedFile("projB/src/Api.Part1.cs", "csharp",
             """
             namespace Shared;
@@ -1198,7 +1200,8 @@ public class DbReaderTests : IDisposable
                     Run(1);
                 }
             }
-            """);
+            """,
+            familyScopeKey: "projB");
         InsertIndexedFile("projB/src/Api.Part2.cs", "csharp",
             """
             namespace Shared;
@@ -1207,7 +1210,8 @@ public class DbReaderTests : IDisposable
             {
                 public void Run(int value) { }
             }
-            """);
+            """,
+            familyScopeKey: "projB");
 
         var results = _reader.GetSymbolHotspots(
             limit: 10,
