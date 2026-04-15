@@ -110,11 +110,48 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NamedService");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "NamedService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
         Assert.Equal("class", run.ContainerKind);
-        Assert.Equal("NamedService", run.ContainerName);
+        Assert.Equal("Service", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsInlineClassMethods()
+    {
+        var content = "export class Inline { run() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("Inline", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsInlineDefaultExportClassMethods()
+    {
+        var content = "export default class Inline { run() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("Inline", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsInlineClassExpressionMethods()
+    {
+        var content = "const Service = class NamedService { run() {} };";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("Service", run.ContainerName);
     }
 
     [Fact]
@@ -381,6 +418,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DoesNotInventImplementsAsAnonymousDefaultClassName()
+    {
+        var content = """
+            export default class implements Runnable {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "implements");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("default", run.ContainerName);
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsClassExpressionMethods()
     {
         var content = """
@@ -390,11 +443,48 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NamedService");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "NamedService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
         Assert.Equal("class", run.ContainerKind);
-        Assert.Equal("NamedService", run.ContainerName);
+        Assert.Equal("Service", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlineClassMethods()
+    {
+        var content = "export class Inline { run(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("Inline", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlineDefaultExportClassMethods()
+    {
+        var content = "export default class Inline { run(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("Inline", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlineClassExpressionMethods()
+    {
+        var content = "const Service = class NamedService { run(): void {} };";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("Service", run.ContainerName);
     }
 
     [Fact]

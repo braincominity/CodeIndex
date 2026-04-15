@@ -60,7 +60,8 @@ public static class SymbolExtractor
     private readonly record struct JavaScriptClassScanTarget(
         int StartIndex,
         int ScanStartIndex,
-        int ScanEndExclusive);
+        int ScanEndExclusive,
+        int FirstLineScanOffset);
 
     private static readonly Regex JavaScriptBareMethodRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{",
@@ -71,7 +72,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptAnonymousDefaultClassRegex = new(
-        @"^\s*(?<visibility>export)\s+default\s+class\b(?=\s+extends\b|\s*\{)",
+        @"^\s*(?<visibility>export)\s+default\s+class\b(?=\s+(?:extends|implements)\b|\s*\{)",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptClassExpressionRegex = new(
@@ -98,7 +99,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
             // 名前空間・モジュール — 識別子形式と引用符付きアンビエント形式の両方に対応
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -559,10 +560,7 @@ public static class SymbolExtractor
             .Where(s => s.Kind == "class" && s.BodyStartLine != null && s.BodyEndLine != null)
             .OrderBy(s => s.StartLine)
             .ThenByDescending(s => s.EndLine)
-            .Select(s => new JavaScriptClassScanTarget(
-                s.StartLine - 1,
-                s.BodyStartLine!.Value,
-                s.BodyEndLine!.Value - 1))
+            .Select(s => CreateJavaScriptClassScanTarget(lines, lang, s.StartLine - 1, s.BodyStartLine, s.BodyEndLine))
             .ToList();
 
         var lexState = new JavaScriptLexState();
@@ -617,8 +615,8 @@ public static class SymbolExtractor
         if (!classExpressionMatch.Success)
             return;
 
-        var containerName = TryGetGroup(classExpressionMatch, "name")
-            ?? TryGetGroup(classExpressionMatch, "alias")
+        var containerName = TryGetGroup(classExpressionMatch, "alias")
+            ?? TryGetGroup(classExpressionMatch, "name")
             ?? "class";
         AddJavaScriptTypeScriptSyntheticClassTarget(
             fileId,
@@ -663,13 +661,31 @@ public static class SymbolExtractor
             });
         }
 
-        var candidate = new JavaScriptClassScanTarget(startIndex, bodyStartLine.Value, bodyEndLine.Value - 1);
+        var candidate = CreateJavaScriptClassScanTarget(lines, lang, startIndex, bodyStartLine, bodyEndLine);
         if (!targets.Any(t => t.StartIndex == candidate.StartIndex
             && t.ScanStartIndex == candidate.ScanStartIndex
-            && t.ScanEndExclusive == candidate.ScanEndExclusive))
+            && t.ScanEndExclusive == candidate.ScanEndExclusive
+            && t.FirstLineScanOffset == candidate.FirstLineScanOffset))
         {
             targets.Add(candidate);
         }
+    }
+
+    private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int? bodyStartLine, int? bodyEndLine)
+    {
+        var scanStartIndex = bodyStartLine!.Value - 1;
+        var scanEndExclusive = bodyEndLine!.Value;
+        var firstLineScanOffset = FindJavaScriptBodyOpenBraceIndex(lines, startIndex, scanStartIndex, lang);
+        if (firstLineScanOffset >= 0)
+            firstLineScanOffset++;
+        else
+            firstLineScanOffset = 0;
+
+        return new JavaScriptClassScanTarget(
+            startIndex,
+            scanStartIndex,
+            scanEndExclusive,
+            firstLineScanOffset);
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInClass(
@@ -693,19 +709,43 @@ public static class SymbolExtractor
             var line = lines[i];
             var lexedLine = LexJavaScriptLine(line, lexState);
             lexState = lexedLine.EndState;
+            var matchInput = lexedLine.SanitizedLine;
+            var braceCountInput = lexedLine.SanitizedLine;
+            var signatureInput = line;
+            var methodStartColumn = 0;
+
+            if (i == scanStartIndex && classScanTarget.FirstLineScanOffset > 0)
+            {
+                if (classScanTarget.FirstLineScanOffset >= matchInput.Length)
+                    matchInput = string.Empty;
+                else
+                    matchInput = matchInput[classScanTarget.FirstLineScanOffset..];
+
+                braceCountInput = matchInput;
+
+                if (classScanTarget.FirstLineScanOffset >= signatureInput.Length)
+                    signatureInput = string.Empty;
+                else
+                    signatureInput = signatureInput[classScanTarget.FirstLineScanOffset..];
+
+                methodStartColumn = classScanTarget.FirstLineScanOffset;
+            }
+
             if (nestedBraceDepth == 0)
             {
-                var match = methodRegex.Match(lexedLine.SanitizedLine);
+                var match = methodRegex.Match(matchInput);
                 if (match.Success)
                 {
                     var name = match.Groups["name"].Success
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
 
+                    methodStartColumn += match.Index;
+
                     var startLine = i + 1;
                     if (!symbols.Any(s => s.Line == startLine && s.Kind == "function" && s.Name == name))
                     {
-                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang);
+                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang, methodStartColumn);
                         symbols.Add(new SymbolRecord
                         {
                             FileId = fileId,
@@ -716,7 +756,7 @@ public static class SymbolExtractor
                             EndLine = Math.Max(startLine, endLine),
                             BodyStartLine = bodyStartLine,
                             BodyEndLine = bodyEndLine,
-                            Signature = line.Trim(),
+                            Signature = signatureInput[match.Index..].Trim(),
                             Visibility = TryGetGroup(match, "visibility"),
                             ReturnType = NormalizeMetadata(TryGetGroup(match, "returnType")),
                         });
@@ -724,7 +764,7 @@ public static class SymbolExtractor
                 }
             }
 
-            nestedBraceDepth += CountBraces(lexedLine.SanitizedLine);
+            nestedBraceDepth += CountBraces(braceCountInput);
             if (nestedBraceDepth < 0)
                 nestedBraceDepth = 0;
         }
@@ -1087,19 +1127,19 @@ public static class SymbolExtractor
         return delta;
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string? lang = null)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string? lang = null, int startColumn = 0)
     {
         return bodyStyle switch
         {
-            BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang),
-            BodyStyle.Brace => FindBraceRange(lines, startIndex),
+            BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
+            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex, string? lang)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex, string? lang, int startColumn = 0)
     {
         var depth = 0;
         var opened = false;
@@ -1114,7 +1154,13 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
             lexState = lexedLine.EndState;
 
-            foreach (var ch in lexedLine.SanitizedLine)
+            var scanLine = i == startIndex && startColumn > 0 && startColumn < lexedLine.SanitizedLine.Length
+                ? lexedLine.SanitizedLine[startColumn..]
+                : i == startIndex && startColumn >= lexedLine.SanitizedLine.Length
+                    ? string.Empty
+                    : lexedLine.SanitizedLine;
+
+            foreach (var ch in scanLine)
             {
                 if (!opened)
                 {
@@ -1176,7 +1222,7 @@ public static class SymbolExtractor
                 }
             }
 
-            if (!opened && lexedLine.SanitizedLine.TrimEnd().EndsWith(';'))
+            if (!opened && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
 
@@ -1185,7 +1231,7 @@ public static class SymbolExtractor
             : (startIndex + 1, null, null);
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0)
     {
         int depth = 0;
         bool opened = false;
@@ -1193,7 +1239,13 @@ public static class SymbolExtractor
 
         for (int i = startIndex; i < lines.Length; i++)
         {
-            foreach (var c in lines[i])
+            var scanLine = i == startIndex && startColumn > 0 && startColumn < lines[i].Length
+                ? lines[i][startColumn..]
+                : i == startIndex && startColumn >= lines[i].Length
+                    ? string.Empty
+                    : lines[i];
+
+            foreach (var c in scanLine)
             {
                 if (c == '{')
                 {
@@ -1212,13 +1264,82 @@ public static class SymbolExtractor
                 }
             }
 
-            if (!opened && lines[i].TrimEnd().EndsWith(';'))
+            if (!opened && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
 
         return opened
             ? (lines.Length, bodyStartLine, lines.Length)
             : (startIndex + 1, null, null);
+    }
+
+    private static int FindJavaScriptBodyOpenBraceIndex(string[] lines, int startIndex, int bodyStartIndex, string? lang)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
+        var lexState = new JavaScriptLexState();
+
+        for (int i = startIndex; i <= bodyStartIndex; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+
+            for (int column = 0; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                if (!char.IsWhiteSpace(ch))
+                {
+                    if (ch == '(')
+                    {
+                        parenDepth++;
+                        continue;
+                    }
+
+                    if (ch == ')' && parenDepth > 0)
+                    {
+                        parenDepth--;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        bracketDepth++;
+                        continue;
+                    }
+
+                    if (ch == ']' && bracketDepth > 0)
+                    {
+                        bracketDepth--;
+                        continue;
+                    }
+
+                    if (ch == '<')
+                    {
+                        if (lang == "typescript" && parenDepth == 0 && bracketDepth == 0)
+                            angleDepth++;
+                        continue;
+                    }
+
+                    if (ch == '>' && angleDepth > 0)
+                    {
+                        angleDepth--;
+                        continue;
+                    }
+                }
+
+                if (ch != '{')
+                    continue;
+
+                if (parenDepth > 0 || bracketDepth > 0 || angleDepth > 0)
+                    continue;
+
+                return column;
+            }
+        }
+
+        return -1;
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindIndentRange(string[] lines, int startIndex)
@@ -1385,6 +1506,15 @@ public static class SymbolExtractor
     {
         if (container.BodyStartLine == null || container.BodyEndLine == null)
             return false;
+
+        if (candidate.StartLine == container.StartLine)
+        {
+            return container.Kind == "class"
+                && candidate.Kind == "function"
+                && container.Signature != null
+                && candidate.Signature != null
+                && container.Signature.Contains(candidate.Signature, StringComparison.Ordinal);
+        }
 
         return candidate.StartLine >= container.BodyStartLine
             && candidate.StartLine <= container.BodyEndLine
