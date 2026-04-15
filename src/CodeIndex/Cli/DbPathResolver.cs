@@ -33,14 +33,14 @@ public static class DbPathResolver
         if (dbDir == null)
             return null;
 
-        if (!dbPathExplicit
-            && string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(Path.GetFileName(fullDbPath), "codeindex.db", StringComparison.OrdinalIgnoreCase))
-            return Path.GetDirectoryName(dbDir);
-
         var indexedProjectRoot = TryReadIndexedProjectRoot(dbPath);
         if (indexedProjectRoot == null && !string.Equals(dbPath, fullDbPath, StringComparison.Ordinal))
             indexedProjectRoot = TryReadIndexedProjectRoot(fullDbPath);
+
+        var projectLocalRoot = TryResolveProjectLocalRoot(fullDbPath, dbPath, dbPathExplicit, indexedProjectRoot);
+        if (projectLocalRoot != null)
+            return projectLocalRoot;
+
         if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
             return Path.GetFullPath(indexedProjectRoot);
 
@@ -91,6 +91,72 @@ public static class DbPathResolver
         }
     }
 
+    private static string? TryResolveProjectLocalRoot(string fullDbPath, string dbPath, bool dbPathExplicit, string? indexedProjectRoot)
+    {
+        var dbDir = Path.GetDirectoryName(fullDbPath);
+        if (dbDir == null)
+            return null;
+
+        if (!string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(Path.GetFileName(fullDbPath), "codeindex.db", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var siblingRoot = Path.GetDirectoryName(dbDir);
+        if (string.IsNullOrWhiteSpace(siblingRoot))
+            return null;
+
+        // Implicit default queries always trust the sibling `.cdidx/codeindex.db` layout.
+        // 明示指定なしのデフォルト query は `.cdidx/codeindex.db` の sibling layout を常に信頼する。
+        if (!dbPathExplicit)
+            return siblingRoot;
+
+        // Explicit `--db .../.cdidx/codeindex.db` is ambiguous: it may be a genuine
+        // project-local DB, or an external/shared DB whose container happens to use the
+        // same filename. Prefer the sibling path only when the indexed contents still line
+        // up with that sibling root; otherwise fall back to persisted metadata.
+        // 明示指定の `--db .../.cdidx/codeindex.db` は曖昧なので、DB内容と sibling root が
+        // 実際に整合しているときだけ sibling を採用し、それ以外は persisted metadata を使う。
+        if (SiblingRootMatchesIndexedContents(dbPath, fullDbPath, siblingRoot, indexedProjectRoot))
+            return siblingRoot;
+
+        return null;
+    }
+
+    private static bool SiblingRootMatchesIndexedContents(string dbPath, string fullDbPath, string siblingRoot, string? indexedProjectRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
+        {
+            var storedDbPath = Path.Combine(Path.GetFullPath(indexedProjectRoot), ".cdidx", "codeindex.db");
+            if (PathsEqual(storedDbPath, fullDbPath))
+                return true;
+        }
+
+        try
+        {
+            using var connection = OpenMetadataConnection(dbPath);
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT path FROM files ORDER BY id LIMIT 5";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (reader.IsDBNull(0))
+                    continue;
+
+                var relativePath = reader.GetString(0);
+                var absolutePath = Path.Combine(siblingRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(absolutePath))
+                    return true;
+            }
+        }
+        catch
+        {
+            // Fall back to persisted metadata / 永続化 metadata 側へフォールバック
+        }
+
+        return false;
+    }
+
     private static SqliteConnection OpenMetadataConnection(string dbPath)
     {
         if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && UriRequestsReadOnly(dbPath))
@@ -116,5 +182,13 @@ public static class DbPathResolver
             if (seg.Equals("mode=ro", StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(left, right, comparison);
     }
 }

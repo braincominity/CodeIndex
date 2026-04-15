@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -121,6 +122,71 @@ public class DbPathResolverTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteDirectory(staleRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_ExplicitProjectLocalDbPrefersCdidxSiblingOverStoredMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local_explicit");
+        var staleRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_stale_explicit");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+            Assert.Equal(projectRoot, resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(staleRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_ExplicitProjectLocalReadOnlyUriPrefersCdidxSibling()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local_uri");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(readOnlyUri, dbPathExplicit: true);
+
+            Assert.Equal(projectRoot, resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
         }
     }
 

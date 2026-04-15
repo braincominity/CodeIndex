@@ -224,6 +224,35 @@ public class WorkspaceMetadataEnricherTests
         }
     }
 
+    [Fact]
+    public void Enrich_StatusResult_ExplicitProjectLocalDbUsesCdidxSiblingPathWhenMetadataIsMissing()
+    {
+        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_project_local_explicit");
+        try
+        {
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+
+            var status = new StatusResult();
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath, dbPathExplicit: true);
+
+            Assert.Equal(projectRoot, status.ProjectRoot);
+            Assert.Equal(expectedHead, status.GitHead);
+            Assert.True(status.GitIsDirty);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static (string ProjectRoot, string DbPath, string HeadCommit) CreateDirtyGitProject(string prefix)
     {
         var projectRoot = TestProjectHelper.CreateTempProject(prefix);
