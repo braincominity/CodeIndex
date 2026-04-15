@@ -120,6 +120,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NestedRawStringInsideInterpolation_DoesNotLeakPhantomSymbols()
+    {
+        var content = """""
+            public class FixtureHost
+            {
+                public int Run() => 1;
+                public string Id(string value) => value;
+
+                public int UsesRawFixture()
+                {
+                    return $"""
+                        value = {Id("""
+                            public class Phantom
+                            {
+                                public void Go() { }
+                            }
+                            """) + Run()}
+                        """.Length;
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "FixtureHost");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "UsesRawFixture");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Id");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Phantom");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Go");
+    }
+
+    [Fact]
     public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
     {
         var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";

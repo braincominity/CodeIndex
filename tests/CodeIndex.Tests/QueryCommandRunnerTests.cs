@@ -1097,6 +1097,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpNestedInterpolatedStringInsideRawInterpolationPreservesCallSite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_nested_interpolated_raw");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "app.cs"),
+                """"
+                public class App
+                {
+                    private string Run() => "ok";
+
+                    public string Render()
+                    {
+                        return $"""
+                            value = {$"{Run()}"}
+                            literal = function main()
+                        """;
+                    }
+                }
+                """");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Run", json.GetProperty("symbol_name").GetString());
+            Assert.Equal("src/app.cs", json.GetProperty("path").GetString());
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("Render", json.GetProperty("container_name").GetString());
+            Assert.Equal(8, json.GetProperty("line").GetInt32());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callers_zero_json_missing_graph");
@@ -4728,6 +4780,105 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Empty(entrypoints.EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomSymbols()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_nested_raw_fixture");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "app.cs"),
+                """"
+                public class App
+                {
+                    private int Run() => 1;
+                    private string Id(string value) => value;
+
+                    public int Render()
+                    {
+                        return $"""
+                            value = {Id("""
+                                public class Phantom
+                                {
+                                    public void Go() { }
+                                }
+                                """) + Run()}
+                            """.Length;
+                    }
+                }
+                """");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Phantom", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_nested_raw_fixture");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "app.cs"),
+                """"
+                public class App
+                {
+                    private int Run() => 1;
+                    private string Id(string value) => value;
+
+                    public int Render()
+                    {
+                        return $"""
+                            value = {Id("""
+                                Execute();
+                                public class Phantom
+                                {
+                                    public void Go() { }
+                                }
+                                """) + Run()}
+                            """.Length;
+                    }
+                }
+                """");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Execute", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
