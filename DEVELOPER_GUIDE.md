@@ -365,7 +365,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 |---|---|---|---|---|---|---|---|---|:---:|
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, arrow, methods (including same-line keyword/modifier-named methods) | class, export default class, same-line sibling classes, multiline/parenthesized/CommonJS class exports | -- | -- | -- | -- | -- | import...from | yes |
-| TypeScript | function, arrow, methods (including generic and same-line object/conditional/function-return methods) | class, export default class, same-line sibling classes, multiline/parenthesized class expressions, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
+| TypeScript | function, arrow, methods (including generic and same-line object/conditional/function-return methods) | class, export default class, anonymous default `abstract class`, `export = class`, same-line sibling classes, multiline/parenthesized class expressions, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
 | C# | methods, ctors, explicit-interface impls (guards named-argument labels only before qualified call expressions; allows `global::` / alias-qualified return types), operators, indexers, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
 | Go | func, methods | type alias | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
@@ -1315,7 +1315,7 @@ LIMIT 20;
 |---|---|---|---|---|---|---|---|---|:---:|
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, アロー, メソッド（同一行の keyword / modifier 名メソッドを含む） | class, export default class, 同一行 sibling class, クラス式, 複数行 / parenthesized / CommonJS クラス export | -- | -- | -- | -- | -- | import...from | yes |
-| TypeScript | function, アロー, メソッド（generic / 同一行 object-return / conditional / function-return を含む） | class, export default class, 同一行 sibling class, 複数行 / parenthesized クラス式, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
+| TypeScript | function, アロー, メソッド（generic / 同一行 object-return / conditional / function-return を含む） | class, export default class, 匿名 default `abstract class`, `export = class`, 同一行 sibling class, 複数行 / parenthesized クラス式, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
 | C# | メソッド, コンストラクタ, explicit-interface 実装（qualified call expression の直前にある named-argument label だけを除外し、`global::` / alias-qualified な戻り値型は許可）, 演算子, インデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
 | Go | func, メソッド | 型エイリアス | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |

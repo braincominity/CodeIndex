@@ -111,6 +111,10 @@ public static class SymbolExtractor
         @"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|module\.exports\.(?<moduleExportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=",
         RegexOptions.Compiled);
 
+    private static readonly Regex TypeScriptExportEqualsRegex = new(
+        @"^\s*export\s*=",
+        RegexOptions.Compiled);
+
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
     {
         ["python"] =
@@ -994,12 +998,11 @@ public static class SymbolExtractor
 
     private static bool IsAnonymousJavaScriptTypeScriptDefaultClassDeclaration(string[] lines, int startIndex, int startColumn)
     {
-        if (!TryGetJavaScriptTypeScriptNextToken(lines, startIndex, startColumn, skipWrappingParens: true, out var tokenLineIndex, out var tokenStartColumn, out var token)
-            || token != "class")
+        if (!TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(lines, startIndex, startColumn, "javascript", out var tokenLineIndex, out var tokenStartColumn))
             return false;
 
         startIndex = tokenLineIndex;
-        startColumn = tokenStartColumn + token.Length;
+        startColumn = tokenStartColumn + "class".Length;
         var lexState = new JavaScriptLexState();
         for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
         {
@@ -1007,6 +1010,66 @@ public static class SymbolExtractor
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
             var column = lineIndex == startIndex ? startColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    column++;
+                    while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                        column++;
+
+                    var nextToken = sanitizedLine[tokenStart..column];
+                    return nextToken is "extends" or "implements";
+                }
+
+                return ch == '{';
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        string lang,
+        out int classLineIndex,
+        out int classStartColumn)
+    {
+        classLineIndex = -1;
+        classStartColumn = -1;
+
+        if (!TryGetJavaScriptTypeScriptNextToken(lines, startIndex, startColumn, skipWrappingParens: true, out classLineIndex, out classStartColumn, out var token))
+            return false;
+
+        if (lang == "typescript" && token == "abstract")
+        {
+            if (!TryGetJavaScriptTypeScriptNextToken(lines, classLineIndex, classStartColumn + token.Length, skipWrappingParens: false, out classLineIndex, out classStartColumn, out token))
+                return false;
+        }
+
+        if (token != "class")
+            return false;
+
+        var inspectLineIndex = classLineIndex;
+        var inspectStartColumn = classStartColumn + token.Length;
+        var lexState = new JavaScriptLexState();
+        for (int lineIndex = inspectLineIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == inspectLineIndex ? inspectStartColumn : 0;
 
             while (column < sanitizedLine.Length)
             {
@@ -1088,20 +1151,14 @@ public static class SymbolExtractor
         var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultExportRegex.Match(sanitizedLine);
         if (anonymousDefaultMatch.Success)
         {
-            if (!IsAnonymousJavaScriptTypeScriptDefaultClassDeclaration(lines, startIndex, anonymousDefaultMatch.Index + anonymousDefaultMatch.Length))
-                return;
-
-            if (!TryGetJavaScriptTypeScriptNextToken(
+            if (!TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(
                 lines,
                 startIndex,
                 anonymousDefaultMatch.Index + anonymousDefaultMatch.Length,
-                skipWrappingParens: true,
+                lang,
                 out var classTokenLineIndex,
-                out var classTokenStartColumn,
-                out _))
-            {
+                out var classTokenStartColumn))
                 return;
-            }
 
             if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, anonymousDefaultMatch.Index, sanitizedLine, includeBlockScope: false))
                 return;
@@ -1118,6 +1175,44 @@ public static class SymbolExtractor
                 containerName: "default",
                 visibility: TryGetGroup(anonymousDefaultMatch, "visibility"));
             return;
+        }
+
+        if (lang == "typescript")
+        {
+            var exportEqualsMatch = TypeScriptExportEqualsRegex.Match(sanitizedLine);
+            if (exportEqualsMatch.Success)
+            {
+                if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, exportEqualsMatch.Index + exportEqualsMatch.Length))
+                    return;
+
+                if (!TryGetJavaScriptTypeScriptNextToken(
+                    lines,
+                    startIndex,
+                    exportEqualsMatch.Index + exportEqualsMatch.Length,
+                    skipWrappingParens: true,
+                    out var exportEqualsClassTokenLineIndex,
+                    out var exportEqualsClassTokenStartColumn,
+                    out _))
+                {
+                    return;
+                }
+
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, exportEqualsMatch.Index, sanitizedLine, includeBlockScope: false))
+                    return;
+
+                AddJavaScriptTypeScriptSyntheticClassTarget(
+                    fileId,
+                    lang,
+                    lines,
+                    symbols,
+                    targets,
+                    startIndex,
+                    exportEqualsClassTokenLineIndex,
+                    exportEqualsClassTokenStartColumn,
+                    containerName: "default",
+                    visibility: "export");
+                return;
+            }
         }
 
         var classExpressionBindingMatch = JavaScriptTypeScriptClassExpressionBindingRegex.Match(sanitizedLine);
