@@ -389,7 +389,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
 | Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
 | Shell | function declarations | -- | -- | -- | -- | -- | -- | -- | -- |
-| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- | -- | -- | -- | -- | yes |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX, TYPE, SEQUENCE, DOMAIN | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
 | Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
@@ -404,6 +404,8 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
+
+SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
 Additionally, 14 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml.
 
@@ -1358,7 +1360,7 @@ LIMIT 20;
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
 | Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
 | Shell | 関数宣言 | -- | -- | -- | -- | -- | -- | -- | -- |
-| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- | -- | -- | -- | -- | yes |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX, TYPE, SEQUENCE, DOMAIN | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
 | Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
@@ -1373,6 +1375,8 @@ LIMIT 20;
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
+
+SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 
 他に14言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml。
 
