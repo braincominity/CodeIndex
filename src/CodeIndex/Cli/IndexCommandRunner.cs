@@ -161,6 +161,7 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -183,7 +184,7 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorIndexedProjectRoot)
             : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
     }
 
@@ -423,7 +424,8 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        string? priorIndexedProjectRoot)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -482,7 +484,7 @@ public static class IndexCommandRunner
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
         var readinessDemoted = false;
-        var projectRootWritten = false;
+        var projectRootWritten = !string.IsNullOrEmpty(priorIndexedProjectRoot);
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
@@ -513,6 +515,16 @@ public static class IndexCommandRunner
             writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
             projectRootWritten = true;
         }
+
+        // Backfill missing indexed_project_root before any mutation/no-op path so legacy
+        // explicit DBs can recover workspace metadata even when update-mode does not end up
+        // rewriting a file. Existing metadata is left untouched so shared DB no-op updates
+        // still cannot hijack another workspace's persisted root.
+        // legacy explicit DB でも、update-mode が最終的に file rewrite しない no-op /
+        // rollback 経路で workspace metadata を回復できるよう、欠損時だけ先に
+        // indexed_project_root を補完する。既存 metadata は触らないので shared DB の
+        // no-op update が別 workspace の root を奪うこともない。
+        WriteProjectRootOnce();
 
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
         {
