@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -34,6 +36,8 @@ internal static class TestProjectHelper
         var dbPath = Path.Combine(dbDir, "codeindex.db");
         using var db = new DbContext(dbPath);
         db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(projectRoot));
         return dbPath;
     }
 
@@ -53,7 +57,7 @@ internal static class TestProjectHelper
             Size = normalized.Length,
             Lines = lines.Length,
             Modified = modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            Checksum = Guid.NewGuid().ToString("N"),
+            Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
         });
 
         writer.InsertChunks([
@@ -132,6 +136,34 @@ internal static class TestProjectHelper
                     SqliteConnection.ClearAllPools();
                 Thread.Sleep(100);
                 ClearAttributes(path);
+            }
+        }
+    }
+
+    internal static void DeleteFile(string path)
+    {
+        if (!File.Exists(path))
+            return;
+
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+                File.Delete(path);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                if (OperatingSystem.IsWindows())
+                    SqliteConnection.ClearAllPools();
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                if (OperatingSystem.IsWindows())
+                    SqliteConnection.ClearAllPools();
+                Thread.Sleep(100);
             }
         }
     }

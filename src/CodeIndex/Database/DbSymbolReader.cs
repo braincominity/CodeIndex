@@ -426,7 +426,7 @@ public partial class DbReader
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
@@ -451,7 +451,7 @@ public partial class DbReader
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
             : (ExactQuerySignal?)null;
-        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
         var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0

@@ -17,17 +17,20 @@ namespace CodeIndex.Tests;
 public class McpServerTests : IDisposable
 {
     private readonly string _dbPath;
+    private readonly string _projectRoot;
     private readonly DbContext _db;
     private readonly McpServer _server;
 
     public McpServerTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_{Guid.NewGuid():N}.db");
+        _projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_workspace");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
 
         // Seed test data / テストデータを投入
         var writer = new DbWriter(_db.Connection);
+        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, _projectRoot);
         // Stamp graph + issues ready so reads trust the seeded references like a completed index run.
         // seed したデータを完了 index と同等に扱うため readiness を stamp しておく。
         writer.MarkGraphReady();
@@ -552,6 +555,18 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["containerName"]!.GetValue<string>());
         Assert.Equal("call", response["result"]!["structuredContent"]!["results"]![0]!["referenceKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_MaxLineWidthZeroReturnsError()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1775,6 +1790,136 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Excerpt_ClampsLongSingleLineContent()
+    {
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        var focusColumn = longLine.IndexOf("TARGET", StringComparison.Ordinal) + 1;
+        InsertIndexedFile("dist/data.txt", "text", longLine);
+
+        var request = JsonNode.Parse($"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"excerpt\",\"arguments\":{{\"path\":\"dist/data.txt\",\"startLine\":1,\"endLine\":1,\"maxLineWidth\":96,\"focusColumn\":{focusColumn},\"focusLength\":6}}}}}}")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.DoesNotContain(longLine, structured["content"]!.GetValue<string>());
+        Assert.Contains("TARGET", structured["content"]!.GetValue<string>());
+        Assert.True(structured["content"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_ClampsLongSingleLineContentWithoutFocus()
+    {
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("dist/data-no-focus.txt", "text", longLine);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-no-focus.txt","startLine":1,"endLine":1,"maxLineWidth":96}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.DoesNotContain(longLine, structured["content"]!.GetValue<string>());
+        Assert.True(structured["content"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_FocusLineWithoutFocusColumnReturnsError()
+    {
+        InsertIndexedFile("dist/data-focus-error.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-error.txt","startLine":1,"endLine":1,"maxLineWidth":96,"focusLine":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusLine and focusLength require focusColumn", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_FocusColumnZeroReturnsError()
+    {
+        InsertIndexedFile("dist/data-focus-zero.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-zero.txt","startLine":1,"endLine":1,"maxLineWidth":96,"focusColumn":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusColumn must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_FocusLengthZeroReturnsError()
+    {
+        InsertIndexedFile("dist/data-focus-length-zero.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-length-zero.txt","startLine":1,"endLine":1,"focusColumn":1,"focusLength":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusLength must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_MaxLineWidthZeroReturnsError()
+    {
+        InsertIndexedFile("dist/data-max-width-zero.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-max-width-zero.txt","startLine":1,"endLine":1,"maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_NegativeBeforeReturnsError()
+    {
+        InsertIndexedFile("dist/data-before-negative.txt", "text", "line one\nline two");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-before-negative.txt","startLine":1,"before":-1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("before must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_NegativeAfterReturnsError()
+    {
+        InsertIndexedFile("dist/data-after-negative.txt", "text", "line one\nline two");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-after-negative.txt","startLine":1,"after":-1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("after must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_FocusLineOutsideReturnedRangeReturnsError()
+    {
+        InsertIndexedFile("dist/data-focus-range.txt", "text", "line one\nline two\nline three");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-range.txt","startLine":2,"endLine":2,"focusLine":999,"focusColumn":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusLine (999) must be within the returned excerpt range (2-2)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_FocusColumnOutsideFocusedLineReturnsError()
+    {
+        InsertIndexedFile("dist/data-focus-column-range.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-column-range.txt","startLine":1,"endLine":1,"focusColumn":9999,"maxLineWidth":40}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusColumn (9999) must be within the focused line length (646)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_FindInFile_ReturnsLiteralMatchesWithContext()
     {
         InsertIndexedFile("src/Auth.cs", "csharp",
@@ -1799,6 +1944,121 @@ public class McpServerTests : IDisposable
         Assert.Equal(2, result["startLine"]!.GetValue<int>());
         Assert.Equal(4, result["endLine"]!.GetValue<int>());
         Assert.Contains("void Guard()", result["snippet"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_ClampsLongSingleLineSnippet()
+    {
+        InsertIndexedFile("dist/search.txt", "text", new string('a', 320) + "target" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search.txt","maxLineWidth":96,"exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.True(result["snippetTruncated"]!.GetValue<bool>());
+        Assert.Contains("target", result["snippet"]!.GetValue<string>());
+        Assert.True(result["snippet"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_MaxLineWidthZeroReturnsError()
+    {
+        InsertIndexedFile("dist/search-max-width-zero.txt", "text", new string('a', 320) + "target" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-max-width-zero.txt","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_NegativeBeforeReturnsError()
+    {
+        InsertIndexedFile("dist/search-before-negative.txt", "text", "target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-before-negative.txt","before":-1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("before must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_NegativeAfterReturnsError()
+    {
+        InsertIndexedFile("dist/search-after-negative.txt", "text", "target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-after-negative.txt","after":-1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("after must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ClampsBundledReferenceContext()
+    {
+        InsertIndexedFile("src/target.js", "javascript",
+            """
+            function target() {
+              return true;
+            }
+            """);
+        var longLine = "const x = 0; " + new string('a', 320) + " target(); " + new string('b', 320);
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "dist/bundle.js",
+            Lang = "javascript",
+            Size = longLine.Length,
+            Lines = 1,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks([
+            new ChunkRecord { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = longLine }
+        ]);
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "target",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = longLine.IndexOf("target", StringComparison.Ordinal) + 1,
+                Context = longLine,
+            }
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","lang":"javascript","maxLineWidth":96}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var firstReference = structured["references"]![0]!;
+
+        Assert.True(firstReference["contextTruncated"]!.GetValue<bool>());
+        Assert.Contains("target()", firstReference["context"]!.GetValue<string>());
+        Assert.True(firstReference["context"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_MaxLineWidthZeroReturnsError()
+    {
+        InsertIndexedFile("src/analyze-target.js", "javascript",
+            """
+            function target() {
+              return true;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1859,6 +2119,217 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_uri");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_{Guid.NewGuid():N}.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App { void Run() {} }\n");
+
+            var readOnlyServer = new McpServer(new Uri(dbPath).AbsoluteUri + "?immutable=1", ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = readOnlyServer.HandleMessage(request)!;
+
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_CustomDbUnderCdidx_UsesPersistedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_custom_db");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_custom_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "shared.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ExplicitProjectLocalDb_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_project_local_explicit");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ExplicitProjectLocalReadOnlyUri_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_project_local_uri");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var server = new McpServer(dbUri, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ExplicitExternalCodeIndexDb_UsesPersistedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_codeindex_db");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_codeindex_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
     }
 
     [Fact]
@@ -1937,6 +2408,14 @@ public class McpServerTests : IDisposable
         Assert.True(csharp["symbol_extraction"]!.GetValue<bool>());
         Assert.True(csharp["graph_queries"]!.GetValue<bool>());
         Assert.Contains(".cs", csharp["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+
+        var javascript = languages.First(l => l!["lang"]!.GetValue<string>() == "javascript")!;
+        Assert.Contains(".cjs", javascript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains(".mjs", javascript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+
+        var typescript = languages.First(l => l!["lang"]!.GetValue<string>() == "typescript")!;
+        Assert.Contains(".cts", typescript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains(".mts", typescript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
 
         // Verify a detection-only language / 検出のみの言語を検証
         var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
@@ -2025,6 +2504,146 @@ public class McpServerTests : IDisposable
         {
             if (Directory.Exists(fixtureDir))
                 Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_FailedFirstMutation_DoesNotRewriteIndexedProjectRootMetadata()
+    {
+        var projectRootA = TestProjectHelper.CreateTempProject("cdidx_mcp_index_root_a");
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_root_b_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_root_{Guid.NewGuid():N}.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRootA);
+            var sourcePathA = Path.Combine(projectRootA, "app.cs");
+            File.WriteAllText(sourcePathA, "public class AppA { public void Run() { } }\n");
+            TestProjectHelper.RunGit(projectRootA, "add", "app.cs");
+            TestProjectHelper.RunGit(projectRootA, "commit", "-m", "init-a");
+            var headA = TestProjectHelper.RunGit(projectRootA, "rev-parse", "HEAD").Trim();
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            });
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TRIGGER fail_update
+                    BEFORE UPDATE ON files
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            Directory.CreateDirectory(fixtureDir);
+            TestProjectHelper.InitializeGitRepo(fixtureDir);
+            var sourcePathB = Path.Combine(fixtureDir, "app.cs");
+            File.WriteAllText(sourcePathB, "public class AppB { public void Run() { } public void Extra() { } }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "init-b");
+            File.SetLastWriteTimeUtc(sourcePathB, DateTime.UtcNow.AddSeconds(2));
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var indexRequest = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var indexResponse = server.HandleMessage(indexRequest)!;
+            Assert.Equal(1, indexResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
+
+            var statusRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var statusResponse = server.HandleMessage(statusRequest)!;
+
+            Assert.Equal(projectRootA, statusResponse["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(headA, statusResponse["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRootA);
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_SuccessfulNoOpBackfillsMissingIndexedProjectRootMetadata()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_noop_{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            TestProjectHelper.InitializeGitRepo(fixtureDir);
+            var sourcePath = Path.Combine(fixtureDir, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "init");
+            var expectedHead = TestProjectHelper.RunGit(fixtureDir, "rev-parse", "HEAD").Trim();
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var indexRequest = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(indexRequest)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+
+            var secondResponse = server.HandleMessage(indexRequest)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.Equal(1, secondResponse["result"]!["structuredContent"]!["summary"]!["skipped"]!.GetValue<int>());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(fixtureDir), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var statusRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var statusResponse = server.HandleMessage(statusRequest)!;
+
+            Assert.Equal(Path.GetFullPath(fixtureDir), statusResponse["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(expectedHead, statusResponse["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
+        }
+        finally
+        {
+            if (Directory.Exists(fixtureDir))
+                TestProjectHelper.DeleteDirectory(fixtureDir);
+            DeleteFileRobust(dbPath);
         }
     }
 
@@ -3867,6 +4486,7 @@ public class McpServerTests : IDisposable
     {
         _db.Dispose();
         DeleteDbPath();
+        TestProjectHelper.DeleteDirectory(_projectRoot);
     }
 
     private void DeleteDbPath()

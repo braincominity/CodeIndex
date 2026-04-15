@@ -83,10 +83,13 @@ under `~/.local/bin/`, then peek inside the downloaded tarball with
 The published binary is built with `PublishTrimmed=true`, which disables
 reflection-based `System.Text.Json` serialization. Any CLI command invoked
 with `--json` (for example `cdidx index --json`, `cdidx status --json`)
-currently crashes with:
+currently fails fast with:
 
-> `InvalidOperationException: Reflection-based serialization has been
-> disabled for this application.`
+> `Error: --json is not available on this trimmed build.`
+>
+> `Hint: use `cdidx mcp` for structured output, omit `--json` for`
+> `human-readable output, or use the NuGet/global-tool build if you need`
+> `CLI JSON.`
 
 MCP output is unaffected because the MCP path hand-rolls JSON. Until the
 trimming / source-gen JSON issue is fixed in a future release, prefer the
@@ -223,10 +226,13 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp
 公開バイナリは `PublishTrimmed=true` でビルドされているため、リフレクション
 ベースの `System.Text.Json` 直列化が無効化されています。CLI で `--json` を
 付けたコマンド（例: `cdidx index --json`、`cdidx status --json`）は現状
-以下の例外で失敗します:
+以下の専用エラーで即時失敗します:
 
-> `InvalidOperationException: Reflection-based serialization has been
-> disabled for this application.`
+> `Error: --json is not available on this trimmed build.`
+>
+> `Hint: use `cdidx mcp` for structured output, omit `--json` for`
+> `human-readable output, or use the NuGet/global-tool build if you need`
+> `CLI JSON.`
 
 MCP 出力は手書き JSON のため影響を受けません。将来のリリースで trimming /
 source-gen JSON 問題が解決するまでは、デフォルトの人間向け出力を使い、

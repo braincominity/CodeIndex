@@ -19,15 +19,59 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
-    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
+    private static readonly HashSet<string> ValueTakingOptions =
+    [
+        "--db",
+        "--limit",
+        "--top",
+        "--lang",
+        "--kind",
+        "--since",
+        "--start",
+        "--end",
+        "--before",
+        "--after",
+        "--name",
+        "--snippet-lines",
+        "--path",
+        "--exclude-path",
+        "--depth",
+        "--query",
+        "--focus-line",
+        "--focus-column",
+        "--focus-length",
+        "--max-line-width",
+    ];
+    private static readonly HashSet<string> FlagOnlyOptions =
+    [
+        "--json",
+        "--fts",
+        "--body",
+        "--count",
+        "--no-dedup",
+        "--exact",
+        "--exact-name",
+        "--exact-substring",
+        "--reverse",
+        "--help",
+        "-h",
+        "--version",
+        "-V",
+    ];
+    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "search"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -35,10 +79,14 @@ public static class QueryCommandRunner
         }
         if (options.Query == null)
         {
-            Console.Error.WriteLine("Error: search requires a query argument");
-            Console.Error.WriteLine("Usage: cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring]");
+            WriteUsageError(
+                "search requires a query argument",
+                GetUsageLineOrThrow("search"),
+                "Add the text you want to search for after the command, for example: `cdidx search authenticate`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("search", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -92,12 +140,17 @@ public static class QueryCommandRunner
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("definition", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("definition", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--body", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "definition"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -105,10 +158,14 @@ public static class QueryCommandRunner
         }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: definition requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
+            WriteUsageError(
+                "definition requires a symbol query argument",
+                GetUsageLineOrThrow("definition"),
+                "Add the symbol name after the command, for example: `cdidx definition QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("definition", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -199,12 +256,17 @@ public static class QueryCommandRunner
 
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("references", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--max-line-width", "--exact", "--exact-name", "--exact-substring"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "references"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -212,14 +274,18 @@ public static class QueryCommandRunner
         }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: references requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
+            WriteUsageError(
+                "references requires a symbol query argument",
+                GetUsageLineOrThrow("references"),
+                "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("references", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
@@ -279,12 +345,17 @@ public static class QueryCommandRunner
 
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("callers", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "callers"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -292,10 +363,14 @@ public static class QueryCommandRunner
         }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: callers requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
+            WriteUsageError(
+                "callers requires a symbol query argument",
+                GetUsageLineOrThrow("callers"),
+                "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("callers", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -355,12 +430,17 @@ public static class QueryCommandRunner
 
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("callees", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "callees"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -368,10 +448,14 @@ public static class QueryCommandRunner
         }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: callees requires a caller query argument");
-            Console.Error.WriteLine("Usage: cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
+            WriteUsageError(
+                "callees requires a caller query argument",
+                GetUsageLineOrThrow("callees"),
+                "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("callees", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -451,12 +535,17 @@ public static class QueryCommandRunner
 
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("symbols", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("symbols", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring", "--name"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "symbols"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "symbols", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -561,12 +650,19 @@ public static class QueryCommandRunner
 
     public static int RunFiles(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("files", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "files"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedExtraPositionals("files", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -613,35 +709,94 @@ public static class QueryCommandRunner
 
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("excerpt", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: true);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, ["--db", "--json", "--start", "--end", "--before", "--after", "--max-line-width", "--focus-line", "--focus-column", "--focus-length"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "excerpt"))
+            return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
-            Console.Error.WriteLine("Error: excerpt requires a path argument");
-            Console.Error.WriteLine("Usage: cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
+            WriteUsageError(
+                "excerpt requires a path argument",
+                GetUsageLineOrThrow("excerpt"),
+                "Pass the indexed file path after `excerpt`, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (TryWriteUnexpectedExtraPositionals("excerpt", options))
+            return CommandExitCodes.UsageError;
+        if (options.FocusColumn == null && (options.FocusLine.HasValue || cmdArgs.Any(arg => arg == "--focus-length" || arg.StartsWith("--focus-length=", StringComparison.Ordinal))))
+        {
+            WriteValidationError(
+                "--focus-line and --focus-length require --focus-column.",
+                "Add `--focus-column <n>` so excerpt knows which token to keep visible inside the clamped line.");
             return CommandExitCodes.UsageError;
         }
 
         if (options.StartLine == null)
         {
-            Console.Error.WriteLine("Error: excerpt requires --start <line>");
+            WriteValidationError(
+                "excerpt requires --start <line>",
+                "Add a starting line number, for example: `cdidx excerpt src/CodeIndex/Program.cs --start 20`.");
             return CommandExitCodes.UsageError;
         }
 
         var endLine = options.EndLine ?? options.StartLine.Value;
         if (endLine < options.StartLine.Value)
         {
-            Console.Error.WriteLine($"Error: --start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).");
+            WriteValidationError(
+                $"--start ({options.StartLine.Value}) must be less than or equal to --end ({endLine}).",
+                "Use `--start` less than or equal to `--end`, or omit `--end` to read a single line.");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var excerpt = reader.GetExcerpt(options.Query, options.StartLine.Value, endLine, options.ContextBefore, options.ContextAfter);
+            if (options.FocusLine.HasValue)
+            {
+                var file = reader.GetFileByPath(options.Query);
+                if (file != null)
+                {
+                    var requestedStart = Math.Max(1, options.StartLine.Value - options.ContextBefore);
+                    var requestedEnd = Math.Min(file.Lines, endLine + options.ContextAfter);
+                    if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
+                    {
+                        Console.Error.WriteLine($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
+                        return CommandExitCodes.UsageError;
+                    }
+                }
+            }
+            if (options.FocusColumn.HasValue)
+            {
+                var focusLineLength = reader.GetExcerptFocusLineLength(
+                    options.Query,
+                    options.StartLine.Value,
+                    endLine,
+                    options.ContextBefore,
+                    options.ContextAfter,
+                    options.FocusLine ?? options.StartLine.Value);
+                if (focusLineLength.HasValue && options.FocusColumn.Value > focusLineLength.Value)
+                {
+                    Console.Error.WriteLine($"Error: --focus-column ({options.FocusColumn.Value}) must be within the focused line length ({focusLineLength.Value}).");
+                    return CommandExitCodes.UsageError;
+                }
+            }
+
+            var excerpt = reader.GetExcerpt(
+                options.Query,
+                options.StartLine.Value,
+                endLine,
+                options.ContextBefore,
+                options.ContextAfter,
+                options.MaxLineWidth,
+                options.FocusLine ?? options.StartLine.Value,
+                options.FocusColumn,
+                options.FocusLength);
             if (excerpt == null)
             {
                 if (!options.Json)
@@ -703,7 +858,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact);
+            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -776,11 +931,11 @@ public static class QueryCommandRunner
     {
         HashSet<string> allowedWithValues =
         [
-            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after", "--query"
+            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after", "--max-line-width", "--query"
         ];
         HashSet<string> allowedFlags =
         [
-            "--json", "--no-json", "--exclude-tests", "--count", "--exact"
+            "--json", "--exclude-tests", "--count", "--exact"
         ];
 
         var queryCount = 0;
@@ -792,7 +947,7 @@ public static class QueryCommandRunner
                 if (i + 1 >= args.Length)
                     return $"Error: {arg} requires a value";
                 var value = args[i + 1];
-                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
+                if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
@@ -853,17 +1008,24 @@ public static class QueryCommandRunner
 
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("map", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("map", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "map"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("map", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
             var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            WorkspaceMetadataEnricher.Enrich(map, options.DbPath);
+            WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
 
             // Return not-found only when a narrowing filter is active and produces zero files.
             // Unfiltered empty indexes return success (valid state for health probes).
@@ -922,12 +1084,17 @@ public static class QueryCommandRunner
 
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("inspect", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--body", "--max-line-width", "--exact", "--exact-name", "--exact-substring"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "inspect"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "inspect", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -935,14 +1102,18 @@ public static class QueryCommandRunner
         }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: inspect requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
+            WriteUsageError(
+                "inspect requires a symbol query argument",
+                GetUsageLineOrThrow("inspect"),
+                "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("inspect", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var exactSignal = exact && analysis.ExactIndexAvailable.HasValue
                 ? new ExactQuerySignal(
                     analysis.ExactIndexAvailable.Value,
@@ -950,7 +1121,7 @@ public static class QueryCommandRunner
                     analysis.ExactHasMissingTable ?? false,
                     analysis.DegradedReason)
                 : (ExactQuerySignal?)null;
-            WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath, options.DbPathExplicit);
             if (exactSignal.HasValue)
                 WriteExactBundleWarningIfNeeded(exact, options.Json, exactSignal.Value);
             if (options.Json)
@@ -996,18 +1167,27 @@ public static class QueryCommandRunner
     {
         if (cmdArgs.Length == 0 || cmdArgs[0].StartsWith('-'))
         {
-            Console.Error.WriteLine("Error: outline requires a file path.");
-            Console.Error.WriteLine("Usage: cdidx outline <path> [--db <path>] [--json]");
+            WriteUsageError(
+                "outline requires a file path.",
+                GetUsageLineOrThrow("outline"),
+                "Pass the indexed file path, for example: `cdidx outline src/CodeIndex/Program.cs`.");
             return CommandExitCodes.UsageError;
         }
 
         var filePath = cmdArgs[0].Replace('\\', '/');
-        var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], ["--db", "--json"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "outline"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("outline", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1049,17 +1229,24 @@ public static class QueryCommandRunner
 
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("status", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("status", cmdArgs, ["--db", "--json"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "status"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("status", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, options.DbPath);
+            WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
@@ -1130,18 +1317,27 @@ public static class QueryCommandRunner
 
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "impact"))
+            return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
-            Console.Error.WriteLine("Error: impact requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx impact <symbol> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>]");
+            WriteUsageError(
+                "impact requires a symbol query argument",
+                GetUsageLineOrThrow("impact"),
+                "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteUnexpectedExtraPositionals("impact", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1332,12 +1528,19 @@ public static class QueryCommandRunner
 
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("deps", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("deps", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--reverse"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "deps"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("deps", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1376,12 +1579,19 @@ public static class QueryCommandRunner
 
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("hotspots", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "hotspots"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("hotspots", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1484,12 +1694,19 @@ public static class QueryCommandRunner
 
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("unused", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("unused", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "unused"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("unused", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1633,12 +1850,19 @@ public static class QueryCommandRunner
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (options.ParseError != null)
+        var previewOptionError = ValidatePreviewOptions("validate", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
         {
-            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("validate", cmdArgs, ["--db", "--json", "--kind", "--path"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "validate"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("validate", options))
+            return CommandExitCodes.UsageError;
 
         return WithDb(options.DbPath, reader =>
         {
@@ -1675,7 +1899,14 @@ public static class QueryCommandRunner
 
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var json = cmdArgs.Any(a => a == "--json");
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("languages", cmdArgs, ["--json"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "languages"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("languages", options))
+            return CommandExitCodes.UsageError;
+        var json = options.Json;
 
         var langExtensions = FileIndexer.GetLanguageExtensions();
         var symbolLangs = SymbolExtractor.GetSupportedLanguages();
@@ -1740,55 +1971,83 @@ public static class QueryCommandRunner
         int? endLine = null;
         int contextBefore = 0;
         int contextAfter = 0;
+        int? focusLine = null;
+        int? focusColumn = null;
+        int focusLength = 1;
         int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
+        int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         var pathPatterns = new List<string>();
         var excludePaths = new List<string>();
         bool excludeTests = false;
         DateTime? since = null;
         bool noDedup = false;
         bool exact = false;
+        List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
-        string? parseError = null;
+        bool dbPathExplicit = false;
         var extraNames = new List<string>();
+
+        void AddParseError(string error)
+        {
+            parseErrors ??= [];
+            parseErrors.Add(error);
+        }
 
         for (int i = 0; i < args.Length; i++)
         {
-            switch (args[i])
+            var currentArg = args[i];
+            var inlineValue = TrySplitInlineOptionValue(currentArg, out var inlineOptionName)
+                ? currentArg[(inlineOptionName!.Length + 1)..]
+                : null;
+            var normalizedArg = inlineOptionName ?? currentArg;
+
+            switch (normalizedArg)
             {
-                case "--db" when i + 1 < args.Length:
-                    dbPath = args[++i];
+                case "--db":
+                    if (TryReadStringOptionValue(args, ref i, "--db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dbPathValue, out var dbPathError))
+                    {
+                        dbPath = dbPathValue!;
+                        dbPathExplicit = true;
+                    }
+                    else
+                        AddParseError(dbPathError!);
                     break;
                 case "--json":
                     json = true;
                     break;
-                case "--no-json":
-                    json = false;
+                case "--limit":
+                case "--top":
+                    if (!TryReadRawOptionValue(args, ref i, "--limit", inlineValue, out var limitValue, out var missingLimitError))
+                        AddParseError(missingLimitError!);
+                    else if (TryParsePositiveInt(limitValue!, "--limit", out var parsedLimit, out var limitError))
+                        limit = parsedLimit;
+                    else
+                        AddParseError(limitError!);
                     break;
-                case "--limit" when i + 1 < args.Length:
-                case "--top" when i + 1 < args.Length:
-                    if (!int.TryParse(args[++i], out limit) || limit <= 0)
-                    {
-                        Console.Error.WriteLine($"Error: --limit requires a positive integer, got '{args[i]}'");
-                        limit = 20;
-                    }
-                    break;
-                case "--lang" when i + 1 < args.Length:
-                    lang = args[++i];
-                    break;
-                case "--query" when allowNamedQuery && i + 1 < args.Length:
-                    query = args[++i];
-                    break;
-                case "--query" when allowNamedQuery:
-                    parseError = "Error: --query requires a value";
+                case "--lang":
+                    if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var langValue, out var langError))
+                        lang = langValue;
+                    else
+                        AddParseError(langError!);
                     break;
                 case "--query":
-                    parseError = "Error: --query is only supported by 'find'.";
-                    if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
-                        i++;
+                    if (!allowNamedQuery)
+                    {
+                        AddParseError("Error: --query is only supported by 'find'.");
+                        if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                            i++;
+                    }
+                    else if (TryReadStringOptionValue(args, ref i, "--query", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var queryValue, out var queryError))
+                        query = queryValue;
+                    else
+                        AddParseError(queryError!);
                     break;
-                case "--kind" when i + 1 < args.Length:
-                    kind = args[++i];
+                case "--kind":
+                    if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
+                        kind = kindValue;
+                    else
+                        AddParseError(kindError!);
                     break;
                 case "--fts":
                     rawFts = true;
@@ -1811,57 +2070,120 @@ public static class QueryCommandRunner
                 case "--exact-substring":
                     exactSubstring = true;
                     break;
-                case "--depth" when i + 1 < args.Length:
-                    contextAfter = ParseNonNegativeInt(args[++i], "--depth"); // reused as depth for impact / impact用に再利用
+                case "--depth":
+                    if (!TryReadRawOptionValue(args, ref i, "--depth", inlineValue, out var depthValue, out var missingDepthError))
+                        AddParseError(missingDepthError!);
+                    else if (TryParseNonNegativeInt(depthValue!, "--depth", out var parsedDepth, out var depthError))
+                        contextAfter = parsedDepth; // reused as depth for impact / impact用に再利用
+                    else
+                        AddParseError(depthError!);
                     break;
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
-                case "--path" when i + 1 < args.Length:
-                    // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
-                    pathPatterns.Add(args[++i]);
+                case "--path":
+                    if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
+                        pathPatterns.Add(pathPattern!); // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
+                    else
+                        AddParseError(pathError!);
                     break;
-                case "--exclude-path" when i + 1 < args.Length:
-                    excludePaths.Add(args[++i]);
+                case "--exclude-path":
+                    if (TryReadStringOptionValue(args, ref i, "--exclude-path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var excludePath, out var excludePathError))
+                        excludePaths.Add(excludePath!);
+                    else
+                        AddParseError(excludePathError!);
                     break;
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
-                case "--since" when i + 1 < args.Length:
-                    if (TryParseIso8601Since(args[++i], out var parsedSince))
+                case "--since":
+                    if (!TryReadStringOptionValue(args, ref i, "--since", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sinceValue, out var sinceError))
+                        AddParseError(sinceError!);
+                    else if (TryParseIso8601Since(sinceValue!, out var parsedSince))
                         since = parsedSince;
                     else
-                        parseError = $"Error: could not parse --since value '{args[i]}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+                        AddParseError($"Error: could not parse --since value '{sinceValue}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
-                case "--since":
-                    parseError = "Error: --since requires a value. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).";
+                case "--start":
+                    if (!TryReadRawOptionValue(args, ref i, "--start", inlineValue, out var startValue, out var missingStartError))
+                        AddParseError(missingStartError!);
+                    else if (TryParsePositiveInt(startValue!, "--start", out var parsedStart, out var startError))
+                        startLine = parsedStart;
+                    else
+                        AddParseError(startError!);
                     break;
-                case "--start" when i + 1 < args.Length:
-                    startLine = ParsePositiveInt(args[++i], "--start");
+                case "--end":
+                    if (!TryReadRawOptionValue(args, ref i, "--end", inlineValue, out var endValue, out var missingEndError))
+                        AddParseError(missingEndError!);
+                    else if (TryParsePositiveInt(endValue!, "--end", out var parsedEnd, out var endError))
+                        endLine = parsedEnd;
+                    else
+                        AddParseError(endError!);
                     break;
-                case "--end" when i + 1 < args.Length:
-                    endLine = ParsePositiveInt(args[++i], "--end");
+                case "--before":
+                    if (!TryReadRawOptionValue(args, ref i, "--before", inlineValue, out var beforeValue, out var missingBeforeError))
+                        AddParseError(missingBeforeError!);
+                    else if (TryParseNonNegativeInt(beforeValue!, "--before", out var parsedBefore, out var beforeError))
+                        contextBefore = parsedBefore;
+                    else
+                        AddParseError(beforeError!);
                     break;
-                case "--before" when i + 1 < args.Length:
-                    contextBefore = ParseNonNegativeInt(args[++i], "--before");
+                case "--after":
+                    if (!TryReadRawOptionValue(args, ref i, "--after", inlineValue, out var afterValue, out var missingAfterError))
+                        AddParseError(missingAfterError!);
+                    else if (TryParseNonNegativeInt(afterValue!, "--after", out var parsedAfter, out var afterError))
+                        contextAfter = parsedAfter;
+                    else
+                        AddParseError(afterError!);
                     break;
-                case "--after" when i + 1 < args.Length:
-                    contextAfter = ParseNonNegativeInt(args[++i], "--after");
+                case "--focus-line":
+                    if (!TryReadRawOptionValue(args, ref i, "--focus-line", inlineValue, out var focusLineValue, out var missingFocusLineError))
+                        AddParseError(missingFocusLineError!);
+                    else if (TryParsePositiveInt(focusLineValue!, "--focus-line", out var parsedFocusLine, out var focusLineError))
+                        focusLine = parsedFocusLine;
+                    else
+                        AddParseError(focusLineError!);
                     break;
-                case "--name" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
-                    // Repeatable; OR-joined with other --name values and extra positional names / 繰り返し可、他の --name や追加の positional 引数と OR 結合
-                    extraNames.Add(args[++i]);
+                case "--focus-column":
+                    if (!TryReadRawOptionValue(args, ref i, "--focus-column", inlineValue, out var focusColumnValue, out var missingFocusColumnError))
+                        AddParseError(missingFocusColumnError!);
+                    else if (TryParsePositiveInt(focusColumnValue!, "--focus-column", out var parsedFocusColumn, out var focusColumnError))
+                        focusColumn = parsedFocusColumn;
+                    else
+                        AddParseError(focusColumnError!);
+                    break;
+                case "--focus-length":
+                    if (!TryReadRawOptionValue(args, ref i, "--focus-length", inlineValue, out var focusLengthValue, out var missingFocusLengthError))
+                        AddParseError(missingFocusLengthError!);
+                    else if (TryParsePositiveInt(focusLengthValue!, "--focus-length", out var parsedFocusLength, out var focusLengthError))
+                        focusLength = parsedFocusLength;
+                    else
+                        AddParseError(focusLengthError!);
                     break;
                 case "--name":
-                    parseError = "Error: --name requires a value (symbol name pattern). / --name には値（シンボル名パターン）が必要です。";
+                    if (TryReadStringOptionValue(args, ref i, "--name", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var extraName, out var nameError))
+                        extraNames.Add(extraName!); // Repeatable; OR-joined with other --name values and extra positional names / 繰り返し可、他の --name や追加の positional 引数と OR 結合
+                    else
+                        AddParseError($"{nameError} / --name には値（シンボル名パターン）が必要です。");
                     break;
-                case "--snippet-lines" when i + 1 < args.Length:
-                    snippetLines = SearchSnippetFormatter.ClampSnippetLines(ParsePositiveInt(args[++i], "--snippet-lines") ?? SearchSnippetFormatter.DefaultSnippetLines);
+                case "--snippet-lines":
+                    if (!TryReadRawOptionValue(args, ref i, "--snippet-lines", inlineValue, out var snippetLinesValue, out var missingSnippetLinesError))
+                        AddParseError(missingSnippetLinesError!);
+                    else if (TryParsePositiveInt(snippetLinesValue!, "--snippet-lines", out var parsedSnippetLines, out var snippetLinesError))
+                        snippetLines = SearchSnippetFormatter.ClampSnippetLines(parsedSnippetLines);
+                    else
+                        AddParseError(snippetLinesError!);
+                    break;
+                case "--max-line-width":
+                    if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
+                        AddParseError(missingMaxLineWidthError!);
+                    else if (TryParsePositiveInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
+                        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(parsedMaxLineWidth);
+                    else
+                        AddParseError(maxLineWidthError!);
                     break;
                 default:
                     if (args[i].StartsWith('-'))
-                    {
-                        Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
-                    }
+                        break;
                     else if (query == null)
                     {
                         query = args[i];
@@ -1878,6 +2200,7 @@ public static class QueryCommandRunner
         return new QueryCommandOptions
         {
             DbPath = dbPath,
+            DbPathExplicit = dbPathExplicit,
             Json = json ?? jsonDefault,
             Limit = limit,
             Lang = lang,
@@ -1889,7 +2212,11 @@ public static class QueryCommandRunner
             EndLine = endLine,
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
+            FocusLine = focusLine,
+            FocusColumn = focusColumn,
+            FocusLength = focusLength,
             SnippetLines = snippetLines,
+            MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
@@ -1900,7 +2227,7 @@ public static class QueryCommandRunner
             ExactName = exactName,
             ExactSubstring = exactSubstring,
             ExtraNames = extraNames,
-            ParseError = parseError,
+            ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
     }
 
@@ -1932,8 +2259,21 @@ public static class QueryCommandRunner
         return true;
     }
 
+    // Preview option validation now lives in the command-specific unsupported-option allowlists.
+    // Keep this shim so the existing call sites stay simple while the actual fail-closed logic
+    // runs through ParseArgs() + TryWriteUnsupportedOptionError().
+    // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
+    private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
+
     private static int WithDb(string dbPath, Func<DbReader, int> action)
     {
+        if (string.IsNullOrWhiteSpace(dbPath))
+        {
+            Console.Error.WriteLine("Error: --db requires a value.");
+            Console.Error.WriteLine("Hint: pass a concrete database path with `--db <path>` or omit `--db` to use `.cdidx/codeindex.db`.");
+            return CommandExitCodes.UsageError;
+        }
+
         // Allow SQLite URI forms (file:///abs/path?immutable=1 etc.) so users and AI agents
         // on read-only mounts / sandboxes can opt into the immutable read-only escape hatch
         // explicitly when the automatic DbContext fallback cannot recover. File.Exists is
@@ -1944,7 +2284,7 @@ public static class QueryCommandRunner
         if (!isUri && !File.Exists(dbPath))
         {
             Console.Error.WriteLine($"Error: database not found at {Path.GetFullPath(dbPath)}");
-            Console.Error.WriteLine("Run 'cdidx index <projectPath>' first to create the index.");
+            Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.");
             return CommandExitCodes.DatabaseError;
         }
 
@@ -1958,7 +2298,11 @@ public static class QueryCommandRunner
         }
         catch (Exception ex)
         {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
             Console.Error.WriteLine($"Error: database error: {ex.Message}");
+            Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
             Database.DbDebug.DumpToStderr(ex);
             return CommandExitCodes.DatabaseError;
         }
@@ -1973,6 +2317,102 @@ public static class QueryCommandRunner
         var lines = content.Split('\n');
         for (int i = 0; i < lines.Length; i++)
             Console.WriteLine($"  {startLine + i,4}: {lines[i]}");
+    }
+
+    private static bool TryWriteParseError(QueryCommandOptions options, string commandName)
+    {
+        if (options.ParseError == null)
+            return false;
+
+        Console.Error.WriteLine(options.ParseError);
+        Console.Error.WriteLine("Hint: fix the invalid or missing option value, then rerun with the command shape below.");
+        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        return true;
+    }
+
+    private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions)
+    {
+        var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
+        for (var i = 0; i < cmdArgs.Length; i++)
+        {
+            var arg = cmdArgs[i];
+            if (!arg.StartsWith("-", StringComparison.Ordinal))
+                continue;
+
+            var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
+                ? inlineOptionName!
+                : arg;
+
+            if (supported.Contains(normalizedArg))
+            {
+                if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
+                    i++;
+                continue;
+            }
+
+            // `--query` is parsed specially so non-find commands can emit the dedicated
+            // "only supported by 'find'" message instead of the generic unsupported-option error.
+            // `--query` は専用エラー文言を出したいので generic unsupported 判定からは外す。
+            if (normalizedArg == "--query")
+            {
+                if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
+                    i++;
+                continue;
+            }
+
+            if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
+                i++;
+
+            Console.Error.WriteLine($"Error: {arg} is not supported for {commandName}.");
+            Console.Error.WriteLine($"Hint: remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`.");
+            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryWriteUnexpectedExtraPositionals(string commandName, QueryCommandOptions options)
+    {
+        if (options.ExtraNames.Count == 0)
+            return false;
+
+        Console.Error.WriteLine($"Error: unexpected extra positional argument(s) for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
+        Console.Error.WriteLine("Hint: quote multi-word queries as a single argument, or remove the extra positional values.");
+        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        return true;
+    }
+
+    private static bool TryWriteUnexpectedPositionals(string commandName, QueryCommandOptions options)
+    {
+        var unexpected = new List<string>();
+        if (!string.IsNullOrWhiteSpace(options.Query))
+            unexpected.Add($"`{options.Query}`");
+        unexpected.AddRange(options.ExtraNames.Select(name => $"`{name}`"));
+        if (unexpected.Count == 0)
+            return false;
+
+        Console.Error.WriteLine($"Error: {commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.");
+        Console.Error.WriteLine("Hint: remove the extra positional argument(s) and use the documented flags only.");
+        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        return true;
+    }
+
+    private static string GetUsageLineOrThrow(string commandName) =>
+        ConsoleUi.GetUsageLine(commandName)
+        ?? throw new InvalidOperationException($"Missing usage line for command '{commandName}'.");
+
+    private static void WriteUsageError(string message, string usage, string hint)
+    {
+        Console.Error.WriteLine($"Error: {message}");
+        Console.Error.WriteLine($"Hint: {hint}");
+        Console.Error.WriteLine($"Usage: {usage}");
+    }
+
+    private static void WriteValidationError(string message, string hint)
+    {
+        Console.Error.WriteLine($"Error: {message}");
+        Console.Error.WriteLine($"Hint: {hint}");
     }
 
     private static void WriteRepoMapSection(string title, IEnumerable<string> rows)
@@ -2246,12 +2686,23 @@ public static class QueryCommandRunner
         };
         if (!graphAvailable)
             payload["degraded"] = true;
-        if (options.Exact)
+        if (options.Exact || options.ExactName)
             AddExactGraphJsonFields(payload, exactSignal);
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
         if (count == 0)
             AddFreshnessHint(payload, reader);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void WriteGraphZeroJsonResult(DbReader reader, string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
+        ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null)
+    {
+        var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: graphAvailable);
+        if (exactSignal != null)
+            AddExactGraphJsonFields(payload, exactSignal.Value);
+        if (exactZeroHint != null)
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, jsonOptions);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
@@ -2301,26 +2752,126 @@ public static class QueryCommandRunner
         Console.Error.WriteLine("Hint: rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
     }
 
-    private static int? ParsePositiveInt(string rawValue, string optionName)
+    private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
     {
-        if (!int.TryParse(rawValue, out var value) || value <= 0)
+        if (int.TryParse(rawValue, out value) && value > 0)
         {
-            Console.Error.WriteLine($"Error: {optionName} requires a positive integer, got '{rawValue}'");
-            return null;
+            error = null;
+            return true;
         }
 
-        return value;
+        value = 0;
+        error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
+        return false;
     }
 
-    private static int ParseNonNegativeInt(string rawValue, string optionName)
+    private static bool TryParseNonNegativeInt(string rawValue, string optionName, out int value, out string? error)
     {
-        if (!int.TryParse(rawValue, out var value) || value < 0)
+        if (int.TryParse(rawValue, out value) && value >= 0)
         {
-            Console.Error.WriteLine($"Error: {optionName} requires a non-negative integer, got '{rawValue}'");
-            return 0;
+            error = null;
+            return true;
         }
 
-        return value;
+        value = 0;
+        error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
+        return false;
+    }
+
+    private static bool TryReadRawOptionValue(string[] args, ref int index, string optionName, string? inlineValue, out string? value, out string? error)
+    {
+        if (inlineValue != null)
+        {
+            value = inlineValue;
+            error = null;
+            return true;
+        }
+
+        if (index + 1 >= args.Length)
+        {
+            value = null;
+            error = $"Error: {optionName} requires a value.";
+            return false;
+        }
+
+        value = args[++index];
+        error = null;
+        return true;
+    }
+
+    private static bool TryReadStringOptionValue(string[] args, ref int index, string optionName, string? inlineValue, bool allowSeparatedDashPrefixedLiteralValue, out string? value, out string? error)
+    {
+        if (inlineValue != null)
+        {
+            if (string.IsNullOrWhiteSpace(inlineValue))
+            {
+                value = null;
+                error = $"Error: {optionName} requires a value.";
+                return false;
+            }
+
+            value = inlineValue;
+            error = null;
+            return true;
+        }
+
+        if (index + 1 >= args.Length)
+        {
+            value = null;
+            error = $"Error: {optionName} requires a value.";
+            return false;
+        }
+
+        var candidate = args[index + 1];
+        if (optionName != "--query" && IsRejectedSeparatedStringValue(candidate, allowSeparatedDashPrefixedLiteralValue))
+        {
+            value = null;
+            error = allowSeparatedDashPrefixedLiteralValue && candidate.StartsWith("--", StringComparison.Ordinal)
+                ? $"Error: {optionName} requires a value. Hint: if the literal value starts with `--`, pass it as `{optionName}=<value>`."
+                : $"Error: {optionName} requires a value.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            value = null;
+            error = $"Error: {optionName} requires a value.";
+            return false;
+        }
+
+        index++;
+        value = candidate;
+        error = null;
+        return true;
+    }
+
+    private static bool IsRejectedSeparatedStringValue(string candidate, bool allowSeparatedDashPrefixedLiteralValue)
+    {
+        if (!candidate.StartsWith("-", StringComparison.Ordinal))
+            return false;
+
+        if (!allowSeparatedDashPrefixedLiteralValue)
+            return true;
+
+        return candidate.StartsWith("--", StringComparison.Ordinal);
+    }
+
+    private static bool IsRecognizedOptionToken(string value) =>
+        ValueTakingOptions.Contains(value) || FlagOnlyOptions.Contains(value);
+
+    private static bool TrySplitInlineOptionValue(string token, out string? optionName)
+    {
+        optionName = null;
+        var separator = token.IndexOf('=');
+        if (separator <= 0)
+            return false;
+
+        var candidate = token[..separator];
+        if (!ValueTakingOptions.Contains(candidate))
+            return false;
+
+        optionName = candidate;
+        return true;
     }
 
     // Accepted ISO 8601 formats for --since / --sinceフィルタで受け付けるISO 8601書式
@@ -2366,6 +2917,7 @@ public static class QueryCommandRunner
 public sealed class QueryCommandOptions
 {
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
+    public bool DbPathExplicit { get; init; }
     public bool Json { get; init; }
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }
@@ -2377,7 +2929,11 @@ public sealed class QueryCommandOptions
     public int? EndLine { get; init; }
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
+    public int? FocusLine { get; init; }
+    public int? FocusColumn { get; init; }
+    public int FocusLength { get; init; } = 1;
     public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
+    public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }

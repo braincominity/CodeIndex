@@ -291,6 +291,7 @@ public class DbContext : IDisposable
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
     public static string GetHotspotFamilyVersionMetaKey(string lang) => $"hotspot_family_version_{lang}";
     public static string GetHotspotFamilyMarkerFingerprintMetaKey(string lang) => $"hotspot_family_marker_fingerprint_{lang}";
+    public const string IndexedProjectRootMetaKey = "indexed_project_root";
 
     public int GetUserVersion()
     {
