@@ -419,6 +419,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude paths containing this text (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
+| `--max-line-width <n>` | `references`, `find`, `excerpt`, `inspect` | Clamp very long single-line reference/snippet/excerpt payloads around the relevant match (default: 512, max: 4096) |
 | `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
 | `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Backward-compatible shorthand. Prefer `--exact-substring` for `search`, keep `--exact` for `find`, and prefer `--exact-name` for symbol / graph commands plus `inspect`. CLI JSON and MCP `structuredContent` expose `exact_index_available` / `degraded_reason`; MCP also keeps the legacy camelCase aliases `exactIndexAvailable` / `degradedReason` for backward compatibility. |
 | `--exact-substring` | `search` | Preferred explicit name for search exactness: case-sensitive exact substring (FTS5 bypassed). |
@@ -430,6 +431,9 @@ cdidx map --path src/ --exclude-tests --json
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match |
 | `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match |
+| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt whose focused column should stay visible when `--max-line-width` clamps long single-line content; requires `--focus-column` |
+| `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content; must be within that line's length |
+| `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1; requires `--focus-column`) |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits. Prefer this after a normal commit because git history includes rename/delete paths. |
@@ -1268,6 +1272,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | 指定文字列を含むパスを除外（繰り返し指定可） |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
+| `--max-line-width <n>` | `references`, `find`, `excerpt`, `inspect` | 極端に長い1行の参照文脈・スニペット・抜粋を、関連箇所の周辺だけに切り詰める（デフォルト: 512、最大: 4096） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
 | `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | 後方互換の短縮形。`search` では `--exact-substring`、`find` では `--exact` を使い、symbol / graph 系コマンドと `inspect` では `--exact-name` を推奨。CLI JSON と MCP `structuredContent` は `exact_index_available` / `degraded_reason` を返し、MCP では後方互換の camelCase alias も維持する。 |
 | `--exact-substring` | `search` | `search` 用の推奨 explicit alias。大文字小文字を区別する完全部分一致（FTS5 バイパス）。 |
@@ -1279,6 +1284,9 @@ cdidx map --path src/ --exclude-tests --json
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数 |
 | `--after <n>` | `excerpt`, `find` | 指定範囲または一致箇所の後に追加する文脈行数 |
+| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、注目列を表示に残したい抜粋内の行。`--focus-column` 必須 |
+| `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列。対象行の長さ以内である必要があります |
+| `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1、`--focus-column` 必須） |
 | `--rebuild` | `index` | 既存DBを削除して再構築 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新。通常のコミット後はこちらを推奨。rename/delete の旧パスも git 履歴から拾える。 |
