@@ -159,6 +159,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedString_WithEscapedBraces_DoesNotLeakPhantomReference()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public string Render()
+                {
+                    return $"{{Run()}}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpInterpolatedVerbatimString_WithEscapedBraces_DoesNotLeakPhantomReference()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public string Render()
+                {
+                    return $@"{{Run()}}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored

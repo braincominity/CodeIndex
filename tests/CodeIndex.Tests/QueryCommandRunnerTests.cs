@@ -1149,6 +1149,45 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_Json_CSharpInterpolatedVerbatimStringEscapedBracesDoNotCreatePhantomReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_escaped_verbatim_braces");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "app.cs"),
+                """
+                public class App
+                {
+                    public string Render()
+                    {
+                        return $@"{{Run()}}";
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callers_zero_json_missing_graph");
@@ -4872,6 +4911,47 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
                 ["Execute", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_Json_CSharpInterpolatedVerbatimStringEscapedBracesDoNotCreatePhantomSymbols()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_escaped_verbatim_braces");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "app.cs"),
+                """
+                public class App
+                {
+                    public string Render()
+                    {
+                        return $@"{{
+                            public class Phantom
+                        }}";
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Phantom", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);

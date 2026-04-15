@@ -152,6 +152,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_InterpolatedVerbatimStringWithEscapedBraces_DoesNotLeakPhantomSymbols()
+    {
+        var content = """
+            public class FixtureHost
+            {
+                public string Render()
+                {
+                    return $@"{{
+                        public class Phantom
+                    }}";
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "FixtureHost");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Render");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Phantom");
+    }
+
+    [Fact]
     public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
     {
         var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";

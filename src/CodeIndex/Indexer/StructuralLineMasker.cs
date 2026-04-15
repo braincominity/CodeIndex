@@ -89,6 +89,16 @@ internal static class StructuralLineMasker
 
                     if (activeFrame is StringFrame stringFrame)
                     {
+                        if (stringFrame.InterpolationBraceCount == 1 && stringFrame.Kind != StringKind.Raw)
+                        {
+                            if (StartsWith(line, searchStart, "{{") || StartsWith(line, searchStart, "}}"))
+                            {
+                                ReplaceWithSpaces(masked, searchStart, 2);
+                                searchStart += 2;
+                                continue;
+                            }
+                        }
+
                         if (stringFrame.InterpolationBraceCount > 0)
                         {
                             var openBraceRun = CountRun(line, searchStart, '{');
