@@ -187,6 +187,25 @@ public class FileIndexer
         return DeriveFallbackFamilyScopeKey(relativePath);
     }
 
+    public string GetProjectMarkerFingerprint()
+    {
+        var projectMarkers = Directory
+            .EnumerateFiles(_projectRoot, "*.*proj", SearchOption.AllDirectories)
+            .Where(path =>
+            {
+                var ext = Path.GetExtension(path);
+                return ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                    || ext.Equals(".vbproj", StringComparison.OrdinalIgnoreCase)
+                    || ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase);
+            })
+            .Select(path => NormalizeScopeKey(Path.GetRelativePath(_projectRoot, path)))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        var payload = string.Join('\n', projectMarkers);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+    }
+
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
         => ".";
 

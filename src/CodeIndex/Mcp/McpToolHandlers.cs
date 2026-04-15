@@ -1208,6 +1208,7 @@ public partial class McpServer
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
         var priorHotspotFamilyVersion = db.GetMetaString(DbContext.HotspotFamilyVersionMetaKey);
+        var priorHotspotFamilyMarkerFingerprint = db.GetMetaString(DbContext.HotspotFamilyMarkerFingerprintMetaKey);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1226,6 +1227,7 @@ public partial class McpServer
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
+        var currentHotspotFamilyMarkerFingerprint = indexer.GetProjectMarkerFingerprint();
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
@@ -1290,8 +1292,11 @@ public partial class McpServer
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             var currentHotspotFamilyVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            if (skipped == 0 || priorHotspotFamilyVersion == currentHotspotFamilyVersion)
-                writer.MarkHotspotFamilyReady();
+            var canRestampHotspotFamilyTrust =
+                priorHotspotFamilyVersion == currentHotspotFamilyVersion
+                && priorHotspotFamilyMarkerFingerprint == currentHotspotFamilyMarkerFingerprint;
+            if (skipped == 0 || canRestampHotspotFamilyTrust)
+                writer.MarkHotspotFamilyReady(currentHotspotFamilyMarkerFingerprint);
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
             // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers

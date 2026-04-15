@@ -288,6 +288,7 @@ public class DbContext : IDisposable
     // hotspots family grouping 用 readiness。table の有無ではなく query 意味論の trust を表す。
     public const int HotspotFamilyVersion = 1;
     public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
+    public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
 
     public int GetUserVersion()
     {

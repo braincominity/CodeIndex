@@ -624,11 +624,12 @@ public class DbWriter
     /// stay unstamped so readers degrade to conservative same-file counting.
     /// hotspots family grouping の current authoritative version を stamp する。
     /// </summary>
-    public void MarkHotspotFamilyReady()
+    public void MarkHotspotFamilyReady(string? markerFingerprint = null)
     {
         SetMeta(
             DbContext.HotspotFamilyVersionMetaKey,
             DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, markerFingerprint);
     }
 
     /// <summary>
@@ -639,7 +640,11 @@ public class DbWriter
     /// </summary>
     public void ClearHotspotFamilyReady()
     {
+        if (!TableExists("codeindex_meta"))
+            return;
+
         SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
     }
 
     /// <summary>
@@ -656,6 +661,14 @@ public class DbWriter
         cmd.ExecuteNonQuery();
     }
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
+
+    private bool TableExists(string name)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
+        cmd.Parameters.AddWithValue("@name", name);
+        return cmd.ExecuteScalar() != null;
+    }
 
     /// <summary>
     /// True only when every existing row in symbols / symbol_references has a populated folded

@@ -1090,6 +1090,26 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RebuildFlag_SucceedsOnFreshDb()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_total").GetInt32() >= 1);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DoesNotStampFoldReadyWhenLegacyRowsRemain()
     {
         // Codex #86 review regression: on a legacy DB (pre-#86) opened by a new binary, the
@@ -1303,6 +1323,80 @@ public class IndexCommandRunnerTests
 
             using var verifyDb = new DbContext(dbPath);
             Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+
+            File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyMarkerFingerprintMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+
+            File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "Extra.csproj", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyMarkerFingerprintMetaKey));
         }
         finally
         {
