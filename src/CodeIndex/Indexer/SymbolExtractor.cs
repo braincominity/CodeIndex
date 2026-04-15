@@ -2646,7 +2646,7 @@ public static class SymbolExtractor
             while (previous >= 0 && char.IsWhiteSpace(sanitizedLine[previous]))
                 previous--;
 
-            if (previous < 0 || sanitizedLine[previous] is ';' or '{' or '}' or ':')
+            if (previous < 0 || sanitizedLine[previous] is ';' or '{' or '}')
                 return index;
 
             index++;

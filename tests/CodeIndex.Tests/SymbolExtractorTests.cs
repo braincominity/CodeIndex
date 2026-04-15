@@ -693,6 +693,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotLeakNamedClassExpressionsAfterColon()
+    {
+        var content = """
+            const pick = cond ? value : class Hidden { method() {} };
+            const obj = { field: class Inner { run() {} } };
+            class Visible { ok() {} }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ok" && s.ContainerName == "Visible");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotTreatControlFlowBlocksAsFunctions()
     {
         var content = """
@@ -1678,6 +1696,24 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenGetter");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenSetter");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotLeakNamedClassExpressionsAfterColon()
+    {
+        var content = """
+            const pick = flag ? value : class Hidden { method(): void {} };
+            const obj = { field: class Inner { run(): void {} } };
+            class Visible { ok(): void {} }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ok" && s.ContainerName == "Visible");
     }
 
     [Fact]
