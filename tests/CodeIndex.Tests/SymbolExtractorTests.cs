@@ -175,6 +175,57 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotTreatHeaderComparisonAsGenericAngleDepth()
+    {
+        var content = """
+            class Derived extends mixin(a < b ? Base : Fallback) {
+                run() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_KeepsSiblingMethodsAfterElseRegexLiteral()
+    {
+        var content = """
+            class Example {
+                first(value) {
+                    if (cond) {
+                    }
+                    else /{/.test(value);
+                }
+
+                second() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_FunctionRangeIgnoresComparisonAngleBracketsInParameters()
+    {
+        var content = """
+            function choose(value = a < b ? one : two) {
+                return value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var choose = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "choose"));
+        Assert.Equal(1, choose.StartLine);
+        Assert.Equal(3, choose.EndLine);
+        Assert.Equal(1, choose.BodyStartLine);
+        Assert.Equal(3, choose.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
     {
         var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
@@ -277,6 +328,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DoesNotTreatHeaderComparisonAsGenericAngleDepth()
+    {
+        var content = """
+            export class Derived extends mixin(a < b ? Base : Fallback) {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_FunctionRangeIgnoresComparisonAngleBracketsInParameters()
+    {
+        var content = """
+            function choose(value = a < b ? one : two): Result {
+                return value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var choose = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "choose"));
+        Assert.Equal(1, choose.StartLine);
+        Assert.Equal(3, choose.EndLine);
+        Assert.Equal(1, choose.BodyStartLine);
+        Assert.Equal(3, choose.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_TypeScript_KeepsSiblingMethodsAfterWrappedControlFlowRegexLiterals()
     {
         var content = """
@@ -303,6 +385,26 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_KeepsSiblingMethodsAfterElseRegexLiteral()
+    {
+        var content = """
+            export class Example {
+                first(value: string): void {
+                    if (cond) {
+                    }
+                    else /{/.test(value);
+                }
+
+                second(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
     }
 
     [Fact]

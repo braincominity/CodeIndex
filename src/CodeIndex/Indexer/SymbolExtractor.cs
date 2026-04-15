@@ -871,8 +871,7 @@ public static class SymbolExtractor
 
         if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Identifier)
         {
-            return state.PreviousIdentifier is
-                "return" or "throw" or "case" or "delete" or "typeof" or "void" or "new" or "in" or "of" or "instanceof" or "yield" or "await";
+            return IsJavaScriptRegexPrefixKeyword(state.PreviousIdentifier);
         }
 
         if (state.PreviousTokenKind == JavaScriptPrevTokenKind.CloseParen)
@@ -884,6 +883,13 @@ public static class SymbolExtractor
     private static bool IsJavaScriptControlFlowKeyword(string identifier)
     {
         return identifier is "if" or "for" or "while" or "switch" or "catch" or "with";
+    }
+
+    private static bool IsJavaScriptRegexPrefixKeyword(string? identifier)
+    {
+        return identifier is
+            "return" or "throw" or "case" or "delete" or "typeof" or "void" or "new" or
+            "in" or "of" or "instanceof" or "yield" or "await" or "else";
     }
 
     private static int SkipJavaScriptRegexLiteral(string line, char[] sanitized, int slashIndex)
@@ -957,7 +963,7 @@ public static class SymbolExtractor
     {
         return bodyStyle switch
         {
-            BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex),
+            BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang),
             BodyStyle.Brace => FindBraceRange(lines, startIndex),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
@@ -965,7 +971,7 @@ public static class SymbolExtractor
         };
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex, string? lang)
     {
         var depth = 0;
         var opened = false;
@@ -1010,7 +1016,8 @@ public static class SymbolExtractor
 
                     if (ch == '<')
                     {
-                        angleDepth++;
+                        if (lang == "typescript" && parenDepth == 0 && bracketDepth == 0)
+                            angleDepth++;
                         continue;
                     }
 
