@@ -2152,6 +2152,14 @@ public class McpServerTests : IDisposable
         Assert.True(csharp["graph_queries"]!.GetValue<bool>());
         Assert.Contains(".cs", csharp["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
 
+        var javascript = languages.First(l => l!["lang"]!.GetValue<string>() == "javascript")!;
+        Assert.Contains(".cjs", javascript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains(".mjs", javascript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+
+        var typescript = languages.First(l => l!["lang"]!.GetValue<string>() == "typescript")!;
+        Assert.Contains(".cts", typescript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains(".mts", typescript["extensions"]!.AsArray().Select(e => e!.GetValue<string>()));
+
         // Verify a detection-only language / 検出のみの言語を検証
         var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
         Assert.False(markdown["symbol_extraction"]!.GetValue<bool>());

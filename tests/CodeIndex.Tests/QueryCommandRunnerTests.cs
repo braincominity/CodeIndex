@@ -308,6 +308,25 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain("Warning: unknown option", stderr);
     }
 
+    [Fact]
+    public void RunLanguages_JsonListsModernNodeModuleExtensions()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var javascript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "javascript");
+        var typescript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "typescript");
+
+        Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]

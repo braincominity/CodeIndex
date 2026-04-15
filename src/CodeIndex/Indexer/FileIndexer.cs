@@ -15,7 +15,11 @@ public class FileIndexer
     {
         [".py"]     = "python",
         [".js"]     = "javascript",
+        [".cjs"]    = "javascript",
+        [".mjs"]    = "javascript",
         [".ts"]     = "typescript",
+        [".cts"]    = "typescript",
+        [".mts"]    = "typescript",
         [".jsx"]    = "javascript",
         [".tsx"]    = "typescript",
         [".rb"]     = "ruby",
