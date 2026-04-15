@@ -420,9 +420,10 @@ public partial class DbReader
     /// Search indexed references such as call sites.
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
-    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         if (!_hasReferencesTable) return new List<ReferenceResult>();
+        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         using var cmd = _conn.CreateCommand();
 
         var sql = @"
@@ -485,6 +486,9 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var column = reader.GetInt32(5);
+            var context = reader.GetString(6);
+            var clampedContext = LineWidthFormatter.ClampLine(context, maxLineWidth, column, query?.Length ?? 1);
             results.Add(new ReferenceResult
             {
                 Path = reader.GetString(0),
@@ -492,8 +496,9 @@ public partial class DbReader
                 SymbolName = reader.GetString(2),
                 ReferenceKind = reader.GetString(3),
                 Line = reader.GetInt32(4),
-                Column = reader.GetInt32(5),
-                Context = reader.GetString(6),
+                Column = column,
+                Context = clampedContext.Text,
+                ContextTruncated = clampedContext.Truncated,
                 ContainerKind = GetNullableString(reader, 7),
                 ContainerName = GetNullableString(reader, 8),
             });
@@ -1336,13 +1341,14 @@ public partial class DbReader
     /// Find literal substring matches inside path-scoped indexed files.
     /// path で絞ったインデックス済みファイル内でリテラル部分文字列一致を探す。
     /// </summary>
-    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false)
+    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
             return [];
 
         before = Math.Max(0, before);
         after = Math.Max(0, after);
+        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         using var fileCmd = _conn.CreateCommand();
@@ -1388,6 +1394,14 @@ public partial class DbReader
                     if (matchColumn < 0)
                         break;
 
+                    var snippetLines = snippetLineNumbers.Select(line => lineMap[line]).ToList();
+                    var clampedSnippet = LineWidthFormatter.ClampLines(
+                        snippetLines,
+                        maxLineWidth,
+                        focusLineIndex: snippetLineNumbers.IndexOf(lineNumber),
+                        focusColumn: matchColumn + 1,
+                        focusLength: query.Length);
+
                     results.Add(new FileFindResult
                     {
                         Path = path,
@@ -1396,7 +1410,8 @@ public partial class DbReader
                         Column = matchColumn + 1,
                         StartLine = snippetLineNumbers[0],
                         EndLine = snippetLineNumbers[^1],
-                        Snippet = string.Join("\n", snippetLineNumbers.Select(line => lineMap[line])),
+                        Snippet = clampedSnippet.Text,
+                        SnippetTruncated = clampedSnippet.Truncated,
                     });
 
                     searchStart = matchColumn + 1;
@@ -1471,7 +1486,7 @@ public partial class DbReader
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>
-    public FileExcerptResult? GetExcerpt(string path, int startLine, int endLine, int before = 0, int after = 0)
+    public FileExcerptResult? GetExcerpt(string path, int startLine, int endLine, int before = 0, int after = 0, int? maxLineWidth = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
@@ -1496,13 +1511,19 @@ public partial class DbReader
         if (selectedLines.Count == 0)
             return null;
 
+        var contentLines = selectedLines.Select(line => lineMap[line]).ToList();
+        var clampedContent = maxLineWidth.HasValue
+            ? LineWidthFormatter.ClampLines(contentLines, maxLineWidth.Value)
+            : new ClampedTextResult(string.Join("\n", contentLines), false);
+
         return new FileExcerptResult
         {
             Path = path,
             Lang = lang,
             StartLine = selectedLines[0],
             EndLine = selectedLines[^1],
-            Content = string.Join("\n", selectedLines.Select(line => lineMap[line])),
+            Content = clampedContent.Text,
+            ContentTruncated = clampedContent.Truncated,
         };
     }
 

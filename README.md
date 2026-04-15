@@ -418,6 +418,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude paths containing this text (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
+| `--max-line-width <n>` | `references`, `find`, `excerpt`, `inspect` | Clamp very long single-line reference/snippet/excerpt payloads around the relevant match (default: 512, max: 4096) |
 | `--fts` | `search` | Use raw FTS5 query syntax instead of literal-safe quoting |
 | `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Backward-compatible shorthand. Prefer `--exact-substring` for `search`, keep `--exact` for `find`, and prefer `--exact-name` for symbol / graph commands plus `inspect`. JSON and MCP degraded-state metadata remain `exact_index_available` / `degraded_reason` (plus legacy camelCase aliases in MCP). |
 | `--exact-substring` | `search` | Preferred explicit name for search exactness: case-sensitive exact substring (FTS5 bypassed). |
@@ -1265,6 +1266,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | 指定文字列を含むパスを除外（繰り返し指定可） |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
+| `--max-line-width <n>` | `references`, `find`, `excerpt`, `inspect` | 極端に長い1行の参照文脈・スニペット・抜粋を、関連箇所の周辺だけに切り詰める（デフォルト: 512、最大: 4096） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う |
 | `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | 後方互換の短縮形。`search` では `--exact-substring`、`find` では `--exact` を使い、symbol / graph 系コマンドと `inspect` では `--exact-name` を推奨。JSON / MCP の縮退メタデータは従来どおり `exact_index_available` / `degraded_reason`（MCP は camelCase alias も維持）。 |
 | `--exact-substring` | `search` | `search` 用の推奨 explicit alias。大文字小文字を区別する完全部分一致（FTS5 バイパス）。 |

@@ -90,6 +90,9 @@ public partial class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
+    private static int ClampMaxLineWidth(JsonNode? args, string propertyName = "maxLineWidth") =>
+        LineWidthFormatter.ClampMaxLineWidth(args?[propertyName]?.GetValue<int>() ?? LineWidthFormatter.DefaultMaxLineWidth);
+
     private static List<string> ReadStringList(JsonNode? args, string propertyName)
     {
         return args?[propertyName] is JsonArray array
@@ -273,6 +276,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var maxLineWidth = ClampMaxLineWidth(args);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -421,6 +425,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var maxLineWidth = ClampMaxLineWidth(args);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -429,7 +434,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
@@ -443,6 +448,7 @@ public partial class McpServer
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
+                ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
@@ -661,6 +667,7 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var lang = args?["lang"]?.GetValue<string>();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
+        var maxLineWidth = ClampMaxLineWidth(args);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -669,12 +676,13 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
+            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             AddExactSignalAliases(structured);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
+            structured["maxLineWidth"] = maxLineWidth;
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
@@ -765,10 +773,11 @@ public partial class McpServer
 
         var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
         var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var maxLineWidth = ClampMaxLineWidth(args);
 
         return WithDbReader(id, reader =>
         {
-            var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after);
+            var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after, maxLineWidth);
             if (excerpt == null)
             {
                 var emptyPayload = new JsonObject
@@ -781,6 +790,7 @@ public partial class McpServer
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            payload["maxLineWidth"] = maxLineWidth;
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
@@ -803,11 +813,12 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
         var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var maxLineWidth = ClampMaxLineWidth(args);
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact);
+            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth);
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -815,6 +826,7 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["before"] = before,
                 ["after"] = after,
+                ["maxLineWidth"] = maxLineWidth,
                 ["exact"] = exact,
                 ["count"] = results.Count,
                 ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),

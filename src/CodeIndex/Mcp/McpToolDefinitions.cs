@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Mcp;
 
@@ -76,6 +77,7 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line context payloads per result (default: 512)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 1, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
@@ -179,7 +181,8 @@ public partial class McpServer
                         ["startLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Start line (1-based)" },
                         ["endLine"] = new JsonObject { ["type"] = "integer", ["description"] = "End line (default: startLine)" },
                         ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines before the range", ["default"] = 0 },
-                        ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines after the range", ["default"] = 0 }
+                        ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines after the range", ["default"] = 0 },
+                        ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line excerpt payloads per line (default: 512)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 1, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth }
                     },
                     ["required"] = new JsonArray { "path", "startLine" }
                 },
@@ -200,6 +203,7 @@ public partial class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines before the match (default: 0)", ["default"] = 0, ["minimum"] = 0 },
                         ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines after the match (default: 0)", ["default"] = 0, ["minimum"] = 0 },
+                        ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line snippets per line (default: 512)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 1, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive literal substring match. Default is case-insensitive literal substring matching.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query", "path" }
@@ -233,6 +237,7 @@ public partial class McpServer
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max items per section (default: 10)", ["default"] = 10 },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["includeBody"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include body content in definitions when available", ["default"] = false },
+                        ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp bundled reference context lines so single-line files stay bounded (default: 512)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 1, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },

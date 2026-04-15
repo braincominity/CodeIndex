@@ -1775,6 +1775,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Excerpt_ClampsLongSingleLineContent()
+    {
+        InsertIndexedFile("dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data.txt","startLine":1,"endLine":1,"maxLineWidth":96}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.DoesNotContain(new string('a', 320) + "TARGET" + new string('b', 320), structured["content"]!.GetValue<string>());
+        Assert.True(structured["content"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_FindInFile_ReturnsLiteralMatchesWithContext()
     {
         InsertIndexedFile("src/Auth.cs", "csharp",
@@ -1799,6 +1814,68 @@ public class McpServerTests : IDisposable
         Assert.Equal(2, result["startLine"]!.GetValue<int>());
         Assert.Equal(4, result["endLine"]!.GetValue<int>());
         Assert.Contains("void Guard()", result["snippet"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_ClampsLongSingleLineSnippet()
+    {
+        InsertIndexedFile("dist/search.txt", "text", new string('a', 320) + "target" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search.txt","maxLineWidth":96,"exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.True(result["snippetTruncated"]!.GetValue<bool>());
+        Assert.Contains("target", result["snippet"]!.GetValue<string>());
+        Assert.True(result["snippet"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_ClampsBundledReferenceContext()
+    {
+        InsertIndexedFile("src/target.js", "javascript",
+            """
+            function target() {
+              return true;
+            }
+            """);
+        var longLine = "const x = 0; " + new string('a', 320) + " target(); " + new string('b', 320);
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "dist/bundle.js",
+            Lang = "javascript",
+            Size = longLine.Length,
+            Lines = 1,
+            Modified = new DateTime(2024, 1, 1),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks([
+            new ChunkRecord { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = longLine }
+        ]);
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "target",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = longLine.IndexOf("target", StringComparison.Ordinal) + 1,
+                Context = longLine,
+            }
+        ]);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","lang":"javascript","maxLineWidth":96}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var firstReference = structured["references"]![0]!;
+
+        Assert.True(firstReference["contextTruncated"]!.GetValue<bool>());
+        Assert.Contains("target()", firstReference["context"]!.GetValue<string>());
+        Assert.True(firstReference["context"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
     }
 
     [Fact]

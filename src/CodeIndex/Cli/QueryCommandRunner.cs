@@ -19,7 +19,7 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
-    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
@@ -213,13 +213,13 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: references requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name]");
+            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
@@ -622,7 +622,7 @@ public static class QueryCommandRunner
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: excerpt requires a path argument");
-            Console.Error.WriteLine("Usage: cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]");
+            Console.Error.WriteLine("Usage: cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--db <path>] [--json]");
             return CommandExitCodes.UsageError;
         }
 
@@ -641,7 +641,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var excerpt = reader.GetExcerpt(options.Query, options.StartLine.Value, endLine, options.ContextBefore, options.ContextAfter);
+            var excerpt = reader.GetExcerpt(options.Query, options.StartLine.Value, endLine, options.ContextBefore, options.ContextAfter, options.MaxLineWidth);
             if (excerpt == null)
             {
                 if (!options.Json)
@@ -703,7 +703,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact);
+            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
             if (results.Count == 0)
             {
                 if (options.CountOnly)
@@ -776,7 +776,7 @@ public static class QueryCommandRunner
     {
         HashSet<string> allowedWithValues =
         [
-            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after", "--query"
+            "--db", "--limit", "--top", "--lang", "--path", "--exclude-path", "--before", "--after", "--max-line-width", "--query"
         ];
         HashSet<string> allowedFlags =
         [
@@ -792,7 +792,7 @@ public static class QueryCommandRunner
                 if (i + 1 >= args.Length)
                     return $"Error: {arg} requires a value";
                 var value = args[i + 1];
-                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
+                if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
@@ -936,13 +936,13 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: inspect requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]");
+            Console.Error.WriteLine("Usage: cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options.DbPath, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var exactSignal = exact && analysis.ExactIndexAvailable.HasValue
                 ? new ExactQuerySignal(
                     analysis.ExactIndexAvailable.Value,
@@ -1691,6 +1691,7 @@ public static class QueryCommandRunner
         int contextBefore = 0;
         int contextAfter = 0;
         int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
+        int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         var pathPatterns = new List<string>();
         var excludePaths = new List<string>();
         bool excludeTests = false;
@@ -1807,6 +1808,9 @@ public static class QueryCommandRunner
                 case "--snippet-lines" when i + 1 < args.Length:
                     snippetLines = SearchSnippetFormatter.ClampSnippetLines(ParsePositiveInt(args[++i], "--snippet-lines") ?? SearchSnippetFormatter.DefaultSnippetLines);
                     break;
+                case "--max-line-width" when i + 1 < args.Length:
+                    maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(ParsePositiveInt(args[++i], "--max-line-width") ?? LineWidthFormatter.DefaultMaxLineWidth);
+                    break;
                 default:
                     if (args[i].StartsWith('-'))
                     {
@@ -1840,6 +1844,7 @@ public static class QueryCommandRunner
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
             SnippetLines = snippetLines,
+            MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
             ExcludePaths = excludePaths,
             ExcludeTests = excludeTests,
@@ -2311,6 +2316,7 @@ public sealed class QueryCommandOptions
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
     public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
+    public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }

@@ -3575,4 +3575,44 @@ public class DbReaderTests : IDisposable
         Assert.Equal(7, sym.StartLine);
         Assert.Equal(7, sym.EndLine);
     }
+
+    [Fact]
+    public void SearchReferences_ClampsLongSingleLineContextAroundMatch()
+    {
+        var longLine = "const x = 0; " + new string('a', 320) + " target(); " + new string('b', 320);
+        InsertIndexedFile("dist/app.js", "javascript", longLine);
+
+        var result = Assert.Single(_reader.SearchReferences("target", limit: 1, maxLineWidth: 96));
+
+        Assert.True(result.ContextTruncated);
+        Assert.Contains("target()", result.Context);
+        Assert.True(result.Context.Length <= 96);
+    }
+
+    [Fact]
+    public void GetExcerpt_ClampsLongSingleLineContent()
+    {
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("dist/data.txt", "text", longLine);
+
+        var excerpt = _reader.GetExcerpt("dist/data.txt", 1, 1, maxLineWidth: 96);
+
+        Assert.NotNull(excerpt);
+        Assert.True(excerpt!.ContentTruncated);
+        Assert.DoesNotContain(longLine, excerpt.Content);
+        Assert.True(excerpt.Content.Length <= 96);
+    }
+
+    [Fact]
+    public void FindInFiles_ClampsLongSingleLineSnippetAroundMatch()
+    {
+        var longLine = new string('a', 320) + "target" + new string('b', 320);
+        InsertIndexedFile("dist/search.txt", "text", longLine);
+
+        var result = Assert.Single(_reader.FindInFiles("target", 1, pathPatterns: ["dist/search.txt"], exact: true, maxLineWidth: 96));
+
+        Assert.True(result.SnippetTruncated);
+        Assert.Contains("target", result.Snippet);
+        Assert.True(result.Snippet.Length <= 96);
+    }
 }
