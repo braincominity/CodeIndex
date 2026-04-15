@@ -286,7 +286,7 @@ public class DbContext : IDisposable
     // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
     // low-level table availability.
     // hotspots family grouping 用 readiness。table の有無ではなく query 意味論の trust を表す。
-    public const int HotspotFamilyVersion = 1;
+    public const int HotspotFamilyVersion = 2;
     public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
     public static string GetHotspotFamilyVersionMetaKey(string lang) => $"hotspot_family_version_{lang}";

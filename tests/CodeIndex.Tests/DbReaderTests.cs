@@ -1480,6 +1480,83 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_StaleVersionOneMarkerlessFamiliesDegradeAndDoNotMerge()
+    {
+        InsertIndexedFile("projA/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """,
+            familyScopeKey: ".");
+        InsertIndexedFile("projA/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """,
+            familyScopeKey: ".");
+        InsertIndexedFile("projB/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """,
+            familyScopeKey: ".");
+        InsertIndexedFile("projB/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """,
+            familyScopeKey: ".");
+
+        _writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), "1");
+        _writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), "stale-v1");
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("csharp", signal.DegradedReason);
+
+        var runs = reader.GetSymbolHotspots(
+                limit: 10,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["projA/", "projB/"],
+                excludePathPatterns: null,
+                excludeTests: false)
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(2, runs.Count);
+        Assert.StartsWith("projA/src/Api.Part", runs[0].Symbol.Path, StringComparison.Ordinal);
+        Assert.Equal(1, runs[0].ReferenceCount);
+        Assert.StartsWith("projB/src/Api.Part", runs[1].Symbol.Path, StringComparison.Ordinal);
+        Assert.Equal(1, runs[1].ReferenceCount);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_DoesNotPromoteSameFileDifferentContainersToGlobalCounts()
     {
         InsertIndexedFile("src/Duplicate.cs", "csharp",
