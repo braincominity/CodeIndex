@@ -586,32 +586,39 @@ public partial class DbReader
     /// <summary>
     /// Find symbols with the most references (hotspots — heavily used code).
     /// Counts total reference volume across the codebase for names that stay unambiguous within
-    /// the active language/kind candidate set. Path and test filters only decide which symbol rows
-    /// are returned, not whether a name is considered globally ambiguous. When multiple targets
-    /// still share the same name across different file/container groups, falls back to same-file
-    /// counting; same-file duplicate rows within one container group are collapsed because
-    /// bare-name references cannot disambiguate the true target symbol.
+    /// the active language/kind candidate set. Path and test filters only decide which logical
+    /// target rows are returned, not whether a name is considered globally ambiguous. When
+    /// multiple logical targets still share the same name, falls back to conservative in-target
+    /// file counts; rows that collapse to one logical target family (same container or top-level
+    /// file) are grouped because bare-name references cannot disambiguate the true target symbol.
     /// 最も多く参照されるシンボルを検索する（ホットスポット — 多用されるコード）。
     /// active な言語/種別候補集合の中で名前が曖昧でないシンボルは codebase 全体の参照数を数える。
-    /// path/test フィルタは返す行だけを絞り、名前の曖昧性判定には使わない。
-    /// 異なる file/container group に同名定義が残る場合は bare-name 参照で真の対象を特定できないため
-    /// same-file カウントへフォールバックし、同一 container group 内の重複行は 1 行に集約する。
+    /// path/test フィルタは返す logical target 行だけを絞り、名前の曖昧性判定には使わない。
+    /// 複数の logical target が同名を共有する場合は bare-name 参照で真の対象を特定できないため
+    /// 保守的な in-target file 件数へフォールバックし、1 つの logical target family に収まる行は集約する。
     /// </summary>
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
         // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
         // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
-        // back to codebase-wide counting. If every definition with that name collapses to one
-        // file/container group, treat it like one overload family and keep cross-file counts.
+        // back to codebase-wide counting. Logical targets are container-scoped when a
+        // container name exists (partial classes / overload families can span files) and
+        // file-scoped only for top-level symbols without a container.
         // 曖昧性は path 非依存の候補集合で判定し、`--path` で隠れた重複定義が一意扱いに
-        // 戻ってしまうことを防ぐ。同名定義が 1 つの file/container group に収まるなら、
-        // 1 つの overload family とみなして cross-file 集計を維持する。
+        // 戻ってしまうことを防ぐ。logical target は container があれば container 単位、
+        // 無ければ top-level symbol として file 単位で扱うため、partial class や overload family
+        // はファイルをまたいでも 1 つの family とみなせる。
         var sql = $@"
             WITH all_candidate_symbols AS (
                 SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
-                       {GetSymbolColumnSql("container_name")} AS container_name
+                       {GetSymbolColumnSql("container_name")} AS container_name,
+                       CASE
+                           WHEN COALESCE({GetSymbolColumnSql("container_name")}, '') <> ''
+                               THEN 'container|' || {GetSymbolColumnSql("container_name")}
+                           ELSE 'file|' || CAST(s.file_id AS TEXT)
+                       END AS logical_target_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')";
@@ -630,7 +637,7 @@ public partial class DbReader
             name_cardinality AS (
                 SELECT name,
                        COUNT(*) AS defs,
-                       COUNT(DISTINCT CAST(file_id AS TEXT) || '|' || COALESCE(container_name, '')) AS target_groups
+                       COUNT(DISTINCT logical_target_key) AS target_groups
                 FROM all_candidate_symbols
                 GROUP BY name
             ),
@@ -656,11 +663,11 @@ public partial class DbReader
             ),
             grouped_candidates AS (
                 SELECT MIN(id) AS symbol_id,
-                       file_id,
                        name,
                        kind,
-                       path,
-                       lang,
+                       MIN(file_id) AS representative_file_id,
+                       MIN(path) AS path,
+                       MIN(lang) AS lang,
                        MIN(line) AS line,
                        CASE
                            WHEN COUNT(DISTINCT COALESCE(visibility, '')) = 1 THEN MIN(visibility)
@@ -669,9 +676,10 @@ public partial class DbReader
                        CASE
                            WHEN COUNT(DISTINCT COALESCE(container_name, '')) = 1 THEN MIN(container_name)
                            ELSE NULL
-                       END AS container_name
+                       END AS container_name,
+                       logical_target_key
                 FROM filtered_candidates
-                GROUP BY file_id, name, kind, path, lang, COALESCE(container_name, '')
+                GROUP BY logical_target_key, name, kind
             ),
             reference_counts AS (
                 SELECT gc.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
@@ -679,7 +687,12 @@ public partial class DbReader
                 JOIN name_cardinality nc ON nc.name = gc.name
                 JOIN symbol_references sr
                   ON sr.symbol_name = gc.name
-                 AND (nc.defs = 1 OR nc.target_groups = 1 OR sr.file_id = gc.file_id)
+                LEFT JOIN filtered_candidates fc
+                  ON fc.logical_target_key = gc.logical_target_key
+                 AND fc.name = gc.name
+                 AND fc.kind = gc.kind
+                 AND fc.file_id = sr.file_id
+                WHERE nc.defs = 1 OR nc.target_groups = 1 OR fc.id IS NOT NULL
                 GROUP BY gc.symbol_id
             )
             SELECT gc.name, rc.ref_count,

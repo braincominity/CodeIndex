@@ -949,6 +949,48 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_KeepsCrossFileCountsForPartialClassOverloadFamily()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("Api", run.Symbol.ContainerName);
+        Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_CollapsesSameFileDuplicateNames()
     {
         InsertIndexedFile("src/duplicate_names.py", "python",
