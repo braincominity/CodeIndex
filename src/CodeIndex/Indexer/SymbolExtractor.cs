@@ -670,7 +670,7 @@ public static class SymbolExtractor
         var stack = new Stack<SymbolRecord>();
         foreach (var symbol in ordered)
         {
-            while (stack.Count > 0 && symbol.StartLine > stack.Peek().EndLine)
+            while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
             while (stack.Count > 0 && !ContainsSymbol(stack.Peek(), symbol))
@@ -681,6 +681,7 @@ public static class SymbolExtractor
                 var container = stack.Peek();
                 symbol.ContainerKind = container.Kind;
                 symbol.ContainerName = container.Name;
+                symbol.ContainerQualifiedName = BuildQualifiedContainerName(stack);
             }
 
             if (CanContainSymbols(symbol))
@@ -688,16 +689,35 @@ public static class SymbolExtractor
         }
     }
 
+    private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)
+    {
+        var names = containers
+            .Reverse()
+            .Select(container => container.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+
+        return names.Count > 0
+            ? string.Join(".", names)
+            : null;
+    }
+
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
         if (!ContainerKinds.Contains(symbol.Kind))
             return false;
+
+        if (IsFileScopedNamespace(symbol))
+            return true;
 
         return symbol.BodyStartLine != null && symbol.BodyEndLine != null;
     }
 
     private static bool ContainsSymbol(SymbolRecord container, SymbolRecord candidate)
     {
+        if (IsFileScopedNamespace(container))
+            return candidate.StartLine > container.StartLine;
+
         if (container.BodyStartLine == null || container.BodyEndLine == null)
             return false;
 
@@ -705,6 +725,11 @@ public static class SymbolExtractor
             && candidate.StartLine <= container.BodyEndLine
             && candidate.StartLine > container.StartLine;
     }
+
+    private static bool IsFileScopedNamespace(SymbolRecord symbol) =>
+        symbol.Kind == "namespace" &&
+        symbol.BodyStartLine == null &&
+        symbol.BodyEndLine == null;
 
     private static int CountIndent(string line)
     {

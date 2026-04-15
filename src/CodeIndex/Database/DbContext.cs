@@ -364,6 +364,7 @@ public class DbContext : IDisposable
                 signature       TEXT,
                 container_kind  TEXT,
                 container_name  TEXT,
+                container_qualified_name TEXT,
                 visibility      TEXT,
                 return_type     TEXT
             )");
@@ -413,6 +414,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "signature", "TEXT");
         EnsureColumn("symbols", "container_kind", "TEXT");
         EnsureColumn("symbols", "container_name", "TEXT");
+        EnsureColumn("symbols", "container_qualified_name", "TEXT");
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
@@ -563,6 +565,7 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "signature", "TEXT");
             EnsureColumn("symbols", "container_kind", "TEXT");
             EnsureColumn("symbols", "container_name", "TEXT");
+            EnsureColumn("symbols", "container_qualified_name", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");

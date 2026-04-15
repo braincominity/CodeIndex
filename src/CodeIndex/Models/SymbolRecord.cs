@@ -39,6 +39,9 @@ public class SymbolRecord
     /// <summary>Enclosing symbol name when known / 親シンボル名</summary>
     public string? ContainerName { get; set; }
 
+    /// <summary>Qualified enclosing symbol path when known / 修飾付き親シンボル経路</summary>
+    public string? ContainerQualifiedName { get; set; }
+
     /// <summary>Visibility or export-like modifier when known / 可視性または公開修飾子</summary>
     public string? Visibility { get; set; }
 

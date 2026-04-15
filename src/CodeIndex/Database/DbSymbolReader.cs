@@ -600,23 +600,26 @@ public partial class DbReader
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
+        var containerNameSql = GetSymbolColumnSql("container_name");
+        var containerKindSql = GetSymbolColumnSql("container_kind");
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql);
         // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
         // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
-        // back to codebase-wide counting. Logical targets are container-scoped when a
-        // container name exists (partial classes / overload families can span files) and
-        // file-scoped only for top-level symbols without a container.
+        // back to codebase-wide counting. Logical targets are keyed by qualified container
+        // identity when present so namespace siblings and partial-class families stay
+        // separate, and file-scoped only for top-level symbols without a container.
         // 曖昧性は path 非依存の候補集合で判定し、`--path` で隠れた重複定義が一意扱いに
-        // 戻ってしまうことを防ぐ。logical target は container があれば container 単位、
-        // 無ければ top-level symbol として file 単位で扱うため、partial class や overload family
-        // はファイルをまたいでも 1 つの family とみなせる。
+        // 戻ってしまうことを防ぐ。logical target は qualified container identity があれば
+        // それを使って namespace 兄弟や partial class family を分離し、無ければ top-level symbol
+        // として file 単位で扱う。
         var sql = $@"
             WITH all_candidate_symbols AS (
                 SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
-                       {GetSymbolColumnSql("container_name")} AS container_name,
+                       {containerNameSql} AS container_name,
                        CASE
-                           WHEN COALESCE({GetSymbolColumnSql("container_name")}, '') <> ''
-                               THEN 'container|' || {GetSymbolColumnSql("container_name")}
+                           WHEN COALESCE({containerQualifiedNameSql}, '') <> ''
+                               THEN 'container|' || COALESCE({containerKindSql}, '') || '|' || COALESCE(f.lang, '') || '|' || {containerQualifiedNameSql}
                            ELSE 'file|' || CAST(s.file_id AS TEXT)
                        END AS logical_target_key
                 FROM symbols s
@@ -665,10 +668,14 @@ public partial class DbReader
                 SELECT MIN(id) AS symbol_id,
                        name,
                        kind,
-                       MIN(file_id) AS representative_file_id,
-                       MIN(path) AS path,
-                       MIN(lang) AS lang,
-                       MIN(line) AS line,
+                       logical_target_key
+                FROM filtered_candidates
+                GROUP BY logical_target_key, name, kind
+            ),
+            grouped_metadata AS (
+                SELECT logical_target_key,
+                       name,
+                       kind,
                        CASE
                            WHEN COUNT(DISTINCT COALESCE(visibility, '')) = 1 THEN MIN(visibility)
                            ELSE NULL
@@ -676,30 +683,46 @@ public partial class DbReader
                        CASE
                            WHEN COUNT(DISTINCT COALESCE(container_name, '')) = 1 THEN MIN(container_name)
                            ELSE NULL
-                       END AS container_name,
-                       logical_target_key
+                       END AS container_name
                 FROM filtered_candidates
                 GROUP BY logical_target_key, name, kind
             ),
-            reference_counts AS (
-                SELECT gc.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
+            grouped_rows AS (
+                SELECT gc.symbol_id,
+                       gc.name,
+                       gc.kind,
+                       fc.path,
+                       fc.lang,
+                       fc.line,
+                       gm.visibility,
+                       gm.container_name,
+                       gc.logical_target_key
                 FROM grouped_candidates gc
-                JOIN name_cardinality nc ON nc.name = gc.name
+                JOIN filtered_candidates fc ON fc.id = gc.symbol_id
+                JOIN grouped_metadata gm
+                  ON gm.logical_target_key = gc.logical_target_key
+                 AND gm.name = gc.name
+                 AND gm.kind = gc.kind
+            ),
+            reference_counts AS (
+                SELECT gr.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
+                FROM grouped_rows gr
+                JOIN name_cardinality nc ON nc.name = gr.name
                 JOIN symbol_references sr
-                  ON sr.symbol_name = gc.name
+                  ON sr.symbol_name = gr.name
                 LEFT JOIN filtered_candidates fc
-                  ON fc.logical_target_key = gc.logical_target_key
-                 AND fc.name = gc.name
-                 AND fc.kind = gc.kind
+                  ON fc.logical_target_key = gr.logical_target_key
+                 AND fc.name = gr.name
+                 AND fc.kind = gr.kind
                  AND fc.file_id = sr.file_id
                 WHERE nc.defs = 1 OR nc.target_groups = 1 OR fc.id IS NOT NULL
-                GROUP BY gc.symbol_id
+                GROUP BY gr.symbol_id
             )
-            SELECT gc.name, rc.ref_count,
-                   gc.kind, gc.path, gc.lang, gc.line,
-                   gc.visibility, gc.container_name
-            FROM grouped_candidates gc
-            JOIN reference_counts rc ON rc.symbol_id = gc.symbol_id
+            SELECT gr.name, rc.ref_count,
+                   gr.kind, gr.path, gr.lang, gr.line,
+                   gr.visibility, gr.container_name
+            FROM grouped_rows gr
+            JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
             ORDER BY rc.ref_count DESC
             LIMIT @limit";
 
