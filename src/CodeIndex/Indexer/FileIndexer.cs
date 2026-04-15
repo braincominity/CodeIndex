@@ -159,7 +159,10 @@ public class FileIndexer
 
         // Fall back to exact file name matching / ファイル名の完全一致で言語を検出
         var fileName = Path.GetFileName(filePath);
-        return FileNameMap.TryGetValue(fileName, out var nameLang) ? nameLang : null;
+        if (FileNameMap.TryGetValue(fileName, out var nameLang))
+            return nameLang;
+
+        return TryDetectLanguageFromShebang(filePath);
     }
 
     /// <summary>
@@ -196,9 +199,8 @@ public class FileIndexer
                     continue;
 
                 // Include files with a known extension or known filename
-                // 既知の拡張子または既知のファイル名のファイルを含める
-                var ext = Path.GetExtension(file);
-                if (LangMap.ContainsKey(ext) || FileNameMap.ContainsKey(fileName))
+                // 既知の拡張子・既知ファイル名・認識済み shebang のファイルを含める
+                if (DetectLanguage(file) != null)
                     results.Add(file);
             }
 
@@ -375,4 +377,89 @@ public class FileIndexer
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    /// <summary>
+    /// Try to infer a language from an extensionless script shebang.
+    /// This is a cheap fallback used only after extension and exact-filename checks fail.
+    /// 拡張子・完全一致ファイル名で判定できない場合だけ、拡張子なしスクリプトの shebang から言語を推定する。
+    /// </summary>
+    private static string? TryDetectLanguageFromShebang(string filePath)
+    {
+        try
+        {
+            using var stream = File.OpenRead(filePath);
+            if (!stream.CanRead)
+                return null;
+
+            Span<byte> buffer = stackalloc byte[256];
+            var bytesRead = stream.Read(buffer);
+            if (bytesRead <= 0)
+                return null;
+
+            var firstLine = Encoding.UTF8.GetString(buffer[..bytesRead])
+                .Split(['\r', '\n'], 2)[0]
+                .TrimStart('\uFEFF', ' ', '\t');
+
+            if (!firstLine.StartsWith("#!", StringComparison.Ordinal))
+                return null;
+
+            var commandLine = firstLine[2..].Trim();
+            if (string.IsNullOrWhiteSpace(commandLine))
+                return null;
+
+            var tokens = commandLine
+                .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (tokens.Length == 0)
+                return null;
+
+            var interpreter = ResolveShebangInterpreter(tokens);
+            if (interpreter == null)
+                return null;
+
+            return MapShebangInterpreterToLanguage(interpreter);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveShebangInterpreter(IReadOnlyList<string> tokens)
+    {
+        var interpreter = Path.GetFileName(tokens[0]).ToLowerInvariant();
+        if (interpreter is not "env")
+            return interpreter;
+
+        for (var i = 1; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (token.StartsWith("-", StringComparison.Ordinal))
+                continue;
+
+            // `env FOO=bar python` style assignments before the real interpreter.
+            // `env FOO=bar python` のような代入はスキップして本体の interpreter を探す。
+            if (token.Contains('='))
+                continue;
+
+            return Path.GetFileName(token).ToLowerInvariant();
+        }
+
+        return null;
+    }
+
+    private static string? MapShebangInterpreterToLanguage(string interpreter) => interpreter switch
+    {
+        "bash" or "sh" or "zsh" or "fish" or "dash" or "ksh" or "ash" => "shell",
+        "node" or "nodejs" => "javascript",
+        "ruby" => "ruby",
+        "php" => "php",
+        "lua" => "lua",
+        "pwsh" or "powershell" => "powershell",
+        _ when interpreter.StartsWith("python", StringComparison.Ordinal) => "python",
+        _ => null,
+    };
 }

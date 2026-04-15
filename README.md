@@ -522,7 +522,7 @@ The database reflects the working tree at the time of the last index. After swit
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | -- |
-| PowerShell | `.ps1` | yes |
+| PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql` | -- |
@@ -537,6 +537,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Terraform | `.tf` | -- |
 
 All languages are fully searchable via FTS5. Languages with **Symbols = yes** also support structured queries by function/class/import name.
+
+Extensionless scripts are also indexed when their first line has a recognized shebang. Current shebang fallback coverage includes shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`), Python, Ruby, Node.js, PHP, Lua, and PowerShell.
 
 ## Prerequisites: sqlite3
 
@@ -1375,7 +1377,7 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | -- |
-| PowerShell | `.ps1` | yes |
+| PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql` | -- |
@@ -1390,6 +1392,8 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 | Terraform | `.tf` | -- |
 
 全言語がFTS5による全文検索に対応。**シンボル = yes** の言語は関数・クラス・インポート名での構造化検索にも対応しています。
+
+拡張子なしスクリプトでも、先頭行の shebang が認識できればインデックス対象になります。現在の shebang フォールバック対応は shell (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `ash`)、Python、Ruby、Node.js、PHP、Lua、PowerShell です。
 
 ## 前提条件: sqlite3
 

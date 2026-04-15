@@ -68,6 +68,48 @@ public class FileIndexerTests
         Assert.Null(FileIndexer.DetectLanguage(filename));
     }
 
+    [Theory]
+    [InlineData("rbenv", "#!/usr/bin/env bash\nexit 0\n", "shell")]
+    [InlineData("tool", "#!/bin/sh\necho hi\n", "shell")]
+    [InlineData("worker", "#!/usr/bin/python3\nprint('hi')\n", "python")]
+    [InlineData("bundle", "#!/usr/bin/env ruby\nputs 'hi'\n", "ruby")]
+    [InlineData("cli", "#!/usr/bin/env node\nconsole.log('hi')\n", "javascript")]
+    [InlineData("script", "#!/usr/bin/env pwsh\nWrite-Host hi\n", "powershell")]
+    public void DetectLanguage_ExtensionlessShebangScripts_ReturnCorrectLang(string fileName, string content, string expected)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, fileName);
+            File.WriteAllText(path, content);
+
+            Assert.Equal(expected, FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_ExtensionlessNonScript_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "README");
+            File.WriteAllText(path, "Hello world\n");
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
     [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
@@ -145,6 +187,32 @@ public class FileIndexerTests
             // app.jsのみ検出され、package-lock.jsonは除外される
             Assert.Single(files);
             Assert.Contains("app.js", files[0]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IncludesExtensionlessShebangScripts()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "rbenv-init"), "#!/usr/bin/env bash\necho init\n");
+            File.WriteAllText(Path.Combine(tempDir, "python-tool"), "#!/usr/bin/python3\nprint('hi')\n");
+            File.WriteAllText(Path.Combine(tempDir, "plain-text"), "Hello world\n");
+            File.WriteAllText(Path.Combine(tempDir, "known.rb"), "puts 'known'\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["known.rb", "python-tool", "rbenv-init"], files);
         }
         finally
         {
@@ -337,6 +405,28 @@ public class FileIndexerTests
 
             var indexer = new FileIndexer(tempDir);
             Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_ExtensionlessShebangScriptUsesDetectedLanguage()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "rbenv-hooks");
+            File.WriteAllText(filePath, "#!/usr/bin/env bash\necho hooks\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, warning) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("shell", record.Lang);
+            Assert.Null(warning);
         }
         finally
         {
