@@ -585,32 +585,32 @@ public partial class DbReader
 
     /// <summary>
     /// Find symbols with the most references (hotspots — heavily used code).
-    /// Uses symbol-local reference counting: only counts same-file references for the exact
-    /// symbol row, which avoids inflating hotspots from unrelated same-named symbols in other files.
-    /// Cross-file disambiguation would require richer callee resolution than the bare reference name
-    /// currently stored in symbol_references.
+    /// Counts total reference volume across the codebase for names that are unique within the
+    /// filtered candidate set. When multiple candidate definitions share the same name, falls
+    /// back to same-file counting and collapses duplicate same-file rows because bare-name
+    /// references cannot disambiguate the true target symbol.
     /// 最も多く参照されるシンボルを検索する（ホットスポット — 多用されるコード）。
-    /// シンボル行ローカルな参照数を使い、同じファイル内の参照だけをカウントすることで、
-    /// 他ファイルの無関係な同名シンボルによるホットスポット水増しを防ぐ。
-    /// クロスファイルを正確に結び付けるには、symbol_references に現在保存している
-    /// bare name より豊かな callee 解決情報が必要になる。
+    /// フィルタ後の候補集合で名前が一意なシンボルは codebase 全体の参照数を数える。
+    /// 同名定義が複数ある場合は bare-name 参照では真の対象を特定できないため、
+    /// 同じファイル内の参照だけにフォールバックし、同一ファイル内の重複行は集約する。
     /// </summary>
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
-        // Only count same-file bare-name matches. Without true symbol resolution, cross-file
-        // references with the same callee name are too ambiguous and inflate the hotspot score.
-        // 同じファイル内の bare-name 一致だけを数える。真の symbol resolution が無い状態で
-        // クロスファイルの同名参照まで数えると hotspot が過大評価される。
+        // Unique names keep the codebase-wide total reference count. Duplicate names are too
+        // ambiguous for cross-file bare-name joins, so they fall back to same-file counts.
+        // Same-file duplicate definitions are collapsed into one hotspot row because the current
+        // reference table has no target_symbol_id to distinguish overloads or shadowed defs.
+        // 一意名は codebase 全体の参照数を維持し、重複名だけ same-file カウントへ縮退する。
+        // 同一ファイル内の重複定義は target_symbol_id が無いので 1 行に集約する。
         var sql = $@"
-            SELECT s.name, COUNT(DISTINCT sr.id) as ref_count,
-                   s.kind, f.path, f.lang, s.line,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("container_name")} AS container_name
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            JOIN symbol_references sr ON sr.symbol_name = s.name AND sr.file_id = s.file_id
-            WHERE s.kind NOT IN ('import', 'namespace')";
+            WITH candidate_symbols AS (
+                SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
+                       {GetSymbolColumnSql("visibility")} AS visibility,
+                       {GetSymbolColumnSql("container_name")} AS container_name
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.kind NOT IN ('import', 'namespace')";
 
         // Restrict to graph-supported languages only / グラフ対応言語のみに制限
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
@@ -622,10 +622,47 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $@"
-            GROUP BY s.id, s.name, s.kind, f.path, f.lang, s.line,
-                     {GetSymbolColumnSql("visibility")}, {GetSymbolColumnSql("container_name")}
-            ORDER BY ref_count DESC
+        sql += @"
+            ),
+            name_cardinality AS (
+                SELECT name, COUNT(*) AS defs
+                FROM candidate_symbols
+                GROUP BY name
+            ),
+            grouped_candidates AS (
+                SELECT MIN(id) AS symbol_id,
+                       file_id,
+                       name,
+                       kind,
+                       path,
+                       lang,
+                       MIN(line) AS line,
+                       CASE
+                           WHEN COUNT(DISTINCT COALESCE(visibility, '')) = 1 THEN MIN(visibility)
+                           ELSE NULL
+                       END AS visibility,
+                       CASE
+                           WHEN COUNT(DISTINCT COALESCE(container_name, '')) = 1 THEN MIN(container_name)
+                           ELSE NULL
+                       END AS container_name
+                FROM candidate_symbols
+                GROUP BY file_id, name, kind, path, lang
+            ),
+            reference_counts AS (
+                SELECT gc.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
+                FROM grouped_candidates gc
+                JOIN name_cardinality nc ON nc.name = gc.name
+                JOIN symbol_references sr
+                  ON sr.symbol_name = gc.name
+                 AND (nc.defs = 1 OR sr.file_id = gc.file_id)
+                GROUP BY gc.symbol_id
+            )
+            SELECT gc.name, rc.ref_count,
+                   gc.kind, gc.path, gc.lang, gc.line,
+                   gc.visibility, gc.container_name
+            FROM grouped_candidates gc
+            JOIN reference_counts rc ON rc.symbol_id = gc.symbol_id
+            ORDER BY rc.ref_count DESC
             LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();

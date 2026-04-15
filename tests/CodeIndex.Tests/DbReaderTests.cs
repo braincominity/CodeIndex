@@ -865,6 +865,54 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_CountsCrossFileReferencesForUniqueName()
+    {
+        InsertIndexedFile("src/api.py", "python", "def SharedApi():\n    return True\n");
+        InsertIndexedFile("src/use1.py", "python",
+            "def use_one():\n    SharedApi()\n    SharedApi()\n");
+        InsertIndexedFile("src/use2.py", "python",
+            "def use_two():\n    SharedApi()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var sharedApi = Assert.Single(results.Where(result => result.Symbol.Name == "SharedApi"));
+        Assert.Equal("src/api.py", sharedApi.Symbol.Path);
+        Assert.Equal(3, sharedApi.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CollapsesSameFileDuplicateNames()
+    {
+        InsertIndexedFile("src/duplicate_names.py", "python",
+            "def Run():\n    return True\n\n" +
+            "def Run(value=None):\n    return value\n\n" +
+            "def caller():\n    Run()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/duplicate_names.py"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runResults = results
+            .Where(result => result.Symbol.Name == "Run")
+            .ToList();
+
+        var run = Assert.Single(runResults);
+        Assert.Equal("src/duplicate_names.py", run.Symbol.Path);
+        Assert.Equal(1, run.ReferenceCount);
+        Assert.Equal(1, run.Symbol.Line);
+    }
+
+    [Fact]
     public void GraphReaders_ExactMatchesNameEquality()
     {
         // Seed content where `authenticate_v2` is both CALLED (so it appears as a reference
