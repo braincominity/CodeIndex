@@ -2370,6 +2370,34 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("references", "MissingSymbol")]
+    [InlineData("callers", "MissingSymbol")]
+    [InlineData("callees", "MissingSymbol")]
+    public void GraphCommands_SymbolKindArgumentWarnsAboutReferenceKindSemantics(string command, string query)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_kind_warning");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => RunGraphCommand(
+                command,
+                [query, "--db", dbPath, "--kind", "class"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("symbol kind", stderr);
+            Assert.Contains("filters by reference kind", stderr);
+            Assert.Contains("call, instantiate, subscribe", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunImpact_ClassSymbolJsonReturnsHeuristicFileDependencyHints()
     {
