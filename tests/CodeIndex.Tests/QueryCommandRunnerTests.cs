@@ -88,6 +88,48 @@ public class QueryCommandRunnerTests
         Assert.False(symbols.ExactSubstring);
     }
 
+    [Theory]
+    [InlineData("definition", "--focus-column", "10")]
+    [InlineData("definition", "--max-line-width", "10")]
+    [InlineData("search", "--focus-column", "10")]
+    [InlineData("symbols", "--max-line-width", "10")]
+    public void QueryCommands_RejectPreviewOptionsWhenUnsupported(string command, string option, string value)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_preview_reject_{command}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var args = new List<string>();
+            switch (command)
+            {
+                case "definition":
+                    args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
+                    break;
+                case "search":
+                    args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
+                    break;
+                case "symbols":
+                    args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
+                    break;
+            }
+
+            var (exitCode, _, stderr) = command switch
+            {
+                "definition" => CaptureConsole(() => QueryCommandRunner.RunDefinition([.. args], _jsonOptions)),
+                "search" => CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions)),
+                "symbols" => CaptureConsole(() => QueryCommandRunner.RunSymbols([.. args], _jsonOptions)),
+                _ => throw new InvalidOperationException($"Unexpected command: {command}")
+            };
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"unsupported option for {command}: {option}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void ParseArgs_InvalidNumbersAndUnknownOptionsFallbackAndReportErrors()
     {
@@ -375,6 +417,28 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("content_truncated").GetBoolean());
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_FocusLineWithoutFocusColumnReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_dep");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-line", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-line and --focus-length require --focus-column", stderr);
         }
         finally
         {

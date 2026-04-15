@@ -376,9 +376,9 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine($"  --max-line-width <n>       Clamp very long single-line context/excerpt payloads (default: {LineWidthFormatter.DefaultMaxLineWidth})");
-        Console.WriteLine("  --focus-line <line>        excerpt: line to keep visible when clamping");
+        Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping");
-        Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1)");
+        Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
         Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect.");
         Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");

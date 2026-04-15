@@ -1809,6 +1809,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Excerpt_FocusLineWithoutFocusColumnReturnsError()
+    {
+        InsertIndexedFile("dist/data-focus-error.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-error.txt","startLine":1,"endLine":1,"maxLineWidth":96,"focusLine":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusLine and focusLength require focusColumn", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_FindInFile_ReturnsLiteralMatchesWithContext()
     {
         InsertIndexedFile("src/Auth.cs", "csharp",

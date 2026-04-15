@@ -776,7 +776,11 @@ public partial class McpServer
         var focusLine = args?["focusLine"]?.GetValue<int>();
         var focusColumn = args?["focusColumn"]?.GetValue<int>();
         var focusLength = Math.Max(1, args?["focusLength"]?.GetValue<int>() ?? 1);
+        var explicitFocusLength = args?["focusLength"] != null;
         var maxLineWidth = ClampMaxLineWidth(args);
+
+        if (!focusColumn.HasValue && (focusLine.HasValue || explicitFocusLength))
+            return CreateToolErrorResponse(id, "focusLine and focusLength require focusColumn");
 
         return WithDbReader(id, reader =>
         {

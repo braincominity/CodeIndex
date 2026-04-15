@@ -22,6 +22,12 @@ public static class QueryCommandRunner
     private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -92,6 +98,12 @@ public static class QueryCommandRunner
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("definition", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -199,6 +211,12 @@ public static class QueryCommandRunner
 
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("references", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -279,6 +297,12 @@ public static class QueryCommandRunner
 
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("callers", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -355,6 +379,12 @@ public static class QueryCommandRunner
 
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("callees", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -451,6 +481,12 @@ public static class QueryCommandRunner
 
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("symbols", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -561,6 +597,12 @@ public static class QueryCommandRunner
 
     public static int RunFiles(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("files", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -613,10 +655,21 @@ public static class QueryCommandRunner
 
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("excerpt", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: true);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
             Console.Error.WriteLine(options.ParseError);
+            return CommandExitCodes.UsageError;
+        }
+        if (options.FocusColumn == null && (options.FocusLine.HasValue || cmdArgs.Any(arg => arg == "--focus-length")))
+        {
+            Console.Error.WriteLine("Error: --focus-line and --focus-length require --focus-column.");
             return CommandExitCodes.UsageError;
         }
         if (options.Query == null)
@@ -862,6 +915,12 @@ public static class QueryCommandRunner
 
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("map", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -931,6 +990,12 @@ public static class QueryCommandRunner
 
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("inspect", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1011,6 +1076,12 @@ public static class QueryCommandRunner
         }
 
         var filePath = cmdArgs[0].Replace('\\', '/');
+        var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1058,6 +1129,12 @@ public static class QueryCommandRunner
 
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
+        var previewOptionError = ValidatePreviewOptions("status", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1139,6 +1216,12 @@ public static class QueryCommandRunner
 
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1341,6 +1424,12 @@ public static class QueryCommandRunner
 
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("deps", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1385,6 +1474,12 @@ public static class QueryCommandRunner
 
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("hotspots", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1443,6 +1538,12 @@ public static class QueryCommandRunner
 
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("unused", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1592,6 +1693,12 @@ public static class QueryCommandRunner
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("validate", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (options.ParseError != null)
         {
@@ -1634,6 +1741,12 @@ public static class QueryCommandRunner
 
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var previewOptionError = ValidatePreviewOptions("languages", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        if (previewOptionError != null)
+        {
+            Console.Error.WriteLine(previewOptionError);
+            return CommandExitCodes.UsageError;
+        }
         var json = cmdArgs.Any(a => a == "--json");
 
         var langExtensions = FileIndexer.GetLanguageExtensions();
@@ -1813,11 +1926,20 @@ public static class QueryCommandRunner
                 case "--focus-line" when i + 1 < args.Length:
                     focusLine = ParsePositiveInt(args[++i], "--focus-line");
                     break;
+                case "--focus-line":
+                    parseError = "Error: --focus-line requires a value";
+                    break;
                 case "--focus-column" when i + 1 < args.Length:
                     focusColumn = ParsePositiveInt(args[++i], "--focus-column");
                     break;
+                case "--focus-column":
+                    parseError = "Error: --focus-column requires a value";
+                    break;
                 case "--focus-length" when i + 1 < args.Length:
                     focusLength = ParsePositiveInt(args[++i], "--focus-length") ?? 1;
+                    break;
+                case "--focus-length":
+                    parseError = "Error: --focus-length requires a value";
                     break;
                 case "--name" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
                     // Repeatable; OR-joined with other --name values and extra positional names / 繰り返し可、他の --name や追加の positional 引数と OR 結合
@@ -1831,6 +1953,9 @@ public static class QueryCommandRunner
                     break;
                 case "--max-line-width" when i + 1 < args.Length:
                     maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(ParsePositiveInt(args[++i], "--max-line-width") ?? LineWidthFormatter.DefaultMaxLineWidth);
+                    break;
+                case "--max-line-width":
+                    parseError = "Error: --max-line-width requires a value";
                     break;
                 default:
                     if (args[i].StartsWith('-'))
@@ -1909,6 +2034,42 @@ public static class QueryCommandRunner
         exact = options.Exact || options.ExactName;
         error = null;
         return true;
+    }
+
+    private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--max-line-width":
+                    if (!allowMaxLineWidth)
+                        return $"Error: unsupported option for {commandName}: --max-line-width";
+                    if (i + 1 < args.Length)
+                        i++;
+                    break;
+                case "--focus-line":
+                    if (!allowFocusOptions)
+                        return $"Error: unsupported option for {commandName}: --focus-line";
+                    if (i + 1 < args.Length)
+                        i++;
+                    break;
+                case "--focus-column":
+                    if (!allowFocusOptions)
+                        return $"Error: unsupported option for {commandName}: --focus-column";
+                    if (i + 1 < args.Length)
+                        i++;
+                    break;
+                case "--focus-length":
+                    if (!allowFocusOptions)
+                        return $"Error: unsupported option for {commandName}: --focus-length";
+                    if (i + 1 < args.Length)
+                        i++;
+                    break;
+            }
+        }
+
+        return null;
     }
 
     private static int WithDb(string dbPath, Func<DbReader, int> action)
