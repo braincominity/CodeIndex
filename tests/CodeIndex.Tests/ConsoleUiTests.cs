@@ -41,7 +41,7 @@ public class ConsoleUiTests
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
-        Assert.Contains("--max-line-width <n>       Clamp very long single-line context/excerpt payloads", output);
+        Assert.Contains("--max-line-width <n>       references/find/excerpt/inspect only: clamp very long single-line context/excerpt payloads", output);
         Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
         Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);

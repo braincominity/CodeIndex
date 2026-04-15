@@ -90,8 +90,18 @@ public partial class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
-    private static int ClampMaxLineWidth(JsonNode? args, string propertyName = "maxLineWidth") =>
-        LineWidthFormatter.ClampMaxLineWidth(args?[propertyName]?.GetValue<int>() ?? LineWidthFormatter.DefaultMaxLineWidth);
+    private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
+    {
+        var maxLineWidthValue = args?[propertyName]?.GetValue<int>();
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value <= 0)
+        {
+            maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
+        }
+
+        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth);
+        return null;
+    }
 
     private static List<string> ReadStringList(JsonNode? args, string propertyName)
     {
@@ -276,7 +286,8 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var maxLineWidth = ClampMaxLineWidth(args);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -425,7 +436,8 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var maxLineWidth = ClampMaxLineWidth(args);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -667,7 +679,8 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var lang = args?["lang"]?.GetValue<string>();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
-        var maxLineWidth = ClampMaxLineWidth(args);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -788,10 +801,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "focusLength must be greater than or equal to 1");
         var focusLength = focusLengthValue ?? 1;
         var explicitFocusLength = args?["focusLength"] != null;
-        var maxLineWidthValue = args?["maxLineWidth"]?.GetValue<int>();
-        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value <= 0)
-            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
-        var maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
 
         if (focusLine.HasValue && focusLine.Value <= 0)
             return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
@@ -867,7 +878,8 @@ public partial class McpServer
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
         var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
-        var maxLineWidth = ClampMaxLineWidth(args);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>

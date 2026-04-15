@@ -555,6 +555,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_MaxLineWidthZeroReturnsError()
+    {
+        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_References_UnsupportedLanguage_ReturnsGraphSupportHint()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"markdown"}}}""")!;
@@ -1948,6 +1960,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_FindInFile_MaxLineWidthZeroReturnsError()
+    {
+        InsertIndexedFile("dist/search-max-width-zero.txt", "text", new string('a', 320) + "target" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-max-width-zero.txt","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ClampsBundledReferenceContext()
     {
         InsertIndexedFile("src/target.js", "javascript",
@@ -1991,6 +2015,23 @@ public class McpServerTests : IDisposable
         Assert.Contains("target()", firstReference["context"]!.GetValue<string>());
         Assert.True(firstReference["context"]!.GetValue<string>().Length <= 96);
         Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_MaxLineWidthZeroReturnsError()
+    {
+        InsertIndexedFile("src/analyze-target.js", "javascript",
+            """
+            function target() {
+              return true;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
