@@ -11,7 +11,13 @@ public class FileIndexerTests
     [Theory]
     [InlineData("test.py", "python")]
     [InlineData("app.js", "javascript")]
+    [InlineData("app.cjs", "javascript")]
+    [InlineData("app.mjs", "javascript")]
     [InlineData("main.ts", "typescript")]
+    [InlineData("main.cts", "typescript")]
+    [InlineData("main.mts", "typescript")]
+    [InlineData("types.d.cts", "typescript")]
+    [InlineData("types.d.mts", "typescript")]
     [InlineData("lib.go", "go")]
     [InlineData("mod.rs", "rust")]
     [InlineData("App.java", "java")]
@@ -145,6 +151,30 @@ public class FileIndexerTests
             // app.jsのみ検出され、package-lock.jsonは除外される
             Assert.Single(files);
             Assert.Contains("app.js", files[0]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IncludesModernNodeModuleExtensions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "index.mjs"), "export const run = () => {};");
+            File.WriteAllText(Path.Combine(tempDir, "cli.cjs"), "module.exports = {};");
+            File.WriteAllText(Path.Combine(tempDir, "types.cts"), "export type Config = {};");
+            File.WriteAllText(Path.Combine(tempDir, "types.d.mts"), "export interface Config {}");
+            File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "ignored");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles().Select(Path.GetFileName).OrderBy(name => name).ToList();
+
+            Assert.Equal(["cli.cjs", "index.mjs", "types.cts", "types.d.mts"], files);
         }
         finally
         {

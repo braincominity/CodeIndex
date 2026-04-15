@@ -492,8 +492,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Language | Extensions | Symbols |
 |---|---|:---:|
 | Python | `.py` | yes |
-| JavaScript | `.js`, `.jsx` | yes |
-| TypeScript | `.ts`, `.tsx` | yes |
+| JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
+| TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |
 | Go | `.go` | yes |
 | Rust | `.rs` | yes |
@@ -535,6 +535,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
+
+Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
 
 All languages are fully searchable via FTS5. Languages with **Symbols = yes** also support structured queries by function/class/import name.
 
@@ -1345,8 +1347,8 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
 | Python | `.py` | yes |
-| JavaScript | `.js`, `.jsx` | yes |
-| TypeScript | `.ts`, `.tsx` | yes |
+| JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
+| TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |
 | Go | `.go` | yes |
 | Rust | `.rs` | yes |
@@ -1388,6 +1390,8 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
+
+モダンな Node モジュール構成でも、拡張子を変更せずにそのままインデックスできます。`.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` の宣言ファイルを含む）は TypeScript として扱います。
 
 全言語がFTS5による全文検索に対応。**シンボル = yes** の言語は関数・クラス・インポート名での構造化検索にも対応しています。
 
