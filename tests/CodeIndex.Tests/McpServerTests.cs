@@ -1972,6 +1972,30 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_FindInFile_NegativeBeforeReturnsError()
+    {
+        InsertIndexedFile("dist/search-before-negative.txt", "text", "target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-before-negative.txt","before":-1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("before must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_NegativeAfterReturnsError()
+    {
+        InsertIndexedFile("dist/search-after-negative.txt", "text", "target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-after-negative.txt","after":-1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("after must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ClampsBundledReferenceContext()
     {
         InsertIndexedFile("src/target.js", "javascript",

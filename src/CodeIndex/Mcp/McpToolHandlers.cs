@@ -876,8 +876,15 @@ public partial class McpServer
         var lang = args?["lang"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
-        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var beforeValue = args?["before"]?.GetValue<int>();
+        if (beforeValue.HasValue && beforeValue.Value < 0)
+            return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
+        var before = beforeValue ?? 0;
+
+        var afterValue = args?["after"]?.GetValue<int>();
+        if (afterValue.HasValue && afterValue.Value < 0)
+            return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
+        var after = afterValue ?? 0;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
