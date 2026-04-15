@@ -24,6 +24,36 @@ public static class SymbolExtractor
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null);
 
+    private enum JavaScriptLexMode
+    {
+        Code,
+        SingleQuote,
+        DoubleQuote,
+        TemplateString,
+        BlockComment,
+    }
+
+    private enum JavaScriptPrevTokenKind
+    {
+        None,
+        Identifier,
+        Number,
+        CloseParen,
+        CloseBracket,
+        CloseBrace,
+        Other,
+    }
+
+    private readonly record struct JavaScriptLexState(
+        JavaScriptLexMode Mode = JavaScriptLexMode.Code,
+        bool EscapeNext = false,
+        JavaScriptPrevTokenKind PreviousTokenKind = JavaScriptPrevTokenKind.None,
+        string? PreviousIdentifier = null);
+
+    private readonly record struct JavaScriptLexedLine(
+        string SanitizedLine,
+        JavaScriptLexState EndState);
+
     private static readonly Regex JavaScriptBareMethodRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{",
         RegexOptions.Compiled);
@@ -461,7 +491,7 @@ public static class SymbolExtractor
                     ? match.Groups["name"].Value.Trim()
                     : match.Value.Trim();
 
-                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, pattern.BodyStyle);
+                    var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, pattern.BodyStyle, lang);
                 var startLine = i + 1;
 
                 // Python @property decorator: reclassify the def as property
@@ -508,11 +538,12 @@ public static class SymbolExtractor
             .ToList();
 
         foreach (var classSymbol in classSymbols)
-            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lines, symbols, classSymbol, methodRegex);
+            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lang, lines, symbols, classSymbol, methodRegex);
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInClass(
         long fileId,
+        string lang,
         string[] lines,
         List<SymbolRecord> symbols,
         SymbolRecord classSymbol,
@@ -524,15 +555,16 @@ public static class SymbolExtractor
         var scanStartIndex = classSymbol.BodyStartLine.Value;
         var scanEndExclusive = classSymbol.BodyEndLine.Value - 1;
         var nestedBraceDepth = 0;
-        var inBlockComment = false;
-        var inTemplateString = false;
+        var lexState = new JavaScriptLexState();
 
         for (int i = scanStartIndex; i < scanEndExclusive; i++)
         {
             var line = lines[i];
+            var lexedLine = LexJavaScriptLine(line, lexState);
+            lexState = lexedLine.EndState;
             if (nestedBraceDepth == 0)
             {
-                var match = methodRegex.Match(line);
+                var match = methodRegex.Match(lexedLine.SanitizedLine);
                 if (match.Success)
                 {
                     var name = match.Groups["name"].Success
@@ -542,7 +574,7 @@ public static class SymbolExtractor
                     var startLine = i + 1;
                     if (!symbols.Any(s => s.Line == startLine && s.Kind == "function" && s.Name == name))
                     {
-                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace);
+                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang);
                         symbols.Add(new SymbolRecord
                         {
                             FileId = fileId,
@@ -561,104 +593,318 @@ public static class SymbolExtractor
                 }
             }
 
-            nestedBraceDepth += CountJavaScriptBraceDelta(line, ref inBlockComment, ref inTemplateString);
+            nestedBraceDepth += CountBraces(lexedLine.SanitizedLine);
             if (nestedBraceDepth < 0)
                 nestedBraceDepth = 0;
         }
     }
 
-    private static int CountJavaScriptBraceDelta(string line, ref bool inBlockComment, ref bool inTemplateString)
+    private static JavaScriptLexedLine LexJavaScriptLine(string line, JavaScriptLexState state)
     {
-        var delta = 0;
-        var inSingleQuote = false;
-        var inDoubleQuote = false;
+        var sanitized = new char[line.Length];
+        var i = 0;
 
-        for (int i = 0; i < line.Length; i++)
+        while (i < line.Length)
         {
             var ch = line[i];
             var next = i + 1 < line.Length ? line[i + 1] : '\0';
 
-            if (inBlockComment)
+            if (state.Mode == JavaScriptLexMode.BlockComment)
             {
+                sanitized[i] = ' ';
                 if (ch == '*' && next == '/')
                 {
-                    inBlockComment = false;
+                    sanitized[i + 1] = ' ';
+                    state = state with { Mode = JavaScriptLexMode.Code };
                     i++;
                 }
 
+                i++;
                 continue;
             }
 
-            if (inSingleQuote)
+            if (state.Mode == JavaScriptLexMode.SingleQuote)
             {
+                sanitized[i] = ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
                 if (ch == '\\')
                 {
+                    state = state with { EscapeNext = true };
                     i++;
                     continue;
                 }
 
                 if (ch == '\'')
-                    inSingleQuote = false;
+                    state = state with { Mode = JavaScriptLexMode.Code };
 
+                i++;
                 continue;
             }
 
-            if (inDoubleQuote)
+            if (state.Mode == JavaScriptLexMode.DoubleQuote)
             {
+                sanitized[i] = ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
                 if (ch == '\\')
                 {
+                    state = state with { EscapeNext = true };
                     i++;
                     continue;
                 }
 
                 if (ch == '"')
-                    inDoubleQuote = false;
+                    state = state with { Mode = JavaScriptLexMode.Code };
 
+                i++;
                 continue;
             }
 
-            if (inTemplateString)
+            if (state.Mode == JavaScriptLexMode.TemplateString)
             {
+                sanitized[i] = ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
                 if (ch == '\\')
                 {
+                    state = state with { EscapeNext = true };
                     i++;
                     continue;
                 }
 
                 if (ch == '`')
-                    inTemplateString = false;
+                    state = state with { Mode = JavaScriptLexMode.Code };
 
+                i++;
                 continue;
             }
 
             if (ch == '/' && next == '/')
+            {
+                while (i < line.Length)
+                {
+                    sanitized[i] = ' ';
+                    i++;
+                }
+
                 break;
+            }
 
             if (ch == '/' && next == '*')
             {
-                inBlockComment = true;
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                state = state with { Mode = JavaScriptLexMode.BlockComment };
+                i++;
                 i++;
                 continue;
             }
 
             if (ch == '\'')
             {
-                inSingleQuote = true;
+                sanitized[i] = ' ';
+                state = state with { Mode = JavaScriptLexMode.SingleQuote, EscapeNext = false };
+                i++;
                 continue;
             }
 
             if (ch == '"')
             {
-                inDoubleQuote = true;
+                sanitized[i] = ' ';
+                state = state with { Mode = JavaScriptLexMode.DoubleQuote, EscapeNext = false };
+                i++;
                 continue;
             }
 
             if (ch == '`')
             {
-                inTemplateString = true;
+                sanitized[i] = ' ';
+                state = state with { Mode = JavaScriptLexMode.TemplateString, EscapeNext = false };
+                i++;
                 continue;
             }
 
+            if (ch == '/' && CanStartJavaScriptRegexLiteral(state, sanitized, i))
+            {
+                sanitized[i] = ' ';
+                i = SkipJavaScriptRegexLiteral(line, sanitized, i);
+                state = state with
+                {
+                    PreviousTokenKind = JavaScriptPrevTokenKind.Other,
+                    PreviousIdentifier = null
+                };
+                i++;
+                continue;
+            }
+
+            if (char.IsLetter(ch) || ch == '_' || ch == '$')
+            {
+                var tokenStart = i;
+                while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '$'))
+                {
+                    sanitized[i] = line[i];
+                    i++;
+                }
+
+                state = state with
+                {
+                    PreviousTokenKind = JavaScriptPrevTokenKind.Identifier,
+                    PreviousIdentifier = line[tokenStart..i]
+                };
+                continue;
+            }
+
+            if (char.IsDigit(ch))
+            {
+                sanitized[i] = ch;
+                i++;
+                while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '.'))
+                {
+                    sanitized[i] = line[i];
+                    i++;
+                }
+
+                state = state with
+                {
+                    PreviousTokenKind = JavaScriptPrevTokenKind.Number,
+                    PreviousIdentifier = null
+                };
+                continue;
+            }
+
+            sanitized[i] = ch;
+            if (!char.IsWhiteSpace(ch))
+            {
+                state = state with
+                {
+                    PreviousTokenKind = ch switch
+                    {
+                        ')' => JavaScriptPrevTokenKind.CloseParen,
+                        ']' => JavaScriptPrevTokenKind.CloseBracket,
+                        '}' => JavaScriptPrevTokenKind.CloseBrace,
+                        _ => JavaScriptPrevTokenKind.Other
+                    },
+                    PreviousIdentifier = null
+                };
+            }
+
+            i++;
+        }
+
+        return new JavaScriptLexedLine(new string(sanitized), state);
+    }
+
+    private static bool CanStartJavaScriptRegexLiteral(JavaScriptLexState state, char[] sanitized, int slashIndex)
+    {
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.None)
+            return true;
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Other)
+            return true;
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Identifier)
+        {
+            return state.PreviousIdentifier is
+                "return" or "throw" or "case" or "delete" or "typeof" or "void" or "new" or "in" or "of" or "instanceof" or "yield" or "await";
+        }
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.CloseParen)
+        {
+            var prefix = new string(sanitized, 0, slashIndex).TrimStart();
+            return prefix.StartsWith("if ", StringComparison.Ordinal)
+                || prefix.StartsWith("if(", StringComparison.Ordinal)
+                || prefix.StartsWith("while ", StringComparison.Ordinal)
+                || prefix.StartsWith("while(", StringComparison.Ordinal)
+                || prefix.StartsWith("for ", StringComparison.Ordinal)
+                || prefix.StartsWith("for(", StringComparison.Ordinal)
+                || prefix.StartsWith("switch ", StringComparison.Ordinal)
+                || prefix.StartsWith("switch(", StringComparison.Ordinal)
+                || prefix.StartsWith("catch ", StringComparison.Ordinal)
+                || prefix.StartsWith("catch(", StringComparison.Ordinal)
+                || prefix.StartsWith("with ", StringComparison.Ordinal)
+                || prefix.StartsWith("with(", StringComparison.Ordinal);
+        }
+
+        return false;
+    }
+
+    private static int SkipJavaScriptRegexLiteral(string line, char[] sanitized, int slashIndex)
+    {
+        var i = slashIndex + 1;
+        var inCharacterClass = false;
+
+        while (i < line.Length)
+        {
+            sanitized[i] = ' ';
+            var ch = line[i];
+            if (ch == '\\')
+            {
+                if (i + 1 < line.Length)
+                {
+                    sanitized[i + 1] = ' ';
+                    i += 2;
+                    continue;
+                }
+
+                return i;
+            }
+
+            if (ch == '[')
+            {
+                inCharacterClass = true;
+                i++;
+                continue;
+            }
+
+            if (ch == ']' && inCharacterClass)
+            {
+                inCharacterClass = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && !inCharacterClass)
+            {
+                i++;
+                while (i < line.Length && char.IsLetter(line[i]))
+                {
+                    sanitized[i] = ' ';
+                    i++;
+                }
+
+                return i - 1;
+            }
+
+            i++;
+        }
+
+        return line.Length - 1;
+    }
+
+    private static int CountBraces(string sanitizedLine)
+    {
+        var delta = 0;
+        foreach (var ch in sanitizedLine)
+        {
             if (ch == '{')
                 delta++;
             else if (ch == '}')
@@ -668,15 +914,56 @@ public static class SymbolExtractor
         return delta;
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string? lang = null)
     {
         return bodyStyle switch
         {
+            BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex),
             BodyStyle.Brace => FindBraceRange(lines, startIndex),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex)
+    {
+        var depth = 0;
+        var opened = false;
+        int? bodyStartLine = null;
+        var lexState = new JavaScriptLexState();
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+
+            foreach (var ch in lexedLine.SanitizedLine)
+            {
+                if (ch == '{')
+                {
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLine = i + 1;
+                    }
+                }
+                else if (ch == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                }
+            }
+
+            if (!opened && lexedLine.SanitizedLine.TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
+
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex)

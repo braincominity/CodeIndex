@@ -107,6 +107,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_IgnoresRegexLiteralBracesAndBlockCommentMethodShapes()
+    {
+        var content = """
+            class Example {
+                /*
+                    fake() {
+                    }
+                */
+                first() {
+                    const open = /{/;
+                    const close = /}/;
+                }
+
+                second() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
     {
         var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
@@ -167,6 +192,31 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "KeywordMethods");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "if");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "catch");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_IgnoresRegexLiteralBracesAndBlockCommentMethodShapes()
+    {
+        var content = """
+            export class Example {
+                /*
+                    fake(): void {
+                    }
+                */
+                first(): void {
+                    const open = /{/;
+                    const close = /}/;
+                }
+
+                second(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
     }
 
     [Fact]
