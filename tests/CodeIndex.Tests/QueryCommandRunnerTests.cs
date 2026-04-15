@@ -260,6 +260,17 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_UsageIncludesCount()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+            [],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("[--count]", stderr);
+    }
+
+    [Fact]
     public void ParseArgs_InvalidNumbersAndUnknownOptionsFallbackAndReportErrors()
     {
         var (options, _, stderr) = CaptureConsole(() => QueryCommandRunner.ParseArgs(
@@ -590,6 +601,28 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("--focus-line (999) must be within the returned excerpt range", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_FocusColumnOutsideFocusedLineReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_column_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--focus-column", "9999", "--max-line-width", "40", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-column (9999) must be within the focused line length", stderr);
         }
         finally
         {

@@ -1893,6 +1893,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Excerpt_FocusColumnOutsideFocusedLineReturnsError()
+    {
+        InsertIndexedFile("dist/data-focus-column-range.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-focus-column-range.txt","startLine":1,"endLine":1,"focusColumn":9999,"maxLineWidth":40}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("focusColumn (9999) must be within the focused line length (646)", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_FindInFile_ReturnsLiteralMatchesWithContext()
     {
         InsertIndexedFile("src/Auth.cs", "csharp",

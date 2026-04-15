@@ -431,7 +431,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match |
 | `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match |
 | `--focus-line <line>` | `excerpt` | Line inside the requested excerpt whose focused column should stay visible when `--max-line-width` clamps long single-line content; requires `--focus-column` |
-| `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content |
+| `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content; must be within that line's length |
 | `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1; requires `--focus-column`) |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
@@ -1282,7 +1282,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数 |
 | `--after <n>` | `excerpt`, `find` | 指定範囲または一致箇所の後に追加する文脈行数 |
 | `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、注目列を表示に残したい抜粋内の行。`--focus-column` 必須 |
-| `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列 |
+| `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列。対象行の長さ以内である必要があります |
 | `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1、`--focus-column` 必須） |
 | `--rebuild` | `index` | 既存DBを削除して再構築 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |

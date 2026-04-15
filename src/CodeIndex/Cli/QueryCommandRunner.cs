@@ -231,7 +231,7 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             Console.Error.WriteLine("Error: references requires a symbol query argument");
-            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name]");
+            Console.Error.WriteLine("Usage: cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]");
             return CommandExitCodes.UsageError;
         }
 
@@ -706,6 +706,21 @@ public static class QueryCommandRunner
                         Console.Error.WriteLine($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
                         return CommandExitCodes.UsageError;
                     }
+                }
+            }
+            if (options.FocusColumn.HasValue)
+            {
+                var focusLineLength = reader.GetExcerptFocusLineLength(
+                    options.Query,
+                    options.StartLine.Value,
+                    endLine,
+                    options.ContextBefore,
+                    options.ContextAfter,
+                    options.FocusLine ?? options.StartLine.Value);
+                if (focusLineLength.HasValue && options.FocusColumn.Value > focusLineLength.Value)
+                {
+                    Console.Error.WriteLine($"Error: --focus-column ({options.FocusColumn.Value}) must be within the focused line length ({focusLineLength.Value}).");
+                    return CommandExitCodes.UsageError;
                 }
             }
 

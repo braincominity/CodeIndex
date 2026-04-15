@@ -3626,6 +3626,24 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetExcerpt_FocusColumnOutsideFocusedLineReturnsNull()
+    {
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("dist/focus-column-range.txt", "text", longLine);
+
+        var excerpt = _reader.GetExcerpt(
+            "dist/focus-column-range.txt",
+            1,
+            1,
+            maxLineWidth: 40,
+            focusLine: 1,
+            focusColumn: 9999,
+            focusLength: 6);
+
+        Assert.Null(excerpt);
+    }
+
+    [Fact]
     public void FindInFiles_ClampsLongSingleLineSnippetAroundMatch()
     {
         var longLine = new string('a', 320) + "target" + new string('b', 320);

@@ -1522,6 +1522,8 @@ public partial class DbReader
 
         var contentLines = selectedLines.Select(line => lineMap[line]).ToList();
         var focusLineIndex = focusLine.HasValue ? selectedLines.IndexOf(focusLine.Value) : -1;
+        if (focusLineIndex >= 0 && focusColumn.HasValue && focusColumn.Value > contentLines[focusLineIndex].Length)
+            return null;
         var clampedContent = maxLineWidth.HasValue
             ? LineWidthFormatter.ClampLines(
                 contentLines,
@@ -1540,6 +1542,41 @@ public partial class DbReader
             Content = clampedContent.Text,
             ContentTruncated = clampedContent.Truncated,
         };
+    }
+
+    /// <summary>
+    /// Return the length of the focused excerpt line when it is part of the reconstructed range.
+    /// 抜粋として再構成される範囲内に focus line が含まれる場合、その行長を返す。
+    /// </summary>
+    public int? GetExcerptFocusLineLength(
+        string path,
+        int startLine,
+        int endLine,
+        int before = 0,
+        int after = 0,
+        int? focusLine = null)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !focusLine.HasValue)
+            return null;
+
+        if (startLine <= 0)
+            startLine = 1;
+        if (endLine < startLine)
+            endLine = startLine;
+        if (before < 0)
+            before = 0;
+        if (after < 0)
+            after = 0;
+
+        var requestedStart = Math.Max(1, startLine - before);
+        if (!TryLoadIndexedFileLines(path, out _, out var totalLines, out var lineMap, requestedStart, endLine + after))
+            return null;
+        var requestedEnd = Math.Min(totalLines, endLine + after);
+
+        if (focusLine.Value < requestedStart || focusLine.Value > requestedEnd)
+            return null;
+
+        return lineMap.TryGetValue(focusLine.Value, out var line) ? line.Length : null;
     }
 
     /// <summary>

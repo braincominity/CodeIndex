@@ -813,6 +813,18 @@ public partial class McpServer
                         return CreateToolErrorResponse(id, $"focusLine ({focusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd})");
                 }
             }
+            if (focusColumn.HasValue)
+            {
+                var focusLineLength = reader.GetExcerptFocusLineLength(
+                    path,
+                    startLine.Value,
+                    endLine,
+                    before,
+                    after,
+                    focusLine ?? startLine.Value);
+                if (focusLineLength.HasValue && focusColumn.Value > focusLineLength.Value)
+                    return CreateToolErrorResponse(id, $"focusColumn ({focusColumn.Value}) must be within the focused line length ({focusLineLength.Value})");
+            }
 
             var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after, maxLineWidth, focusLine ?? startLine.Value, focusColumn, focusLength);
             if (excerpt == null)
