@@ -195,6 +195,102 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_NoOpAgainstSharedExplicitDb_PurgesUnsupportedReferencesWithoutRewritingIndexedProjectRoot()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_stale_refs_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('from a')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "docs/readme.md",
+                    Lang = "markdown",
+                    Size = 12,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "stale-edge",
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "LegacyLink",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = "LegacyLink",
+                    },
+                ]);
+            }
+
+            long CountReferences()
+            {
+                using var db = new DbContext(dbPath);
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
+                return (long)cmd.ExecuteScalar()!;
+            }
+
+            Assert.Equal(1, CountReferences());
+
+            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
+            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
+            Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
+
+            Assert.Equal(0, CountReferences());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var statusExitCode = QueryCommandRunner.RunStatus(["--db", dbPath, "--json"], _jsonOptions);
+                    Assert.Equal(CommandExitCodes.Success, statusExitCode);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    Assert.Equal(Path.GetFullPath(projectRootA), document.RootElement.GetProperty("project_root").GetString());
+                    Assert.Equal(0, document.RootElement.GetProperty("references").GetInt32());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_MissingDb_PrintsActionableHint()
     {
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");

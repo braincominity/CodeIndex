@@ -482,22 +482,38 @@ public static class IndexCommandRunner
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
         var mutated = false;
+        var projectRootWritten = false;
         var purgedRefs = 0;
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
 
-        void StartMutationBatch()
+        void EnsureMutationContext(bool writeProjectRoot)
         {
-            if (mutated)
-                return;
+            if (!mutated)
+            {
+                // Demote readiness only inside the first real mutation transaction so a no-op
+                // update against a shared explicit DB cannot rewrite trust metadata or project root.
+                // 最初の実更新トランザクション内でのみ readiness を落とす。no-op update では
+                // 共有 explicit DB の trust metadata / project root を書き換えない。
+                writer.ClearReadyFlags();
+                mutated = true;
+            }
 
-            // Demote readiness only inside the first real mutation transaction so a no-op
-            // update against a shared explicit DB cannot rewrite trust metadata or project root.
-            // 最初の実更新トランザクション内でのみ readiness を落とす。no-op update では
-            // 共有 explicit DB の trust metadata / project root を書き換えない。
-            writer.ClearReadyFlags();
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            if (writeProjectRoot && !projectRootWritten)
+            {
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+                projectRootWritten = true;
+            }
+        }
+
+        using (var purgeTxn = writer.BeginTransaction())
+        {
             purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+            if (purgedRefs > 0)
+            {
+                EnsureMutationContext(writeProjectRoot: false);
+                purgeTxn.Commit();
+            }
         }
 
         foreach (var relPath in targetPaths)
@@ -510,9 +526,8 @@ public static class IndexCommandRunner
                     using var deleteTxn = writer.BeginTransaction();
                     if (writer.DeleteFileByPath(relPath))
                     {
-                        StartMutationBatch();
+                        EnsureMutationContext(writeProjectRoot: true);
                         deleteTxn.Commit();
-                        mutated = true;
                         removed++;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [DEL ] {relPath}");
@@ -549,7 +564,7 @@ public static class IndexCommandRunner
                 }
 
                 using var txn = writer.BeginTransaction();
-                StartMutationBatch();
+                EnsureMutationContext(writeProjectRoot: true);
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
@@ -561,7 +576,6 @@ public static class IndexCommandRunner
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
                 txn.Commit();
-                mutated = true;
 
                 updated++;
                 if (options.Verbose && !options.Json)
