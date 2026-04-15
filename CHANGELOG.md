@@ -644,6 +644,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 修正
+- **未知コマンド候補が短い入力に過剰一致しないよう修正** — `FindClosestCommand` を Damerau-Levenshtein 距離と長さ依存の閾値に変更し、短い未知コマンドが無関係に長いコマンドへ誘導されないようにした（例: `fold` が旧来の一律距離 3 閾値だけで `find` を提案しない）。一方で `serach` や `backfillfold` のような一般的な typo やハイフン抜けは引き続き意図したコマンドに解決される。回帰テストも追加。対象: `src/CodeIndex/Cli/ConsoleUi.cs`、`tests/CodeIndex.Tests/ConsoleUiTests.cs`。
 - **Release ワークフローの verify ステップを CDN 伝播待ち＋`gh release create` 冪等化** — `.github/workflows/release.yml` の `Verify install.sh against the published release` は `gh release create` 直後に `install.sh` を起動しており、GitHub Release の download CDN との競合で URL が数秒間 404 を返し、リリース自体は正常なのに verify が落ちることがあった（v1.10.0 で発生）。verify 前に `Wait for release assets to be downloadable` ステップを追加し、`releases/download/<tag>/CodeIndex-linux-x64.tar.gz` を 5 秒間隔で最大 10 回ポーリングしてから verify を回すようにした。あわせて `Create GitHub release` を冪等化し、同名タグの release が既に存在する場合は `gh release upload --clobber` で不足アセットのみ補完するため、verify ステップの再実行で `a release with the same tag name already exists` で落ちないようにした。対象: `.github/workflows/release.yml`。
 
 ### [1.10.0] - 2026-04-15
