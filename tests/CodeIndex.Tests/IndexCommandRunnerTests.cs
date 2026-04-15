@@ -1562,6 +1562,50 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWithinDirectoryWhenExtensionlessSiblingProbeFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var srcDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(srcDir);
+            var deletedPath = Path.Combine(srcDir, "old.cs");
+            var toolPath = Path.Combine(srcDir, "tool");
+            File.WriteAllText(deletedPath, "public class Old { }\n");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(toolPath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("src/tool", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not probe file for indexability/language.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/old.cs", indexedPaths);
+            Assert.Contains("src/tool", indexedPaths);
+        }
+        finally
+        {
+            var toolPath = Path.Combine(projectRoot, "src", "tool");
+            if (File.Exists(toolPath))
+                SetUnixPermissions(toolPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithFiles_DoesNotRemoveUnreadableExtensionlessScript()
     {
         if (OperatingSystem.IsWindows())

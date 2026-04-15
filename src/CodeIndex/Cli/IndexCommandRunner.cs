@@ -937,6 +937,8 @@ public static class IndexCommandRunner
             .ToHashSet(StringComparer.Ordinal);
         if (scanResult.HadErrors)
         {
+            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths);
+
             foreach (var relPath in scanResult.NonIndexablePaths)
             {
                 if (!writer.HasFileAtPath(relPath))

@@ -25,6 +25,7 @@ public class FileIndexer
         IReadOnlyList<string> Files,
         IReadOnlyList<ScanError> Errors,
         IReadOnlyList<string> NonIndexablePaths,
+        IReadOnlyList<string> ProbeFailedFilePaths,
         IReadOnlyList<string> FullyScannedDirectories)
     {
         public bool HadErrors => Errors.Count > 0;
@@ -219,22 +220,35 @@ public class FileIndexer
         var files = new List<string>();
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
+        var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, fullyScannedDirectories);
-        return new ScanFilesResult(files, errors, nonIndexablePaths.ToList(), fullyScannedDirectories.ToList());
+        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, fullyScannedDirectories);
+        return new ScanFilesResult(files, errors, nonIndexablePaths.ToList(), probeFailedFilePaths.ToList(), fullyScannedDirectories.ToList());
     }
 
-    private bool ScanDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths, HashSet<string> fullyScannedDirectories)
+    private bool ScanDirectory(
+        string dir,
+        List<string> results,
+        List<ScanError> errors,
+        HashSet<string> nonIndexablePaths,
+        HashSet<string> probeFailedFilePaths,
+        HashSet<string> fullyScannedDirectories)
     {
         // Check for skip directories / スキップ対象ディレクトリかチェック
         var dirName = Path.GetFileName(dir);
         if (SkipDirs.Contains(dirName))
             return true;
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, fullyScannedDirectories);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, fullyScannedDirectories);
     }
 
-    private bool EnumerateDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths, HashSet<string> fullyScannedDirectories)
+    private bool EnumerateDirectory(
+        string dir,
+        List<string> results,
+        List<ScanError> errors,
+        HashSet<string> nonIndexablePaths,
+        HashSet<string> probeFailedFilePaths,
+        HashSet<string> fullyScannedDirectories)
     {
         var fullyScanned = true;
         try
@@ -252,8 +266,9 @@ public class FileIndexer
                 var indexability = GetFileIndexability(file);
                 if (indexability == FileProbeStatus.ProbeFailed)
                 {
-                    errors.Add(new ScanError(ToRelativePath(file), "Could not probe file for indexability/language."));
-                    fullyScanned = false;
+                    var relativePath = ToRelativePath(file);
+                    errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+                    probeFailedFilePaths.Add(relativePath);
                     continue;
                 }
 
@@ -268,8 +283,9 @@ public class FileIndexer
                 var language = TryDetectLanguage(file);
                 if (language.Status == FileProbeStatus.ProbeFailed)
                 {
-                    errors.Add(new ScanError(ToRelativePath(file), "Could not probe file for indexability/language."));
-                    fullyScanned = false;
+                    var relativePath = ToRelativePath(file);
+                    errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+                    probeFailedFilePaths.Add(relativePath);
                     continue;
                 }
 
@@ -281,7 +297,7 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, fullyScannedDirectories);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, fullyScannedDirectories);
             }
         }
         catch (UnauthorizedAccessException)
