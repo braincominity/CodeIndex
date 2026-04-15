@@ -1371,6 +1371,37 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_RemovesIndexedScriptThatLosesShebang()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_scanned").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
     {
         var projectRoot = CreateTempProject();
@@ -1717,6 +1748,8 @@ public class IndexCommandRunnerTests
         try
         {
             CreateUnixFifo(Path.Combine(projectRoot, "tool"));
+            CreateUnixFifo(Path.Combine(projectRoot, "tool.sh"));
+            CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
 
             var result = RunCliInSubprocessWithTimeout([projectRoot, "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
 

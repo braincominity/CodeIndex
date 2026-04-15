@@ -568,7 +568,7 @@ public static class IndexCommandRunner
                     continue;
                 }
 
-                if (FileIndexer.DetectLanguage(absPath) == null)
+                if (!FileIndexer.CanIndexFile(absPath) || FileIndexer.DetectLanguage(absPath) == null)
                 {
                     if (!writer.HasFileAtPath(relPath))
                     {
@@ -829,12 +829,15 @@ public static class IndexCommandRunner
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
-        var purged = writer.PurgeStaleFiles(projectRoot);
+        var retainedPaths = files
+            .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+            .ToHashSet(StringComparer.Ordinal);
+        var purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
         if (purged > 0)
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
         if (purged > 0 && !options.Json)
-            Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
+            Console.WriteLine($"  Purged {purged:N0} stale files (missing or no longer indexable)");
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());

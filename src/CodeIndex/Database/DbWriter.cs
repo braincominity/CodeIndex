@@ -540,6 +540,46 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Remove files from DB that are not part of the current authoritative full-scan set.
+    /// This covers both deleted files and files that still exist on disk but are no longer indexable.
+    /// 現在の authoritative な full-scan 結果に含まれないファイルをDBから削除する。
+    /// ディスク上から消えたファイルだけでなく、存在はするがインデックス対象外になったファイルも含む。
+    /// </summary>
+    public int PurgeFilesOutsideRetainedSet(IReadOnlySet<string> retainedRelativePaths)
+    {
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var path = reader.GetString(1);
+                if (!retainedRelativePaths.Contains(path))
+                    staleIds.Add(id);
+            }
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = BeginTransaction();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn.Commit();
+
+        return staleIds.Count;
+    }
+
+    /// <summary>
     /// Count symbol_references for files whose language is no longer graph-supported.
     /// Used by update mode to demote readiness before the first real mutation commits.
     /// グラフ非対応になった言語の symbol_references 件数を数える。

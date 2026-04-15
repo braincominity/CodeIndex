@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Runtime.InteropServices;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -169,6 +168,15 @@ public class FileIndexer
         return TryDetectLanguageFromShebang(filePath);
     }
 
+    internal static bool CanIndexFile(string filePath)
+    {
+        if (OperatingSystem.IsWindows())
+            return true;
+
+        return UnixFileStatus.TryGetFileMode(filePath, out var mode)
+            && (mode & UnixFileStatus.FileTypeMask) == UnixFileStatus.RegularFile;
+    }
+
     /// <summary>
     /// Enumerate all indexable files under the project root.
     /// プロジェクトルート以下のインデックス対象ファイルを列挙する。
@@ -200,6 +208,11 @@ public class FileIndexer
 
                 // Skip excluded file names / 除外ファイル名をスキップ
                 if (SkipFiles.Contains(fileName))
+                    continue;
+
+                // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
+                // Unix では通常ファイルのみをインデックス対象にする。FIFO/socket/device でのブロックを避ける。
+                if (!CanIndexFile(file))
                     continue;
 
                 // Include files with a known extension/filename or an extensionless recognized shebang
@@ -241,6 +254,9 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath)
     {
+        if (!CanIndexFile(absolutePath))
+            throw new InvalidOperationException("Only regular files can be indexed");
+
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var info = new FileInfo(absolutePath);
 
@@ -389,7 +405,7 @@ public class FileIndexer
     /// </summary>
     private static string? TryDetectLanguageFromShebang(string filePath)
     {
-        if (!CanProbeShebang(filePath))
+        if (!CanIndexFile(filePath))
             return null;
 
         try
@@ -433,15 +449,6 @@ public class FileIndexer
         {
             return null;
         }
-    }
-
-    private static bool CanProbeShebang(string filePath)
-    {
-        if (OperatingSystem.IsWindows())
-            return true;
-
-        return UnixFileStatus.TryGetFileMode(filePath, out var mode)
-            && (mode & UnixFileStatus.FileTypeMask) == UnixFileStatus.RegularFile;
     }
 
     private static string? ResolveShebangInterpreter(IReadOnlyList<string> tokens)
@@ -494,7 +501,7 @@ public class FileIndexer
             return true;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
         private struct FileStatus
         {
             internal FileStatusFlags Flags;
@@ -516,7 +523,7 @@ public class FileIndexer
             internal uint UserFlags;
         }
 
-        [Flags]
+        [System.Flags]
         private enum FileStatusFlags : uint
         {
             None = 0,
@@ -524,7 +531,7 @@ public class FileIndexer
 
         private static class NativeMethods
         {
-            [DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = CharSet.Ansi)]
+            [System.Runtime.InteropServices.DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = System.Runtime.InteropServices.CharSet.Ansi)]
             internal static extern int Stat(string path, out FileStatus output);
         }
     }

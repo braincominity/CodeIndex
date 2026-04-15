@@ -275,6 +275,8 @@ public class FileIndexerTests
         {
             Directory.CreateDirectory(tempDir);
             CreateUnixFifo(Path.Combine(tempDir, "tool"));
+            CreateUnixFifo(Path.Combine(tempDir, "tool.sh"));
+            CreateUnixFifo(Path.Combine(tempDir, "Dockerfile"));
 
             var indexer = new FileIndexer(tempDir);
             var scanTask = Task.Run(() => indexer.ScanFiles());
