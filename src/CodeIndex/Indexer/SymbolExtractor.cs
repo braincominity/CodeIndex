@@ -48,7 +48,10 @@ public static class SymbolExtractor
         JavaScriptLexMode Mode = JavaScriptLexMode.Code,
         bool EscapeNext = false,
         JavaScriptPrevTokenKind PreviousTokenKind = JavaScriptPrevTokenKind.None,
-        string? PreviousIdentifier = null);
+        string? PreviousIdentifier = null,
+        bool ExpectingControlFlowOpenParen = false,
+        int ControlFlowParenDepth = 0,
+        bool RegexAllowedAfterControlFlowParen = false);
 
     private readonly record struct JavaScriptLexedLine(
         string SanitizedLine,
@@ -719,6 +722,24 @@ public static class SymbolExtractor
                 continue;
             }
 
+            if (char.IsWhiteSpace(ch))
+            {
+                sanitized[i] = ch;
+                i++;
+                continue;
+            }
+
+            if (state.ExpectingControlFlowOpenParen && ch != '(')
+                state = state with { ExpectingControlFlowOpenParen = false };
+
+            if (state.RegexAllowedAfterControlFlowParen && ch != '/')
+            {
+                state = state with
+                {
+                    RegexAllowedAfterControlFlowParen = false
+                };
+            }
+
             if (ch == '\'')
             {
                 sanitized[i] = ' ';
@@ -743,7 +764,7 @@ public static class SymbolExtractor
                 continue;
             }
 
-            if (ch == '/' && CanStartJavaScriptRegexLiteral(state, sanitized, i))
+            if (ch == '/' && CanStartJavaScriptRegexLiteral(state))
             {
                 sanitized[i] = ' ';
                 i = SkipJavaScriptRegexLiteral(line, sanitized, i);
@@ -768,7 +789,8 @@ public static class SymbolExtractor
                 state = state with
                 {
                     PreviousTokenKind = JavaScriptPrevTokenKind.Identifier,
-                    PreviousIdentifier = line[tokenStart..i]
+                    PreviousIdentifier = line[tokenStart..i],
+                    ExpectingControlFlowOpenParen = IsJavaScriptControlFlowKeyword(line[tokenStart..i])
                 };
                 continue;
             }
@@ -786,7 +808,8 @@ public static class SymbolExtractor
                 state = state with
                 {
                     PreviousTokenKind = JavaScriptPrevTokenKind.Number,
-                    PreviousIdentifier = null
+                    PreviousIdentifier = null,
+                    ExpectingControlFlowOpenParen = false
                 };
                 continue;
             }
@@ -794,6 +817,28 @@ public static class SymbolExtractor
             sanitized[i] = ch;
             if (!char.IsWhiteSpace(ch))
             {
+                var controlFlowParenDepth = state.ControlFlowParenDepth;
+                var regexAllowedAfterControlFlowParen = state.RegexAllowedAfterControlFlowParen;
+
+                if (ch == '(')
+                {
+                    if (state.ExpectingControlFlowOpenParen)
+                    {
+                        controlFlowParenDepth = 1;
+                        regexAllowedAfterControlFlowParen = false;
+                    }
+                    else if (controlFlowParenDepth > 0)
+                    {
+                        controlFlowParenDepth++;
+                    }
+                }
+                else if (ch == ')' && controlFlowParenDepth > 0)
+                {
+                    controlFlowParenDepth--;
+                    if (controlFlowParenDepth == 0)
+                        regexAllowedAfterControlFlowParen = true;
+                }
+
                 state = state with
                 {
                     PreviousTokenKind = ch switch
@@ -803,7 +848,10 @@ public static class SymbolExtractor
                         '}' => JavaScriptPrevTokenKind.CloseBrace,
                         _ => JavaScriptPrevTokenKind.Other
                     },
-                    PreviousIdentifier = null
+                    PreviousIdentifier = null,
+                    ExpectingControlFlowOpenParen = false,
+                    ControlFlowParenDepth = controlFlowParenDepth,
+                    RegexAllowedAfterControlFlowParen = regexAllowedAfterControlFlowParen
                 };
             }
 
@@ -813,7 +861,7 @@ public static class SymbolExtractor
         return new JavaScriptLexedLine(new string(sanitized), state);
     }
 
-    private static bool CanStartJavaScriptRegexLiteral(JavaScriptLexState state, char[] sanitized, int slashIndex)
+    private static bool CanStartJavaScriptRegexLiteral(JavaScriptLexState state)
     {
         if (state.PreviousTokenKind == JavaScriptPrevTokenKind.None)
             return true;
@@ -828,23 +876,14 @@ public static class SymbolExtractor
         }
 
         if (state.PreviousTokenKind == JavaScriptPrevTokenKind.CloseParen)
-        {
-            var prefix = new string(sanitized, 0, slashIndex).TrimStart();
-            return prefix.StartsWith("if ", StringComparison.Ordinal)
-                || prefix.StartsWith("if(", StringComparison.Ordinal)
-                || prefix.StartsWith("while ", StringComparison.Ordinal)
-                || prefix.StartsWith("while(", StringComparison.Ordinal)
-                || prefix.StartsWith("for ", StringComparison.Ordinal)
-                || prefix.StartsWith("for(", StringComparison.Ordinal)
-                || prefix.StartsWith("switch ", StringComparison.Ordinal)
-                || prefix.StartsWith("switch(", StringComparison.Ordinal)
-                || prefix.StartsWith("catch ", StringComparison.Ordinal)
-                || prefix.StartsWith("catch(", StringComparison.Ordinal)
-                || prefix.StartsWith("with ", StringComparison.Ordinal)
-                || prefix.StartsWith("with(", StringComparison.Ordinal);
-        }
+            return state.RegexAllowedAfterControlFlowParen;
 
         return false;
+    }
+
+    private static bool IsJavaScriptControlFlowKeyword(string identifier)
+    {
+        return identifier is "if" or "for" or "while" or "switch" or "catch" or "with";
     }
 
     private static int SkipJavaScriptRegexLiteral(string line, char[] sanitized, int slashIndex)

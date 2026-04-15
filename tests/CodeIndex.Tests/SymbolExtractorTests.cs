@@ -132,6 +132,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_KeepsSiblingMethodsAfterWrappedControlFlowRegexLiterals()
+    {
+        var content = """
+            class Example {
+                first(value) {
+                    if (
+                        ready
+                    ) /{/.test(value);
+                }
+
+                second(value) {
+                    if (first) {
+                    }
+                    else if (
+                        secondReady
+                    ) /{/.test(value);
+                }
+
+                third() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
     {
         var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
@@ -217,6 +246,35 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_KeepsSiblingMethodsAfterWrappedControlFlowRegexLiterals()
+    {
+        var content = """
+            export class Example {
+                first(value: string): void {
+                    if (
+                        ready
+                    ) /{/.test(value);
+                }
+
+                second(value: string): void {
+                    if (first) {
+                    }
+                    else if (
+                        secondReady
+                    ) /{/.test(value);
+                }
+
+                third(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
     }
 
     [Fact]
