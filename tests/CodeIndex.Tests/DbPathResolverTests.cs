@@ -8,6 +8,7 @@ namespace CodeIndex.Tests;
 /// Tests for default DB path resolution.
 /// 既定DBパス解決のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class DbPathResolverTests
 {
     [Fact]
@@ -66,8 +67,7 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 
@@ -93,8 +93,7 @@ public class DbPathResolverTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 
@@ -339,8 +338,7 @@ public class DbPathResolverTests
         }
         finally
         {
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 }

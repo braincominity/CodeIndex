@@ -7,6 +7,7 @@ namespace CodeIndex.Tests;
 /// Tests for workspace-level metadata enrichment.
 /// ワークスペース単位メタデータ補強のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class WorkspaceMetadataEnricherTests
 {
     [Fact]
@@ -122,8 +123,7 @@ public class WorkspaceMetadataEnricherTests
         {
             Directory.SetCurrentDirectory(originalCwd);
             TestProjectHelper.DeleteDirectory(queryCwd);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 
@@ -170,8 +170,7 @@ public class WorkspaceMetadataEnricherTests
             Directory.SetCurrentDirectory(originalCwd);
             TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteDirectory(queryCwd);
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 

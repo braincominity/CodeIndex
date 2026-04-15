@@ -140,6 +140,34 @@ internal static class TestProjectHelper
         }
     }
 
+    internal static void DeleteFile(string path)
+    {
+        if (!File.Exists(path))
+            return;
+
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+                File.Delete(path);
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                if (OperatingSystem.IsWindows())
+                    SqliteConnection.ClearAllPools();
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                if (OperatingSystem.IsWindows())
+                    SqliteConnection.ClearAllPools();
+                Thread.Sleep(100);
+            }
+        }
+    }
+
     private static void ClearAttributes(string path)
     {
         if (!Directory.Exists(path))
