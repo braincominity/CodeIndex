@@ -378,6 +378,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_SemicolonlessFieldInitializerDoesNotHideComputedOrGeneratorMethods()
+    {
+        var content = """
+            class Example {
+                field = foo
+                [Symbol.iterator]() {}
+                *generate() {}
+                next() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "generate" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "next" && s.ContainerName == "Example");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsInlineClassExpressionMethods()
     {
         var content = "const Service = class NamedService { run() {} };";
@@ -1364,6 +1383,25 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Example");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == unexpectedMethod && s.ContainerName == "Example");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_SemicolonlessFieldInitializerDoesNotHideComputedOrGeneratorMethods()
+    {
+        var content = """
+            export class Example {
+                field = foo
+                [Symbol.iterator](): Iterator<number> {}
+                *generate(): Iterable<number> {}
+                next(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.ContainerName == "Example" && s.ReturnType == "Iterator<number>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "generate" && s.ContainerName == "Example" && s.ReturnType == "Iterable<number>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "next" && s.ContainerName == "Example" && s.ReturnType == "void");
     }
 
     [Fact]

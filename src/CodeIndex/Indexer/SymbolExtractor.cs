@@ -1414,7 +1414,7 @@ public static class SymbolExtractor
                     ? string.Empty
                     : sanitizedLine[scanStartColumn..];
                 if (continuationInput.Any(ch => !char.IsWhiteSpace(ch))
-                    && !StartsJavaScriptTypeScriptExpressionContinuation(continuationInput))
+                    && !StartsJavaScriptTypeScriptFieldInitializerContinuation(continuationInput, lang))
                 {
                     inFieldInitializer = false;
                 }
@@ -1570,6 +1570,27 @@ public static class SymbolExtractor
         {
             inFieldInitializer = false;
         }
+    }
+
+    private static bool StartsJavaScriptTypeScriptFieldInitializerContinuation(string continuationInput, string? lang)
+    {
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < continuationInput.Length && char.IsWhiteSpace(continuationInput[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        if (firstNonWhitespace >= continuationInput.Length)
+            return false;
+
+        if (IsJavaScriptTypeScriptMethodCandidateStart(continuationInput, firstNonWhitespace))
+        {
+            var matchCandidate = lang == "typescript"
+                ? NormalizeTypeScriptBareMethodMatchInput(continuationInput[firstNonWhitespace..])
+                : continuationInput[firstNonWhitespace..];
+            if (TryParseJavaScriptTypeScriptMethodHeader(matchCandidate, 0, lang, out _))
+                return false;
+        }
+
+        return StartsJavaScriptTypeScriptExpressionContinuation(continuationInput);
     }
 
     private static bool CanStartJavaScriptTypeScriptClassFieldInitializer(string sanitizedLine, int index)
