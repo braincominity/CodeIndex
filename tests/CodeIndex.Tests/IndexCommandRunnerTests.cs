@@ -1585,6 +1585,64 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_MarkerlessRootLevelPartialsStayVisibleInHotspots()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Api.Part1.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run() { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "Api.Part2.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                        api.Run(1);
+                    }
+                }
+                """);
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal("success", indexJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            var runRows = hotspotsJson.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(item => item.GetProperty("name").GetString() == "Run")
+                .ToList();
+
+            var runRow = Assert.Single(runRows);
+            Assert.Matches(@"Api\.Part[12]\.cs", runRow.GetProperty("path").GetString() ?? string.Empty);
+            Assert.Equal(2, runRow.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
     {
         // Normal non-rebuild `cdidx index .` is still incremental: unchanged rows are skipped.

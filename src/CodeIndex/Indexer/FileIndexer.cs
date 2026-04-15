@@ -215,7 +215,7 @@ public class FileIndexer
 
         var firstSeparator = normalized.IndexOf('/');
         if (firstSeparator < 0)
-            return $"__file__/{normalized}";
+            return ".";
 
         return normalized[..firstSeparator];
     }

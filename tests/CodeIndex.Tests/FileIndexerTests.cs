@@ -273,6 +273,31 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetFamilyScopeKey_MarkerlessRootLevelFilesShareRootScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            var firstFile = Path.Combine(tempDir, "Api.Part1.cs");
+            var secondFile = Path.Combine(tempDir, "Api.Part2.cs");
+            File.WriteAllText(firstFile, "public partial class Api {}");
+            File.WriteAllText(secondFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal(".", indexer.GetFamilyScopeKey(firstFile, "csharp"));
+            Assert.Equal(".", indexer.GetFamilyScopeKey(secondFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
