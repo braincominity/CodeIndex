@@ -1312,6 +1312,13 @@ public partial class McpServer
         string? foldReadyReason = null;
         if (errors == 0)
         {
+            // Successful MCP full-scan revalidates the entire workspace even when all files
+            // are skipped. Repair stale / missing explicit-DB root metadata only here so
+            // failure paths still cannot rewrite trust metadata before a real success.
+            // MCP の successful full-scan は全件 skip でも workspace 全体を再検証済み。
+            // stale / missing な explicit DB root はここでのみ修復し、失敗経路からの
+            // trust metadata 上書きは引き続き防ぐ。
+            WriteProjectRootOnce();
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips

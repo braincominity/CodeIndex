@@ -907,6 +907,14 @@ public static class IndexCommandRunner
         var foldReadyAfter = false;
         if (errors == 0)
         {
+            // A successful full scan revalidated the target workspace even when every file
+            // was skipped as unchanged. Backfill or rewrite explicit-DB root metadata here
+            // so no-op refreshes repair stale / missing workspace metadata without reopening
+            // the failure-path hole where a rolled-back mutation could hijack trust signals.
+            // 全件 unchanged で skip された成功 full-scan でも workspace は再検証済み。
+            // ここで explicit DB の root metadata を backfill / rewrite し、失敗経路の
+            // trust metadata hijack を再導入せずに stale / missing metadata を修復する。
+            WriteProjectRootOnce();
             // Full-scan covers the whole repo, so it may always stamp Graph / Issues on
             // success regardless of what the DB carried before. Fold still gates on the
             // backfill verification below because incremental-by-default full scans skip
