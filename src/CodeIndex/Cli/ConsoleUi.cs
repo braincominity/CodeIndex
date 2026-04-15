@@ -351,7 +351,7 @@ public static class ConsoleUi
         Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
         Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
-        Console.WriteLine("  hotspots                   Find most-referenced symbols (high-impact code)");
+        Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine();
@@ -423,7 +423,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx deps --path src/ --exclude-tests          Show file-level dependency edges");
         Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
         Console.WriteLine("  cdidx unused --lang csharp --exclude-tests      Find potentially unused symbols");
-        Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find most-referenced symbols");
+        Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback");
         Console.WriteLine("  cdidx impact Run --depth 3 --exclude-tests      Transitive callers of a symbol");
         Console.WriteLine("  cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints");
         Console.WriteLine("  cdidx files --lang python                      List Python files");

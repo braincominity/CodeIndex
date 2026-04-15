@@ -60,7 +60,9 @@ public class ConsoleUiTests
         Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
         Assert.Contains("Prefer --exact-substring for search, keep --exact for find", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
+        Assert.Contains("hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively", output);
         Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);
+        Assert.Contains("cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);

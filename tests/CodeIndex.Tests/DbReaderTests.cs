@@ -34,6 +34,8 @@ public class DbReaderTests : IDisposable
         // test that opens a DB without this flag.
         // #86: full scan 後の本番 DB は fold ready も立つため、reader は fold 経路を通す。
         _writer.MarkFoldReady();
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            _writer.MarkHotspotFamilyReady(lang, $"{lang}-fixture-fingerprint");
         _reader = new DbReader(_db.Connection);
     }
 
@@ -96,7 +98,7 @@ public class DbReaderTests : IDisposable
         InsertIndexedFile("docs/notes.md", "markdown", "# Notes\n\nSome documentation text.");
     }
 
-    private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
+    private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null, string? familyScopeKey = null)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -119,6 +121,7 @@ public class DbReaderTests : IDisposable
         }]);
 
         var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
+        SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey ?? FileIndexer.DeriveFallbackFamilyScopeKey(path));
         _writer.InsertSymbols(symbols);
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
@@ -824,6 +827,932 @@ public class DbReaderTests : IDisposable
         Assert.Equal("login", callee.CallerName);
         Assert.Equal("authenticate", callee.CalleeName);
         Assert.Equal("call", callee.ReferenceKind);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CountsSameNameReferencesPerSymbolFile()
+    {
+        InsertIndexedFile("src/hotspots_alpha.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def alpha_use():\n    Shared()\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_beta.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def beta_use():\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_gamma.py", "python",
+            "def gamma_use():\n    Shared()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/hotspots_alpha.py", "src/hotspots_beta.py"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var shared = results
+            .Where(result => result.Symbol.Name == "Shared")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(shared,
+            alpha =>
+            {
+                Assert.Equal("src/hotspots_alpha.py", alpha.Symbol.Path);
+                Assert.Equal(2, alpha.ReferenceCount);
+            },
+            beta =>
+            {
+                Assert.Equal("src/hotspots_beta.py", beta.Symbol.Path);
+                Assert.Equal(1, beta.ReferenceCount);
+            });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_PathFilterStillTreatsOutOfScopeDuplicateAsAmbiguous()
+    {
+        InsertIndexedFile("src/hotspots_alpha.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def alpha_use():\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_beta.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def beta_use():\n    Shared()\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_gamma.py", "python",
+            "def gamma_use():\n    Shared()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/hotspots_alpha.py"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var shared = Assert.Single(results.Where(result => result.Symbol.Name == "Shared"));
+        Assert.Equal("src/hotspots_alpha.py", shared.Symbol.Path);
+        Assert.Equal(1, shared.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CountsCrossFileReferencesForUniqueName()
+    {
+        InsertIndexedFile("src/api.py", "python", "def SharedApi():\n    return True\n");
+        InsertIndexedFile("src/use1.py", "python",
+            "def use_one():\n    SharedApi()\n    SharedApi()\n");
+        InsertIndexedFile("src/use2.py", "python",
+            "def use_two():\n    SharedApi()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var sharedApi = Assert.Single(results.Where(result => result.Symbol.Name == "SharedApi"));
+        Assert.Equal("src/api.py", sharedApi.Symbol.Path);
+        Assert.Equal(3, sharedApi.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_KeepsCrossFileCountsForSameContainerOverloadFamily()
+    {
+        InsertIndexedFile("src/api.cs", "csharp",
+            """
+            public class Api
+            {
+                public void Run() { }
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("src/api.cs", run.Symbol.Path);
+        Assert.Equal("Api", run.Symbol.ContainerName);
+        Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_KeepsCrossFileCountsForPartialClassOverloadFamily()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("Api", run.Symbol.ContainerName);
+        Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_SeparatesSameSimpleContainerNamesAcrossNamespaces()
+    {
+        InsertIndexedFile("src/One.Api.cs", "csharp",
+            """
+            namespace One;
+
+            public class Api
+            {
+                public void Run() { }
+
+                public void LocalOne()
+                {
+                    Run();
+                }
+            }
+            """);
+        InsertIndexedFile("src/Two.Api.cs", "csharp",
+            """
+            namespace Two;
+
+            public class Api
+            {
+                public void Run() { }
+
+                public void LocalTwo()
+                {
+                    Run();
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runs = results
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(runs,
+            first =>
+            {
+                Assert.Equal("src/One.Api.cs", first.Symbol.Path);
+                Assert.Equal("Api", first.Symbol.ContainerName);
+                Assert.Equal(1, first.ReferenceCount);
+            },
+            second =>
+            {
+                Assert.Equal("src/Two.Api.cs", second.Symbol.Path);
+                Assert.Equal("Api", second.Symbol.ContainerName);
+                Assert.Equal(1, second.ReferenceCount);
+            });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotMergeSameContainerNameAcrossPythonModules()
+    {
+        InsertIndexedFile("src/alpha.py", "python",
+            """
+            class Api:
+                def Run(self):
+                    return True
+
+                def Use(self):
+                    self.Run()
+                    self.Run()
+            """);
+        InsertIndexedFile("src/beta.py", "python",
+            """
+            class Api:
+                def Run(self):
+                    return True
+
+                def Use(self):
+                    self.Run()
+                    self.Run()
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runs = results
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(runs,
+            first =>
+            {
+                Assert.Equal("src/alpha.py", first.Symbol.Path);
+                Assert.Equal("Api", first.Symbol.ContainerName);
+                Assert.Equal(2, first.ReferenceCount);
+            },
+            second =>
+            {
+                Assert.Equal("src/beta.py", second.Symbol.Path);
+                Assert.Equal("Api", second.Symbol.ContainerName);
+                Assert.Equal(2, second.ReferenceCount);
+            });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotMergeSameQualifiedTypeAcrossProjectRoots()
+    {
+        InsertIndexedFile("projA/src/Api.cs", "csharp",
+            """
+            namespace Shared;
+
+            public class Api
+            {
+                public void Run() { }
+
+                public void LocalA()
+                {
+                    Run();
+                }
+            }
+            """);
+        InsertIndexedFile("projB/src/Api.cs", "csharp",
+            """
+            namespace Shared;
+
+            public class Api
+            {
+                public void Run() { }
+
+                public void LocalB()
+                {
+                    Run();
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["projA/", "projB/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runs = results
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(runs,
+            first =>
+            {
+                Assert.Equal("projA/src/Api.cs", first.Symbol.Path);
+                Assert.Equal("Api", first.Symbol.ContainerName);
+                Assert.Equal(1, first.ReferenceCount);
+            },
+            second =>
+            {
+                Assert.Equal("projB/src/Api.cs", second.Symbol.Path);
+                Assert.Equal("Api", second.Symbol.ContainerName);
+                Assert.Equal(1, second.ReferenceCount);
+            });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotMergePartialFamiliesAcrossProjectRoots()
+    {
+        InsertIndexedFile("projA/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """,
+            familyScopeKey: "projA");
+        InsertIndexedFile("projA/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """,
+            familyScopeKey: "projA");
+        InsertIndexedFile("projB/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """,
+            familyScopeKey: "projB");
+        InsertIndexedFile("projB/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """,
+            familyScopeKey: "projB");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["projA/", "projB/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runs = results
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(runs,
+            first =>
+            {
+                Assert.Equal("projA/src/Api.Part1.cs", first.Symbol.Path);
+                Assert.Equal("Api", first.Symbol.ContainerName);
+                Assert.Equal(1, first.ReferenceCount);
+            },
+            second =>
+            {
+                Assert.Equal("projB/src/Api.Part1.cs", second.Symbol.Path);
+                Assert.Equal("Api", second.Symbol.ContainerName);
+                Assert.Equal(1, second.ReferenceCount);
+            });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_KeepsCrossFileCountsForVbPartialClassFamily()
+    {
+        InsertIndexedFile("src/Api.Part1.vb", "vb",
+            """
+            Public Partial Class Api
+                Public Sub Run()
+                End Sub
+            End Class
+            """);
+        InsertIndexedFile("src/Api.Part2.vb", "vb",
+            """
+            Public Partial Class Api
+                Public Sub Run(value As Integer)
+                End Sub
+            End Class
+            """);
+        InsertIndexedFile("src/Caller.vb", "vb",
+            """
+            Public Class Caller
+                Public Sub Call(api As Api)
+                    api.Run()
+                    api.Run(1)
+                End Sub
+            End Class
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "vb",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("Api", run.Symbol.ContainerName);
+        Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_GroupedFamilyReturnsRealDefinitionLocation()
+    {
+        InsertIndexedFile("src/APart.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Helper()
+                {
+                }
+
+                public void Run()
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/BPart.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value)
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal(2, run.ReferenceCount);
+
+        var definitions = _reader.SearchSymbols(
+            "Run",
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false,
+            exact: true);
+
+        Assert.Contains(definitions, definition =>
+            definition.Path == run.Symbol.Path &&
+            definition.Line == run.Symbol.Line &&
+            definition.Name == run.Symbol.Name);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CollapsesSameFileDuplicateNames()
+    {
+        InsertIndexedFile("src/duplicate_names.py", "python",
+            "def Run():\n    return True\n\n" +
+            "def Run(value=None):\n    return value\n\n" +
+            "def caller():\n    Run()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/duplicate_names.py"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runResults = results
+            .Where(result => result.Symbol.Name == "Run")
+            .ToList();
+
+        var run = Assert.Single(runResults);
+        Assert.Equal("src/duplicate_names.py", run.Symbol.Path);
+        Assert.Equal(1, run.ReferenceCount);
+        Assert.Equal(1, run.Symbol.Line);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_WithoutHotspotFamilyReadyFallsBackForMixedPartialFamilies()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                UPDATE symbols
+                SET family_key = NULL
+                WHERE file_id IN (
+                    SELECT id FROM files WHERE path = 'src/Api.Part2.cs'
+                )
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        _writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+
+        var reader = new DbReader(_db.Connection);
+        var results = reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+    }
+
+    [Fact]
+    public void GetHotspotFamilySignal_LegacyPartialFamiliesWithoutPersistedKeysAreStillDegraded()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                UPDATE symbols
+                SET family_key = NULL,
+                    container_qualified_name = NULL
+                WHERE file_id IN (
+                    SELECT id FROM files WHERE lang = 'csharp'
+                )
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        _writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+        _writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("csharp", signal.DegradedReason);
+    }
+
+    [Fact]
+    public void GetHotspotFamilySignal_MissingMarkerFingerprintIsStillDegraded()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        _writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("csharp", signal.DegradedReason);
+
+        var results = reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_StaleVersionOneMarkerlessFamiliesDegradeAndDoNotMerge()
+    {
+        InsertIndexedFile("projA/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """,
+            familyScopeKey: ".");
+        InsertIndexedFile("projA/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """,
+            familyScopeKey: ".");
+        InsertIndexedFile("projB/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """,
+            familyScopeKey: ".");
+        InsertIndexedFile("projB/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """,
+            familyScopeKey: ".");
+
+        _writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), "1");
+        _writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), "stale-v1");
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("csharp", signal.DegradedReason);
+
+        var runs = reader.GetSymbolHotspots(
+                limit: 10,
+                kind: "function",
+                lang: "csharp",
+                pathPatterns: ["projA/", "projB/"],
+                excludePathPatterns: null,
+                excludeTests: false)
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(2, runs.Count);
+        Assert.StartsWith("projA/src/Api.Part", runs[0].Symbol.Path, StringComparison.Ordinal);
+        Assert.Equal(1, runs[0].ReferenceCount);
+        Assert.StartsWith("projB/src/Api.Part", runs[1].Symbol.Path, StringComparison.Ordinal);
+        Assert.Equal(1, runs[1].ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotPromoteSameFileDifferentContainersToGlobalCounts()
+    {
+        InsertIndexedFile("src/Duplicate.cs", "csharp",
+            """
+            public class A
+            {
+                public void Run() { }
+            }
+
+            public class B
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(A api)
+                {
+                    api.Run();
+                    api.Run();
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotCountAmbiguousSameFileSiblingContainerReferences()
+    {
+        InsertIndexedFile("src/Duplicate.cs", "csharp",
+            """
+            public class A
+            {
+                public void Run() { }
+
+                public void CallA()
+                {
+                    Run();
+                }
+            }
+
+            public class B
+            {
+                public void Run() { }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_LangFilterIgnoresCrossLanguageReferences()
+    {
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(App app)
+                {
+                    app.Run();
+                    app.Run();
+                }
+            }
+            """);
+        InsertIndexedFile("src/tool.py", "python",
+            """
+            def helper():
+                Run()
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("src/App.cs", run.Symbol.Path);
+        Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CrossLanguageDefinitionsDoNotSuppressSameLanguageHotspots()
+    {
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(App app)
+                {
+                    app.Run();
+                    app.Run();
+                }
+            }
+            """);
+        InsertIndexedFile("src/tool.py", "python",
+            """
+            def Run():
+                return True
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: null,
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run" && result.Symbol.Lang == "csharp"));
+        Assert.Equal("src/App.cs", run.Symbol.Path);
+        Assert.Equal(2, run.ReferenceCount);
     }
 
     [Fact]

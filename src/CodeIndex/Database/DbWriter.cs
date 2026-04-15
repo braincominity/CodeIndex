@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Database;
@@ -336,13 +337,15 @@ public class DbWriter
                 INSERT INTO symbols (
                     file_id, kind, name, line, start_line, end_line,
                     body_start_line, body_end_line, signature,
-                    container_kind, container_name, visibility, return_type,
+                    container_kind, container_name, container_qualified_name, family_key,
+                    visibility, return_type,
                     name_folded
                 )
                 VALUES (
                     @fid, @kind, @name, @line, @startLine, @endLine,
                     @bodyStartLine, @bodyEndLine, @signature,
-                    @containerKind, @containerName, @visibility, @returnType,
+                    @containerKind, @containerName, @containerQualifiedName, @familyKey,
+                    @visibility, @returnType,
                     @nameFolded
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
@@ -356,6 +359,8 @@ public class DbWriter
             var pSignature = cmd.Parameters.Add("@signature", SqliteType.Text);
             var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
             var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
+            var pContainerQualifiedName = cmd.Parameters.Add("@containerQualifiedName", SqliteType.Text);
+            var pFamilyKey = cmd.Parameters.Add("@familyKey", SqliteType.Text);
             var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
             var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
             var pNameFolded = cmd.Parameters.Add("@nameFolded", SqliteType.Text);
@@ -377,6 +382,8 @@ public class DbWriter
                 pSignature.Value = (object?)symbol.Signature ?? DBNull.Value;
                 pContainerKind.Value = (object?)symbol.ContainerKind ?? DBNull.Value;
                 pContainerName.Value = (object?)symbol.ContainerName ?? DBNull.Value;
+                pContainerQualifiedName.Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
+                pFamilyKey.Value = (object?)symbol.FamilyKey ?? DBNull.Value;
                 pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
                 pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
                 pNameFolded.Value = (object?)NameFold.Fold(symbol.Name) ?? DBNull.Value;
@@ -645,6 +652,44 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Stamp the current authoritative version for hotspot family grouping semantics.
+    /// Only fully authoritative DB states should call this; mixed legacy/current DBs must
+    /// stay unstamped so readers degrade to conservative same-file counting.
+    /// hotspots family grouping の current authoritative version を stamp する。
+    /// </summary>
+    public void MarkHotspotFamilyReady(string lang, string? markerFingerprint = null)
+    {
+        SetMeta(
+            DbContext.GetHotspotFamilyVersionMetaKey(lang),
+            DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), markerFingerprint);
+        // Clear the superseded global keys so mixed-version DBs don't leave confusing stale metadata behind.
+        // 廃止した global key を掃除し、混在 DB に紛らわしい古い metadata を残さない。
+        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+    }
+
+    /// <summary>
+    /// Demote hotspot-family trust. Called at the start of any indexing run that may leave
+    /// a mixed legacy/current symbol set so readers fall back conservatively unless the run
+    /// completes and restamps the current version.
+    /// hotspot-family trust を縮退させる。index 開始時に呼び、成功時だけ再 stamp する。
+    /// </summary>
+    public void ClearHotspotFamilyReady()
+    {
+        if (!TableExists("codeindex_meta"))
+            return;
+
+        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            SetMeta(DbContext.GetHotspotFamilyVersionMetaKey(lang), null);
+            SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), null);
+        }
+    }
+
+    /// <summary>
     /// Upsert a metadata key/value into `codeindex_meta`.
     /// codeindex_meta への key/value の upsert。
     /// </summary>
@@ -658,6 +703,14 @@ public class DbWriter
         cmd.ExecuteNonQuery();
     }
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
+
+    private bool TableExists(string name)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
+        cmd.Parameters.AddWithValue("@name", name);
+        return cmd.ExecuteScalar() != null;
+    }
 
     /// <summary>
     /// True only when every existing row in symbols / symbol_references has a populated folded

@@ -161,6 +161,8 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
+        var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
@@ -173,6 +175,7 @@ public static class IndexCommandRunner
         if (options.Rebuild)
         {
             db.ClearReadyFlags();
+            new DbWriter(db.Connection).ClearHotspotFamilyReady();
             db.DropAll();
         }
 
@@ -181,11 +184,12 @@ public static class IndexCommandRunner
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(options.ProjectPath);
+        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorIndexedProjectRoot)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorIndexedProjectRoot);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -428,6 +432,9 @@ public static class IndexCommandRunner
         int priorReadiness,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
+        IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
@@ -511,6 +518,7 @@ public static class IndexCommandRunner
             // file update が rollback しても reader は stale ready bit を信じない。
             // no-op update では呼ばないので、shared explicit DB の metadata も安定する。
             writer.ClearReadyFlags();
+            writer.ClearHotspotFamilyReady();
             readinessDemoted = true;
         }
 
@@ -597,6 +605,7 @@ public static class IndexCommandRunner
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
@@ -612,6 +621,15 @@ public static class IndexCommandRunner
             }
             catch (Exception ex)
             {
+                // If an already-indexed target file can no longer be re-read/re-parsed, the
+                // existing hotspot-family metadata may be stale relative to the user's
+                // requested refresh. Demote trust even though the attempted rewrite failed
+                // before commit so readers do not keep treating the DB as authoritative.
+                // 既存 index 対象ファイルの再読込/再解析に失敗した場合は、commit 前失敗でも
+                // refresh 未完了として hotspot-family trust を縮退させる。
+                if (File.Exists(absPath) && writer.HasFileAtPath(relPath))
+                    DemoteReadinessOnce();
+
                 errors++;
                 errorList.Add(new { file = relPath, message = ex.Message });
                 if (!options.Json)
@@ -669,6 +687,11 @@ public static class IndexCommandRunner
                 writer.MarkIssuesReady();
                 issuesTableAvailableAfter = true;
             }
+            RestampHotspotFamilyTrustForUpdate(
+                writer,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
             // FoldReady restamp requires both the prior stored version and fingerprint to
             // match the current binary/runtime. Otherwise untouched rows still carry keys
             // from an older fold implementation or runtime table set, and advertising
@@ -741,6 +764,60 @@ public static class IndexCommandRunner
         return CommandExitCodes.Success;
     }
 
+    private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = db.GetMetaString(keyFactory(lang));
+        return values;
+    }
+
+    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = indexer.GetProjectMarkerFingerprint(lang);
+        return values;
+    }
+
+    private static void RestampHotspotFamilyTrustForUpdate(
+        DbWriter writer,
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            if (priorVersions.TryGetValue(lang, out var priorVersion)
+                && priorFingerprints.TryGetValue(lang, out var priorFingerprint)
+                && currentFingerprints.TryGetValue(lang, out var currentFingerprint)
+                && priorVersion == currentVersion
+                && priorFingerprint == currentFingerprint)
+            {
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+            }
+        }
+    }
+
+    private static void RestampHotspotFamilyTrustForFullScan(
+        DbWriter writer,
+        bool allFilesRewritten,
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            priorVersions.TryGetValue(lang, out var priorVersion);
+            priorFingerprints.TryGetValue(lang, out var priorFingerprint);
+            if (allFilesRewritten || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+        }
+    }
+
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
 
@@ -768,6 +845,9 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
+        IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot)
     {
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
@@ -803,6 +883,7 @@ public static class IndexCommandRunner
         // never reaches this point for any reason.
         // 実書き込み直前で readiness をクリア。--rebuild 経路は RunIndex で既に clear 済み。
         writer.ClearReadyFlags();
+        writer.ClearHotspotFamilyReady();
 
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
@@ -860,6 +941,7 @@ public static class IndexCommandRunner
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
@@ -919,6 +1001,12 @@ public static class IndexCommandRunner
             writer.MarkIssuesReady();
             graphTableAvailableAfter = true;
             issuesTableAvailableAfter = true;
+            RestampHotspotFamilyTrustForFullScan(
+                writer,
+                skipped == 0,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
             // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
             // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
             // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip
