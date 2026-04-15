@@ -85,6 +85,7 @@ public static class IndexCommandRunner
         {
             var dryIndexer = new FileIndexer(options.ProjectPath);
             IReadOnlyList<string> dryCandidates;
+            var errorList = new List<object>();
 
             if (options.UpdateFiles.Count > 0)
             {
@@ -111,12 +112,18 @@ public static class IndexCommandRunner
             }
             else
             {
-                dryCandidates = dryIndexer.ScanFiles();
+                var scanResult = dryIndexer.ScanFilesDetailed();
+                dryCandidates = scanResult.Files;
+                errorList.AddRange(scanResult.Errors.Select(error => (object)new { file = error.Path, message = error.Message }));
+                if (!options.Json)
+                {
+                    foreach (var error in scanResult.Errors)
+                        ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
+                }
             }
 
             var dryFiles = new List<string>();
             var langCounts = new Dictionary<string, int>();
-            var errorList = new List<object>();
             foreach (var f in dryCandidates)
             {
                 if (!TryProbeDryRunFile(dryIndexer, f, out var lang, out var message))

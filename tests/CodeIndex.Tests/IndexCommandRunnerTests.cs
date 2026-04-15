@@ -1905,6 +1905,41 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_FullScan_ReportsUnreadableDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("secret", stderr);
+            Assert.Contains("Could not scan directory due to permissions.", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_IgnoresUnixFifoKnownFilename()
     {
         if (OperatingSystem.IsWindows())
