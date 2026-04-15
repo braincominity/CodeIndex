@@ -285,6 +285,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            WriteGraphReferenceKindHint("references", options.Kind, options.Json);
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
@@ -374,6 +375,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
@@ -459,6 +461,7 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
@@ -2583,6 +2586,8 @@ public static class QueryCommandRunner
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
         ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct"];
+    private static readonly string[] AllValidReferenceKinds =
+        ["call", "instantiate", "subscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {
@@ -2597,6 +2602,23 @@ public static class QueryCommandRunner
         var existingKinds = reader.GetDistinctKinds();
         if (!existingKinds.Contains(kind))
             Console.Error.WriteLine($"Hint: no '{kind}' symbols in the index. Indexed kinds: {string.Join(", ", existingKinds)}");
+    }
+
+    private static void WriteGraphReferenceKindHint(string command, string? kind, bool json)
+    {
+        if (json || string.IsNullOrWhiteSpace(kind))
+            return;
+
+        if (AllValidReferenceKinds.Contains(kind))
+            return;
+
+        if (AllValidKinds.Contains(kind))
+        {
+            Console.Error.WriteLine($"WARN: '{kind}' is a symbol kind, but --kind on '{command}' filters by reference kind ({string.Join(", ", AllValidReferenceKinds)}). Use symbols/definition/hotspots/unused to filter by symbol kind.");
+            return;
+        }
+
+        Console.Error.WriteLine($"Hint: '{kind}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", AllValidReferenceKinds)}");
     }
 
     private static void WriteGraphSupportHint(string? lang)

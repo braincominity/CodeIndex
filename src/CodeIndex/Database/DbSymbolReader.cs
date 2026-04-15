@@ -732,6 +732,18 @@ public partial class DbReader
                  AND gm.name = gc.name
                  AND gm.kind = gc.kind
             ),
+            logical_references AS (
+                SELECT sr.file_id,
+                       rf.lang,
+                       sr.symbol_name,
+                       sr.line,
+                       sr.column_number,
+                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind,
+                       CAST(sr.file_id AS TEXT) || ':' || sr.symbol_name || ':' || CAST(sr.line AS TEXT) || ':' || CAST(sr.column_number AS TEXT) || ':' || " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_site_key
+                FROM symbol_references sr
+                JOIN files rf ON rf.id = sr.file_id
+                GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
+            ),
             file_target_cardinality AS (
                 SELECT lang,
                        file_id,
@@ -742,16 +754,14 @@ public partial class DbReader
                 GROUP BY lang, file_id, name, kind
             ),
             reference_counts AS (
-                SELECT gr.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
+                SELECT gr.symbol_id, COUNT(DISTINCT sr.logical_site_key) AS ref_count
                 FROM grouped_rows gr
                 JOIN name_cardinality nc
                   ON nc.lang = gr.lang
                  AND nc.name = gr.name
-                JOIN symbol_references sr
+                JOIN logical_references sr
                   ON sr.symbol_name = gr.name
-                JOIN files rf
-                  ON rf.id = sr.file_id
-                 AND rf.lang = gr.lang
+                 AND sr.lang = gr.lang
                 LEFT JOIN filtered_candidates fc
                   ON fc.logical_target_key = gr.logical_target_key
                  AND fc.name = gr.name

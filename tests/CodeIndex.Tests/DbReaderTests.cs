@@ -2115,6 +2115,159 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphQueries_DefaultCountsDeduplicateConstructorCallAndInstantiateSites()
+    {
+        InsertIndexedFile("src/constructor_fixture_target.cs", "csharp",
+            """
+            public class Target
+            {
+                public Target() { }
+            }
+            """);
+        InsertIndexedFile("src/constructor_fixture_caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Run()
+                {
+                    var target = new Target();
+                }
+            }
+            """);
+
+        var refs = _reader.SearchReferences("Target", lang: "csharp", exact: true, pathPatterns: ["constructor_fixture"]);
+        var reference = Assert.Single(refs);
+        Assert.Equal("instantiate", reference.ReferenceKind);
+        Assert.Equal(1, _reader.CountSearchReferences("Target", lang: "csharp", exact: true, pathPatterns: ["constructor_fixture"]));
+
+        var caller = Assert.Single(_reader.GetCallers("Target", lang: "csharp", exact: true, pathPatterns: ["constructor_fixture"]));
+        Assert.Equal("Run", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var callee = Assert.Single(_reader.GetCallees("Run", lang: "csharp", exact: true, pathPatterns: ["constructor_fixture"]));
+        Assert.Equal("Target", callee.CalleeName);
+        Assert.Equal("instantiate", callee.ReferenceKind);
+        Assert.Equal(1, callee.ReferenceCount);
+
+        var (impact, truncated) = _reader.GetTransitiveCallers("Target", maxDepth: 1, limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture"]);
+        Assert.False(truncated);
+        var impactCaller = Assert.Single(impact);
+        Assert.Equal("Run", impactCaller.CallerName);
+        Assert.Equal(1, impactCaller.ReferenceCount);
+
+        var hotspot = Assert.Single(_reader.GetSymbolHotspots(10, "class", "csharp", ["constructor_fixture"], null, false), item => item.Symbol.Name == "Target");
+        Assert.Equal(1, hotspot.ReferenceCount);
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(limit: 10, lang: "csharp", pathPatterns: ["constructor_fixture_caller.cs"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/constructor_fixture_caller.cs", dependency.SourcePath);
+        Assert.Equal("src/constructor_fixture_target.cs", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+    }
+
+    [Fact]
+    public void GraphQueries_ExplicitReferenceKindsKeepSeparateConstructorRows()
+    {
+        InsertIndexedFile("src/constructor_kind_target.cs", "csharp",
+            """
+            public class Target
+            {
+                public Target() { }
+            }
+            """);
+        InsertIndexedFile("src/constructor_kind_caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Run()
+                {
+                    var target = new Target();
+                }
+            }
+            """);
+
+        var callRef = Assert.Single(_reader.SearchReferences("Target", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal("call", callRef.ReferenceKind);
+        var instantiateRef = Assert.Single(_reader.SearchReferences("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal("instantiate", instantiateRef.ReferenceKind);
+
+        Assert.Equal(1, _reader.CountSearchReferences("Target", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal(1, _reader.CountSearchReferences("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
+
+        var callCallee = Assert.Single(_reader.GetCallees("Run", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal("call", callCallee.ReferenceKind);
+        Assert.Equal(1, callCallee.ReferenceCount);
+
+        var instantiateCallee = Assert.Single(_reader.GetCallees("Run", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal("instantiate", instantiateCallee.ReferenceKind);
+        Assert.Equal(1, instantiateCallee.ReferenceCount);
+
+        var callCaller = Assert.Single(_reader.GetCallers("Target", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal(1, callCaller.ReferenceCount);
+        var instantiateCaller = Assert.Single(_reader.GetCallers("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal(1, instantiateCaller.ReferenceCount);
+    }
+
+    [Fact]
+    public void GraphQueries_DefaultGraphQueriesKeepSubscribeRowsVisible()
+    {
+        InsertIndexedFile("src/event_publisher.cs", "csharp",
+            """
+            using System;
+
+            public class Publisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/event_subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class Subscriber
+            {
+                public void Hook(Publisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var reference = Assert.Single(_reader.SearchReferences("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+        Assert.Equal("subscribe", reference.ReferenceKind);
+        Assert.Equal("Hook", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+
+        var caller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+        Assert.Equal("Hook", caller.CallerName);
+        Assert.Equal("Changed", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+
+        var callee = Assert.Single(_reader.GetCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+        Assert.Equal("Hook", callee.CallerName);
+        Assert.Equal("Changed", callee.CalleeName);
+        Assert.Equal("subscribe", callee.ReferenceKind);
+        Assert.Equal(1, callee.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+
+        var analysis = _reader.AnalyzeSymbol("Changed", limit: 5, lang: "csharp", pathPatterns: ["event_"], exact: true);
+        var bundledReference = Assert.Single(analysis.References);
+        Assert.Equal("subscribe", bundledReference.ReferenceKind);
+        Assert.Equal("Hook", bundledReference.ContainerName);
+        var bundledCaller = Assert.Single(analysis.Callers);
+        Assert.Equal("Hook", bundledCaller.CallerName);
+        Assert.Empty(analysis.Callees);
+
+        var callerAnalysis = _reader.AnalyzeSymbol("Hook", limit: 5, lang: "csharp", pathPatterns: ["event_"], exact: true);
+        var bundledCallee = Assert.Single(callerAnalysis.Callees);
+        Assert.Equal("Hook", bundledCallee.CallerName);
+        Assert.Equal("Changed", bundledCallee.CalleeName);
+        Assert.Equal("subscribe", bundledCallee.ReferenceKind);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_ReturnsAllDirectCallersAcrossPages()
     {
         const int callerCount = 205;
