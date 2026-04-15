@@ -634,7 +634,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
-            WorkspaceMetadataEnricher.Enrich(map, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             structured["limit"] = limit;
             structured["lang"] = lang;
@@ -670,7 +670,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
-            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             AddExactSignalAliases(structured);
             structured.Remove("exactZeroHint");
@@ -716,7 +716,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
@@ -1312,13 +1312,6 @@ public partial class McpServer
         string? foldReadyReason = null;
         if (errors == 0)
         {
-            // Successful MCP full-scan revalidates the entire workspace even when all files
-            // are skipped. Repair stale / missing explicit-DB root metadata only here so
-            // failure paths still cannot rewrite trust metadata before a real success.
-            // MCP の successful full-scan は全件 skip でも workspace 全体を再検証済み。
-            // stale / missing な explicit DB root はここでのみ修復し、失敗経路からの
-            // trust metadata 上書きは引き続き防ぐ。
-            WriteProjectRootOnce();
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
@@ -1349,6 +1342,11 @@ public partial class McpServer
             {
                 foldReadyReason = "stale_fold_key_fingerprint";
             }
+
+            // Successful no-op MCP full scans should repair explicit-DB roots only after
+            // readiness is stamped, preserving the failure-path safety contract.
+            // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
+            WriteProjectRootOnce();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 

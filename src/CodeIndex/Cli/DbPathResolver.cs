@@ -26,14 +26,15 @@ public static class DbPathResolver
     /// Resolve the most likely project root for query commands from the DB path.
     /// クエリ系コマンドのDBパスから、もっとも可能性が高いプロジェクトルートを解決する。
     /// </summary>
-    public static string? ResolveProjectRootForQuery(string dbPath)
+    public static string? ResolveProjectRootForQuery(string dbPath, bool dbPathExplicit = false)
     {
         var fullDbPath = Path.GetFullPath(NormalizeDbPath(dbPath));
         var dbDir = Path.GetDirectoryName(fullDbPath);
         if (dbDir == null)
             return null;
 
-        if (string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase)
+        if (!dbPathExplicit
+            && string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase)
             && string.Equals(Path.GetFileName(fullDbPath), "codeindex.db", StringComparison.OrdinalIgnoreCase))
             return Path.GetDirectoryName(dbDir);
 

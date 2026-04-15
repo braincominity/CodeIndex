@@ -34,6 +34,8 @@ internal static class TestProjectHelper
         var dbPath = Path.Combine(dbDir, "codeindex.db");
         using var db = new DbContext(dbPath);
         db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(projectRoot));
         return dbPath;
     }
 

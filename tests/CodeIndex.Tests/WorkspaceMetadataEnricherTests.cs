@@ -159,7 +159,7 @@ public class WorkspaceMetadataEnricherTests
             Directory.SetCurrentDirectory(queryCwd);
             var status = new StatusResult();
 
-            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+            WorkspaceMetadataEnricher.Enrich(status, dbPath, dbPathExplicit: true);
 
             Assert.Equal(projectRoot, status.ProjectRoot);
             Assert.Equal(expectedHead, status.GitHead);
@@ -172,6 +172,55 @@ public class WorkspaceMetadataEnricherTests
             TestProjectHelper.DeleteDirectory(queryCwd);
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Enrich_StatusResult_ExplicitExternalCodeIndexDbUsesStoredProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_explicit_codeindex_root");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_explicit_codeindex_container");
+        var queryCwd = TestProjectHelper.CreateTempProject("cdidx_workspace_explicit_codeindex_other_git");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
+        var originalCwd = Directory.GetCurrentDirectory();
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App { void Run() {} }\n");
+
+            TestProjectHelper.InitializeGitRepo(queryCwd);
+            File.WriteAllText(Path.Combine(queryCwd, "tracked.txt"), "tracked\n");
+            TestProjectHelper.RunGit(queryCwd, "add", "tracked.txt");
+            TestProjectHelper.RunGit(queryCwd, "commit", "-m", "initial");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+
+            Directory.SetCurrentDirectory(queryCwd);
+            var status = new StatusResult();
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath, dbPathExplicit: true);
+
+            Assert.Equal(projectRoot, status.ProjectRoot);
+            Assert.Equal(expectedHead, status.GitHead);
+            Assert.True(status.GitIsDirty);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalCwd);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+            TestProjectHelper.DeleteDirectory(queryCwd);
         }
     }
 

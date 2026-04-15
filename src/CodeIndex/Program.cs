@@ -98,7 +98,7 @@ static bool IsProjectPathArg(string arg) =>
 int RunMcp(string[] cmdArgs)
 {
     var options = QueryCommandRunner.ParseArgs(cmdArgs, jsonDefault: true);
-    var server = new McpServer(options.DbPath, appVersion);
+    var server = new McpServer(options.DbPath, appVersion, options.DbPathExplicit);
     server.RunAsync().GetAwaiter().GetResult();
     return CommandExitCodes.Success;
 }
