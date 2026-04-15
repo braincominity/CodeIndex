@@ -4064,7 +4064,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_ExplicitProjectLocalDb_UsesCdidxSiblingPathWhenMetadataIsMissing()
+    public void RunStatus_ExplicitProjectLocalDb_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_project_local_explicit");
         try
@@ -4098,9 +4098,9 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(projectRoot, json.GetProperty("project_root").GetString());
-            Assert.Equal(expectedHead, json.GetProperty("git_head").GetString());
-            Assert.True(json.GetProperty("git_is_dirty").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("project_root").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("git_is_dirty").ValueKind);
         }
         finally
         {
@@ -4109,7 +4109,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_ExplicitProjectLocalReadOnlyUri_UsesCdidxSiblingPathWhenMetadataIsMissing()
+    public void RunStatus_ExplicitProjectLocalReadOnlyUri_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_project_local_uri");
         try
@@ -4130,7 +4130,6 @@ public class QueryCommandRunnerTests
                 cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
                 cmd.ExecuteNonQuery();
             }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
             using (var db = new DbContext(dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
@@ -4151,9 +4150,9 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(projectRoot, json.GetProperty("project_root").GetString());
-            Assert.Equal(expectedHead, json.GetProperty("git_head").GetString());
-            Assert.True(json.GetProperty("git_is_dirty").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("project_root").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("git_is_dirty").ValueKind);
         }
         finally
         {
@@ -4249,6 +4248,62 @@ public class QueryCommandRunnerTests
             Assert.Equal(projectRoot, json.GetProperty("project_root").GetString());
             Assert.Equal(expectedHead, json.GetProperty("git_head").GetString());
             Assert.False(json.GetProperty("git_is_dirty").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_ExplicitExternalCodeIndexDbWithoutMetadata_IgnoresSiblingPathCollisionAndLeavesWorkspaceMetadataNull()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_codeindex_missing_meta_db");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_codeindex_missing_meta_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            TestProjectHelper.InitializeGitRepo(dbContainerRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
+
+            const string indexedContent = "class App {}\n";
+            const string siblingContent = "class App { void Different() {} }\n";
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
+            File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), siblingContent);
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            TestProjectHelper.RunGit(dbContainerRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(dbContainerRoot, "commit", "-m", "initial");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("project_root").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("git_is_dirty").ValueKind);
         }
         finally
         {

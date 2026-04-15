@@ -778,11 +778,12 @@ This exercises the entire stack end-to-end.
    `<projectPath>/.cdidx/codeindex.db` unless `--db` overrides it, and
    creates the `.cdidx/` directory. The same helper also resolves
    query-time workspace roots for `status` / `map` / `inspect`:
-   project-local `<project>/.cdidx/codeindex.db` trusts the `.cdidx`
-   sibling path first, while external explicit DBs fall back to
-   `codeindex_meta.indexed_project_root` when present and otherwise leave
-   `project_root` / `git_head` / `git_is_dirty` unset on legacy DBs that
-   have no stored root metadata.
+   implicit queries without `--db` trust the default `.cdidx/codeindex.db`
+   sibling path for the current workspace, while explicit `--db` values
+   fall back to `codeindex_meta.indexed_project_root` when present and
+   otherwise leave `project_root` / `git_head` / `git_is_dirty` unset on
+   legacy DBs that have no stored root metadata, even when the explicit
+   path itself looks like `.../.cdidx/codeindex.db`.
 4. **Open SQLite.** `IndexCommandRunner` constructs
    `new DbContext(dbPath)`, which calls `new SqliteConnection(...)`.
    **This is when the native library is resolved.** `SqliteConnection`'s
@@ -1682,7 +1683,7 @@ flowchart TD
 
 1. **バイナリ起動。** 自己完結型ホストがマネージエントリポイント（`Program.Main`）を解決。
 2. **CLI ルーティング。** `Program.cs` が `IndexCommandRunner.Run(args, jsonOptions)` に振り分け。
-3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。同じヘルパーは `status` / `map` / `inspect` の query-time workspace root 解決も担う。project-local な `<project>/.cdidx/codeindex.db` では `.cdidx` sibling path を最優先し、外置き explicit DB では `codeindex_meta.indexed_project_root` を読む。保存済み root metadata を持たない legacy explicit DB は `project_root` / `git_head` / `git_is_dirty` を未設定のまま返す。
+3. **DB パス解決。** `DbPathResolver` が `--db` 指定が無い限り `<projectPath>/.cdidx/codeindex.db` を算出し、`.cdidx/` ディレクトリを作成する。同じヘルパーは `status` / `map` / `inspect` の query-time workspace root 解決も担う。`--db` を付けない query は既定の `.cdidx/codeindex.db` sibling path をそのまま正とし、explicit DB は `codeindex_meta.indexed_project_root` を読む。保存済み root metadata を持たない legacy explicit DB は、明示パス自体が `.../.cdidx/codeindex.db` でも `project_root` / `git_head` / `git_is_dirty` を未設定のまま返す。
 4. **SQLite オープン。** `IndexCommandRunner` が `new DbContext(dbPath)` を構築し、内部で `new SqliteConnection(...)` が呼ばれる。**ネイティブライブラリの解決はこの時点で行われる。** `SqliteConnection` の静的コンストラクタが `SQLitePCL.Batteries_V2.Init()` を呼び、それが `SQLite3Provider_e_sqlite3` 上で `sqlite3_libversion_number()` を起動し、`e_sqlite3` への P/Invoke に到達する。Linux の .NET 動的ローダは次の順で探す（失敗時のエラーメッセージを参照）:
    - `${apphost_dir}/libe_sqlite3.so`
    - `${apphost_dir}/e_sqlite3.so`（および `lib` プレフィックスなしのバリエーション）

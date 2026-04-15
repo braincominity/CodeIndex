@@ -225,9 +225,9 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_StatusResult_ExplicitProjectLocalDbUsesCdidxSiblingPathWhenMetadataIsMissing()
+    public void Enrich_StatusResult_ExplicitProjectLocalDbLeavesWorkspaceMetadataNullWhenMetadataIsMissing()
     {
-        var (projectRoot, dbPath, expectedHead) = CreateDirtyGitProject("cdidx_workspace_project_local_explicit");
+        var (projectRoot, dbPath, _) = CreateDirtyGitProject("cdidx_workspace_project_local_explicit");
         try
         {
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
@@ -243,9 +243,9 @@ public class WorkspaceMetadataEnricherTests
 
             WorkspaceMetadataEnricher.Enrich(status, dbPath, dbPathExplicit: true);
 
-            Assert.Equal(projectRoot, status.ProjectRoot);
-            Assert.Equal(expectedHead, status.GitHead);
-            Assert.True(status.GitIsDirty);
+            Assert.Null(status.ProjectRoot);
+            Assert.Null(status.GitHead);
+            Assert.Null(status.GitIsDirty);
         }
         finally
         {

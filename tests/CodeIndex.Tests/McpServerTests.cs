@@ -1953,7 +1953,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Status_ExplicitProjectLocalDb_UsesCdidxSiblingPathWhenMetadataIsMissing()
+    public void ToolsCall_Status_ExplicitProjectLocalDb_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_project_local_explicit");
         try
@@ -1963,8 +1963,6 @@ public class McpServerTests : IDisposable
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
             TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
-            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
-
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using (var db = new DbContext(dbPath))
             {
@@ -1981,9 +1979,9 @@ public class McpServerTests : IDisposable
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
-            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
-            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
-            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
         }
         finally
         {
@@ -1992,7 +1990,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Status_ExplicitProjectLocalReadOnlyUri_UsesCdidxSiblingPathWhenMetadataIsMissing()
+    public void ToolsCall_Status_ExplicitProjectLocalReadOnlyUri_LeavesWorkspaceMetadataNullWhenMetadataIsMissing()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_project_local_uri");
         try
@@ -2002,8 +2000,6 @@ public class McpServerTests : IDisposable
             File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
             TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
             TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
-            var expectedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
-
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using (var db = new DbContext(dbPath))
             {
@@ -2012,7 +2008,6 @@ public class McpServerTests : IDisposable
                 cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
                 cmd.ExecuteNonQuery();
             }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
             using (var db = new DbContext(dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
@@ -2028,9 +2023,9 @@ public class McpServerTests : IDisposable
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
-            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
-            Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
-            Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
+            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
+            Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
         }
         finally
         {

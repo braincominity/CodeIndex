@@ -113,10 +113,12 @@ public static class DbPathResolver
 
         // Explicit `--db .../.cdidx/codeindex.db` is ambiguous: it may be a genuine
         // project-local DB, or an external/shared DB whose container happens to use the
-        // same filename. Prefer the sibling path only when the indexed contents still line
-        // up with that sibling root; otherwise fall back to persisted metadata.
-        // 明示指定の `--db .../.cdidx/codeindex.db` は曖昧なので、DB内容と sibling root が
-        // 実際に整合しているときだけ sibling を採用し、それ以外は persisted metadata を使う。
+        // same filename. Only prefer the sibling path when persisted metadata exists and
+        // the indexed contents clearly match that sibling more strongly than the stored
+        // root; legacy explicit DBs without stored metadata must not guess.
+        // 明示指定の `--db .../.cdidx/codeindex.db` は曖昧なので、保存済み metadata があり、
+        // かつ DB内容がその sibling と stored root より強く整合するときだけ sibling を採用する。
+        // 保存済み metadata のない legacy explicit DB は推測してはいけない。
         if (SiblingRootMatchesIndexedContents(dbPath, fullDbPath, siblingRoot, indexedProjectRoot))
             return siblingRoot;
 
@@ -138,7 +140,7 @@ public static class DbPathResolver
 
         var siblingMatches = CountMatchingSamples(siblingRoot, samples);
         if (string.IsNullOrWhiteSpace(indexedProjectRoot))
-            return siblingMatches.PathExistsMatches > 0;
+            return false;
 
         var storedRootMatches = CountMatchingSamples(Path.GetFullPath(indexedProjectRoot), samples);
         if (siblingMatches.ChecksumMatches != storedRootMatches.ChecksumMatches)

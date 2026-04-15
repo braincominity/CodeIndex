@@ -156,7 +156,7 @@ public class DbPathResolverTests
     }
 
     [Fact]
-    public void ResolveProjectRootForQuery_ExplicitProjectLocalReadOnlyUriPrefersCdidxSibling()
+    public void ResolveProjectRootForQuery_ExplicitProjectLocalReadOnlyUriWithoutMetadataReturnsNull()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local_uri");
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -167,11 +167,13 @@ public class DbPathResolverTests
             {
                 db.InitializeSchema();
             }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
             using (var db = new DbContext(dbPath))
             {
+                using var deleteCmd = db.Connection.CreateCommand();
+                deleteCmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                deleteCmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                deleteCmd.ExecuteNonQuery();
+
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
                 cmd.ExecuteNonQuery();
@@ -181,7 +183,7 @@ public class DbPathResolverTests
             var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var resolved = DbPathResolver.ResolveProjectRootForQuery(readOnlyUri, dbPathExplicit: true);
 
-            Assert.Equal(projectRoot, resolved);
+            Assert.Null(resolved);
         }
         finally
         {
@@ -271,6 +273,47 @@ public class DbPathResolverTests
             var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
 
             Assert.Equal(projectRoot, resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_ExplicitExternalCodeIndexDbWithoutMetadataReturnsNullEvenWhenSiblingPathExists()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_collision_missing_meta_root");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_collision_missing_meta_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
+
+            const string indexedContent = "class App {}\n";
+            const string siblingContent = "class App { void Different() {} }\n";
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
+            File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), siblingContent);
+
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+                cmd.ExecuteNonQuery();
+            }
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+            Assert.Null(resolved);
         }
         finally
         {
