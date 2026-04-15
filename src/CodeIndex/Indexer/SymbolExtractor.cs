@@ -49,6 +49,8 @@ public static class SymbolExtractor
         Other,
         Function,
         StaticBlock,
+        Class,
+        Object,
     }
 
     private readonly record struct JavaScriptLexState(
@@ -603,10 +605,6 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
-
-            if (IsInsideJavaScriptTypeScriptFunctionBody(symbols, i + 1))
-                continue;
-
             TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine, privateScopeColumns);
         }
 
@@ -621,6 +619,11 @@ public static class SymbolExtractor
         return scopeStack.Any(scopeKind => scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock);
     }
 
+    private static bool IsInsideJavaScriptTypeScriptMethodContainer(Stack<JavaScriptScopeKind> scopeStack)
+    {
+        return scopeStack.Count > 0 && scopeStack.Peek() is JavaScriptScopeKind.Class or JavaScriptScopeKind.Object;
+    }
+
     private static bool[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines)
     {
         var privateColumns = new bool[lines.Length][];
@@ -628,9 +631,16 @@ public static class SymbolExtractor
         var scopeStack = new Stack<JavaScriptScopeKind>();
         var pendingFunctionScope = false;
         var pendingStaticBlockScope = false;
+        var pendingClassScope = false;
+        var pendingConciseMethodScope = false;
         var pendingArrowBody = false;
         var arrowExpressionActive = false;
+        var arrowExpressionParenDepth = 0;
+        var arrowExpressionBracketDepth = 0;
         var arrowExpressionBraceDepth = 0;
+        var previousTokenKind = JavaScriptPrevTokenKind.None;
+        string? previousIdentifier = null;
+        char previousSignificantChar = '\0';
 
         for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
@@ -680,16 +690,26 @@ public static class SymbolExtractor
                     {
                         pendingFunctionScope = true;
                         pendingStaticBlockScope = false;
+                        pendingConciseMethodScope = false;
                     }
                     else if (token == "static")
                     {
-                        pendingStaticBlockScope = true;
+                        pendingStaticBlockScope = IsInsideJavaScriptTypeScriptMethodContainer(scopeStack);
                     }
-                    else if (pendingStaticBlockScope)
+                    else if (token == "class")
+                    {
+                        pendingClassScope = true;
+                        pendingStaticBlockScope = false;
+                        pendingConciseMethodScope = false;
+                    }
+                    else
                     {
                         pendingStaticBlockScope = false;
                     }
 
+                    previousTokenKind = JavaScriptPrevTokenKind.Identifier;
+                    previousIdentifier = token;
+                    previousSignificantChar = sanitizedLine[column - 1];
                     column--;
                     continue;
                 }
@@ -701,7 +721,59 @@ public static class SymbolExtractor
                     pendingArrowBody = true;
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingConciseMethodScope = false;
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = '>';
                     column++;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    if (arrowExpressionActive)
+                        arrowExpressionParenDepth++;
+
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == ')')
+                {
+                    if (arrowExpressionActive && arrowExpressionParenDepth > 0)
+                        arrowExpressionParenDepth--;
+
+                    if (IsInsideJavaScriptTypeScriptMethodContainer(scopeStack))
+                        pendingConciseMethodScope = true;
+
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseParen;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    if (arrowExpressionActive)
+                        arrowExpressionBracketDepth++;
+
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == ']')
+                {
+                    if (arrowExpressionActive && arrowExpressionBracketDepth > 0)
+                        arrowExpressionBracketDepth--;
+
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseBracket;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
                     continue;
                 }
 
@@ -710,10 +782,16 @@ public static class SymbolExtractor
                     var scopeKind = JavaScriptScopeKind.Other;
                     if (pendingFunctionScope)
                         scopeKind = JavaScriptScopeKind.Function;
+                    else if (pendingConciseMethodScope)
+                        scopeKind = JavaScriptScopeKind.Function;
                     else if (pendingStaticBlockScope)
                         scopeKind = JavaScriptScopeKind.StaticBlock;
+                    else if (pendingClassScope)
+                        scopeKind = JavaScriptScopeKind.Class;
+                    else if (CanStartJavaScriptTypeScriptObjectLiteral(previousTokenKind, previousIdentifier, previousSignificantChar))
+                        scopeKind = JavaScriptScopeKind.Object;
 
-                    if (scopeKind != JavaScriptScopeKind.Other)
+                    if (scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock)
                         linePrivateColumns[column] = true;
 
                     scopeStack.Push(scopeKind);
@@ -722,6 +800,11 @@ public static class SymbolExtractor
 
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingConciseMethodScope = false;
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
                     continue;
                 }
 
@@ -739,12 +822,20 @@ public static class SymbolExtractor
 
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingConciseMethodScope = false;
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
                     continue;
                 }
 
-                if (ch == ';')
+                if (ch is ';' or ',')
                 {
-                    if (arrowExpressionActive && arrowExpressionBraceDepth == 0)
+                    if (arrowExpressionActive
+                        && arrowExpressionBraceDepth == 0
+                        && arrowExpressionParenDepth == 0
+                        && arrowExpressionBracketDepth == 0)
                     {
                         linePrivateColumns[column] = true;
                         arrowExpressionActive = false;
@@ -752,20 +843,48 @@ public static class SymbolExtractor
 
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingConciseMethodScope = false;
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == ':')
+                {
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
                     continue;
                 }
 
                 if (pendingStaticBlockScope && ch != '{')
                     pendingStaticBlockScope = false;
-            }
 
-            if (arrowExpressionActive && arrowExpressionBraceDepth == 0)
-                arrowExpressionActive = false;
+                previousTokenKind = JavaScriptPrevTokenKind.Other;
+                previousIdentifier = null;
+                previousSignificantChar = ch;
+            }
 
             privateColumns[lineIndex] = linePrivateColumns;
         }
 
         return privateColumns;
+    }
+
+    private static bool CanStartJavaScriptTypeScriptObjectLiteral(
+        JavaScriptPrevTokenKind previousTokenKind,
+        string? previousIdentifier,
+        char previousSignificantChar)
+    {
+        if (previousSignificantChar is '=' or '(' or '[' or ',' or ':' or '?' or '!')
+            return true;
+
+        if (previousIdentifier is "return" or "throw" or "case" or "else")
+            return true;
+
+        return previousTokenKind == JavaScriptPrevTokenKind.None;
     }
 
     private static bool IsJavaScriptTypeScriptMatchInPrivateScope(bool[][] privateScopeColumns, int lineIndex, int startColumn, string matchLine)
@@ -888,16 +1007,6 @@ public static class SymbolExtractor
         {
             targets.Add(candidate);
         }
-    }
-
-    private static bool IsInsideJavaScriptTypeScriptFunctionBody(List<SymbolRecord> symbols, int lineNumber)
-    {
-        return symbols.Any(s =>
-            s.Kind == "function"
-            && s.BodyStartLine != null
-            && s.BodyEndLine != null
-            && lineNumber >= s.BodyStartLine.Value
-            && lineNumber <= s.BodyEndLine.Value);
     }
 
     private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int? bodyStartLine, int? bodyEndLine)
@@ -1390,6 +1499,11 @@ public static class SymbolExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var angleDepth = 0;
+        var pendingArrowBody = false;
+        var arrowExpressionActive = false;
+        var arrowExpressionParenDepth = 0;
+        var arrowExpressionBracketDepth = 0;
+        var arrowExpressionBraceDepth = 0;
         int? bodyStartLine = null;
         var lexState = new JavaScriptLexState();
 
@@ -1411,8 +1525,80 @@ public static class SymbolExtractor
                     ? string.Empty
                     : lexedLine.SanitizedLine;
 
-            foreach (var ch in scanLine)
+            for (int column = 0; column < scanLine.Length; column++)
             {
+                var ch = scanLine[column];
+                if (!opened && !arrowExpressionActive && i == startIndex && ch == '=' && column + 1 < scanLine.Length && scanLine[column + 1] == '>')
+                {
+                    pendingArrowBody = true;
+                    column++;
+                    continue;
+                }
+
+                if (pendingArrowBody)
+                {
+                    if (char.IsWhiteSpace(ch))
+                        continue;
+
+                    bodyStartLine ??= i + 1;
+                    if (ch == '{')
+                        pendingArrowBody = false;
+                    else
+                    {
+                        arrowExpressionActive = true;
+                        pendingArrowBody = false;
+                    }
+                }
+
+                if (arrowExpressionActive)
+                {
+                    if (ch == '(')
+                    {
+                        arrowExpressionParenDepth++;
+                        continue;
+                    }
+
+                    if (ch == ')' && arrowExpressionParenDepth > 0)
+                    {
+                        arrowExpressionParenDepth--;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        arrowExpressionBracketDepth++;
+                        continue;
+                    }
+
+                    if (ch == ']' && arrowExpressionBracketDepth > 0)
+                    {
+                        arrowExpressionBracketDepth--;
+                        continue;
+                    }
+
+                    if (ch == '{')
+                    {
+                        arrowExpressionBraceDepth++;
+                        continue;
+                    }
+
+                    if (ch == '}' && arrowExpressionBraceDepth > 0)
+                    {
+                        arrowExpressionBraceDepth--;
+                        continue;
+                    }
+
+                    if (ch == ';'
+                        && arrowExpressionParenDepth == 0
+                        && arrowExpressionBracketDepth == 0
+                        && arrowExpressionBraceDepth == 0)
+                    {
+                        return (i + 1, bodyStartLine ?? startIndex + 1, i + 1);
+                    }
+
+                    continue;
+                }
+
                 if (!opened)
                 {
                     if (ch == '(')
@@ -1473,9 +1659,17 @@ public static class SymbolExtractor
                 }
             }
 
-            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+            if (!opened
+                && !arrowExpressionActive
+                && parenDepth == 0
+                && bracketDepth == 0
+                && angleDepth == 0
+                && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
+
+        if (arrowExpressionActive)
+            return (lines.Length, bodyStartLine ?? startIndex + 1, lines.Length);
 
         return opened
             ? (lines.Length, bodyStartLine, lines.Length)

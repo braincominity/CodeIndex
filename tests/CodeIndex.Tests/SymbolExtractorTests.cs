@@ -250,6 +250,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotLeakClassMethodDirectLocalClasses()
+    {
+        var content = """
+            class Outer {
+                method() {
+                    class Hidden {
+                        run() {}
+                    }
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakFunctionLocalClassExpressionMethods()
     {
         var content = """
@@ -315,6 +335,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotLeakWrappedBlocklessArrowReturnedClassesAndKeepsRange()
+    {
+        var content = """
+            const factory = () =>
+                wrap(
+                    class Hidden {
+                        method() {}
+                    }
+                );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(1, factory.StartLine);
+        Assert.Equal(6, factory.EndLine);
+        Assert.Equal(2, factory.BodyStartLine);
+        Assert.Equal(6, factory.BodyEndLine);
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakIifeLocalClassMethods()
     {
         var content = """
@@ -372,6 +414,49 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotLeakObjectLiteralConciseMethodLocalClasses()
+    {
+        var content = """
+            const obj = {
+                method() {
+                    class Inner {
+                        run() {}
+                    }
+                }
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotLeakGetterSetterLocalClasses()
+    {
+        var content = """
+            const obj = {
+                get value() {
+                    class HiddenGetter {
+                        run() {}
+                    }
+                    return 1;
+                },
+                set value(input) {
+                    class HiddenSetter {
+                        run() {}
+                    }
+                }
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenGetter");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenSetter");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
     [Fact]
@@ -797,6 +882,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DoesNotLeakClassMethodDirectLocalClasses()
+    {
+        var content = """
+            export class Outer {
+                method(): void {
+                    class Hidden {
+                        run(): void {}
+                    }
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DoesNotLeakFunctionLocalClassExpressionMethods()
     {
         var content = """
@@ -878,6 +983,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DoesNotLeakWrappedBlocklessArrowReturnedClassesAndKeepsRange()
+    {
+        var content = """
+            const factory = () =>
+                wrap(
+                    class Hidden {
+                        method(): void {}
+                    }
+                );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(1, factory.StartLine);
+        Assert.Equal(6, factory.EndLine);
+        Assert.Equal(2, factory.BodyStartLine);
+        Assert.Equal(6, factory.BodyEndLine);
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DoesNotLeakStaticBlockLocalClassMethods()
     {
         var content = """
@@ -919,6 +1046,49 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotLeakObjectLiteralConciseMethodLocalClasses()
+    {
+        var content = """
+            const obj = {
+                method(): void {
+                    class Inner {
+                        run(): void {}
+                    }
+                }
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotLeakGetterSetterLocalClasses()
+    {
+        var content = """
+            const obj = {
+                get value(): number {
+                    class HiddenGetter {
+                        run(): void {}
+                    }
+                    return 1;
+                },
+                set value(input: number) {
+                    class HiddenSetter {
+                        run(): void {}
+                    }
+                }
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenGetter");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenSetter");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
     [Fact]
