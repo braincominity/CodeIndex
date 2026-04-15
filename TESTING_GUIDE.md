@@ -35,8 +35,8 @@ The test project mirrors the production areas closely.
   SQLite schema, write paths, migrations, and query behavior.
 - `LegacySchemaMigrationTests.cs`
   End-to-end upgrade path: seeds a pre-column legacy DB, opens it through `TryMigrateForRead`, and exercises the read paths that touch nullable symbol ordinals (outline, symbol search, nearby, unused, analyze bundle) to lock in the real-world failure mode behind #58 / #49.
-- `IndexCommandRunnerTests.cs`, `QueryCommandRunnerTests.cs`
-  CLI parsing and command execution behavior.
+- `IndexCommandRunnerTests.cs`, `QueryCommandRunnerTests.cs`, `ProgramCliTests.cs`
+  CLI parsing and command execution behavior. `ProgramCliTests.cs` covers top-level entrypoint behavior that must be exercised through a subprocess, such as global flag handling and full CLI invocation flow.
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `GitHelperTests.cs`
@@ -179,8 +179,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。
 - `LegacySchemaMigrationTests.cs`
   エンドツーエンドのアップグレード経路: カラム追加前のレガシー DB を用意し、`TryMigrateForRead` 経由で開いてから NULL になりうるシンボル列を触る read path（outline、シンボル検索、近傍、unused、analyze バンドル）を一通り叩き、#58 / #49 の実機失敗モードを固定する。
-- `IndexCommandRunnerTests.cs`、`QueryCommandRunnerTests.cs`
-  CLI の引数解析とコマンド実行のテスト。
+- `IndexCommandRunnerTests.cs`、`QueryCommandRunnerTests.cs`、`ProgramCliTests.cs`
+  CLI の引数解析とコマンド実行のテスト。`ProgramCliTests.cs` は、グローバル引数の解釈や完全な CLI 起動フローのように subprocess 経由で確認すべき Program エントリポイント挙動を扱う。
 - `McpServerTests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。
 - `GitHelperTests.cs`

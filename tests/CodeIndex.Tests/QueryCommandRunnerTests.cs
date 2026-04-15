@@ -23,7 +23,6 @@ public class QueryCommandRunnerTests
         [
             "RunSearch",
             "--db", "/tmp/query.db",
-            "--no-json",
             "--limit", "7",
             "--lang", "csharp",
             "--kind", "function",
@@ -41,7 +40,7 @@ public class QueryCommandRunnerTests
         ], jsonDefault: true);
 
         Assert.Equal("/tmp/query.db", options.DbPath);
-        Assert.False(options.Json);
+        Assert.True(options.Json);
         Assert.Equal(7, options.Limit);
         Assert.Equal("csharp", options.Lang);
         Assert.Equal("function", options.Kind);
@@ -346,6 +345,7 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("search", "--no-json")]
     [InlineData("map", "--count")]
     [InlineData("inspect", "--count")]
     [InlineData("status", "--count")]
@@ -2935,6 +2935,7 @@ public class QueryCommandRunnerTests
     {
         return command switch
         {
+            "search" => QueryCommandRunner.RunSearch(["QueryCommandRunner", .. args], _jsonOptions),
             "map" => QueryCommandRunner.RunMap(args, _jsonOptions),
             "inspect" => QueryCommandRunner.RunInspect(["QueryCommandRunner", .. args], _jsonOptions),
             "status" => QueryCommandRunner.RunStatus(args, _jsonOptions),

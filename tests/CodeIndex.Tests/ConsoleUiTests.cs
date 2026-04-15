@@ -25,7 +25,9 @@ public class ConsoleUiTests
 
         Assert.DoesNotContain("██████╗", output);
         Assert.Contains("Usage:", output);
-        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]", output);
+        Assert.Contains("cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--dry-run] [--json]", output);
+        Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
+        Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
         Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count]", output);

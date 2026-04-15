@@ -399,6 +399,7 @@ cdidx map --path src/ --exclude-tests --json
 |---|---|---|
 | `--db <path>` | All commands except `languages`; for `mcp`, only `--db` is supported | Database file path. `index` defaults to `<projectPath>/.cdidx/codeindex.db`; query commands default to `.cdidx/codeindex.db` in the current directory. |
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use) |
+| `--dry-run` | `index` | Scan files and report what would change without writing to the database |
 | `--limit <n>` | Query commands | Max results (default: 20; `map` uses it per section) |
 | `--lang <lang>` | Query commands | Filter by language |
 | `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect`, `validate` | Restrict results to paths containing this text. Repeatable; multiple values are OR'd together |
@@ -1215,6 +1216,7 @@ cdidx map --path src/ --exclude-tests --json
 |---|---|---|
 | `--db <path>` | `languages` を除く全コマンド。`mcp` は `--db` のみ対応 | DBファイルパス。`index` のデフォルトは `<projectPath>/.cdidx/codeindex.db`、クエリ系コマンドのデフォルトはカレントディレクトリの `.cdidx/codeindex.db`。 |
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
+| `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20。`map` では各セクションごとの件数） |
 | `--lang <lang>` | クエリ系 | 言語でフィルタ |
 | `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `map`, `inspect`, `validate` | 指定文字列を含むパスに結果を絞る。繰り返し指定可（複数値は OR で結合） |
