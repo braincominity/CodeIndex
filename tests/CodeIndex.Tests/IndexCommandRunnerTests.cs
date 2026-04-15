@@ -1486,6 +1486,41 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_HumanOutput_ExplainsObservedOnlyPurgeWhenAnotherDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot]);
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("positively observed as no longer indexable", stdout);
+            Assert.Contains("Skipped authoritative purge outside positively observed non-indexable paths", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithFiles_DoesNotRemoveUnreadableExtensionlessScript()
     {
         if (OperatingSystem.IsWindows())
@@ -1573,6 +1608,49 @@ public class IndexCommandRunnerTests
         finally
         {
             var sourcePath = Path.Combine(projectRoot, "a.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DemotesReadinessForUnreadableNewKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var sourcePath = Path.Combine(projectRoot, "b.cs");
+            File.WriteAllText(sourcePath, "public class B { }\n");
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "b.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("b.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "b.cs");
             if (File.Exists(sourcePath))
                 SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             DeleteDirectory(projectRoot);

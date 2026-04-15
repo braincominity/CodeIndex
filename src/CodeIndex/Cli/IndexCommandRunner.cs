@@ -589,8 +589,7 @@ public static class IndexCommandRunner
                 var detection = FileIndexer.TryDetectLanguage(absPath);
                 if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
                 {
-                    if (writer.HasFileAtPath(relPath))
-                        DemoteReadinessOnce();
+                    DemoteReadinessOnce();
 
                     errors++;
                     errorList.Add(new { file = relPath, message = "Could not probe file for indexability/language." });
@@ -670,8 +669,7 @@ public static class IndexCommandRunner
             }
             catch (Exception ex)
             {
-                if (writer.HasFileAtPath(relPath))
-                    DemoteReadinessOnce();
+                DemoteReadinessOnce();
 
                 errors++;
                 errorList.Add(new { file = relPath, message = ex.Message });
@@ -957,7 +955,12 @@ public static class IndexCommandRunner
         if (!options.Json)
         {
             if (purged > 0)
-                Console.WriteLine($"  Purged {purged:N0} stale files (missing or no longer indexable)");
+            {
+                var purgeMessage = scanResult.HadErrors
+                    ? $"  Purged {purged:N0} previously indexed files that were positively observed as no longer indexable"
+                    : $"  Purged {purged:N0} stale files (missing or no longer indexable)";
+                Console.WriteLine(purgeMessage);
+            }
             if (scanResult.HadErrors)
                 ConsoleUi.PrintWarning("Skipped authoritative purge outside positively observed non-indexable paths because some paths could not be scanned.");
         }
