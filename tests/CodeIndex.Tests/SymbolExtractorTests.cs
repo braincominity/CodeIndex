@@ -161,6 +161,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_IgnoresHeaderObjectLiteralBracesBeforeClassBody()
+    {
+        var content = """
+            class Derived extends mixin({ value: true }) {
+                run() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
     {
         var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
@@ -246,6 +260,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_IgnoresHeaderGenericBracesBeforeClassBody()
+    {
+        var content = """
+            export class Derived extends Base<{ value: string }> {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
     [Fact]

@@ -969,6 +969,9 @@ public static class SymbolExtractor
     {
         var depth = 0;
         var opened = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
         int? bodyStartLine = null;
         var lexState = new JavaScriptLexState();
 
@@ -979,8 +982,50 @@ public static class SymbolExtractor
 
             foreach (var ch in lexedLine.SanitizedLine)
             {
+                if (!opened)
+                {
+                    if (ch == '(')
+                    {
+                        parenDepth++;
+                        continue;
+                    }
+
+                    if (ch == ')' && parenDepth > 0)
+                    {
+                        parenDepth--;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        bracketDepth++;
+                        continue;
+                    }
+
+                    if (ch == ']' && bracketDepth > 0)
+                    {
+                        bracketDepth--;
+                        continue;
+                    }
+
+                    if (ch == '<')
+                    {
+                        angleDepth++;
+                        continue;
+                    }
+
+                    if (ch == '>' && angleDepth > 0)
+                    {
+                        angleDepth--;
+                        continue;
+                    }
+                }
+
                 if (ch == '{')
                 {
+                    if (!opened && (parenDepth > 0 || bracketDepth > 0 || angleDepth > 0))
+                        continue;
+
                     depth++;
                     if (!opened)
                     {
