@@ -24,7 +24,8 @@ public class FileIndexer
     public readonly record struct ScanFilesResult(
         IReadOnlyList<string> Files,
         IReadOnlyList<ScanError> Errors,
-        IReadOnlyList<string> NonIndexablePaths)
+        IReadOnlyList<string> NonIndexablePaths,
+        IReadOnlyList<string> FullyScannedDirectories)
     {
         public bool HadErrors => Errors.Count > 0;
     }
@@ -218,22 +219,24 @@ public class FileIndexer
         var files = new List<string>();
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
-        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths);
-        return new ScanFilesResult(files, errors, nonIndexablePaths.ToList());
+        var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, fullyScannedDirectories);
+        return new ScanFilesResult(files, errors, nonIndexablePaths.ToList(), fullyScannedDirectories.ToList());
     }
 
-    private void ScanDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths)
+    private bool ScanDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths, HashSet<string> fullyScannedDirectories)
     {
         // Check for skip directories / スキップ対象ディレクトリかチェック
         var dirName = Path.GetFileName(dir);
         if (SkipDirs.Contains(dirName))
-            return;
+            return true;
 
-        EnumerateDirectory(dir, results, errors, nonIndexablePaths);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, fullyScannedDirectories);
     }
 
-    private void EnumerateDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths)
+    private bool EnumerateDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths, HashSet<string> fullyScannedDirectories)
     {
+        var fullyScanned = true;
         try
         {
             foreach (var file in Directory.EnumerateFiles(dir))
@@ -250,6 +253,7 @@ public class FileIndexer
                 if (indexability == FileProbeStatus.ProbeFailed)
                 {
                     errors.Add(new ScanError(ToRelativePath(file), "Could not probe file for indexability/language."));
+                    fullyScanned = false;
                     continue;
                 }
 
@@ -265,6 +269,7 @@ public class FileIndexer
                 if (language.Status == FileProbeStatus.ProbeFailed)
                 {
                     errors.Add(new ScanError(ToRelativePath(file), "Could not probe file for indexability/language."));
+                    fullyScanned = false;
                     continue;
                 }
 
@@ -276,19 +281,26 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                ScanDirectory(subDir, results, errors, nonIndexablePaths);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, fullyScannedDirectories);
             }
         }
         catch (UnauthorizedAccessException)
         {
             // Skip inaccessible directories / アクセス不可ディレクトリはスキップ
             errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
+            fullyScanned = false;
         }
         catch (IOException)
         {
             // Skip on I/O errors / I/Oエラー時はスキップ
             errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
+            fullyScanned = false;
         }
+
+        if (fullyScanned)
+            fullyScannedDirectories.Add(ToRelativePath(dir));
+
+        return fullyScanned;
     }
 
     /// <summary>
@@ -548,7 +560,10 @@ public class FileIndexer
     };
 
     private string ToRelativePath(string absolutePath)
-        => Path.GetRelativePath(_projectRoot, absolutePath).Replace('\\', '/');
+    {
+        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath).Replace('\\', '/');
+        return relativePath == "." ? string.Empty : relativePath;
+    }
 
     private static class UnixFileStatus
     {

@@ -580,6 +580,75 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Remove files from DB that are outside the retained set, but only when their parent
+    /// directory was fully scanned authoritatively. Used by partial full scans so unrelated
+    /// unreadable subtrees do not block stale-file cleanup elsewhere.
+    /// retained set の外にある DB ファイルを削除するが、親ディレクトリが authoritative に
+    /// 完走した場合に限定する。partial full scan で、無関係な unreadable subtree のせいで
+    /// 他所の stale file cleanup が止まらないようにする。
+    /// </summary>
+    public int PurgeFilesOutsideRetainedSetWithinDirectories(IReadOnlySet<string> retainedRelativePaths, IReadOnlySet<string> authoritativeDirectories)
+    {
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var path = reader.GetString(1);
+                if (retainedRelativePaths.Contains(path))
+                    continue;
+
+                if (IsUnderAuthoritativeDirectory(path, authoritativeDirectories))
+                    staleIds.Add(id);
+            }
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = BeginTransaction();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn.Commit();
+
+        return staleIds.Count;
+    }
+
+    private static bool IsUnderAuthoritativeDirectory(string path, IReadOnlySet<string> authoritativeDirectories)
+    {
+        if (authoritativeDirectories.Contains(string.Empty))
+            return true;
+
+        var directory = GetDirectoryPath(path);
+        while (true)
+        {
+            if (authoritativeDirectories.Contains(directory))
+                return true;
+
+            if (directory.Length == 0)
+                return false;
+
+            directory = GetDirectoryPath(directory);
+        }
+    }
+
+    private static string GetDirectoryPath(string path)
+    {
+        var separatorIndex = path.LastIndexOf('/');
+        return separatorIndex >= 0 ? path[..separatorIndex] : string.Empty;
+    }
+
+    /// <summary>
     /// Count symbol_references for files whose language is no longer graph-supported.
     /// Used by update mode to demote readiness before the first real mutation commits.
     /// グラフ非対応になった言語の symbol_references 件数を数える。
