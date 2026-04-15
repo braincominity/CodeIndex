@@ -230,6 +230,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotLeakClassMethodLocalClassExpressionMethods()
+    {
+        var content = """
+            export class Outer {
+                method() {
+                    const Inner = class {
+                        run() {}
+                    };
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakFunctionLocalClassExpressionMethods()
     {
         var content = """
@@ -579,6 +599,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsInlineMultipleMethodsWithObjectReturnType()
+    {
+        var content = """export class Example { first(): { value: string } { return { value: "x" }; } second(): void {} }""";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first"));
+        var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
+        Assert.Equal("first(): { value: string } { return { value: \"x\" }; }", first.Signature);
+        Assert.Equal("second(): void {}", second.Signature);
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInlineClassExpressionMethods()
     {
         var content = "const Service = class NamedService { run(): void {} };";
@@ -605,6 +638,53 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Foo");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsGenericClassMethods()
+    {
+        var content = """
+            export class Example {
+                first<T extends Foo<Bar>>(): void {}
+                second(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlineGenericClassMethods()
+    {
+        var content = """export class Example { first<T extends Foo<Bar>>(): void {} second(): void {} }""";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotLeakClassMethodLocalClassExpressionMethods()
+    {
+        var content = """
+            export class Outer {
+                method(): void {
+                    const Inner = class {
+                        run(): void {}
+                    };
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
     [Fact]
