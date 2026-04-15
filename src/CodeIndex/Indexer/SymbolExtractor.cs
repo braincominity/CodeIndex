@@ -44,6 +44,13 @@ public static class SymbolExtractor
         Other,
     }
 
+    private enum JavaScriptScopeKind
+    {
+        Other,
+        Function,
+        StaticBlock,
+    }
+
     private readonly record struct JavaScriptLexState(
         JavaScriptLexMode Mode = JavaScriptLexMode.Code,
         bool EscapeNext = false,
@@ -581,22 +588,127 @@ public static class SymbolExtractor
     {
         var targets = new List<JavaScriptClassScanTarget>();
         var lexState = new JavaScriptLexState();
+        var scopeStack = new Stack<JavaScriptScopeKind>();
+        var pendingFunctionScope = false;
+        var pendingArrowFunctionScope = false;
+        var pendingStaticBlockScope = false;
         for (int i = 0; i < lines.Length; i++)
         {
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
 
-            if (IsInsideJavaScriptTypeScriptFunctionBody(symbols, i + 1))
-                continue;
+            var insidePrivateScope = IsInsideJavaScriptTypeScriptPrivateScope(scopeStack)
+                || IsInsideJavaScriptTypeScriptFunctionBody(symbols, i + 1);
+            if (!insidePrivateScope)
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine);
 
-            TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine);
+            AdvanceJavaScriptTypeScriptSyntheticScope(
+                sanitizedLine,
+                scopeStack,
+                ref pendingFunctionScope,
+                ref pendingArrowFunctionScope,
+                ref pendingStaticBlockScope);
         }
 
         return targets
             .OrderBy(t => t.StartIndex)
             .ThenByDescending(t => t.ScanEndExclusive)
             .ToList();
+    }
+
+    private static bool IsInsideJavaScriptTypeScriptPrivateScope(Stack<JavaScriptScopeKind> scopeStack)
+    {
+        return scopeStack.Any(scopeKind => scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock);
+    }
+
+    private static void AdvanceJavaScriptTypeScriptSyntheticScope(
+        string sanitizedLine,
+        Stack<JavaScriptScopeKind> scopeStack,
+        ref bool pendingFunctionScope,
+        ref bool pendingArrowFunctionScope,
+        ref bool pendingStaticBlockScope)
+    {
+        for (int column = 0; column < sanitizedLine.Length; column++)
+        {
+            var ch = sanitizedLine[column];
+            if (char.IsWhiteSpace(ch))
+                continue;
+
+            if (pendingArrowFunctionScope && ch != '{')
+                pendingArrowFunctionScope = false;
+
+            if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+            {
+                pendingArrowFunctionScope = true;
+                pendingStaticBlockScope = false;
+                column++;
+                continue;
+            }
+
+            if (IsJavaScriptTypeScriptIdentifierStart(ch))
+            {
+                var tokenStart = column;
+                column++;
+                while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                    column++;
+
+                var token = sanitizedLine[tokenStart..column];
+                if (token == "function")
+                {
+                    pendingFunctionScope = true;
+                    pendingStaticBlockScope = false;
+                }
+                else if (token == "static")
+                {
+                    pendingStaticBlockScope = true;
+                }
+                else if (pendingStaticBlockScope)
+                {
+                    pendingStaticBlockScope = false;
+                }
+
+                column--;
+                continue;
+            }
+
+            if (ch == '{')
+            {
+                var scopeKind = JavaScriptScopeKind.Other;
+                if (pendingFunctionScope || pendingArrowFunctionScope)
+                    scopeKind = JavaScriptScopeKind.Function;
+                else if (pendingStaticBlockScope)
+                    scopeKind = JavaScriptScopeKind.StaticBlock;
+
+                scopeStack.Push(scopeKind);
+                pendingFunctionScope = false;
+                pendingArrowFunctionScope = false;
+                pendingStaticBlockScope = false;
+                continue;
+            }
+
+            if (ch == '}')
+            {
+                if (scopeStack.Count > 0)
+                    scopeStack.Pop();
+
+                pendingFunctionScope = false;
+                pendingArrowFunctionScope = false;
+                pendingStaticBlockScope = false;
+                continue;
+            }
+
+            if (ch == ';')
+            {
+                pendingFunctionScope = false;
+                pendingArrowFunctionScope = false;
+                pendingStaticBlockScope = false;
+                continue;
+            }
+
+            if (pendingStaticBlockScope && ch != '{')
+                pendingStaticBlockScope = false;
+        }
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInTargets(
