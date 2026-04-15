@@ -656,13 +656,14 @@ public partial class DbReader
         sql += @"
             ),
             name_cardinality AS (
-                SELECT name,
+                SELECT lang,
+                       name,
                        COUNT(*) AS defs,
                        COUNT(DISTINCT logical_target_key) AS target_groups,
                        COUNT(DISTINCT count_safe_key) AS count_safe_groups,
                        COUNT(count_safe_key) AS count_safe_defs
                 FROM all_candidate_symbols
-                GROUP BY name
+                GROUP BY lang, name
             ),
             filtered_candidates AS (
                 SELECT *
@@ -725,26 +726,33 @@ public partial class DbReader
                  AND gm.kind = gc.kind
             ),
             file_target_cardinality AS (
-                SELECT file_id,
+                SELECT lang,
+                       file_id,
                        name,
                        kind,
                        COUNT(DISTINCT logical_target_key) AS target_count
                 FROM filtered_candidates
-                GROUP BY file_id, name, kind
+                GROUP BY lang, file_id, name, kind
             ),
             reference_counts AS (
                 SELECT gr.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
                 FROM grouped_rows gr
-                JOIN name_cardinality nc ON nc.name = gr.name
+                JOIN name_cardinality nc
+                  ON nc.lang = gr.lang
+                 AND nc.name = gr.name
                 JOIN symbol_references sr
                   ON sr.symbol_name = gr.name
+                JOIN files rf
+                  ON rf.id = sr.file_id
+                 AND rf.lang = gr.lang
                 LEFT JOIN filtered_candidates fc
                   ON fc.logical_target_key = gr.logical_target_key
                  AND fc.name = gr.name
                  AND fc.kind = gr.kind
                  AND fc.file_id = sr.file_id
                 LEFT JOIN file_target_cardinality ftc
-                  ON ftc.file_id = sr.file_id
+                  ON ftc.lang = gr.lang
+                 AND ftc.file_id = sr.file_id
                  AND ftc.name = gr.name
                  AND ftc.kind = gr.kind
                 WHERE nc.defs = 1

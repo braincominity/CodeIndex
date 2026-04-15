@@ -1497,6 +1497,86 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_LangFilterIgnoresCrossLanguageReferences()
+    {
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(App app)
+                {
+                    app.Run();
+                    app.Run();
+                }
+            }
+            """);
+        InsertIndexedFile("src/tool.py", "python",
+            """
+            def helper():
+                Run()
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("src/App.cs", run.Symbol.Path);
+        Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_CrossLanguageDefinitionsDoNotSuppressSameLanguageHotspots()
+    {
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(App app)
+                {
+                    app.Run();
+                    app.Run();
+                }
+            }
+            """);
+        InsertIndexedFile("src/tool.py", "python",
+            """
+            def Run():
+                return True
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: null,
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run" && result.Symbol.Lang == "csharp"));
+        Assert.Equal("src/App.cs", run.Symbol.Path);
+        Assert.Equal(2, run.ReferenceCount);
+    }
+
+    [Fact]
     public void GraphReaders_ExactMatchesNameEquality()
     {
         // Seed content where `authenticate_v2` is both CALLED (so it appears as a reference
