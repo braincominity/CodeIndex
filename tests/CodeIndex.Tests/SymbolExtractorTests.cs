@@ -826,6 +826,81 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
+    {
+        var content = """
+            Imports System
+
+            Namespace MyApp
+                Public Class Foo
+                    Sub Bar()
+                    End Sub
+
+                    Function Quux() As Integer
+                        Return 1
+                    End Function
+                End Class
+
+                Class Helper
+                End Class
+
+                Public Module Utils
+                    Sub Log()
+                    End Sub
+                End Module
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "MyApp"));
+        Assert.Equal(3, ns.StartLine);
+        Assert.Equal(20, ns.EndLine);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("namespace", foo.ContainerKind);
+        Assert.Equal("MyApp", foo.ContainerName);
+
+        var helper = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Helper"));
+        Assert.Equal("namespace", helper.ContainerKind);
+        Assert.Equal("MyApp", helper.ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Quux");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Log");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsLeadingModifiersAndMemberKindsWithoutVisibility()
+    {
+        var content = """
+            Namespace MyApp
+                Partial Class Form1
+                End Class
+
+                Public Class Widget
+                    Shared Sub Log()
+                    End Sub
+
+                    Overrides Function ToString() As String
+                        Return ""
+                    End Function
+
+                    Property Count As Integer
+
+                    Event Changed As EventHandler
+                End Class
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Form1");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Log");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Changed");
+    }
+
+    [Fact]
     public void Extract_Haskell_DetectsIndentedAndLiterateSignatures()
     {
         // Indented where-clause signature and literate Haskell '>' prefix
