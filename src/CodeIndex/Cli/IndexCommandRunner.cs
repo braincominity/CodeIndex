@@ -185,7 +185,7 @@ public static class IndexCommandRunner
 
         return isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorIndexedProjectRoot)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorIndexedProjectRoot);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -495,17 +495,6 @@ public static class IndexCommandRunner
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
 
-        static bool PathsEqual(string? left, string? right)
-        {
-            if (left == null || right == null)
-                return false;
-
-            var comparison = OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            return string.Equals(left, right, comparison);
-        }
-
         void DemoteReadinessOnce()
         {
             if (readinessDemoted)
@@ -775,8 +764,24 @@ public static class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        string? priorIndexedProjectRoot)
     {
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+            projectRootWritten = true;
+        }
+
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
@@ -795,12 +800,13 @@ public static class IndexCommandRunner
         // never reaches this point for any reason.
         // 実書き込み直前で readiness をクリア。--rebuild 経路は RunIndex で既に clear 済み。
         writer.ClearReadyFlags();
-        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
 
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = writer.PurgeStaleFiles(projectRoot);
+        if (purged > 0)
+            WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
         if (purged > 0 && !options.Json)
             Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
@@ -857,6 +863,7 @@ public static class IndexCommandRunner
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                WriteProjectRootOnce();
                 txn.Commit();
 
                 if (options.Verbose && !options.Json)
@@ -999,6 +1006,17 @@ public static class IndexCommandRunner
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (left == null || right == null)
+            return false;
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(left, right, comparison);
     }
 
     private static string GetFoldNotReadyWarning(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)

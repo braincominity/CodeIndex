@@ -33,7 +33,8 @@ public static class DbPathResolver
         if (dbDir == null)
             return null;
 
-        if (string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFileName(fullDbPath), "codeindex.db", StringComparison.OrdinalIgnoreCase))
             return Path.GetDirectoryName(dbDir);
 
         var indexedProjectRoot = TryReadIndexedProjectRoot(dbPath);

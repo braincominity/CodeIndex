@@ -1207,6 +1207,7 @@ public partial class McpServer
         using var db = new DbContext(_dbPath);
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1224,14 +1225,40 @@ public partial class McpServer
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
+        var normalizedProjectPath = Path.GetFullPath(projectPath);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
+
+        static bool PathsEqual(string? left, string? right)
+        {
+            if (left == null || right == null)
+                return false;
+
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(left, right, comparison);
+        }
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
+            projectRootWritten = true;
+        }
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
-        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectPath);
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
+        if (purged > 0)
+            WriteProjectRootOnce();
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -1265,6 +1292,7 @@ public partial class McpServer
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                WriteProjectRootOnce();
                 txn.Commit();
             }
             catch

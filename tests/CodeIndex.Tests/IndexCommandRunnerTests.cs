@@ -622,6 +622,68 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScanExplicitDb_FailedFirstMutation_DoesNotRewriteIndexedProjectRootMetadata()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_fullscan_explicit_rollback_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRootA, "init");
+            var sourcePathA = Path.Combine(projectRootA, "app.cs");
+            File.WriteAllText(sourcePathA, "public class AppA { public void Run() { } }\n");
+            RunGit(projectRootA, "add", ".");
+            RunGit(projectRootA, "commit", "-m", "init-a");
+            var headA = RunGitCaptureStdOut(projectRootA, "rev-parse", "HEAD").Trim();
+
+            RunGit(projectRootB, "init");
+            var sourcePathB = Path.Combine(projectRootB, "app.cs");
+            File.WriteAllText(sourcePathB, "public class AppB { public void Run() { } public void Extra() { } }\n");
+            RunGit(projectRootB, "add", ".");
+            RunGit(projectRootB, "commit", "-m", "init-b");
+            File.SetLastWriteTimeUtc(sourcePathB, DateTime.UtcNow.AddSeconds(2));
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TRIGGER fail_update
+                    BEFORE UPDATE ON files
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(Path.GetFullPath(projectRootA), statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(headA, statusJson.GetProperty("git_head").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_MissingDb_PrintsActionableHint()
     {
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");

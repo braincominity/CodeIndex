@@ -125,6 +125,33 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void ResolveProjectRootForQuery_CustomDbUnderCdidxPrefersStoredIndexedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_custom_root");
+        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_custom_container");
+        var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "shared.db");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+
+            Assert.Equal(projectRoot, resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_ReturnsNullForExplicitDbWithoutMetadata()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
