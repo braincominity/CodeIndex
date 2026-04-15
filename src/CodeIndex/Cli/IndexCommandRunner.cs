@@ -484,12 +484,27 @@ public static class IndexCommandRunner
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
         var readinessDemoted = false;
-        var projectRootWritten = !string.IsNullOrEmpty(priorIndexedProjectRoot);
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
+
+        static bool PathsEqual(string? left, string? right)
+        {
+            if (left == null || right == null)
+                return false;
+
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(left, right, comparison);
+        }
 
         void DemoteReadinessOnce()
         {
@@ -512,7 +527,7 @@ public static class IndexCommandRunner
             if (projectRootWritten)
                 return;
 
-            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
             projectRootWritten = true;
         }
 

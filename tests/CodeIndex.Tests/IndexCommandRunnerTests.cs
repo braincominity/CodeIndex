@@ -291,6 +291,62 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_ExplicitDb_RealMutationRewritesIndexedProjectRootMetadata()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_rewrite_root_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRootA, "init");
+            File.WriteAllText(Path.Combine(projectRootA, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRootA, "add", ".");
+            RunGit(projectRootA, "commit", "-m", "init-a");
+            var headA = RunGitCaptureStdOut(projectRootA, "rev-parse", "HEAD").Trim();
+
+            RunGit(projectRootB, "init");
+            var sourcePathB = Path.Combine(projectRootB, "app.cs");
+            File.WriteAllText(sourcePathB, "public class App { public void Run() { } public void Extra() { } }\n");
+            RunGit(projectRootB, "add", ".");
+            RunGit(projectRootB, "commit", "-m", "init-b");
+            var headB = RunGitCaptureStdOut(projectRootB, "rev-parse", "HEAD").Trim();
+            File.SetLastWriteTimeUtc(sourcePathB, DateTime.UtcNow.AddSeconds(2));
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootB), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(Path.GetFullPath(projectRootB), statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(headB, statusJson.GetProperty("git_head").GetString());
+            Assert.NotEqual(headA, statusJson.GetProperty("git_head").GetString());
+            Assert.False(statusJson.GetProperty("git_is_dirty").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_LegacySharedExplicitDb_NoOpDoesNotHijackMissingIndexedProjectRootMetadata()
     {
         var projectRootA = CreateTempProject();
@@ -2184,6 +2240,32 @@ public class IndexCommandRunnerTests
             RunGit(workDir, "config", "user.name", "CodeIndex Tests");
             RunGit(workDir, "config", "user.email", "tests@codeindex.local");
         }
+    }
+
+    private static string RunGitCaptureStdOut(string workDir, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
+
+        return stdout;
     }
 
     private static void DeleteDirectory(string path)
