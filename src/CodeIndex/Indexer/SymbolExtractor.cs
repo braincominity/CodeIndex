@@ -76,7 +76,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptClassExpressionRegex = new(
-        @"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<alias>\w+)\s*=\s*class(?:\s+(?<name>\w+))?\b",
+        @"^\s*(?:(?<visibility>export)\s+)?(?:(?:const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=\s*class(?:\s+(?<name>\w+))?\b",
         RegexOptions.Compiled);
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
@@ -616,6 +616,8 @@ public static class SymbolExtractor
             return;
 
         var containerName = TryGetGroup(classExpressionMatch, "alias")
+            ?? TryGetGroup(classExpressionMatch, "exportsAlias")
+            ?? (classExpressionMatch.Groups["moduleExports"].Success ? "default" : null)
             ?? TryGetGroup(classExpressionMatch, "name")
             ?? "class";
         AddJavaScriptTypeScriptSyntheticClassTarget(
@@ -711,7 +713,6 @@ public static class SymbolExtractor
             lexState = lexedLine.EndState;
             var matchInput = lexedLine.SanitizedLine;
             var braceCountInput = lexedLine.SanitizedLine;
-            var signatureInput = line;
             var methodStartColumn = 0;
 
             if (i == scanStartIndex && classScanTarget.FirstLineScanOffset > 0)
@@ -723,29 +724,32 @@ public static class SymbolExtractor
 
                 braceCountInput = matchInput;
 
-                if (classScanTarget.FirstLineScanOffset >= signatureInput.Length)
-                    signatureInput = string.Empty;
-                else
-                    signatureInput = signatureInput[classScanTarget.FirstLineScanOffset..];
-
                 methodStartColumn = classScanTarget.FirstLineScanOffset;
             }
 
             if (nestedBraceDepth == 0)
             {
-                var match = methodRegex.Match(matchInput);
-                if (match.Success)
+                var lineOffset = 0;
+                while (lineOffset < matchInput.Length)
                 {
+                    var lineRemainder = matchInput[lineOffset..];
+                    var match = methodRegex.Match(lineRemainder);
+                    if (!match.Success)
+                        break;
+
                     var name = match.Groups["name"].Success
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
 
-                    methodStartColumn += match.Index;
+                    var absoluteMethodStartColumn = methodStartColumn + lineOffset + match.Index;
 
                     var startLine = i + 1;
                     if (!symbols.Any(s => s.Line == startLine && s.Kind == "function" && s.Name == name))
                     {
-                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang, methodStartColumn);
+                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang, absoluteMethodStartColumn);
+                        var sameLineMethodEndColumn = bodyEndLine == startLine
+                            ? FindJavaScriptSameLineBodyEndColumn(line, absoluteMethodStartColumn)
+                            : -1;
                         symbols.Add(new SymbolRecord
                         {
                             FileId = fileId,
@@ -756,11 +760,21 @@ public static class SymbolExtractor
                             EndLine = Math.Max(startLine, endLine),
                             BodyStartLine = bodyStartLine,
                             BodyEndLine = bodyEndLine,
-                            Signature = signatureInput[match.Index..].Trim(),
+                            Signature = sameLineMethodEndColumn >= absoluteMethodStartColumn
+                                ? line[absoluteMethodStartColumn..(sameLineMethodEndColumn + 1)].Trim()
+                                : line[absoluteMethodStartColumn..].Trim(),
                             Visibility = TryGetGroup(match, "visibility"),
                             ReturnType = NormalizeMetadata(TryGetGroup(match, "returnType")),
                         });
+
+                        if (bodyEndLine != startLine || sameLineMethodEndColumn < absoluteMethodStartColumn)
+                            break;
+
+                        lineOffset = sameLineMethodEndColumn + 1 - methodStartColumn;
+                        continue;
                     }
+
+                    break;
                 }
             }
 
@@ -1336,6 +1350,31 @@ public static class SymbolExtractor
                     continue;
 
                 return column;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindJavaScriptSameLineBodyEndColumn(string line, int startColumn)
+    {
+        var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
+        var depth = 0;
+        var opened = false;
+
+        for (int column = Math.Max(0, startColumn); column < sanitizedLine.Length; column++)
+        {
+            var ch = sanitizedLine[column];
+            if (ch == '{')
+            {
+                depth++;
+                opened = true;
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return column;
             }
         }
 
