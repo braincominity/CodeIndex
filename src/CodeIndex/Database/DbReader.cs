@@ -695,8 +695,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}
-                  AND r.reference_kind IN {InvokeReferenceKindsSql}"
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    MIN(r.line) AS first_line, COUNT(*) AS reference_count
@@ -786,8 +785,6 @@ public partial class DbReader
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
-        else
-            groupedSql += $" AND r.reference_kind IN {InvokeReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -837,8 +834,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}
-                  AND r.reference_kind IN {InvokeReferenceKindsSql}"
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
@@ -932,8 +928,6 @@ public partial class DbReader
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
-        else
-            groupedSql += $" AND r.reference_kind IN {InvokeReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.container_name_folded = @query";
         else if (exact)

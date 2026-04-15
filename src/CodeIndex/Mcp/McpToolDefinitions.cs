@@ -89,7 +89,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callers",
-                "Find caller symbols that reference a callee. / 指定シンボルを参照している呼び出し元シンボルを探す。",
+                "Find caller symbols that reference a callee. When `kind` is omitted, all indexed reference kinds stay visible while identical constructor `call` + `instantiate` rows at one physical site collapse. / 指定シンボルを参照している呼び出し元シンボルを探す。`kind` 未指定時は全 reference kind を表示したまま、同じ物理位置にある constructor の `call` + `instantiate` 重複行を集約する。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -110,7 +110,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callees",
-                "Find callees used by a caller/container symbol. When `kind` is omitted, identical constructor `call` + `instantiate` rows at one physical site are collapsed. / 呼び出し元シンボルが使っている呼び出し先を探す。`kind` 未指定時は、同じ物理位置にある constructor の `call` + `instantiate` 重複行を集約する。",
+                "Find callees used by a caller/container symbol. When `kind` is omitted, all indexed reference kinds stay visible while identical constructor `call` + `instantiate` rows at one physical site collapse. / 呼び出し元シンボルが使っている呼び出し先を探す。`kind` 未指定時は全 reference kind を表示したまま、同じ物理位置にある constructor の `call` + `instantiate` 重複行を集約する。",
                 new JsonObject
                 {
                     ["type"] = "object",

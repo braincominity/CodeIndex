@@ -2208,7 +2208,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GraphQueries_DefaultReferencesKeepSubscribeRowsVisibleInCountsAndAnalyzeSymbol()
+    public void GraphQueries_DefaultGraphQueriesKeepSubscribeRowsVisible()
     {
         InsertIndexedFile("src/event_publisher.cs", "csharp",
             """
@@ -2239,10 +2239,32 @@ public class DbReaderTests : IDisposable
         Assert.Equal("Hook", reference.ContainerName);
         Assert.Equal(1, _reader.CountSearchReferences("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
 
+        var caller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+        Assert.Equal("Hook", caller.CallerName);
+        Assert.Equal("Changed", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+
+        var callee = Assert.Single(_reader.GetCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+        Assert.Equal("Hook", callee.CallerName);
+        Assert.Equal("Changed", callee.CalleeName);
+        Assert.Equal("subscribe", callee.ReferenceKind);
+        Assert.Equal(1, callee.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallees("Hook", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+
         var analysis = _reader.AnalyzeSymbol("Changed", limit: 5, lang: "csharp", pathPatterns: ["event_"], exact: true);
         var bundledReference = Assert.Single(analysis.References);
         Assert.Equal("subscribe", bundledReference.ReferenceKind);
         Assert.Equal("Hook", bundledReference.ContainerName);
+        var bundledCaller = Assert.Single(analysis.Callers);
+        Assert.Equal("Hook", bundledCaller.CallerName);
+        Assert.Empty(analysis.Callees);
+
+        var callerAnalysis = _reader.AnalyzeSymbol("Hook", limit: 5, lang: "csharp", pathPatterns: ["event_"], exact: true);
+        var bundledCallee = Assert.Single(callerAnalysis.Callees);
+        Assert.Equal("Hook", bundledCallee.CallerName);
+        Assert.Equal("Changed", bundledCallee.CalleeName);
+        Assert.Equal("subscribe", bundledCallee.ReferenceKind);
     }
 
     [Fact]

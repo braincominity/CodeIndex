@@ -2449,6 +2449,109 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_JsonKeepsSubscribeRowsVisibleByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_subscribe_default");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_JsonKeepsSubscribeRowsVisibleByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_subscribe_default");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["Hook", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_JsonKeepsSubscribeReferencesVisibleInBundle()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_subscribe_bundle");
@@ -2487,11 +2590,67 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
             var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            var caller = Assert.Single(json.GetProperty("callers").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("subscribe", reference.GetProperty("reference_kind").GetString());
             Assert.Equal("Hook", reference.GetProperty("container_name").GetString());
+            Assert.Equal("Hook", caller.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", caller.GetProperty("callee_name").GetString());
+            Assert.Empty(json.GetProperty("callees").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonKeepsSubscribeCalleesVisibleForCallerSymbols()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_subscribe_callee_bundle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Hook", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var callee = Assert.Single(json.GetProperty("callees").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hook", callee.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", callee.GetProperty("callee_name").GetString());
+            Assert.Equal("subscribe", callee.GetProperty("reference_kind").GetString());
         }
         finally
         {
