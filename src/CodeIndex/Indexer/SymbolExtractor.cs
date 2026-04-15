@@ -540,18 +540,39 @@ public static class SymbolExtractor
             var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
             {
-                var lineOffset = 0;
-                while (lineOffset < matchLine.Length)
+                var lineOffset = lang is "javascript" or "typescript"
+                    ? FindNextJavaScriptTypeScriptStatementStart(matchLine, 0)
+                    : 0;
+                while (lineOffset >= 0 && lineOffset < matchLine.Length)
                 {
                     var match = pattern.Regex.Match(matchLine[lineOffset..]);
                     if (!match.Success)
+                    {
+                        if (lang is "javascript" or "typescript")
+                        {
+                            lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, lineOffset + 1);
+                            continue;
+                        }
+
                         break;
+                    }
 
                     var absoluteStartColumn = lineOffset + match.Index;
                     if (privateScopeColumns != null
                         && pattern.Kind == "class"
                         && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine, includeBlockScope: true))
                     {
+                        if (lang is "javascript" or "typescript")
+                        {
+                            var skippedEndColumn = pattern.BodyStyle == BodyStyle.Brace
+                                ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
+                                : -1;
+                            lineOffset = skippedEndColumn >= absoluteStartColumn
+                                ? FindNextJavaScriptTypeScriptStatementStart(matchLine, skippedEndColumn + 1)
+                                : FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+                            continue;
+                        }
+
                         break;
                     }
 
@@ -603,7 +624,7 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    lineOffset = sameLineEndColumn + 1;
+                    lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, sameLineEndColumn + 1);
                 }
 
                 if (stopAfterFirstPatternMatch)
@@ -654,7 +675,12 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
-            TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine, privateScopeColumns);
+            var lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (lineOffset >= 0 && lineOffset < sanitizedLine.Length)
+            {
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, lineOffset, sanitizedLine, privateScopeColumns);
+                lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, lineOffset + 1);
+            }
         }
 
         return targets
@@ -1145,22 +1171,24 @@ public static class SymbolExtractor
         List<SymbolRecord> symbols,
         List<JavaScriptClassScanTarget> targets,
         int startIndex,
+        int startColumn,
         string sanitizedLine,
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
-        var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultExportRegex.Match(sanitizedLine);
+        var lineRemainder = sanitizedLine[startColumn..];
+        var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultExportRegex.Match(lineRemainder);
         if (anonymousDefaultMatch.Success)
         {
             if (!TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(
                 lines,
                 startIndex,
-                anonymousDefaultMatch.Index + anonymousDefaultMatch.Length,
+                startColumn + anonymousDefaultMatch.Index + anonymousDefaultMatch.Length,
                 lang,
                 out var classTokenLineIndex,
                 out var classTokenStartColumn))
                 return;
 
-            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, anonymousDefaultMatch.Index, sanitizedLine, includeBlockScope: false))
+            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + anonymousDefaultMatch.Index, sanitizedLine, includeBlockScope: false))
                 return;
 
             AddJavaScriptTypeScriptSyntheticClassTarget(
@@ -1179,16 +1207,16 @@ public static class SymbolExtractor
 
         if (lang == "typescript")
         {
-            var exportEqualsMatch = TypeScriptExportEqualsRegex.Match(sanitizedLine);
+            var exportEqualsMatch = TypeScriptExportEqualsRegex.Match(lineRemainder);
             if (exportEqualsMatch.Success)
             {
-                if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, exportEqualsMatch.Index + exportEqualsMatch.Length))
+                if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, startColumn + exportEqualsMatch.Index + exportEqualsMatch.Length))
                     return;
 
                 if (!TryGetJavaScriptTypeScriptNextToken(
                     lines,
                     startIndex,
-                    exportEqualsMatch.Index + exportEqualsMatch.Length,
+                    startColumn + exportEqualsMatch.Index + exportEqualsMatch.Length,
                     skipWrappingParens: true,
                     out var exportEqualsClassTokenLineIndex,
                     out var exportEqualsClassTokenStartColumn,
@@ -1197,7 +1225,7 @@ public static class SymbolExtractor
                     return;
                 }
 
-                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, exportEqualsMatch.Index, sanitizedLine, includeBlockScope: false))
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + exportEqualsMatch.Index, sanitizedLine, includeBlockScope: false))
                     return;
 
                 AddJavaScriptTypeScriptSyntheticClassTarget(
@@ -1215,17 +1243,17 @@ public static class SymbolExtractor
             }
         }
 
-        var classExpressionBindingMatch = JavaScriptTypeScriptClassExpressionBindingRegex.Match(sanitizedLine);
+        var classExpressionBindingMatch = JavaScriptTypeScriptClassExpressionBindingRegex.Match(lineRemainder);
         if (!classExpressionBindingMatch.Success)
             return;
 
-        if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, classExpressionBindingMatch.Index + classExpressionBindingMatch.Length))
+        if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, startColumn + classExpressionBindingMatch.Index + classExpressionBindingMatch.Length))
             return;
 
         if (!TryGetJavaScriptTypeScriptNextToken(
             lines,
             startIndex,
-            classExpressionBindingMatch.Index + classExpressionBindingMatch.Length,
+            startColumn + classExpressionBindingMatch.Index + classExpressionBindingMatch.Length,
             skipWrappingParens: true,
             out var classExpressionTokenLineIndex,
             out var classExpressionTokenStartColumn,
@@ -1236,7 +1264,7 @@ public static class SymbolExtractor
 
         var includeBlockScope = classExpressionBindingMatch.Groups["bindingKind"].Success
             && classExpressionBindingMatch.Groups["bindingKind"].Value is "const" or "let";
-        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, classExpressionBindingMatch.Index, sanitizedLine, includeBlockScope))
+        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + classExpressionBindingMatch.Index, sanitizedLine, includeBlockScope))
             return;
 
         var containerName = TryGetGroup(classExpressionBindingMatch, "alias")
@@ -2581,6 +2609,51 @@ public static class SymbolExtractor
 
     private static bool IsJavaScriptTypeScriptIdentifierPart(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_' || ch == '$';
+
+    private static int FindNextJavaScriptTypeScriptTokenStart(string sanitizedLine, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < sanitizedLine.Length)
+        {
+            if (!IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+            {
+                index++;
+                continue;
+            }
+
+            if (index > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index - 1]))
+            {
+                index++;
+                continue;
+            }
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int FindNextJavaScriptTypeScriptStatementStart(string sanitizedLine, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < sanitizedLine.Length)
+        {
+            index = FindNextJavaScriptTypeScriptTokenStart(sanitizedLine, index);
+            if (index < 0)
+                return -1;
+
+            var previous = index - 1;
+            while (previous >= 0 && char.IsWhiteSpace(sanitizedLine[previous]))
+                previous--;
+
+            if (previous < 0 || sanitizedLine[previous] is ';' or '{' or '}' or ':')
+                return index;
+
+            index++;
+        }
+
+        return -1;
+    }
 
     private static bool CanTreatJavaScriptTypeScriptMethodTokenAsModifier(string sanitizedLine, int index)
     {

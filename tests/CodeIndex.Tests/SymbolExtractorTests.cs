@@ -197,6 +197,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsSameLinePublicClassAfterStatementPrefix()
+    {
+        var content = "foo(); class Visible { keep() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsSameLinePublicClassAfterFunctionLocalHiddenClass()
+    {
+        var content = "function outer(){ class Hidden { run() {} } } class Visible { keep() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsSameLineClassExpressionAfterStatementPrefix()
+    {
+        var content = "foo(); const Service = class Visible { keep() {} };";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsInlineDefaultExportClassMethods()
     {
         var content = "export default class Inline { run() {} }";
@@ -1006,6 +1040,40 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "A");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "B");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsSameLinePublicClassAfterStatementPrefix()
+    {
+        var content = "foo(); class Visible { keep(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsSameLinePublicClassAfterFunctionLocalHiddenClass()
+    {
+        var content = "function outer(): void { class Hidden { run(): void {} } } class Visible { keep(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsSameLineClassExpressionAfterStatementPrefix()
+    {
+        var content = "foo(); const Service = class Visible { keep(): void {} };";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
     }
 
     [Fact]
