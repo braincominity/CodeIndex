@@ -29,7 +29,13 @@ public static class LineWidthFormatter
         if (lines.Count == 0)
             return new ClampedTextResult(string.Empty, false);
 
+        if (focusLineIndex.HasValue && focusColumn is not > 0)
+            focusLineIndex = null;
+
         maxLineWidth = ClampMaxLineWidth(maxLineWidth);
+        if (!focusLineIndex.HasValue)
+            return new ClampedTextResult(string.Join('\n', lines), false);
+
         var output = new string[lines.Count];
         var anyTruncated = false;
         for (var i = 0; i < lines.Count; i++)

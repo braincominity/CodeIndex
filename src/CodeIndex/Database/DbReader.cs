@@ -1486,7 +1486,16 @@ public partial class DbReader
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>
-    public FileExcerptResult? GetExcerpt(string path, int startLine, int endLine, int before = 0, int after = 0, int? maxLineWidth = null)
+    public FileExcerptResult? GetExcerpt(
+        string path,
+        int startLine,
+        int endLine,
+        int before = 0,
+        int after = 0,
+        int? maxLineWidth = null,
+        int? focusLine = null,
+        int? focusColumn = null,
+        int focusLength = 1)
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
@@ -1512,8 +1521,14 @@ public partial class DbReader
             return null;
 
         var contentLines = selectedLines.Select(line => lineMap[line]).ToList();
+        var focusLineIndex = focusLine.HasValue ? selectedLines.IndexOf(focusLine.Value) : -1;
         var clampedContent = maxLineWidth.HasValue
-            ? LineWidthFormatter.ClampLines(contentLines, maxLineWidth.Value)
+            ? LineWidthFormatter.ClampLines(
+                contentLines,
+                maxLineWidth.Value,
+                focusLineIndex >= 0 ? focusLineIndex : null,
+                focusLineIndex >= 0 ? focusColumn : null,
+                focusLength)
             : new ClampedTextResult(string.Join("\n", contentLines), false);
 
         return new FileExcerptResult

@@ -430,6 +430,9 @@ cdidx map --path src/ --exclude-tests --json
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match |
 | `--after <n>` | `excerpt`, `find` | Include extra context lines after the requested excerpt or match |
+| `--focus-line <line>` | `excerpt` | Line inside the requested excerpt to keep visible when `--max-line-width` clamps long single-line content |
+| `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content |
+| `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1) |
 | `--rebuild` | `index` | Delete existing DB and rebuild |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits. Prefer this after a normal commit because git history includes rename/delete paths. |
@@ -1278,6 +1281,9 @@ cdidx map --path src/ --exclude-tests --json
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数 |
 | `--after <n>` | `excerpt`, `find` | 指定範囲または一致箇所の後に追加する文脈行数 |
+| `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、表示に残したい抜粋内の行 |
+| `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列 |
+| `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1） |
 | `--rebuild` | `index` | 既存DBを削除して再構築 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新 |

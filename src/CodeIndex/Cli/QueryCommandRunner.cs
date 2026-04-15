@@ -622,7 +622,7 @@ public static class QueryCommandRunner
         if (options.Query == null)
         {
             Console.Error.WriteLine("Error: excerpt requires a path argument");
-            Console.Error.WriteLine("Usage: cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--db <path>] [--json]");
+            Console.Error.WriteLine("Usage: cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]");
             return CommandExitCodes.UsageError;
         }
 
@@ -641,7 +641,16 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var excerpt = reader.GetExcerpt(options.Query, options.StartLine.Value, endLine, options.ContextBefore, options.ContextAfter, options.MaxLineWidth);
+            var excerpt = reader.GetExcerpt(
+                options.Query,
+                options.StartLine.Value,
+                endLine,
+                options.ContextBefore,
+                options.ContextAfter,
+                options.MaxLineWidth,
+                options.FocusLine ?? options.StartLine.Value,
+                options.FocusColumn,
+                options.FocusLength);
             if (excerpt == null)
             {
                 if (!options.Json)
@@ -1690,6 +1699,9 @@ public static class QueryCommandRunner
         int? endLine = null;
         int contextBefore = 0;
         int contextAfter = 0;
+        int? focusLine = null;
+        int? focusColumn = null;
+        int focusLength = 1;
         int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         var pathPatterns = new List<string>();
@@ -1798,6 +1810,15 @@ public static class QueryCommandRunner
                 case "--after" when i + 1 < args.Length:
                     contextAfter = ParseNonNegativeInt(args[++i], "--after");
                     break;
+                case "--focus-line" when i + 1 < args.Length:
+                    focusLine = ParsePositiveInt(args[++i], "--focus-line");
+                    break;
+                case "--focus-column" when i + 1 < args.Length:
+                    focusColumn = ParsePositiveInt(args[++i], "--focus-column");
+                    break;
+                case "--focus-length" when i + 1 < args.Length:
+                    focusLength = ParsePositiveInt(args[++i], "--focus-length") ?? 1;
+                    break;
                 case "--name" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
                     // Repeatable; OR-joined with other --name values and extra positional names / 繰り返し可、他の --name や追加の positional 引数と OR 結合
                     extraNames.Add(args[++i]);
@@ -1843,6 +1864,9 @@ public static class QueryCommandRunner
             EndLine = endLine,
             ContextBefore = contextBefore,
             ContextAfter = contextAfter,
+            FocusLine = focusLine,
+            FocusColumn = focusColumn,
+            FocusLength = focusLength,
             SnippetLines = snippetLines,
             MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
@@ -2315,6 +2339,9 @@ public sealed class QueryCommandOptions
     public int? EndLine { get; init; }
     public int ContextBefore { get; init; }
     public int ContextAfter { get; init; }
+    public int? FocusLine { get; init; }
+    public int? FocusColumn { get; init; }
+    public int FocusLength { get; init; } = 1;
     public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
     public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];

@@ -39,8 +39,9 @@ public class ConsoleUiTests
         Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
-        Assert.Contains("cdidx excerpt <path> --start <line>", output);
+        Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
         Assert.Contains("--max-line-width <n>       Clamp very long single-line context/excerpt payloads", output);
+        Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
         Assert.Contains("--json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)", output);
@@ -169,6 +170,7 @@ public class ConsoleUiTests
                 Assert.Contains("--before", output);
                 Assert.Contains("--after", output);
                 Assert.Contains("--max-line-width", output);
+                Assert.Contains("--focus-column", output);
                 Assert.Contains("--exact", output);
                 Assert.Contains("--query", output);
                 if (shell == "bash")

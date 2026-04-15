@@ -773,11 +773,14 @@ public partial class McpServer
 
         var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
         var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var focusLine = args?["focusLine"]?.GetValue<int>();
+        var focusColumn = args?["focusColumn"]?.GetValue<int>();
+        var focusLength = Math.Max(1, args?["focusLength"]?.GetValue<int>() ?? 1);
         var maxLineWidth = ClampMaxLineWidth(args);
 
         return WithDbReader(id, reader =>
         {
-            var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after, maxLineWidth);
+            var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after, maxLineWidth, focusLine ?? startLine.Value, focusColumn, focusLength);
             if (excerpt == null)
             {
                 var emptyPayload = new JsonObject
@@ -791,6 +794,11 @@ public partial class McpServer
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
             payload["maxLineWidth"] = maxLineWidth;
+            if (focusLine.HasValue)
+                payload["focusLine"] = focusLine.Value;
+            if (focusColumn.HasValue)
+                payload["focusColumn"] = focusColumn.Value;
+            payload["focusLength"] = focusLength;
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
