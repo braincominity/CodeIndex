@@ -19,7 +19,12 @@ public class FileIndexer
 
     internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
 
-    public readonly record struct ScanFilesResult(IReadOnlyList<string> Files, bool HadErrors);
+    public readonly record struct ScanError(string Path, string Message);
+
+    public readonly record struct ScanFilesResult(IReadOnlyList<string> Files, IReadOnlyList<ScanError> Errors)
+    {
+        public bool HadErrors => Errors.Count > 0;
+    }
 
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
@@ -208,23 +213,23 @@ public class FileIndexer
     internal ScanFilesResult ScanFilesDetailed()
     {
         var files = new List<string>();
-        var hadErrors = EnumerateDirectory(_projectRoot, files);
-        return new ScanFilesResult(files, hadErrors);
+        var errors = new List<ScanError>();
+        EnumerateDirectory(_projectRoot, files, errors);
+        return new ScanFilesResult(files, errors);
     }
 
-    private bool ScanDirectory(string dir, List<string> results)
+    private void ScanDirectory(string dir, List<string> results, List<ScanError> errors)
     {
         // Check for skip directories / スキップ対象ディレクトリかチェック
         var dirName = Path.GetFileName(dir);
         if (SkipDirs.Contains(dirName))
-            return false;
+            return;
 
-        return EnumerateDirectory(dir, results);
+        EnumerateDirectory(dir, results, errors);
     }
 
-    private bool EnumerateDirectory(string dir, List<string> results)
+    private void EnumerateDirectory(string dir, List<string> results, List<ScanError> errors)
     {
-        var hadErrors = false;
         try
         {
             foreach (var file in Directory.EnumerateFiles(dir))
@@ -240,7 +245,7 @@ public class FileIndexer
                 var indexability = GetFileIndexability(file);
                 if (indexability == FileProbeStatus.ProbeFailed)
                 {
-                    hadErrors = true;
+                    errors.Add(new ScanError(ToRelativePath(file), "Could not probe file for indexability/language."));
                     continue;
                 }
 
@@ -252,7 +257,7 @@ public class FileIndexer
                 var language = TryDetectLanguage(file);
                 if (language.Status == FileProbeStatus.ProbeFailed)
                 {
-                    hadErrors = true;
+                    errors.Add(new ScanError(ToRelativePath(file), "Could not probe file for indexability/language."));
                     continue;
                 }
 
@@ -262,21 +267,19 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                hadErrors |= ScanDirectory(subDir, results);
+                ScanDirectory(subDir, results, errors);
             }
         }
         catch (UnauthorizedAccessException)
         {
             // Skip inaccessible directories / アクセス不可ディレクトリはスキップ
-            hadErrors = true;
+            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
         }
         catch (IOException)
         {
             // Skip on I/O errors / I/Oエラー時はスキップ
-            hadErrors = true;
+            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
         }
-
-        return hadErrors;
     }
 
     /// <summary>
@@ -534,6 +537,9 @@ public class FileIndexer
         _ when interpreter.StartsWith("python", StringComparison.Ordinal) => "python",
         _ => null,
     };
+
+    private string ToRelativePath(string absolutePath)
+        => Path.GetRelativePath(_projectRoot, absolutePath).Replace('\\', '/');
 
     private static class UnixFileStatus
     {

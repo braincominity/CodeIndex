@@ -1426,6 +1426,13 @@ public class IndexCommandRunnerTests
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("secret", stderr);
+            Assert.Contains("Could not scan directory due to permissions.", stderr);
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("secret/a.cs", indexedPaths);
@@ -1462,9 +1469,21 @@ public class IndexCommandRunnerTests
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("tool", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not probe file for indexability/language.", json.GetProperty("errors")[0].GetProperty("message").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("tool", indexedPaths);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {

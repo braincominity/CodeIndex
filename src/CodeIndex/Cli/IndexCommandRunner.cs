@@ -572,6 +572,9 @@ public static class IndexCommandRunner
                 var detection = FileIndexer.TryDetectLanguage(absPath);
                 if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
                 {
+                    if (writer.HasFileAtPath(relPath))
+                        DemoteReadinessOnce();
+
                     errors++;
                     errorList.Add(new { file = relPath, message = "Could not probe file for indexability/language." });
                     if (!options.Json)
@@ -829,9 +832,14 @@ public static class IndexCommandRunner
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
+        var errorList = scanResult.Errors
+            .Select(error => (object)new { file = error.Path, message = error.Message })
+            .ToList();
         if (!options.Json)
         {
             Console.WriteLine($"  Found {files.Count:N0} files");
+            foreach (var error in scanResult.Errors)
+                ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
             Console.WriteLine();
         }
 
@@ -870,8 +878,7 @@ public static class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         if (!options.Json)
             indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
-        int processed = 0, skipped = 0, errors = scanResult.HadErrors ? 1 : 0;
-        var errorList = new List<object>();
+        int processed = 0, skipped = 0, errors = errorList.Count;
         bool indexSpinnerStopped = false;
 
         foreach (var filePath in files)
