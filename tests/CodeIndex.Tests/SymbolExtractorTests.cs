@@ -82,6 +82,54 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RawStringFixturesDoNotLeakPhantomSymbols()
+    {
+        var content = """""
+            public class FixtureHost
+            {
+                public void UsesRawFixture()
+                {
+                    const string fixture = """
+                        public class App
+                        {
+                            public void Run()
+                            {
+                            }
+                        }
+
+                        function main()
+                        end
+                        """;
+
+                    const string wider = """"
+                        public class Wider
+                        """";
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "UsesRawFixture"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "FixtureHost");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "App");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Wider");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "main");
+        Assert.Equal(20, method.EndLine);
+        Assert.Equal(20, method.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
+    {
+        var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "FixtureHost");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedNamespaceAndRecordStruct()
     {
         // C# 10+: file-scoped namespace, global using, record struct

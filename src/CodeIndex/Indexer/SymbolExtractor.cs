@@ -459,12 +459,14 @@ public static class SymbolExtractor
             return [];
 
         var lines = content.Split('\n');
+        var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
         var symbols = new List<SymbolRecord>();
 
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(line) : line;
+            var structuralLine = structuralLines[i];
+            var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(structuralLine) : structuralLine;
             foreach (var pattern in patterns)
             {
                 var match = pattern.Regex.Match(matchLine);
@@ -475,7 +477,7 @@ public static class SymbolExtractor
                     ? match.Groups["name"].Value.Trim()
                     : match.Value.Trim();
 
-                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, pattern.BodyStyle);
+                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(structuralLines, i, pattern.BodyStyle);
                 var startLine = i + 1;
 
                 // Python @property decorator: reclassify the def as property

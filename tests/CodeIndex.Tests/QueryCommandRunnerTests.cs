@@ -4639,6 +4639,51 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_WithJson_CSharpRawStringFixturesDoNotCreatePhantomEntrypoints()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_raw_string");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/fixture.cs",
+                "csharp",
+                """"
+                public class FixtureHost
+                {
+                    public void UsesRawFixture()
+                    {
+                        const string fixture = """
+                            function main()
+                            end
+
+                            public class App
+                            {
+                            }
+                            """;
+                    }
+                }
+                """");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var entrypoints = document.RootElement.GetProperty("entrypoints");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Empty(entrypoints.EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_WithJsonIncludesWorkspaceMetadataForCustomDbUnderCdidx()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_custom_db");

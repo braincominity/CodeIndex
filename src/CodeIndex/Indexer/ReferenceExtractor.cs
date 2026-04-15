@@ -111,6 +111,7 @@ public static class ReferenceExtractor
         var language = lang!;
 
         var lines = content.Split('\n');
+        var structuralLines = StructuralLineMasker.MaskLines(language, lines);
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
             .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
@@ -127,7 +128,7 @@ public static class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
-            var preparedLine = PrepareLine(language, originalLine);
+            var preparedLine = PrepareLine(language, structuralLines[i]);
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
 
