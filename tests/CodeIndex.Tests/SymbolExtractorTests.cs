@@ -110,7 +110,27 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NamedService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("NamedService", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotLeakFunctionLocalClassExpressionMethods()
+    {
+        var content = """
+            function outer() {
+                const Service = class {
+                    run() {}
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
     [Fact]
@@ -370,7 +390,27 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "NamedService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("class", run.ContainerKind);
+        Assert.Equal("NamedService", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotLeakFunctionLocalClassExpressionMethods()
+    {
+        var content = """
+            function outer(): void {
+                const Service = class {
+                    run(): void {}
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
     [Fact]

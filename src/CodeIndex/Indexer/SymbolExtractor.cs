@@ -71,11 +71,11 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptAnonymousDefaultClassRegex = new(
-        @"^\s*export\s+default\s+class(?=\s+extends\b|\s*\{)",
+        @"^\s*(?<visibility>export)\s+default\s+class\b(?=\s+extends\b|\s*\{)",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptClassExpressionRegex = new(
-        @"^\s*(?:(?:export)\s+)?(?:const|let|var)\s+\w+\s*=\s*class\b",
+        @"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<alias>\w+)\s*=\s*class(?:\s+(?<name>\w+))?\b",
         RegexOptions.Compiled);
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
@@ -547,13 +547,13 @@ public static class SymbolExtractor
     private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols)
     {
         var methodRegex = lang == "javascript" ? JavaScriptBareMethodRegex : TypeScriptBareMethodRegex;
-        var classScanTargets = CollectJavaScriptTypeScriptClassScanTargets(lang, lines, symbols);
+        var classScanTargets = CollectJavaScriptTypeScriptClassScanTargets(fileId, lang, lines, symbols);
 
         foreach (var classScanTarget in classScanTargets)
             ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lang, lines, symbols, classScanTarget, methodRegex);
     }
 
-    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols)
     {
         var targets = symbols
             .Where(s => s.Kind == "class" && s.BodyStartLine != null && s.BodyEndLine != null)
@@ -566,35 +566,110 @@ public static class SymbolExtractor
             .ToList();
 
         var lexState = new JavaScriptLexState();
+        var lexicalDepth = 0;
         for (int i = 0; i < lines.Length; i++)
         {
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
 
-            if (!JavaScriptTypeScriptAnonymousDefaultClassRegex.IsMatch(sanitizedLine)
-                && !JavaScriptTypeScriptClassExpressionRegex.IsMatch(sanitizedLine))
+            if (lexicalDepth == 0)
             {
-                continue;
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine);
             }
 
-            var (_, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang);
-            if (bodyStartLine == null || bodyEndLine == null)
-                continue;
-
-            var candidate = new JavaScriptClassScanTarget(i, bodyStartLine.Value, bodyEndLine.Value - 1);
-            if (!targets.Any(t => t.StartIndex == candidate.StartIndex
-                && t.ScanStartIndex == candidate.ScanStartIndex
-                && t.ScanEndExclusive == candidate.ScanEndExclusive))
-            {
-                targets.Add(candidate);
-            }
+            lexicalDepth += CountBraces(sanitizedLine);
+            if (lexicalDepth < 0)
+                lexicalDepth = 0;
         }
 
         return targets
             .OrderBy(t => t.StartIndex)
             .ThenByDescending(t => t.ScanEndExclusive)
             .ToList();
+    }
+
+    private static void TryAddJavaScriptTypeScriptSyntheticClassTarget(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        List<JavaScriptClassScanTarget> targets,
+        int startIndex,
+        string sanitizedLine)
+    {
+        var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultClassRegex.Match(sanitizedLine);
+        if (anonymousDefaultMatch.Success)
+        {
+            AddJavaScriptTypeScriptSyntheticClassTarget(
+                fileId,
+                lang,
+                lines,
+                symbols,
+                targets,
+                startIndex,
+                containerName: "default",
+                visibility: TryGetGroup(anonymousDefaultMatch, "visibility"));
+            return;
+        }
+
+        var classExpressionMatch = JavaScriptTypeScriptClassExpressionRegex.Match(sanitizedLine);
+        if (!classExpressionMatch.Success)
+            return;
+
+        var containerName = TryGetGroup(classExpressionMatch, "name")
+            ?? TryGetGroup(classExpressionMatch, "alias")
+            ?? "class";
+        AddJavaScriptTypeScriptSyntheticClassTarget(
+            fileId,
+            lang,
+            lines,
+            symbols,
+            targets,
+            startIndex,
+            containerName,
+            TryGetGroup(classExpressionMatch, "visibility"));
+    }
+
+    private static void AddJavaScriptTypeScriptSyntheticClassTarget(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        List<JavaScriptClassScanTarget> targets,
+        int startIndex,
+        string containerName,
+        string? visibility)
+    {
+        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, startIndex, BodyStyle.Brace, lang);
+        if (bodyStartLine == null || bodyEndLine == null)
+            return;
+
+        var existingClass = symbols.FirstOrDefault(s => s.Kind == "class" && s.Line == startIndex + 1 && s.Name == containerName);
+        if (existingClass == null)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = containerName,
+                Line = startIndex + 1,
+                StartLine = startIndex + 1,
+                EndLine = Math.Max(startIndex + 1, endLine),
+                BodyStartLine = bodyStartLine,
+                BodyEndLine = bodyEndLine,
+                Signature = lines[startIndex].Trim(),
+                Visibility = visibility,
+            });
+        }
+
+        var candidate = new JavaScriptClassScanTarget(startIndex, bodyStartLine.Value, bodyEndLine.Value - 1);
+        if (!targets.Any(t => t.StartIndex == candidate.StartIndex
+            && t.ScanStartIndex == candidate.ScanStartIndex
+            && t.ScanEndExclusive == candidate.ScanEndExclusive))
+        {
+            targets.Add(candidate);
+        }
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInClass(
