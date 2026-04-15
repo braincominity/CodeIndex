@@ -77,7 +77,7 @@ public static class SymbolExtractor
         [
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["typescript"] =
@@ -85,7 +85,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
             // 名前空間・モジュール — 識別子形式と引用符付きアンビエント形式の両方に対応
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -889,7 +889,7 @@ public static class SymbolExtractor
     {
         return identifier is
             "return" or "throw" or "case" or "delete" or "typeof" or "void" or "new" or
-            "in" or "of" or "instanceof" or "yield" or "await" or "else";
+            "in" or "of" or "instanceof" or "yield" or "await" or "else" or "do" or "finally";
     }
 
     private static int SkipJavaScriptRegexLiteral(string line, char[] sanitized, int slashIndex)

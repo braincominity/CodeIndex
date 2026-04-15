@@ -59,6 +59,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsExportDefaultClassMembers()
+    {
+        var content = """
+            export default class DefaultJs {
+                run() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultJs");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotTreatControlFlowBlocksAsFunctions()
     {
         var content = """
@@ -209,6 +223,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_KeepsSiblingMethodsAfterDoAndFinallyRegexLiterals()
+    {
+        var content = """
+            class Example {
+                first(value) {
+                    do /{/.test(value); while (cond);
+                }
+
+                second(value) {
+                    try {
+                    }
+                    finally /{/.test(value);
+                }
+
+                third() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
+    }
+
+    [Fact]
     public void Extract_JavaScript_FunctionRangeIgnoresComparisonAngleBracketsInParameters()
     {
         var content = """
@@ -236,6 +275,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "express");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "App.Models");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportDefaultClassMembers()
+    {
+        var content = """
+            export default class DefaultTs {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultTs");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
     }
 
     [Fact]
@@ -405,6 +458,31 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_KeepsSiblingMethodsAfterDoAndFinallyRegexLiterals()
+    {
+        var content = """
+            export class Example {
+                first(value: string): void {
+                    do /{/.test(value); while (cond);
+                }
+
+                second(value: string): void {
+                    try {
+                    }
+                    finally /{/.test(value);
+                }
+
+                third(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third");
     }
 
     [Fact]
