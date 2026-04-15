@@ -1091,6 +1091,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotMatchTernaryContinuationCallsAsDefinitions()
+    {
+        var content = """
+            public class Dispatcher
+            {
+                private string Select(bool isUpdate)
+                    => isUpdate
+                        ? RunUpdateMode()
+                        : RunFullScan();
+
+                private string RunUpdateMode() => "update";
+                private string RunFullScan() => "full";
+
+                public int? NullableCount() => null;
+
+                public Dispatcher(bool isUpdate)
+                    : base()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Select");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RunUpdateMode" && s.Line == 8);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RunFullScan" && s.Line == 9);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NullableCount" && s.ReturnType == "int?");
+        Assert.DoesNotContain(symbols, s => s.Name == "RunUpdateMode" && s.Line == 5);
+        Assert.DoesNotContain(symbols, s => s.Name == "RunFullScan" && s.Line == 6);
+        Assert.DoesNotContain(symbols, s => s.Name == "base");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNewModifierMethods()
     {
         // C# `new` modifier for member hiding should still be extracted as definitions
