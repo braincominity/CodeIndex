@@ -230,6 +230,7 @@ public class ConsoleUiTests
     [InlineData("refernces", "references")]
     [InlineData("indx", "index")]
     [InlineData("mpa", "map")]
+    [InlineData("backfillfold", "backfill-fold")]
     public void FindClosestCommand_Typo_ReturnsCorrectSuggestion(string input, string expected)
     {
         Assert.Equal(expected, ConsoleUi.FindClosestCommand(input));
@@ -238,6 +239,7 @@ public class ConsoleUiTests
     [Theory]
     [InlineData("xyzabc")]
     [InlineData("foobarqux")]
+    [InlineData("fold")]
     public void FindClosestCommand_GarbageInput_ReturnsNull(string input)
     {
         Assert.Null(ConsoleUi.FindClosestCommand(input));
