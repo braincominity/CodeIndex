@@ -24,10 +24,13 @@ public static class SymbolExtractor
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null);
 
-    // Control-flow keywords that can look like JS/TS method declarations (`if (...) {`)
-    // but must never be indexed as function definitions.
-    // JS/TS のメソッド宣言に見えてしまう制御構文キーワード（`if (...) {` など）を除外する。
-    private const string JavaScriptTypeScriptMethodControlFlowKeywords = "if|for|while|switch|catch|with";
+    private static readonly Regex JavaScriptBareMethodRegex = new(
+        @"^\s*(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TypeScriptBareMethodRegex = new(
+        @"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{",
+        RegexOptions.Compiled);
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
     {
@@ -42,7 +45,6 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?!(?:" + JavaScriptTypeScriptMethodControlFlowKeywords + @")\b)(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["typescript"] =
@@ -58,7 +60,6 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?!(?:" + JavaScriptTypeScriptMethodControlFlowKeywords + @")\b)(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["csharp"] =
@@ -490,8 +491,181 @@ public static class SymbolExtractor
             }
         }
 
+        if (lang is "javascript" or "typescript")
+            ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols);
+
         AssignContainers(symbols);
         return symbols;
+    }
+
+    private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols)
+    {
+        var methodRegex = lang == "javascript" ? JavaScriptBareMethodRegex : TypeScriptBareMethodRegex;
+        var classSymbols = symbols
+            .Where(s => s.Kind == "class" && s.BodyStartLine != null && s.BodyEndLine != null)
+            .OrderBy(s => s.StartLine)
+            .ThenByDescending(s => s.EndLine)
+            .ToList();
+
+        foreach (var classSymbol in classSymbols)
+            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lines, symbols, classSymbol, methodRegex);
+    }
+
+    private static void ExtractJavaScriptTypeScriptBareMethodsInClass(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolRecord classSymbol,
+        Regex methodRegex)
+    {
+        if (classSymbol.BodyStartLine == null || classSymbol.BodyEndLine == null)
+            return;
+
+        var scanStartIndex = classSymbol.BodyStartLine.Value;
+        var scanEndExclusive = classSymbol.BodyEndLine.Value - 1;
+        var nestedBraceDepth = 0;
+        var inBlockComment = false;
+        var inTemplateString = false;
+
+        for (int i = scanStartIndex; i < scanEndExclusive; i++)
+        {
+            var line = lines[i];
+            if (nestedBraceDepth == 0)
+            {
+                var match = methodRegex.Match(line);
+                if (match.Success)
+                {
+                    var name = match.Groups["name"].Success
+                        ? match.Groups["name"].Value.Trim()
+                        : match.Value.Trim();
+
+                    var startLine = i + 1;
+                    if (!symbols.Any(s => s.Line == startLine && s.Kind == "function" && s.Name == name))
+                    {
+                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace);
+                        symbols.Add(new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "function",
+                            Name = name,
+                            Line = startLine,
+                            StartLine = startLine,
+                            EndLine = Math.Max(startLine, endLine),
+                            BodyStartLine = bodyStartLine,
+                            BodyEndLine = bodyEndLine,
+                            Signature = line.Trim(),
+                            Visibility = TryGetGroup(match, "visibility"),
+                            ReturnType = NormalizeMetadata(TryGetGroup(match, "returnType")),
+                        });
+                    }
+                }
+            }
+
+            nestedBraceDepth += CountJavaScriptBraceDelta(line, ref inBlockComment, ref inTemplateString);
+            if (nestedBraceDepth < 0)
+                nestedBraceDepth = 0;
+        }
+    }
+
+    private static int CountJavaScriptBraceDelta(string line, ref bool inBlockComment, ref bool inTemplateString)
+    {
+        var delta = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            var next = i + 1 < line.Length ? line[i + 1] : '\0';
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    inSingleQuote = false;
+
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"')
+                    inDoubleQuote = false;
+
+                continue;
+            }
+
+            if (inTemplateString)
+            {
+                if (ch == '\\')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (ch == '`')
+                    inTemplateString = false;
+
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+                break;
+
+            if (ch == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                inTemplateString = true;
+                continue;
+            }
+
+            if (ch == '{')
+                delta++;
+            else if (ch == '}')
+                delta--;
+        }
+
+        return delta;
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle)

@@ -91,6 +91,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_AllowsKeywordNamedMethodsAtClassBodyDepthZero()
+    {
+        var content = """
+            class KeywordMethods {
+                if() {}
+                catch() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "KeywordMethods");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "if");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "catch");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
     {
         var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
@@ -133,6 +149,24 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "for");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "while");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "switch");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_AllowsKeywordNamedMethodsAtClassBodyDepthZero()
+    {
+        var content = """
+            export class KeywordMethods {
+                if(): void {}
+                catch(): string {
+                    return "ok";
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "KeywordMethods");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "if");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "catch");
     }
 
     [Fact]
