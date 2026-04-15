@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -131,28 +132,20 @@ public static class DbPathResolver
                 return true;
         }
 
-        try
-        {
-            using var connection = OpenMetadataConnection(dbPath);
-            connection.Open();
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT path FROM files ORDER BY id LIMIT 5";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                if (reader.IsDBNull(0))
-                    continue;
+        var samples = TryReadIndexedFileSamples(dbPath);
+        if (samples.Count == 0)
+            return false;
 
-                var relativePath = reader.GetString(0);
-                var absolutePath = Path.Combine(siblingRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
-                if (File.Exists(absolutePath))
-                    return true;
-            }
-        }
-        catch
-        {
-            // Fall back to persisted metadata / 永続化 metadata 側へフォールバック
-        }
+        var siblingMatches = CountMatchingSamples(siblingRoot, samples);
+        if (string.IsNullOrWhiteSpace(indexedProjectRoot))
+            return siblingMatches.PathExistsMatches > 0;
+
+        var storedRootMatches = CountMatchingSamples(Path.GetFullPath(indexedProjectRoot), samples);
+        if (siblingMatches.ChecksumMatches != storedRootMatches.ChecksumMatches)
+            return siblingMatches.ChecksumMatches > storedRootMatches.ChecksumMatches;
+
+        if (siblingMatches.PathExistsMatches != storedRootMatches.PathExistsMatches)
+            return siblingMatches.PathExistsMatches > storedRootMatches.PathExistsMatches;
 
         return false;
     }
@@ -191,4 +184,75 @@ public static class DbPathResolver
             : StringComparison.Ordinal;
         return string.Equals(left, right, comparison);
     }
+
+    private static List<IndexedFileSample> TryReadIndexedFileSamples(string dbPath)
+    {
+        try
+        {
+            using var connection = OpenMetadataConnection(dbPath);
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT path, checksum
+                FROM files
+                WHERE path IS NOT NULL
+                  AND checksum IS NOT NULL
+                  AND checksum != ''
+                ORDER BY id
+                LIMIT 5
+                """;
+
+            using var reader = cmd.ExecuteReader();
+            var samples = new List<IndexedFileSample>();
+            while (reader.Read())
+            {
+                samples.Add(new IndexedFileSample(
+                    reader.GetString(0),
+                    reader.GetString(1)));
+            }
+
+            return samples;
+        }
+        catch
+        {
+            // Fall back to persisted metadata / 永続化 metadata 側へフォールバック
+            return [];
+        }
+    }
+
+    private static SampleMatchResult CountMatchingSamples(string candidateRoot, IReadOnlyList<IndexedFileSample> samples)
+    {
+        var checksumMatches = 0;
+        var pathExistsMatches = 0;
+        foreach (var sample in samples)
+        {
+            try
+            {
+                var absolutePath = Path.Combine(candidateRoot, sample.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(absolutePath))
+                    continue;
+
+                pathExistsMatches++;
+                var checksum = ComputeChecksum(File.ReadAllBytes(absolutePath));
+                if (string.Equals(checksum, sample.Checksum, StringComparison.OrdinalIgnoreCase))
+                    checksumMatches++;
+            }
+            catch
+            {
+                // Ignore unreadable samples and keep comparing the rest.
+                // 読み込めないサンプルは無視して残りを比較する。
+            }
+        }
+
+        return new SampleMatchResult(checksumMatches, pathExistsMatches);
+    }
+
+    private static string ComputeChecksum(byte[] bytes)
+    {
+        var hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private readonly record struct SampleMatchResult(int ChecksumMatches, int PathExistsMatches);
+    private sealed record IndexedFileSample(string RelativePath, string Checksum);
 }

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -55,7 +57,7 @@ internal static class TestProjectHelper
             Size = normalized.Length,
             Lines = lines.Length,
             Modified = modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            Checksum = Guid.NewGuid().ToString("N"),
+            Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
         });
 
         writer.InsertChunks([

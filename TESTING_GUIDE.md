@@ -77,7 +77,7 @@ Prefer the existing helper before writing new setup code.
 - `CreateTempProject(prefix)` creates a unique temp workspace.
 - `InitializeGitRepo(projectRoot)` initializes git and sets repo-local `user.name` and `user.email`.
 - `CreateProjectDb(projectRoot)` creates `<projectRoot>/.cdidx/codeindex.db`, initializes schema, and seeds `codeindex_meta.indexed_project_root` to match the project root.
-- `InsertIndexedFile(...)` inserts a realistic indexed file with chunks, symbols, and references.
+- `InsertIndexedFile(...)` inserts a realistic indexed file with content-derived checksum, chunks, symbols, and references.
 - `RunGit(...)` executes git without shell quoting issues.
 - `DeleteDirectory(path)` retries temp-project cleanup and normalizes attributes. To avoid process-global cross-test interference, it only clears SQLite pools as a Windows-specific retry fallback after a delete failure.
 - Tests that intentionally call `SqliteConnection.ClearAllPools()` are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new pool-resetting tests to that collection instead of letting them run in parallel with unrelated SQLite tests.
@@ -226,7 +226,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `CreateTempProject(prefix)` は一意な一時ワークスペースを作成します。
 - `InitializeGitRepo(projectRoot)` は git を初期化し、repo-local の `user.name` と `user.email` を設定します。
 - `CreateProjectDb(projectRoot)` は `<projectRoot>/.cdidx/codeindex.db` を作成し、スキーマを初期化したうえで `codeindex_meta.indexed_project_root` に project root を書き込みます。
-- `InsertIndexedFile(...)` は chunks、symbols、references を含む現実的なインデックス済みファイルを挿入します。
+- `InsertIndexedFile(...)` は内容由来の checksum、chunks、symbols、references を含む現実的なインデックス済みファイルを挿入します。
 - `RunGit(...)` は shell の quoting 問題に依存せず git を実行します。
 - `DeleteDirectory(path)` は temp project cleanup のリトライと属性正規化を扱います。プロセス全体への干渉を避けるため、SQLite pool の解放は Windows で削除に失敗した場合のリトライ時だけに限定します。
 - `SqliteConnection.ClearAllPools()` を意図的に呼ぶテストは、xUnit の non-parallel collection `SQLite pool sensitive` にまとめます。新しい pool-reset 系テストも、この collection に入れて無関係な SQLite テストとの並列実行を避けてください。
