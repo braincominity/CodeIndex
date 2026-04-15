@@ -1279,6 +1279,39 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_ClearsHotspotFamilyTrustOnPartialFailure()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+
+            WriteOversizedAsciiFile(Path.Combine(projectRoot, "app.cs"));
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("partial", json2.GetProperty("status").GetString());
+            Assert.Equal(1, json2.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
     {
         // Normal non-rebuild `cdidx index .` is still incremental: unchanged rows are skipped.
@@ -1666,6 +1699,22 @@ public class IndexCommandRunnerTests
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    private static void WriteOversizedAsciiFile(string path)
+    {
+        const int targetBytes = 10 * 1024 * 1024 + 1;
+        var chunk = new byte[8192];
+        Array.Fill(chunk, (byte)'a');
+
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        int written = 0;
+        while (written < targetBytes)
+        {
+            var toWrite = Math.Min(chunk.Length, targetBytes - written);
+            stream.Write(chunk, 0, toWrite);
+            written += toWrite;
+        }
     }
 
     private static void RunGit(string workDir, params string[] args)

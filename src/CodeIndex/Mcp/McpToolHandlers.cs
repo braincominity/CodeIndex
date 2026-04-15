@@ -1218,6 +1218,7 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
+            new DbWriter(db.Connection).ClearHotspotFamilyReady();
             db.DropAll();
         }
 
@@ -1229,6 +1230,7 @@ public partial class McpServer
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
+        writer.ClearHotspotFamilyReady();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);

@@ -639,13 +639,6 @@ public partial class DbReader
                                THEN {containerTargetKeySql}
                            ELSE 'file|' || CAST(s.file_id AS TEXT)
                        END AS logical_target_key,
-                       CASE
-                           WHEN {familyTargetKeySql} IS NOT NULL
-                               THEN {familyTargetKeySql}
-                           WHEN {containerTargetKeySql} IS NOT NULL
-                               THEN {containerTargetKeySql}
-                           ELSE 'file|' || CAST(s.file_id AS TEXT)
-                       END AS conservative_target_key,
                        COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
@@ -727,9 +720,17 @@ public partial class DbReader
                 FROM grouped_candidates gc
                 JOIN filtered_candidates fc ON fc.id = gc.symbol_id
                 JOIN grouped_metadata gm
-                  ON gm.logical_target_key = gc.logical_target_key
+                 ON gm.logical_target_key = gc.logical_target_key
                  AND gm.name = gc.name
                  AND gm.kind = gc.kind
+            ),
+            file_target_cardinality AS (
+                SELECT file_id,
+                       name,
+                       kind,
+                       COUNT(DISTINCT logical_target_key) AS target_count
+                FROM filtered_candidates
+                GROUP BY file_id, name, kind
             ),
             reference_counts AS (
                 SELECT gr.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
@@ -742,9 +743,13 @@ public partial class DbReader
                  AND fc.name = gr.name
                  AND fc.kind = gr.kind
                  AND fc.file_id = sr.file_id
+                LEFT JOIN file_target_cardinality ftc
+                  ON ftc.file_id = sr.file_id
+                 AND ftc.name = gr.name
+                 AND ftc.kind = gr.kind
                 WHERE nc.defs = 1
                    OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
-                   OR fc.id IS NOT NULL
+                   OR (fc.id IS NOT NULL AND COALESCE(ftc.target_count, 0) = 1)
                 GROUP BY gr.symbol_id
             )
             SELECT gr.name, rc.ref_count,

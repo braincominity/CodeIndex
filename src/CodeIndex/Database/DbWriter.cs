@@ -632,6 +632,17 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Demote hotspot-family trust. Called at the start of any indexing run that may leave
+    /// a mixed legacy/current symbol set so readers fall back conservatively unless the run
+    /// completes and restamps the current version.
+    /// hotspot-family trust を縮退させる。index 開始時に呼び、成功時だけ再 stamp する。
+    /// </summary>
+    public void ClearHotspotFamilyReady()
+    {
+        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+    }
+
+    /// <summary>
     /// Upsert a metadata key/value into `codeindex_meta`.
     /// codeindex_meta への key/value の upsert。
     /// </summary>

@@ -1465,6 +1465,38 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_DoesNotCountAmbiguousSameFileSiblingContainerReferences()
+    {
+        InsertIndexedFile("src/Duplicate.cs", "csharp",
+            """
+            public class A
+            {
+                public void Run() { }
+
+                public void CallA()
+                {
+                    Run();
+                }
+            }
+
+            public class B
+            {
+                public void Run() { }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+    }
+
+    [Fact]
     public void GraphReaders_ExactMatchesNameEquality()
     {
         // Seed content where `authenticate_v2` is both CALLED (so it appears as a reference

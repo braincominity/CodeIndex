@@ -173,6 +173,7 @@ public static class IndexCommandRunner
         if (options.Rebuild)
         {
             db.ClearReadyFlags();
+            new DbWriter(db.Connection).ClearHotspotFamilyReady();
             db.DropAll();
         }
 
@@ -485,6 +486,7 @@ public static class IndexCommandRunner
         // downgrade of a previously-healthy index.
         // preflight 成功後、実書き込み直前で readiness をクリア。途中で失敗した場合は healthy index を壊さない。
         writer.ClearReadyFlags();
+        writer.ClearHotspotFamilyReady();
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -730,6 +732,7 @@ public static class IndexCommandRunner
         // never reaches this point for any reason.
         // 実書き込み直前で readiness をクリア。--rebuild 経路は RunIndex で既に clear 済み。
         writer.ClearReadyFlags();
+        writer.ClearHotspotFamilyReady();
 
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
