@@ -3612,7 +3612,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetExcerpt_WithoutFocusKeepsLongSingleLineContentIntact()
+    public void GetExcerpt_WithoutFocusStillClampsLongSingleLineContent()
     {
         var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
         InsertIndexedFile("dist/no-focus.txt", "text", longLine);
@@ -3620,8 +3620,9 @@ public class DbReaderTests : IDisposable
         var excerpt = _reader.GetExcerpt("dist/no-focus.txt", 1, 1, maxLineWidth: 96);
 
         Assert.NotNull(excerpt);
-        Assert.False(excerpt!.ContentTruncated);
-        Assert.Equal(longLine, excerpt.Content);
+        Assert.True(excerpt!.ContentTruncated);
+        Assert.DoesNotContain(longLine, excerpt.Content);
+        Assert.True(excerpt.Content.Length <= 96);
     }
 
     [Fact]

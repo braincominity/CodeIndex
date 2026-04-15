@@ -155,7 +155,7 @@ public class ConsoleUiTests
     [Theory]
     [InlineData("bash")]
     [InlineData("zsh")]
-    public void PrintCompletions_BashAndZshIncludeFindSpecificOptions(string shell)
+    public void PrintCompletions_BashAndZshKeepFocusOptionsExcerptOnly(string shell)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -170,13 +170,26 @@ public class ConsoleUiTests
                 Assert.Contains("--before", output);
                 Assert.Contains("--after", output);
                 Assert.Contains("--max-line-width", output);
-                Assert.Contains("--focus-column", output);
                 Assert.Contains("--exact", output);
                 Assert.Contains("--query", output);
                 if (shell == "bash")
+                {
                     Assert.Contains("if [ \"$cmd\" = \"find\" ]", output);
+                    Assert.Contains("elif [ \"$cmd\" = \"excerpt\" ]; then", output);
+                    var findBranch = ExtractBetween(output, "if [ \"$cmd\" = \"find\" ]", "elif [ \"$cmd\" = \"excerpt\" ]; then");
+                    var excerptBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"excerpt\" ]; then", "elif [ \"$cmd\" = \"references\" ]; then");
+                    Assert.DoesNotContain("--focus-column", findBranch);
+                    Assert.Contains("--focus-column", excerptBranch);
+                }
                 else
+                {
                     Assert.Contains("if [[ $subcmd == find ]]; then", output);
+                    Assert.Contains("elif [[ $subcmd == excerpt ]]; then", output);
+                    var findBranch = ExtractBetween(output, "if [[ $subcmd == find ]]; then", "elif [[ $subcmd == excerpt ]]; then");
+                    var excerptBranch = ExtractBetween(output, "elif [[ $subcmd == excerpt ]]; then", "elif [[ $subcmd == references ]]; then");
+                    Assert.DoesNotContain("focus-column", findBranch);
+                    Assert.Contains("focus-column", excerptBranch);
+                }
             }
             finally
             {
@@ -267,5 +280,15 @@ public class ConsoleUiTests
                 Console.SetOut(originalOut);
             }
         }
+    }
+
+    private static string ExtractBetween(string text, string startMarker, string endMarker)
+    {
+        var start = text.IndexOf(startMarker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Missing start marker: {startMarker}");
+        start += startMarker.Length;
+        var end = text.IndexOf(endMarker, start, StringComparison.Ordinal);
+        Assert.True(end >= 0, $"Missing end marker: {endMarker}");
+        return text[start..end];
     }
 }

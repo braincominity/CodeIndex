@@ -1793,6 +1793,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Excerpt_ClampsLongSingleLineContentWithoutFocus()
+    {
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("dist/data-no-focus.txt", "text", longLine);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-no-focus.txt","startLine":1,"endLine":1,"maxLineWidth":96}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.DoesNotContain(longLine, structured["content"]!.GetValue<string>());
+        Assert.True(structured["content"]!.GetValue<string>().Length <= 96);
+        Assert.Equal(96, structured["maxLineWidth"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_FindInFile_ReturnsLiteralMatchesWithContext()
     {
         InsertIndexedFile("src/Auth.cs", "csharp",

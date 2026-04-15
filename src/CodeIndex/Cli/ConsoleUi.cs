@@ -554,8 +554,14 @@ public static class ConsoleUi
         *)
             if [ ""$cmd"" = ""find"" ]; then
                 COMPREPLY=($(compgen -W ""--db --json --no-json --limit --top --lang --path --exclude-path --exclude-tests --before --after --max-line-width --exact --count --query --help --"" -- ""$cur""))
+            elif [ ""$cmd"" = ""excerpt"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --before --after --max-line-width --focus-line --focus-column --focus-length --start --end --help"" -- ""$cur""))
+            elif [ ""$cmd"" = ""references"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --max-line-width --exact --exact-name --help"" -- ""$cur""))
+            elif [ ""$cmd"" = ""inspect"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --path --exclude-path --exclude-tests --body --max-line-width --exact --exact-name --help"" -- ""$cur""))
             else
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --max-line-width --focus-line --focus-column --focus-length --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
             fi
             ;;
     esac
@@ -596,12 +602,51 @@ _cdidx() {{
                     '--before[Context lines before]:number' \
                     '--after[Context lines after]:number' \
                     '--max-line-width[Clamp long single-line snippets]:number' \
-                    '--focus-line[excerpt: focused line number]:number' \
-                    '--focus-column[excerpt: focused column]:number' \
-                    '--focus-length[excerpt: focused span width]:number' \
                     '--exact[Exact match]' \
                     '--count[Count only]' \
                     '--query[Literal query]' \
+                    '*:query'
+            elif [[ $subcmd == excerpt ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--start[Start line]:number' \
+                    '--end[End line]:number' \
+                    '--before[Context lines before]:number' \
+                    '--after[Context lines after]:number' \
+                    '--max-line-width[Clamp long single-line excerpts]:number' \
+                    '--focus-line[excerpt: focused line number]:number' \
+                    '--focus-column[excerpt: focused column]:number' \
+                    '--focus-length[excerpt: focused span width]:number' \
+                    '*:path'
+            elif [[ $subcmd == references ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--count[Count only]' \
+                    '--max-line-width[Clamp long single-line contexts]:number' \
+                    '--exact[Backward-compatible exact shorthand]' \
+                    '--exact-name[Exact symbol-name equality]' \
+                    '*:query'
+            elif [[ $subcmd == inspect ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--body[Include body]' \
+                    '--max-line-width[Clamp long single-line contexts]:number' \
+                    '--exact[Backward-compatible exact shorthand]' \
+                    '--exact-name[Exact symbol-name equality]' \
                     '*:query'
             else
                 _arguments \
@@ -617,7 +662,6 @@ _cdidx() {{
                     '--count[Count only]' \
                     '--fts[Raw FTS5 syntax]' \
                     '--snippet-lines[Snippet length]:number' \
-                    '--max-line-width[Clamp long single-line contexts]:number' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-substring[Search-only exact substring match]' \
                     '--exact-name[Exact symbol-name equality]' \

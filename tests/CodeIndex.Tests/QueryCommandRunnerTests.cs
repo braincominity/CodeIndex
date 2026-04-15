@@ -354,6 +354,35 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunExcerpt_JsonClampsLongSingleLineContentWithoutFocus()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_long_line_no_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("content_truncated").GetBoolean());
+            Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
+            Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_JsonClampsLongSingleLineSnippet()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line");
