@@ -1468,6 +1468,41 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var unreadableDir = Path.Combine(projectRoot, "secret");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+            Directory.CreateDirectory(unreadableDir);
+            File.WriteAllText(Path.Combine(unreadableDir, "Hidden.csproj"), "<Project />");
+            originalMode = File.GetUnixFileMode(unreadableDir);
+            File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("app.cs", indexedPaths);
+        }
+        finally
+        {
+            if (originalMode.HasValue && Directory.Exists(unreadableDir))
+                File.SetUnixFileMode(unreadableDir, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
     {
         // Normal non-rebuild `cdidx index .` is still incremental: unchanged rows are skipped.

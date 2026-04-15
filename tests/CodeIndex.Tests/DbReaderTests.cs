@@ -1428,6 +1428,58 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetHotspotFamilySignal_LegacyPartialFamiliesWithoutPersistedKeysAreStillDegraded()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                UPDATE symbols
+                SET family_key = NULL,
+                    container_qualified_name = NULL
+                WHERE file_id IN (
+                    SELECT id FROM files WHERE lang = 'csharp'
+                )
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        _writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+        _writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("csharp", signal.DegradedReason);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_DoesNotPromoteSameFileDifferentContainersToGlobalCounts()
     {
         InsertIndexedFile("src/Duplicate.cs", "csharp",

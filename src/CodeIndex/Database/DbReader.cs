@@ -218,17 +218,12 @@ public partial class DbReader
     private HashSet<string> LoadIndexedHotspotFamilyLanguages()
     {
         var langs = new HashSet<string>(StringComparer.Ordinal);
-        if (!_symbolColumns.Contains("family_key"))
-            return langs;
-
         var hotspotFamilyLangs = FileIndexer.GetHotspotFamilyMarkerLanguages();
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
-            SELECT DISTINCT f.lang
-            FROM files f
-            JOIN symbols s ON s.file_id = f.id
-            WHERE COALESCE({GetSymbolColumnSql("family_key")}, '') <> ''
-              AND f.lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hfl{i}"))})";
+            SELECT DISTINCT lang
+            FROM files
+            WHERE lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hfl{i}"))})";
         for (int i = 0; i < hotspotFamilyLangs.Count; i++)
             cmd.Parameters.AddWithValue($"@hfl{i}", hotspotFamilyLangs[i]);
         using var reader = cmd.ExecuteTrackedReader();

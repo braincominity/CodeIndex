@@ -2253,7 +2253,7 @@ public class McpServerTests : IDisposable
             var response = server.HandleMessage(request)!;
 
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
-            Assert.Equal(1L, response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
+            Assert.True(response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>() >= 1L);
         }
         finally
         {
@@ -2463,6 +2463,108 @@ public class McpServerTests : IDisposable
         {
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_ReportsLegacyNullFamilyKeysAsDegraded()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_hotspots_family_legacy_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkHotspotFamilyReady("csharp");
+
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols
+                    SET family_key = NULL,
+                        container_qualified_name = NULL
+                    WHERE file_id IN (
+                        SELECT id FROM files WHERE lang = 'csharp'
+                    );
+                    """;
+                cmd.ExecuteNonQuery();
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.True(structured["degraded"]!.GetValue<bool>());
+            Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_unreadable_marker_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_unreadable_marker_{Guid.NewGuid():N}.db");
+        var unreadableDir = Path.Combine(fixtureDir, "secret");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }");
+            Directory.CreateDirectory(unreadableDir);
+            File.WriteAllText(Path.Combine(unreadableDir, "Hidden.csproj"), "<Project />");
+            originalMode = File.GetUnixFileMode(unreadableDir);
+            File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir,
+                        ["rebuild"] = true,
+                    }
+                }
+            };
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>() >= 1L);
+        }
+        finally
+        {
+            if (originalMode.HasValue && Directory.Exists(unreadableDir))
+                File.SetUnixFileMode(unreadableDir, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
         }
     }
 

@@ -199,11 +199,9 @@ public class FileIndexer
         if (projectMarkerPattern == null)
             return null;
 
-        var projectMarkers = Directory
-            .EnumerateFiles(_projectRoot, projectMarkerPattern, SearchOption.AllDirectories)
-            .Select(path => NormalizeScopeKey(Path.GetRelativePath(_projectRoot, path)))
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
+        var projectMarkers = new List<string>();
+        CollectProjectMarkerFiles(_projectRoot, projectMarkerPattern, projectMarkers);
+        projectMarkers.Sort(StringComparer.Ordinal);
 
         var payload = string.Join('\n', projectMarkers);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
@@ -240,6 +238,33 @@ public class FileIndexer
             return right;
 
         return $"{left}/{right}";
+    }
+
+    private void CollectProjectMarkerFiles(string dir, string pattern, List<string> projectMarkers)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly))
+                projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, file)));
+
+            foreach (var subDir in Directory.EnumerateDirectories(dir))
+            {
+                if (SkipDirs.Contains(Path.GetFileName(subDir)))
+                    continue;
+
+                CollectProjectMarkerFiles(subDir, pattern, projectMarkers);
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Best-effort like ScanFiles(): unreadable directories do not abort the whole index.
+            // ScanFiles() と同じく best-effort。読めないディレクトリでは index 全体を落とさない。
+        }
+        catch (IOException)
+        {
+            // Best-effort like ScanFiles(): transient IO failures should only skip that subtree.
+            // ScanFiles() と同じく best-effort。IO 失敗はその subtree だけスキップする。
+        }
     }
 
     private static string? GetProjectMarkerPattern(string? lang) => lang switch

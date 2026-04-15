@@ -1286,6 +1286,50 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_ZeroJson_ReportsLegacyNullFamilyKeysAsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_legacy_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols
+                    SET family_key = NULL,
+                        container_qualified_name = NULL
+                    WHERE file_id IN (
+                        SELECT id FROM files WHERE lang = 'csharp'
+                    );
+                    """;
+                cmd.ExecuteNonQuery();
+
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_HumanOutput_WarnsWhenHotspotFamilyTrustIsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_zero_human");
