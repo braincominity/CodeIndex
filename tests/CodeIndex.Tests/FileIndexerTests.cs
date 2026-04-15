@@ -247,7 +247,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void GetFamilyScopeKey_MarkerlessRootUsesRootScope()
+    public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
@@ -262,8 +262,8 @@ public class FileIndexerTests
 
             var indexer = new FileIndexer(tempDir);
 
-            Assert.Equal(".", indexer.GetFamilyScopeKey(srcFile, "csharp"));
-            Assert.Equal(".", indexer.GetFamilyScopeKey(generatedFile, "csharp"));
+            Assert.Equal("src", indexer.GetFamilyScopeKey(srcFile, "csharp"));
+            Assert.Equal("generated", indexer.GetFamilyScopeKey(generatedFile, "csharp"));
         }
         finally
         {

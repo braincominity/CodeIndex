@@ -1503,6 +1503,88 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_MarkerlessMultiSubtreePartialsStaySeparatedInHotspots()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "projA", "src"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "projB", "src"));
+
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Api.Part1.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run()
+                    {
+                        Run(1);
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Api.Part2.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part1.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run()
+                    {
+                        Run(1);
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part2.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal("success", indexJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            var runRows = hotspotsJson.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(item => item.GetProperty("name").GetString() == "Run")
+                .OrderBy(item => item.GetProperty("path").GetString(), StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(2, runRows.Count);
+            Assert.StartsWith("projA/src/Api.Part", runRows[0].GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, runRows[0].GetProperty("reference_count").GetInt32());
+            Assert.StartsWith("projB/src/Api.Part", runRows[1].GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, runRows[1].GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DoesNotRestampFoldReadyWhenFoldKeyVersionMismatches()
     {
         // Normal non-rebuild `cdidx index .` is still incremental: unchanged rows are skipped.
@@ -1797,6 +1879,9 @@ public class IndexCommandRunnerTests
     }
 
     private (int ExitCode, JsonElement Json) RunHotspotsJson(string dbPath, string lang, string kind)
+        => RunHotspotsJsonWithPaths(dbPath, lang, kind, null);
+
+    private (int ExitCode, JsonElement Json) RunHotspotsJsonWithPaths(string dbPath, string lang, string kind, IReadOnlyList<string>? paths)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -1806,7 +1891,16 @@ public class IndexCommandRunnerTests
             try
             {
                 Console.SetOut(writer);
-                var exitCode = QueryCommandRunner.RunHotspots(["--db", dbPath, "--json", "--lang", lang, "--kind", kind], _jsonOptions);
+                var args = new List<string> { "--db", dbPath, "--json", "--lang", lang, "--kind", kind };
+                if (paths != null)
+                {
+                    foreach (var path in paths)
+                    {
+                        args.Add("--path");
+                        args.Add(path);
+                    }
+                }
+                var exitCode = QueryCommandRunner.RunHotspots(args.ToArray(), _jsonOptions);
                 using var document = JsonDocument.Parse(writer.ToString());
                 return (exitCode, document.RootElement.Clone());
             }

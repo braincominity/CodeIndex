@@ -208,7 +208,17 @@ public class FileIndexer
     }
 
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
-        => ".";
+    {
+        var normalized = NormalizeScopeKey(relativePath);
+        if (normalized == ".")
+            return ".";
+
+        var firstSeparator = normalized.IndexOf('/');
+        if (firstSeparator < 0)
+            return $"__file__/{normalized}";
+
+        return normalized[..firstSeparator];
+    }
 
     private static string NormalizeScopeKey(string relativePath)
     {
