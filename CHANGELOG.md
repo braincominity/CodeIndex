@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **Explicit root paths now bypass descendant skip-dir filters (#153)** — `FileIndexer.ScanFiles()` no longer applies the default skip-directory list to the project root itself, so commands like `cdidx node_modules`, `cdidx vendor`, `cdidx target`, or `cdidx .` from inside those directories no longer silently produce empty indexes. Descendant skip behavior is unchanged, and regression tests now cover explicit roots whose leaf names match `SkipDirs`. Affected: `src/CodeIndex/Indexer/FileIndexer.cs`, `tests/CodeIndex.Tests/FileIndexerTests.cs`. Closes #153.
 - **Release verify step waits for CDN-propagated download URL and `gh release create` is idempotent** — The `Verify install.sh against the published release` step in `.github/workflows/release.yml` previously called `install.sh` immediately after `gh release create`, which races the GitHub release download CDN. Asset URLs returned 404 for several seconds even though the API listed them, making the v1.10.0 release run fail despite the actual release being healthy. Added a preceding `Wait for release assets to be downloadable` step that polls the public `releases/download/<tag>/CodeIndex-linux-x64.tar.gz` URL with up to ten 5-second retries before the verify step runs. Also made `Create GitHub release` idempotent: when the same-tag release already exists (e.g. on a re-run after a transient verify failure), the step now uploads any missing assets via `gh release upload --clobber` instead of failing with `a release with the same tag name already exists`. Affected: `.github/workflows/release.yml`.
 
 ### [1.10.0] - 2026-04-15
@@ -643,6 +644,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 修正
+- **明示的に指定したルートが `SkipDirs` 名でも空インデックスにならないよう修正 (#153)** — `FileIndexer.ScanFiles()` がデフォルトの skip-directory リストを project root 自体には適用しないようにし、`cdidx node_modules`、`cdidx vendor`、`cdidx target`、あるいはそのようなディレクトリ内での `cdidx .` が、成功扱いのまま 0 件を作る問題を解消した。子ディレクトリに対する skip 挙動は従来どおり維持し、leaf 名が `SkipDirs` に一致するルートを明示指定したケースの回帰テストも追加した。対象: `src/CodeIndex/Indexer/FileIndexer.cs`、`tests/CodeIndex.Tests/FileIndexerTests.cs`。Closes #153。
 - **Release ワークフローの verify ステップを CDN 伝播待ち＋`gh release create` 冪等化** — `.github/workflows/release.yml` の `Verify install.sh against the published release` は `gh release create` 直後に `install.sh` を起動しており、GitHub Release の download CDN との競合で URL が数秒間 404 を返し、リリース自体は正常なのに verify が落ちることがあった（v1.10.0 で発生）。verify 前に `Wait for release assets to be downloadable` ステップを追加し、`releases/download/<tag>/CodeIndex-linux-x64.tar.gz` を 5 秒間隔で最大 10 回ポーリングしてから verify を回すようにした。あわせて `Create GitHub release` を冪等化し、同名タグの release が既に存在する場合は `gh release upload --clobber` で不足アセットのみ補完するため、verify ステップの再実行で `a release with the same tag name already exists` で落ちないようにした。対象: `.github/workflows/release.yml`。
 
 ### [1.10.0] - 2026-04-15
