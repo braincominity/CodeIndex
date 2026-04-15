@@ -171,6 +171,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsInlineModifierNamedMethods()
+    {
+        var content = "export default class { async() {} static() {} keep() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "async" && s.ContainerName == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "static" && s.ContainerName == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "async" && s.Signature == "async() {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "static" && s.Signature == "static() {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.Signature == "keep() {}");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsInlineClassExpressionMethods()
     {
         var content = "const Service = class NamedService { run() {} };";
@@ -879,6 +894,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsInlineModifierNamedMethods()
+    {
+        var content = "export class Example { async(): void {} static(): void {} keep(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "async" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "static" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "async" && s.Signature == "async(): void {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "static" && s.Signature == "static(): void {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.Signature == "keep(): void {}");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInlineMultipleMethodsWithObjectReturnType()
     {
         var content = """export class Example { first(): { value: string } { return { value: "x" }; } second(): void {} }""";
@@ -889,6 +919,36 @@ public class SymbolExtractorTests
         var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
         Assert.Equal("first(): { value: string } { return { value: \"x\" }; }", first.Signature);
         Assert.Equal("second(): void {}", second.Signature);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlineMultipleMethodsWithConditionalObjectReturnType()
+    {
+        var content = """export class Example { first(): T extends U ? { a: string } : { b: string } {} second(): void {} }""";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first"));
+        var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
+        Assert.Equal("first(): T extends U ? { a: string } : { b: string } {}", first.Signature);
+        Assert.Equal("T extends U ? { a: string } : { b: string }", first.ReturnType);
+        Assert.Equal("second(): void {}", second.Signature);
+        Assert.Equal("void", second.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlineMultipleMethodsWithFunctionReturningObjectType()
+    {
+        var content = """export class Example { first(): (() => { value: string }) {} second(): void {} }""";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first"));
+        var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second"));
+        Assert.Equal("first(): (() => { value: string }) {}", first.Signature);
+        Assert.Equal("(() => { value: string })", first.ReturnType);
+        Assert.Equal("second(): void {}", second.Signature);
+        Assert.Equal("void", second.ReturnType);
     }
 
     [Fact]

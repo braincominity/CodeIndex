@@ -77,7 +77,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex TypeScriptBareMethodRegex = new(
-        @"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{",
+        @"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^{]+))?\s*\{",
         RegexOptions.Compiled);
 
     private static readonly HashSet<string> TypeScriptBareMethodModifiers =
@@ -1179,7 +1179,7 @@ public static class SymbolExtractor
                                 ? line[absoluteMethodStartColumn..(sameLineMethodEndColumn + 1)].Trim()
                                 : line[absoluteMethodStartColumn..].Trim(),
                             Visibility = TryGetGroup(match, "visibility"),
-                            ReturnType = NormalizeMetadata(TryGetGroup(match, "returnType")),
+                            ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(line, absoluteMethodStartColumn, startLine, bodyEndLine, lang, match),
                         });
 
                         if (bodyEndLine != startLine || sameLineMethodEndColumn < absoluteMethodStartColumn)
@@ -1951,7 +1951,8 @@ public static class SymbolExtractor
             while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
                 index++;
 
-            if (TypeScriptBareMethodModifiers.Contains(token))
+            if (TypeScriptBareMethodModifiers.Contains(token)
+                && CanTreatJavaScriptTypeScriptMethodTokenAsModifier(sanitizedLine, index))
                 continue;
 
             int? genericStartColumn = null;
@@ -2027,6 +2028,7 @@ public static class SymbolExtractor
                 var returnAngleDepth = 0;
                 var returnBraceDepth = 0;
                 var sawReturnTypeToken = false;
+                string? previousReturnToken = ":";
 
                 while (index < sanitizedLine.Length)
                 {
@@ -2041,6 +2043,7 @@ public static class SymbolExtractor
                     {
                         returnParenDepth++;
                         sawReturnTypeToken = true;
+                        previousReturnToken = "(";
                         index++;
                         continue;
                     }
@@ -2048,6 +2051,7 @@ public static class SymbolExtractor
                     if (ch == ')' && returnParenDepth > 0)
                     {
                         returnParenDepth--;
+                        previousReturnToken = ")";
                         index++;
                         continue;
                     }
@@ -2056,6 +2060,7 @@ public static class SymbolExtractor
                     {
                         returnBracketDepth++;
                         sawReturnTypeToken = true;
+                        previousReturnToken = "[";
                         index++;
                         continue;
                     }
@@ -2063,6 +2068,7 @@ public static class SymbolExtractor
                     if (ch == ']' && returnBracketDepth > 0)
                     {
                         returnBracketDepth--;
+                        previousReturnToken = "]";
                         index++;
                         continue;
                     }
@@ -2071,6 +2077,7 @@ public static class SymbolExtractor
                     {
                         returnAngleDepth++;
                         sawReturnTypeToken = true;
+                        previousReturnToken = "<";
                         index++;
                         continue;
                     }
@@ -2078,21 +2085,35 @@ public static class SymbolExtractor
                     if (ch == '>' && returnAngleDepth > 0)
                     {
                         returnAngleDepth--;
+                        previousReturnToken = ">";
                         index++;
                         continue;
                     }
 
                     if (ch == '{')
                     {
-                        if (returnParenDepth == 0 && returnBracketDepth == 0 && returnAngleDepth == 0 && returnBraceDepth == 0 && sawReturnTypeToken)
+                        if (returnParenDepth == 0 && returnBracketDepth == 0 && returnAngleDepth == 0 && returnBraceDepth == 0)
                         {
-                            returnTypeEndColumn = index - 1;
-                            methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(index, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
-                            return true;
+                            if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(previousReturnToken))
+                            {
+                                returnBraceDepth++;
+                                sawReturnTypeToken = true;
+                                previousReturnToken = "{";
+                                index++;
+                                continue;
+                            }
+
+                            if (sawReturnTypeToken)
+                            {
+                                returnTypeEndColumn = index - 1;
+                                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(index, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
+                                return true;
+                            }
                         }
 
                         returnBraceDepth++;
                         sawReturnTypeToken = true;
+                        previousReturnToken = "{";
                         index++;
                         continue;
                     }
@@ -2100,11 +2121,41 @@ public static class SymbolExtractor
                     if (ch == '}' && returnBraceDepth > 0)
                     {
                         returnBraceDepth--;
+                        previousReturnToken = "}";
                         index++;
                         continue;
                     }
 
+                    if (ch == '?' || ch == ':' || ch == '|' || ch == '&' || ch == ',')
+                    {
+                        sawReturnTypeToken = true;
+                        previousReturnToken = ch.ToString();
+                        index++;
+                        continue;
+                    }
+
+                    if (ch == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
+                    {
+                        sawReturnTypeToken = true;
+                        previousReturnToken = "=>";
+                        index += 2;
+                        continue;
+                    }
+
+                    if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                    {
+                        var returnTokenStart = index;
+                        index++;
+                        while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
+                            index++;
+
+                        sawReturnTypeToken = true;
+                        previousReturnToken = sanitizedLine[returnTokenStart..index];
+                        continue;
+                    }
+
                     sawReturnTypeToken = true;
+                    previousReturnToken = ch.ToString();
                     index++;
                 }
 
@@ -2121,11 +2172,51 @@ public static class SymbolExtractor
         return false;
     }
 
+    private static string? GetJavaScriptTypeScriptBareMethodReturnType(string line, int startColumn, int startLine, int? bodyEndLine, string? lang, Match match)
+    {
+        if (lang != "typescript" || bodyEndLine != startLine)
+            return NormalizeMetadata(TryGetGroup(match, "returnType"));
+
+        var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
+        if (!TryParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out var methodHeader)
+            || methodHeader.ReturnTypeStartColumn == null
+            || methodHeader.ReturnTypeEndColumn == null)
+            return NormalizeMetadata(TryGetGroup(match, "returnType"));
+
+        var returnTypeStartColumn = methodHeader.ReturnTypeStartColumn.Value + 1;
+        var returnTypeEndColumn = methodHeader.ReturnTypeEndColumn.Value;
+        if (returnTypeEndColumn < returnTypeStartColumn || returnTypeEndColumn >= line.Length)
+            return NormalizeMetadata(TryGetGroup(match, "returnType"));
+
+        return NormalizeMetadata(line[returnTypeStartColumn..(returnTypeEndColumn + 1)]);
+    }
+
     private static bool IsJavaScriptTypeScriptIdentifierStart(char ch) =>
         char.IsLetter(ch) || ch == '_' || ch == '$';
 
     private static bool IsJavaScriptTypeScriptIdentifierPart(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_' || ch == '$';
+
+    private static bool CanTreatJavaScriptTypeScriptMethodTokenAsModifier(string sanitizedLine, int index)
+    {
+        var lookahead = index;
+        while (lookahead < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[lookahead]))
+            lookahead++;
+
+        if (lookahead >= sanitizedLine.Length)
+            return false;
+
+        var ch = sanitizedLine[lookahead];
+        if (ch is '(' or '<')
+            return false;
+
+        return IsJavaScriptTypeScriptIdentifierStart(ch);
+    }
+
+    private static bool CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(string? previousReturnToken)
+    {
+        return previousReturnToken is ":" or "?" or "|" or "&" or "," or "(" or "[" or "=>" or "extends";
+    }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindIndentRange(string[] lines, int startIndex)
     {
