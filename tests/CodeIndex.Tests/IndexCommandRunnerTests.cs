@@ -1708,6 +1708,32 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_IgnoresUnixFifoWithoutHanging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            CreateUnixFifo(Path.Combine(projectRoot, "tool"));
+
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+
+            Assert.False(result.TimedOut, "cdidx index --dry-run hung on a FIFO entry.");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+
+            using var document = JsonDocument.Parse(result.StdOut);
+            Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_InWorktreeWithAbsoluteDbPathInsideProject_WritesRelativePatternToSharedExclude()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"cdidx_worktree_{Guid.NewGuid():N}");
@@ -2324,6 +2350,34 @@ public class IndexCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
+    private static (int ExitCode, string StdOut, string StdErr, bool TimedOut) RunCliInSubprocessWithTimeout(string[] args, string workingDirectory, TimeSpan timeout)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(GetBuiltCliDllPath());
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cdidx subprocess / cdidx サブプロセスの起動に失敗");
+
+        if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            return (process.ExitCode, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd(), true);
+        }
+
+        return (process.ExitCode, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd(), false);
+    }
+
     private static string GetBuiltCliDllPath()
     {
         var tfm = new DirectoryInfo(AppContext.BaseDirectory).Name;
@@ -2381,6 +2435,26 @@ public class IndexCommandRunnerTests
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    private static void CreateUnixFifo(string path)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "mkfifo",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(path);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
     }
 
     private static void RunGit(string workDir, params string[] args)

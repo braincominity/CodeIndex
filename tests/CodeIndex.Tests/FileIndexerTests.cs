@@ -1,4 +1,6 @@
 using CodeIndex.Indexer;
+using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace CodeIndex.Tests;
 
@@ -263,6 +265,32 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public async Task ScanFiles_IgnoresUnixFifoWithoutHanging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            CreateUnixFifo(Path.Combine(tempDir, "tool"));
+
+            var indexer = new FileIndexer(tempDir);
+            var scanTask = Task.Run(() => indexer.ScanFiles());
+            var completedTask = await Task.WhenAny(scanTask, Task.Delay(TimeSpan.FromSeconds(2)));
+
+            Assert.Same(scanTask, completedTask);
+            Assert.Empty(await scanTask);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_HandlesUnicodeAndCjkContent()
     {
         // Files with Unicode/CJK characters in content should be indexed correctly
@@ -474,5 +502,25 @@ public class FileIndexerTests
         {
             Directory.Delete(tempDir, true);
         }
+    }
+
+    private static void CreateUnixFifo(string path)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "mkfifo",
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(path);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
     }
 }
