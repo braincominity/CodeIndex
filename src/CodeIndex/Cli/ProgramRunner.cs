@@ -22,23 +22,19 @@ internal static class ProgramRunner
             return args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
         }
 
-        if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
-        {
-            ConsoleUi.PrintUsage(showBanner: true);
-            return CommandExitCodes.Success;
-        }
-
         if (args[0] is "--version" or "-V")
         {
             Console.WriteLine($"cdidx v{appVersion}");
             return CommandExitCodes.Success;
         }
 
-        if (args[0] == "--completions" && args.Length >= 2)
+        if (args[0] == "--completions")
+            return RunCompletions(args[1..]);
+
+        if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
         {
-            return ConsoleUi.PrintCompletions(args[1])
-                ? CommandExitCodes.Success
-                : CommandExitCodes.UsageError;
+            ConsoleUi.PrintUsage(showBanner: true);
+            return CommandExitCodes.Success;
         }
 
         var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");
@@ -96,9 +92,66 @@ internal static class ProgramRunner
     private static int RunMcp(string[] cmdArgs, string appVersion)
     {
         var options = QueryCommandRunner.ParseArgs(cmdArgs, jsonDefault: true);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            Console.Error.WriteLine("Usage: cdidx mcp [--db <path>]");
+            return CommandExitCodes.UsageError;
+        }
+
+        for (var i = 0; i < cmdArgs.Length; i++)
+        {
+            if (cmdArgs[i].StartsWith("--db=", StringComparison.Ordinal))
+                continue;
+
+            if (cmdArgs[i] == "--db")
+            {
+                i++;
+                continue;
+            }
+
+            Console.Error.WriteLine($"Error: {cmdArgs[i]} is not supported for mcp.");
+            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, or run `cdidx mcp` to use the default DB.");
+            Console.Error.WriteLine("Usage: cdidx mcp [--db <path>]");
+            return CommandExitCodes.UsageError;
+        }
+
         var server = new McpServer(options.DbPath, appVersion);
         server.RunAsync().GetAwaiter().GetResult();
         return CommandExitCodes.Success;
+    }
+
+    private static int RunCompletions(string[] cmdArgs)
+    {
+        if (cmdArgs.Length == 0)
+        {
+            Console.Error.WriteLine("Error: --completions requires a shell value.");
+            Console.Error.WriteLine("Hint: rerun with one of `bash`, `zsh`, or `fish`.");
+            Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+            return CommandExitCodes.UsageError;
+        }
+
+        if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"Error: --completions requires a shell value, got option-like token '{cmdArgs[0]}'.");
+            Console.Error.WriteLine("Hint: rerun with one of `bash`, `zsh`, or `fish`.");
+            Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+            return CommandExitCodes.UsageError;
+        }
+
+        if (cmdArgs.Length > 1)
+        {
+            Console.Error.WriteLine($"Error: --completions accepts exactly one shell value, got extra argument(s): {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.");
+            Console.Error.WriteLine("Hint: rerun with exactly one shell name: `bash`, `zsh`, or `fish`.");
+            Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+            return CommandExitCodes.UsageError;
+        }
+
+        if (ConsoleUi.PrintCompletions(cmdArgs[0]))
+            return CommandExitCodes.Success;
+
+        Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+        return CommandExitCodes.UsageError;
     }
 
     private static int ShowError(string[] args, string message)
