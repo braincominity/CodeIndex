@@ -84,12 +84,12 @@ public static class IndexCommandRunner
         if (options.DryRun)
         {
             var dryIndexer = new FileIndexer(options.ProjectPath);
-            IReadOnlyList<string> dryFiles;
+            IReadOnlyList<string> dryCandidates;
 
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
-                dryFiles = options.UpdateFiles
+                dryCandidates = options.UpdateFiles
                     .Select(f => Path.IsPathRooted(f) ? f : Path.Combine(options.ProjectPath, f))
                     .Where(File.Exists)
                     .ToList();
@@ -107,22 +107,42 @@ public static class IndexCommandRunner
                     }
                     catch { /* ignore git errors in dry-run */ }
                 }
-                dryFiles = changedFiles.Distinct().ToList();
+                dryCandidates = changedFiles.Distinct().ToList();
             }
             else
             {
-                dryFiles = dryIndexer.ScanFiles();
+                dryCandidates = dryIndexer.ScanFiles();
             }
 
+            var dryFiles = new List<string>();
             var langCounts = new Dictionary<string, int>();
-            foreach (var f in dryFiles)
+            var errorList = new List<object>();
+            foreach (var f in dryCandidates)
             {
-                var lang = FileIndexer.DetectLanguage(f) ?? "unknown";
+                if (!TryProbeDryRunFile(dryIndexer, f, out var lang, out var message))
+                {
+                    if (message != null)
+                    {
+                        var displayPath = Path.GetRelativePath(options.ProjectPath, f).Replace('\\', '/');
+                        errorList.Add(new { file = displayPath, message });
+                        if (!options.Json)
+                            ConsoleUi.PrintWarning($"{displayPath}: {message}");
+                    }
+                    continue;
+                }
+
+                dryFiles.Add(f);
                 langCounts[lang] = langCounts.GetValueOrDefault(lang) + 1;
             }
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { status = "dry_run", files_total = dryFiles.Count, languages = langCounts }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    status = "dry_run",
+                    files_total = dryFiles.Count,
+                    languages = langCounts,
+                    errors = errorList.Count > 0 ? errorList : null,
+                }, jsonOptions));
             }
             else
             {
@@ -653,6 +673,9 @@ public static class IndexCommandRunner
             }
             catch (Exception ex)
             {
+                if (writer.HasFileAtPath(relPath))
+                    DemoteReadinessOnce();
+
                 errors++;
                 errorList.Add(new { file = relPath, message = ex.Message });
                 if (!options.Json)
@@ -784,6 +807,45 @@ public static class IndexCommandRunner
 
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
+
+    private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
+    {
+        lang = string.Empty;
+        error = null;
+
+        var indexability = FileIndexer.GetFileIndexability(absolutePath);
+        if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
+        {
+            error = "Could not probe file for indexability/language.";
+            return false;
+        }
+
+        if (indexability != FileIndexer.FileProbeStatus.Supported)
+            return false;
+
+        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+        {
+            error = "Could not probe file for indexability/language.";
+            return false;
+        }
+
+        if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+            return false;
+
+        try
+        {
+            var (record, _, _, warning) = indexer.BuildRecordWithRawBytes(absolutePath);
+            lang = record.Lang ?? "unknown";
+            error = warning;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
 
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
     {

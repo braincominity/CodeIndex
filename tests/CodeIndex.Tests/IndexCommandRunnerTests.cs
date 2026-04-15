@@ -1495,6 +1495,51 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_DemotesReadinessForUnreadableKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            File.WriteAllText(sourcePath, "public class A { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("a.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
     {
         var projectRoot = CreateTempProject();
@@ -1855,6 +1900,61 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_IgnoresUnixFifoKnownFilename()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
+
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--files", "Dockerfile", "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+
+            Assert.False(result.TimedOut, "cdidx index --dry-run --files hung on a FIFO entry.");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+
+            using var document = JsonDocument.Parse(result.StdOut);
+            Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_DoesNotCountUnreadableKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            File.WriteAllText(sourcePath, "public class A { }\n");
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal("a.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             DeleteDirectory(projectRoot);
         }
     }
