@@ -1446,7 +1446,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_PurgesStaleRowsWithinFullyScannedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
+    public void Run_FullScan_PurgesStaleRowsWithinListedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1509,8 +1509,8 @@ public class IndexCommandRunnerTests
             var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot]);
 
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("positively observed as no longer indexable or missing from fully scanned directories", stdout);
-            Assert.Contains("Skipped authoritative purge outside fully scanned directories", stderr);
+            Assert.Contains("positively observed as no longer indexable or missing from directories whose file listing completed successfully", stdout);
+            Assert.Contains("Skipped authoritative purge outside directories whose file listing completed successfully", stderr);
         }
         finally
         {
@@ -1552,6 +1552,87 @@ public class IndexCommandRunnerTests
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.DoesNotContain("src/a.cs", indexedPaths);
             Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedRootFileWhenSiblingDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            var deletedPath = Path.Combine(projectRoot, "direct.cs");
+            File.WriteAllText(deletedPath, "public class Direct { }\n");
+            File.WriteAllText(Path.Combine(secretDir, "hidden.cs"), "public class Hidden { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("direct.cs", indexedPaths);
+            Assert.Contains("secret/hidden.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWhenUnreadableDescendantExistsUnderSameParentDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var srcDir = Path.Combine(projectRoot, "src");
+        var secretDir = Path.Combine(srcDir, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            var deletedPath = Path.Combine(srcDir, "direct.cs");
+            File.WriteAllText(deletedPath, "public class Direct { }\n");
+            File.WriteAllText(Path.Combine(secretDir, "hidden.cs"), "public class Hidden { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("src/secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/direct.cs", indexedPaths);
+            Assert.Contains("src/secret/hidden.cs", indexedPaths);
         }
         finally
         {

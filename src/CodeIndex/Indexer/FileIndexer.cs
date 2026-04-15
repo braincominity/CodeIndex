@@ -26,6 +26,7 @@ public class FileIndexer
         IReadOnlyList<ScanError> Errors,
         IReadOnlyList<string> NonIndexablePaths,
         IReadOnlyList<string> ProbeFailedFilePaths,
+        IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> FullyScannedDirectories)
     {
         public bool HadErrors => Errors.Count > 0;
@@ -221,9 +222,16 @@ public class FileIndexer
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
+        var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, fullyScannedDirectories);
-        return new ScanFilesResult(files, errors, nonIndexablePaths.ToList(), probeFailedFilePaths.ToList(), fullyScannedDirectories.ToList());
+        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+        return new ScanFilesResult(
+            files,
+            errors,
+            nonIndexablePaths.ToList(),
+            probeFailedFilePaths.ToList(),
+            listedDirectories.ToList(),
+            fullyScannedDirectories.ToList());
     }
 
     private bool ScanDirectory(
@@ -232,6 +240,7 @@ public class FileIndexer
         List<ScanError> errors,
         HashSet<string> nonIndexablePaths,
         HashSet<string> probeFailedFilePaths,
+        HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories)
     {
         // Check for skip directories / スキップ対象ディレクトリかチェック
@@ -239,7 +248,7 @@ public class FileIndexer
         if (SkipDirs.Contains(dirName))
             return true;
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, fullyScannedDirectories);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
     }
 
     private bool EnumerateDirectory(
@@ -248,6 +257,7 @@ public class FileIndexer
         List<ScanError> errors,
         HashSet<string> nonIndexablePaths,
         HashSet<string> probeFailedFilePaths,
+        HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories)
     {
         var fullyScanned = true;
@@ -295,9 +305,15 @@ public class FileIndexer
                     nonIndexablePaths.Add(ToRelativePath(file));
             }
 
+            // A successful file listing proves the direct children of this directory.
+            // Child subtree failures must not revoke that authority for sibling-file purge.
+            // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
+            // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
+            listedDirectories.Add(ToRelativePath(dir));
+
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, fullyScannedDirectories);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
             }
         }
         catch (UnauthorizedAccessException)

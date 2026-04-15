@@ -580,14 +580,16 @@ public class DbWriter
     }
 
     /// <summary>
-    /// Remove files from DB that are outside the retained set, but only when their parent
-    /// directory was fully scanned authoritatively. Used by partial full scans so unrelated
-    /// unreadable subtrees do not block stale-file cleanup elsewhere.
-    /// retained set の外にある DB ファイルを削除するが、親ディレクトリが authoritative に
-    /// 完走した場合に限定する。partial full scan で、無関係な unreadable subtree のせいで
-    /// 他所の stale file cleanup が止まらないようにする。
+    /// Remove files from DB that are outside the retained set, but only when their immediate
+    /// parent directory completed its own file listing authoritatively. Used by partial full
+    /// scans so unreadable descendants do not block stale-file cleanup for already-listed
+    /// siblings, while still protecting unreadable subtrees from speculative deletes.
+    /// retained set の外にある DB ファイルを削除するが、即時親ディレクトリ自身の file listing が
+    /// authoritative に完了した場合に限定する。partial full scan で、unreadable descendant の
+    /// せいで既に列挙済み sibling の stale cleanup が止まらないようにしつつ、unreadable subtree
+    /// 自体は推測ベースで削除しない。
     /// </summary>
-    public int PurgeFilesOutsideRetainedSetWithinDirectories(IReadOnlySet<string> retainedRelativePaths, IReadOnlySet<string> authoritativeDirectories)
+    public int PurgeFilesOutsideRetainedSetWithinListedDirectories(IReadOnlySet<string> retainedRelativePaths, IReadOnlySet<string> listedDirectories)
     {
         var staleIds = new List<long>();
         using (var cmd = _conn.CreateCommand())
@@ -601,7 +603,7 @@ public class DbWriter
                 if (retainedRelativePaths.Contains(path))
                     continue;
 
-                if (IsUnderAuthoritativeDirectory(path, authoritativeDirectories))
+                if (HasListedParentDirectory(path, listedDirectories))
                     staleIds.Add(id);
             }
         }
@@ -624,22 +626,10 @@ public class DbWriter
         return staleIds.Count;
     }
 
-    private static bool IsUnderAuthoritativeDirectory(string path, IReadOnlySet<string> authoritativeDirectories)
+    private static bool HasListedParentDirectory(string path, IReadOnlySet<string> listedDirectories)
     {
-        if (authoritativeDirectories.Contains(string.Empty))
-            return true;
-
         var directory = GetDirectoryPath(path);
-        while (true)
-        {
-            if (authoritativeDirectories.Contains(directory))
-                return true;
-
-            if (directory.Length == 0)
-                return false;
-
-            directory = GetDirectoryPath(directory);
-        }
+        return listedDirectories.Contains(directory);
     }
 
     private static string GetDirectoryPath(string path)

@@ -948,9 +948,9 @@ public static class IndexCommandRunner
                     purged++;
             }
 
-            var authoritativeDirectories = scanResult.FullyScannedDirectories
+            var authoritativeDirectories = scanResult.ListedDirectories
                 .ToHashSet(StringComparer.Ordinal);
-            purged += writer.PurgeFilesOutsideRetainedSetWithinDirectories(retainedPaths, authoritativeDirectories);
+            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories);
         }
         else
         {
@@ -964,12 +964,12 @@ public static class IndexCommandRunner
             if (purged > 0)
             {
                 var purgeMessage = scanResult.HadErrors
-                    ? $"  Purged {purged:N0} previously indexed files that were positively observed as no longer indexable or missing from fully scanned directories"
+                    ? $"  Purged {purged:N0} previously indexed files that were positively observed as no longer indexable or missing from directories whose file listing completed successfully"
                     : $"  Purged {purged:N0} stale files (missing or no longer indexable)";
                 Console.WriteLine(purgeMessage);
             }
             if (scanResult.HadErrors)
-                ConsoleUi.PrintWarning("Skipped authoritative purge outside fully scanned directories because some paths could not be scanned.");
+                ConsoleUi.PrintWarning("Skipped authoritative purge outside directories whose file listing completed successfully because some paths could not be scanned.");
         }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
