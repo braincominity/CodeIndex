@@ -8,22 +8,28 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class WorkspaceMetadataEnricher
 {
-    public static void Enrich(StatusResult status, string dbPath) =>
-        Apply(dbPath, (root, head, dirty) => { status.ProjectRoot = root; status.GitHead = head; status.GitIsDirty = dirty; });
+    public static void Enrich(StatusResult status, string dbPath, bool dbPathExplicit = false) =>
+        Apply(dbPath, dbPathExplicit, (root, head, dirty) => { status.ProjectRoot = root; status.GitHead = head; status.GitIsDirty = dirty; });
 
-    public static void Enrich(RepoMapResult map, string dbPath) =>
-        Apply(dbPath, (root, head, dirty) => { map.ProjectRoot = root; map.GitHead = head; map.GitIsDirty = dirty; });
+    public static void Enrich(RepoMapResult map, string dbPath, bool dbPathExplicit = false) =>
+        Apply(dbPath, dbPathExplicit, (root, head, dirty) => { map.ProjectRoot = root; map.GitHead = head; map.GitIsDirty = dirty; });
 
-    public static void Enrich(SymbolAnalysisResult analysis, string dbPath) =>
-        Apply(dbPath, (root, head, dirty) => { analysis.ProjectRoot = root; analysis.GitHead = head; analysis.GitIsDirty = dirty; });
+    public static void Enrich(SymbolAnalysisResult analysis, string dbPath, bool dbPathExplicit = false) =>
+        Apply(dbPath, dbPathExplicit, (root, head, dirty) => { analysis.ProjectRoot = root; analysis.GitHead = head; analysis.GitIsDirty = dirty; });
 
     /// <summary>
     /// Resolve workspace metadata once and apply it via callback.
     /// ワークスペースメタデータを一度解決し、コールバックで適用する。
     /// </summary>
-    private static void Apply(string dbPath, Action<string?, string?, bool?> setter)
+    private static void Apply(string dbPath, bool dbPathExplicit, Action<string?, string?, bool?> setter)
     {
-        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
+        if (projectRoot == null)
+        {
+            setter(null, null, null);
+            return;
+        }
+
         setter(projectRoot, GitHelper.TryGetHeadCommit(projectRoot), GitHelper.TryIsWorktreeDirty(projectRoot));
     }
 }

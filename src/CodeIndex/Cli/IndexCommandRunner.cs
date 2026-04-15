@@ -161,6 +161,7 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -183,8 +184,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorIndexedProjectRoot)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorIndexedProjectRoot);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -426,7 +427,8 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        string? priorIndexedProjectRoot)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -480,22 +482,56 @@ public static class IndexCommandRunner
             }
         }
 
-        // Now that preflight (commit / file resolution) has succeeded and we're committed to
-        // mutating the DB, demote readiness. Doing this earlier — before commit resolution —
-        // would turn a transient git failure or a typo in --commits into a permanent
-        // downgrade of a previously-healthy index.
-        // preflight 成功後、実書き込み直前で readiness をクリア。途中で失敗した場合は healthy index を壊さない。
-        writer.ClearReadyFlags();
-
-        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
-        var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
-        if (purgedRefs > 0 && !options.Json)
-            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
-
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
+        var readinessDemoted = false;
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        var ftsMutated = false;
+        var purgedRefs = 0;
+        var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
+        var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var currentFoldFingerprint = NameFold.Fingerprint();
+
+        void DemoteReadinessOnce()
+        {
+            if (readinessDemoted)
+                return;
+
+            // Demote readiness in its own committed step once we know a real mutation is
+            // about to happen. If the following file update rolls back, readers must still
+            // see the DB as degraded rather than trusting stale ready bits. No-op updates
+            // never call this path, so shared explicit DB metadata stays stable.
+            // 実 mutation が必要と確定した時点で readiness を別コミットで下げる。直後の
+            // file update が rollback しても reader は stale ready bit を信じない。
+            // no-op update では呼ばないので、shared explicit DB の metadata も安定する。
+            writer.ClearReadyFlags();
+            readinessDemoted = true;
+        }
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+            projectRootWritten = true;
+        }
+
+        if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
+        {
+            DemoteReadinessOnce();
+
+            using var purgeTxn = writer.BeginTransaction();
+            purgedRefs = writer.PurgeUnsupportedReferences(supportedGraphLanguages);
+            if (purgedRefs > 0)
+                purgeTxn.Commit();
+        }
 
         foreach (var relPath in targetPaths)
         {
@@ -504,9 +540,22 @@ public static class IndexCommandRunner
             {
                 if (!File.Exists(absPath))
                 {
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
                     if (writer.DeleteFileByPath(relPath))
                     {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
                         removed++;
+                        ftsMutated = true;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [DEL ] {relPath}");
                     }
@@ -541,7 +590,9 @@ public static class IndexCommandRunner
                     continue;
                 }
 
+                DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
+                WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
@@ -555,6 +606,7 @@ public static class IndexCommandRunner
                 txn.Commit();
 
                 updated++;
+                ftsMutated = true;
                 if (options.Verbose && !options.Json)
                     Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
             }
@@ -572,16 +624,27 @@ public static class IndexCommandRunner
             }
         }
 
-        writer.OptimizeFts();
+        if (purgedRefs > 0 && !options.Json)
+            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
+
+        if (ftsMutated)
+            writer.OptimizeFts();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
-        // ClearReadyFlags() ran at the start.
+        // readiness was demoted before the first committed mutation.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var graphTableAvailableAfter = false;
-        var issuesTableAvailableAfter = false;
-        var foldReadyAfter = false;
-        if (errors == 0)
+        var graphTableAvailableAfter = !readinessDemoted
+            ? (priorReadiness & DbContext.GraphReadyFlag) != 0
+            : false;
+        var issuesTableAvailableAfter = !readinessDemoted
+            ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
+            : false;
+        var foldReadyAfter = !readinessDemoted
+            && (priorReadiness & DbContext.FoldReadyFlag) != 0
+            && priorFoldVersion == currentFoldVersion
+            && priorFoldFingerprint == currentFoldFingerprint;
+        if (readinessDemoted && errors == 0)
         {
             // Restore each readiness bit independently based on what the DB carried BEFORE
             // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
@@ -612,8 +675,6 @@ public static class IndexCommandRunner
             // FoldReady would silently mismatch on --exact. Only full rebuild can re-fold all rows.
             // fold は version / fingerprint の両一致時のみ restamp。ズレた DB は rebuild まで
             // fold_ready=false のまま残す。
-            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var currentFoldFingerprint = NameFold.Fingerprint();
             if ((priorReadiness & DbContext.FoldReadyFlag) != 0
                 && priorFoldVersion == currentFoldVersion
                 && priorFoldFingerprint == currentFoldFingerprint)
@@ -706,8 +767,24 @@ public static class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        string? priorIndexedProjectRoot)
     {
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+            projectRootWritten = true;
+        }
+
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
@@ -731,6 +808,8 @@ public static class IndexCommandRunner
         if (!options.Json)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = writer.PurgeStaleFiles(projectRoot);
+        if (purged > 0)
+            WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
         if (purged > 0 && !options.Json)
             Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
@@ -787,6 +866,7 @@ public static class IndexCommandRunner
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                WriteProjectRootOnce();
                 txn.Commit();
 
                 if (options.Verbose && !options.Json)
@@ -874,6 +954,12 @@ public static class IndexCommandRunner
             {
                 ConsoleUi.PrintWarning(GetFoldNotReadyWarning(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent));
             }
+
+            // Successful no-op full scans should repair stale / missing explicit-DB roots
+            // only after readiness stamps succeed, so an interruption cannot rewrite trust
+            // metadata ahead of the success markers.
+            // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
+            WriteProjectRootOnce();
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -929,6 +1015,17 @@ public static class IndexCommandRunner
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (left == null || right == null)
+            return false;
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(left, right, comparison);
     }
 
     private static string GetFoldNotReadyWarning(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)

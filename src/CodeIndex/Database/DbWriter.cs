@@ -191,6 +191,18 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Check whether a file row already exists for the given relative path.
+    /// 指定した相対パスの file 行が既に存在するか確認する。
+    /// </summary>
+    public bool HasFileAtPath(string relativePath)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path LIMIT 1";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    /// <summary>
     /// Upsert a file record and return its ID.
     /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids
     /// unnecessary AUTOINCREMENT growth from INSERT OR REPLACE's delete+insert).
@@ -528,6 +540,33 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Count symbol_references for files whose language is no longer graph-supported.
+    /// Used by update mode to demote readiness before the first real mutation commits.
+    /// グラフ非対応になった言語の symbol_references 件数を数える。
+    /// update mode が最初の実 mutation 前に readiness を落とす判断に使う。
+    /// </summary>
+    /// <param name="supportedLanguages">Currently supported languages / 現在対応している言語</param>
+    /// <returns>Number of stale reference rows present / 存在している古い参照行数</returns>
+    public int CountUnsupportedReferences(IReadOnlyCollection<string> supportedLanguages)
+    {
+        if (supportedLanguages.Count == 0)
+            return 0;
+
+        using var cmd = _conn.CreateCommand();
+        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
+        cmd.CommandText = $@"
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id IN (
+                SELECT f.id FROM files f
+                WHERE f.lang IS NOT NULL
+                  AND f.lang NOT IN ({string.Join(", ", inParams)})
+            )";
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : (raw is int i ? i : 0);
+    }
+
+    /// <summary>
     /// Delete symbol_references for files whose language is no longer graph-supported.
     /// Prevents stale call edges from surviving after a language is removed from graph support.
     /// グラフ非対応になった言語のファイルから symbol_references を削除する。
@@ -541,14 +580,7 @@ public class DbWriter
             return 0;
 
         using var cmd = _conn.CreateCommand();
-        // Build an IN clause for supported languages / 対応言語の IN 句を構築
-        var inParams = new List<string>();
-        for (int i = 0; i < supportedLanguages.Count; i++)
-        {
-            var paramName = $"@lang{i}";
-            inParams.Add(paramName);
-            cmd.Parameters.AddWithValue(paramName, supportedLanguages.ElementAt(i));
-        }
+        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
 
         cmd.CommandText = $@"
             DELETE FROM symbol_references
@@ -755,6 +787,19 @@ public class DbWriter
         var raw = cmd.ExecuteScalar();
         int current = raw is long l ? (int)l : (raw is int i ? i : 0);
         Execute($"PRAGMA user_version = {current | flag}");
+    }
+
+    private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
+    {
+        var inParams = new List<string>(supportedLanguages.Count);
+        for (int i = 0; i < supportedLanguages.Count; i++)
+        {
+            var paramName = $"@lang{i}";
+            inParams.Add(paramName);
+            cmd.Parameters.AddWithValue(paramName, supportedLanguages.ElementAt(i));
+        }
+
+        return inParams;
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;

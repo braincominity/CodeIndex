@@ -17,6 +17,7 @@ public static class ArgHelper
         "--limit", "--top",
         "--lang", "--kind",
         "--path", "--exclude-path",
+        "--name",
         "--since",
         "--start", "--end",
         "--before", "--after",

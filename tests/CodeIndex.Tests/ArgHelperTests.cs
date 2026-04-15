@@ -31,6 +31,7 @@ public class ArgHelperTests
     [InlineData("--kind")]
     [InlineData("--path")]
     [InlineData("--exclude-path")]
+    [InlineData("--name")]
     [InlineData("--since")]
     [InlineData("--start")]
     [InlineData("--end")]
