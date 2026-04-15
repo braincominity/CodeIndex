@@ -93,7 +93,7 @@ public static class SymbolExtractor
         int? ReturnTypeEndColumn = null);
 
     private static readonly Regex JavaScriptTypeScriptAnonymousDefaultClassRegex = new(
-        @"^\s*(?<visibility>export)\s+default\s+class\b(?=\s+(?:extends|implements)\b|\s*\{)",
+        @"^\s*(?<visibility>export)\s+default\s+class\b",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptClassExpressionRegex = new(
@@ -649,6 +649,15 @@ public static class SymbolExtractor
             var sanitizedLine = lexedLine.SanitizedLine;
             var linePrivateColumns = new bool[sanitizedLine.Length];
 
+            if (arrowExpressionActive
+                && arrowExpressionBraceDepth == 0
+                && arrowExpressionParenDepth == 0
+                && arrowExpressionBracketDepth == 0
+                && StartsNewJavaScriptTypeScriptTopLevelStatement(sanitizedLine))
+            {
+                arrowExpressionActive = false;
+            }
+
             for (int column = 0; column < sanitizedLine.Length; column++)
             {
                 var ch = sanitizedLine[column];
@@ -887,6 +896,59 @@ public static class SymbolExtractor
         return previousTokenKind == JavaScriptPrevTokenKind.None;
     }
 
+    private static bool StartsNewJavaScriptTypeScriptTopLevelStatement(string sanitizedLine)
+    {
+        var index = 0;
+        while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+            index++;
+
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        var remaining = sanitizedLine[index..];
+        if (Regex.IsMatch(remaining, @"^(?:(?:export|default|declare|abstract|async)\s+)*(?:class|function|const|let|var|interface|enum|type|namespace|module|import)\b"))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsAnonymousJavaScriptTypeScriptDefaultClassDeclaration(string[] lines, int startIndex, int startColumn)
+    {
+        var lexState = new JavaScriptLexState();
+        for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == startIndex ? startColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    column++;
+                    while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                        column++;
+
+                    var token = sanitizedLine[tokenStart..column];
+                    return token is "extends" or "implements";
+                }
+
+                return ch == '{';
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsJavaScriptTypeScriptMatchInPrivateScope(bool[][] privateScopeColumns, int lineIndex, int startColumn, string matchLine)
     {
         if (lineIndex < 0 || lineIndex >= privateScopeColumns.Length)
@@ -928,6 +990,9 @@ public static class SymbolExtractor
         var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultClassRegex.Match(sanitizedLine);
         if (anonymousDefaultMatch.Success)
         {
+            if (!IsAnonymousJavaScriptTypeScriptDefaultClassDeclaration(lines, startIndex, anonymousDefaultMatch.Index + anonymousDefaultMatch.Length))
+                return;
+
             if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, anonymousDefaultMatch.Index, sanitizedLine))
                 return;
 
@@ -1524,6 +1589,15 @@ public static class SymbolExtractor
                 : i == startIndex && effectiveStartColumn >= lexedLine.SanitizedLine.Length
                     ? string.Empty
                     : lexedLine.SanitizedLine;
+
+            if (arrowExpressionActive
+                && arrowExpressionBraceDepth == 0
+                && arrowExpressionParenDepth == 0
+                && arrowExpressionBracketDepth == 0
+                && StartsNewJavaScriptTypeScriptTopLevelStatement(scanLine))
+            {
+                return (i, bodyStartLine ?? startIndex + 1, i);
+            }
 
             for (int column = 0; column < scanLine.Length; column++)
             {

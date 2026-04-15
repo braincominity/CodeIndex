@@ -357,6 +357,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingTopLevelClass()
+    {
+        var content = """
+            const factory = () =>
+                class Hidden {
+                    method() {}
+                }
+            class Visible {
+                keep() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(1, factory.StartLine);
+        Assert.Equal(4, factory.EndLine);
+        Assert.Equal(2, factory.BodyStartLine);
+        Assert.Equal(4, factory.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakIifeLocalClassMethods()
     {
         var content = """
@@ -676,6 +701,22 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultTs");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMultilineAnonymousDefaultExportClassMembers()
+    {
+        var content = """
+            export default class
+            extends Base
+            {
+                run() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
     [Fact]
@@ -1002,6 +1043,47 @@ public class SymbolExtractorTests
         Assert.Equal(6, factory.BodyEndLine);
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingTopLevelClass()
+    {
+        var content = """
+            const factory = () =>
+                class Hidden {
+                    method(): void {}
+                }
+            export class Visible {
+                keep(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(1, factory.StartLine);
+        Assert.Equal(4, factory.EndLine);
+        Assert.Equal(2, factory.BodyStartLine);
+        Assert.Equal(4, factory.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineAnonymousDefaultExportClassMembers()
+    {
+        var content = """
+            export default class
+            implements Runnable
+            {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
     [Fact]
