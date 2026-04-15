@@ -516,16 +516,6 @@ public static class IndexCommandRunner
             projectRootWritten = true;
         }
 
-        // Backfill missing indexed_project_root before any mutation/no-op path so legacy
-        // explicit DBs can recover workspace metadata even when update-mode does not end up
-        // rewriting a file. Existing metadata is left untouched so shared DB no-op updates
-        // still cannot hijack another workspace's persisted root.
-        // legacy explicit DB でも、update-mode が最終的に file rewrite しない no-op /
-        // rollback 経路で workspace metadata を回復できるよう、欠損時だけ先に
-        // indexed_project_root を補完する。既存 metadata は触らないので shared DB の
-        // no-op update が別 workspace の root を奪うこともない。
-        WriteProjectRootOnce();
-
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
         {
             DemoteReadinessOnce();

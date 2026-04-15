@@ -29,18 +29,18 @@ public static class DbPathResolver
     public static string? ResolveProjectRootForQuery(string dbPath)
     {
         var fullDbPath = Path.GetFullPath(NormalizeDbPath(dbPath));
-        var indexedProjectRoot = TryReadIndexedProjectRoot(dbPath);
-        if (indexedProjectRoot == null && !string.Equals(dbPath, fullDbPath, StringComparison.Ordinal))
-            indexedProjectRoot = TryReadIndexedProjectRoot(fullDbPath);
-        if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
-            return Path.GetFullPath(indexedProjectRoot);
-
         var dbDir = Path.GetDirectoryName(fullDbPath);
         if (dbDir == null)
             return null;
 
         if (string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase))
             return Path.GetDirectoryName(dbDir);
+
+        var indexedProjectRoot = TryReadIndexedProjectRoot(dbPath);
+        if (indexedProjectRoot == null && !string.Equals(dbPath, fullDbPath, StringComparison.Ordinal))
+            indexedProjectRoot = TryReadIndexedProjectRoot(fullDbPath);
+        if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
+            return Path.GetFullPath(indexedProjectRoot);
 
         return null;
     }

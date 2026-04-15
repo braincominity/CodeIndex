@@ -291,14 +291,62 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_LegacyExplicitDb_NoOpUnchangedBackfillsIndexedProjectRootMetadata()
+    public void Run_UpdateMode_LegacySharedExplicitDb_NoOpDoesNotHijackMissingIndexedProjectRootMetadata()
     {
-        var projectRoot = CreateTempProject();
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_noop_{Guid.NewGuid():N}.db");
         try
         {
+            RunGit(projectRootA, "init");
+            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('hello')\n");
+            RunGit(projectRootA, "add", ".");
+            RunGit(projectRootA, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DeleteIndexedProjectRootMetadata(dbPath);
+
+            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
+            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Null(statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_is_dirty").ValueKind);
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_LegacyExplicitDb_SuccessfulFileUpdateBackfillsIndexedProjectRootMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_update_{Guid.NewGuid():N}.db");
+        try
+        {
             RunGit(projectRoot, "init");
-            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "init");
 
@@ -306,12 +354,13 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             DeleteIndexedProjectRootMetadata(dbPath);
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
 
-            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "app.py", "--json"]);
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "app.cs", "--json"]);
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
-            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
-            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
 
             using (var db = new DbContext(dbPath))
             {
@@ -321,7 +370,6 @@ public class IndexCommandRunnerTests
             var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(Path.GetFullPath(projectRoot), statusJson.GetProperty("project_root").GetString());
             Assert.False(string.IsNullOrWhiteSpace(statusJson.GetProperty("git_head").GetString()));
-            Assert.False(statusJson.GetProperty("git_is_dirty").GetBoolean());
         }
         finally
         {
@@ -333,7 +381,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_LegacyExplicitDb_PurgeOnlyNoOpBackfillsIndexedProjectRootMetadata()
+    public void Run_UpdateMode_LegacyExplicitDb_PurgeOnlyNoOpDoesNotBackfillIndexedProjectRootMetadata()
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_purge_{Guid.NewGuid():N}.db");
@@ -385,12 +433,13 @@ public class IndexCommandRunnerTests
 
             using (var db = new DbContext(dbPath))
             {
-                Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+                Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
 
             var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
-            Assert.Equal(Path.GetFullPath(projectRoot), statusJson.GetProperty("project_root").GetString());
-            Assert.False(string.IsNullOrWhiteSpace(statusJson.GetProperty("git_head").GetString()));
+            Assert.Null(statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_is_dirty").ValueKind);
         }
         finally
         {
@@ -402,7 +451,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_LegacyExplicitDb_RollbackedFirstMutationStillBackfillsIndexedProjectRootMetadata()
+    public void Run_UpdateMode_LegacyExplicitDb_RollbackedFirstMutationDoesNotBackfillIndexedProjectRootMetadata()
     {
         var projectRoot = CreateTempProject();
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_rollback_{Guid.NewGuid():N}.db");
@@ -441,13 +490,13 @@ public class IndexCommandRunnerTests
 
             using (var db = new DbContext(dbPath))
             {
-                Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+                Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
             }
 
             var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
-            Assert.Equal(Path.GetFullPath(projectRoot), statusJson.GetProperty("project_root").GetString());
-            Assert.False(string.IsNullOrWhiteSpace(statusJson.GetProperty("git_head").GetString()));
-            Assert.True(statusJson.GetProperty("git_is_dirty").GetBoolean());
+            Assert.Null(statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_is_dirty").ValueKind);
         }
         finally
         {
