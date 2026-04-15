@@ -477,23 +477,28 @@ public static class IndexCommandRunner
             }
         }
 
-        // Now that preflight (commit / file resolution) has succeeded and we're committed to
-        // mutating the DB, demote readiness. Doing this earlier — before commit resolution —
-        // would turn a transient git failure or a typo in --commits into a permanent
-        // downgrade of a previously-healthy index.
-        // preflight 成功後、実書き込み直前で readiness をクリア。途中で失敗した場合は healthy index を壊さない。
-        writer.ClearReadyFlags();
-        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
-
-        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
-        var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
-        if (purgedRefs > 0 && !options.Json)
-            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
-
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
+        var mutated = false;
+        var purgedRefs = 0;
+        var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var currentFoldFingerprint = NameFold.Fingerprint();
+
+        void StartMutationBatch()
+        {
+            if (mutated)
+                return;
+
+            // Demote readiness only inside the first real mutation transaction so a no-op
+            // update against a shared explicit DB cannot rewrite trust metadata or project root.
+            // 最初の実更新トランザクション内でのみ readiness を落とす。no-op update では
+            // 共有 explicit DB の trust metadata / project root を書き換えない。
+            writer.ClearReadyFlags();
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        }
 
         foreach (var relPath in targetPaths)
         {
@@ -502,8 +507,12 @@ public static class IndexCommandRunner
             {
                 if (!File.Exists(absPath))
                 {
+                    using var deleteTxn = writer.BeginTransaction();
                     if (writer.DeleteFileByPath(relPath))
                     {
+                        StartMutationBatch();
+                        deleteTxn.Commit();
+                        mutated = true;
                         removed++;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [DEL ] {relPath}");
@@ -540,6 +549,7 @@ public static class IndexCommandRunner
                 }
 
                 using var txn = writer.BeginTransaction();
+                StartMutationBatch();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
@@ -551,6 +561,7 @@ public static class IndexCommandRunner
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
                 txn.Commit();
+                mutated = true;
 
                 updated++;
                 if (options.Verbose && !options.Json)
@@ -570,16 +581,27 @@ public static class IndexCommandRunner
             }
         }
 
-        writer.OptimizeFts();
+        if (purgedRefs > 0 && !options.Json)
+            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
+
+        if (mutated)
+            writer.OptimizeFts();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var graphTableAvailableAfter = false;
-        var issuesTableAvailableAfter = false;
-        var foldReadyAfter = false;
-        if (errors == 0)
+        var graphTableAvailableAfter = !mutated
+            ? (priorReadiness & DbContext.GraphReadyFlag) != 0
+            : false;
+        var issuesTableAvailableAfter = !mutated
+            ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
+            : false;
+        var foldReadyAfter = !mutated
+            && (priorReadiness & DbContext.FoldReadyFlag) != 0
+            && priorFoldVersion == currentFoldVersion
+            && priorFoldFingerprint == currentFoldFingerprint;
+        if (mutated && errors == 0)
         {
             // Restore each readiness bit independently based on what the DB carried BEFORE
             // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
@@ -610,8 +632,6 @@ public static class IndexCommandRunner
             // FoldReady would silently mismatch on --exact. Only full rebuild can re-fold all rows.
             // fold は version / fingerprint の両一致時のみ restamp。ズレた DB は rebuild まで
             // fold_ready=false のまま残す。
-            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var currentFoldFingerprint = NameFold.Fingerprint();
             if ((priorReadiness & DbContext.FoldReadyFlag) != 0
                 && priorFoldVersion == currentFoldVersion
                 && priorFoldFingerprint == currentFoldFingerprint)

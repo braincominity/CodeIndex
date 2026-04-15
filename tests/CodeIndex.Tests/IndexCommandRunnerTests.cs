@@ -138,6 +138,63 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_NoOpAgainstSharedExplicitDb_DoesNotRewriteIndexedProjectRoot()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_root_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('from a')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
+            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var statusExitCode = QueryCommandRunner.RunStatus(["--db", dbPath, "--json"], _jsonOptions);
+                    Assert.Equal(CommandExitCodes.Success, statusExitCode);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    Assert.Equal(Path.GetFullPath(projectRootA), document.RootElement.GetProperty("project_root").GetString());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_MissingDb_PrintsActionableHint()
     {
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");
@@ -1278,6 +1335,8 @@ public class IndexCommandRunnerTests
             // because untouched rows still carry the old version's fold keys.
             // partial update 実行。FoldReady bit も version も新状態に進めてはいけない。
             var targetFile = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(targetFile, "public class App { public void Run() { } }\n");
+            File.SetLastWriteTimeUtc(targetFile, DateTime.UtcNow.AddSeconds(2));
             var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
 
@@ -1398,6 +1457,8 @@ public class IndexCommandRunnerTests
             SqliteConnection.ClearAllPools();
 
             var targetFile = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(targetFile, "public class App { public void Run() { } }\n");
+            File.SetLastWriteTimeUtc(targetFile, DateTime.UtcNow.AddSeconds(2));
             var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
 
