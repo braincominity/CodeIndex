@@ -585,26 +585,30 @@ public partial class DbReader
 
     /// <summary>
     /// Find symbols with the most references (hotspots — heavily used code).
-    /// Counts total reference volume across the codebase for names that are unique within the
-    /// filtered candidate set. When multiple candidate definitions share the same name, falls
-    /// back to same-file counting and collapses duplicate same-file rows because bare-name
-    /// references cannot disambiguate the true target symbol.
+    /// Counts total reference volume across the codebase for names that stay unambiguous within
+    /// the active language/kind candidate set. Path and test filters only decide which symbol rows
+    /// are returned, not whether a name is considered globally ambiguous. When multiple targets
+    /// still share the same name across different file/container groups, falls back to same-file
+    /// counting; same-file duplicate rows within one container group are collapsed because
+    /// bare-name references cannot disambiguate the true target symbol.
     /// 最も多く参照されるシンボルを検索する（ホットスポット — 多用されるコード）。
-    /// フィルタ後の候補集合で名前が一意なシンボルは codebase 全体の参照数を数える。
-    /// 同名定義が複数ある場合は bare-name 参照では真の対象を特定できないため、
-    /// 同じファイル内の参照だけにフォールバックし、同一ファイル内の重複行は集約する。
+    /// active な言語/種別候補集合の中で名前が曖昧でないシンボルは codebase 全体の参照数を数える。
+    /// path/test フィルタは返す行だけを絞り、名前の曖昧性判定には使わない。
+    /// 異なる file/container group に同名定義が残る場合は bare-name 参照で真の対象を特定できないため
+    /// same-file カウントへフォールバックし、同一 container group 内の重複行は 1 行に集約する。
     /// </summary>
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
-        // Unique names keep the codebase-wide total reference count. Duplicate names are too
-        // ambiguous for cross-file bare-name joins, so they fall back to same-file counts.
-        // Same-file duplicate definitions are collapsed into one hotspot row because the current
-        // reference table has no target_symbol_id to distinguish overloads or shadowed defs.
-        // 一意名は codebase 全体の参照数を維持し、重複名だけ same-file カウントへ縮退する。
-        // 同一ファイル内の重複定義は target_symbol_id が無いので 1 行に集約する。
+        // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
+        // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
+        // back to codebase-wide counting. If every definition with that name collapses to one
+        // file/container group, treat it like one overload family and keep cross-file counts.
+        // 曖昧性は path 非依存の候補集合で判定し、`--path` で隠れた重複定義が一意扱いに
+        // 戻ってしまうことを防ぐ。同名定義が 1 つの file/container group に収まるなら、
+        // 1 つの overload family とみなして cross-file 集計を維持する。
         var sql = $@"
-            WITH candidate_symbols AS (
+            WITH all_candidate_symbols AS (
                 SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
                        {GetSymbolColumnSql("container_name")} AS container_name
@@ -621,13 +625,34 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
 
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += @"
             ),
             name_cardinality AS (
-                SELECT name, COUNT(*) AS defs
-                FROM candidate_symbols
+                SELECT name,
+                       COUNT(*) AS defs,
+                       COUNT(DISTINCT CAST(file_id AS TEXT) || '|' || COALESCE(container_name, '')) AS target_groups
+                FROM all_candidate_symbols
                 GROUP BY name
+            ),
+            filtered_candidates AS (
+                SELECT *
+                FROM all_candidate_symbols
+                WHERE 1 = 1";
+        if (pathPatterns != null && pathPatterns.Count > 0)
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+        }
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";
+        sql += @"
             ),
             grouped_candidates AS (
                 SELECT MIN(id) AS symbol_id,
@@ -645,8 +670,8 @@ public partial class DbReader
                            WHEN COUNT(DISTINCT COALESCE(container_name, '')) = 1 THEN MIN(container_name)
                            ELSE NULL
                        END AS container_name
-                FROM candidate_symbols
-                GROUP BY file_id, name, kind, path, lang
+                FROM filtered_candidates
+                GROUP BY file_id, name, kind, path, lang, COALESCE(container_name, '')
             ),
             reference_counts AS (
                 SELECT gc.symbol_id, COUNT(DISTINCT sr.id) AS ref_count
@@ -654,7 +679,7 @@ public partial class DbReader
                 JOIN name_cardinality nc ON nc.name = gc.name
                 JOIN symbol_references sr
                   ON sr.symbol_name = gc.name
-                 AND (nc.defs = 1 OR sr.file_id = gc.file_id)
+                 AND (nc.defs = 1 OR nc.target_groups = 1 OR sr.file_id = gc.file_id)
                 GROUP BY gc.symbol_id
             )
             SELECT gc.name, rc.ref_count,

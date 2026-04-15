@@ -865,6 +865,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_PathFilterStillTreatsOutOfScopeDuplicateAsAmbiguous()
+    {
+        InsertIndexedFile("src/hotspots_alpha.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def alpha_use():\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_beta.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def beta_use():\n    Shared()\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_gamma.py", "python",
+            "def gamma_use():\n    Shared()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/hotspots_alpha.py"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var shared = Assert.Single(results.Where(result => result.Symbol.Name == "Shared"));
+        Assert.Equal("src/hotspots_alpha.py", shared.Symbol.Path);
+        Assert.Equal(1, shared.ReferenceCount);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_CountsCrossFileReferencesForUniqueName()
     {
         InsertIndexedFile("src/api.py", "python", "def SharedApi():\n    return True\n");
@@ -884,6 +909,43 @@ public class DbReaderTests : IDisposable
         var sharedApi = Assert.Single(results.Where(result => result.Symbol.Name == "SharedApi"));
         Assert.Equal("src/api.py", sharedApi.Symbol.Path);
         Assert.Equal(3, sharedApi.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_KeepsCrossFileCountsForSameContainerOverloadFamily()
+    {
+        InsertIndexedFile("src/api.cs", "csharp",
+            """
+            public class Api
+            {
+                public void Run() { }
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("src/api.cs", run.Symbol.Path);
+        Assert.Equal("Api", run.Symbol.ContainerName);
+        Assert.Equal(2, run.ReferenceCount);
     }
 
     [Fact]
