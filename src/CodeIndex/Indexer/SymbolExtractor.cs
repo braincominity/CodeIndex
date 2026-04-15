@@ -681,8 +681,12 @@ public static class SymbolExtractor
                 var container = stack.Peek();
                 symbol.ContainerKind = container.Kind;
                 symbol.ContainerName = container.Name;
-                symbol.ContainerQualifiedName = BuildQualifiedContainerName(stack);
+                var qualifiedContainerName = BuildQualifiedContainerName(stack);
+                symbol.ContainerQualifiedName = qualifiedContainerName;
+                symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
             }
+
+            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, stack);
 
             if (CanContainSymbols(symbol))
                 stack.Push(symbol);
@@ -701,6 +705,33 @@ public static class SymbolExtractor
             ? string.Join(".", names)
             : null;
     }
+
+    private static string? BuildInheritedFamilyKey(SymbolRecord container, string? qualifiedContainerName) =>
+        SupportsCrossFileFamily(container)
+            ? qualifiedContainerName
+            : null;
+
+    private static string? BuildSelfFamilyKey(SymbolRecord symbol, IEnumerable<SymbolRecord> containers)
+    {
+        if (!SupportsCrossFileFamily(symbol))
+            return null;
+
+        var names = containers
+            .Reverse()
+            .Select(container => container.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Append(symbol.Name)
+            .ToList();
+
+        return names.Count > 0
+            ? string.Join(".", names)
+            : null;
+    }
+
+    private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
+        symbol.Kind is "class" or "interface" or "struct"
+        && !string.IsNullOrWhiteSpace(symbol.Signature)
+        && symbol.Signature.Contains("partial", StringComparison.Ordinal);
 
     private static bool CanContainSymbols(SymbolRecord symbol)
     {

@@ -42,6 +42,9 @@ public class SymbolRecord
     /// <summary>Qualified enclosing symbol path when known / 修飾付き親シンボル経路</summary>
     public string? ContainerQualifiedName { get; set; }
 
+    /// <summary>Authoritative cross-file family key when known / 正式な cross-file family キー</summary>
+    public string? FamilyKey { get; set; }
+
     /// <summary>Visibility or export-like modifier when known / 可視性または公開修飾子</summary>
     public string? Visibility { get; set; }
 

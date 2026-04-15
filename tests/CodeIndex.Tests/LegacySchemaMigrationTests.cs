@@ -48,7 +48,7 @@ public class LegacySchemaMigrationTests : IDisposable
     {
         // Build a DB that matches the pre-column layout: no start_line / end_line /
         // body_start_line / body_end_line / signature / visibility / return_type /
-        // container_kind / container_name / container_qualified_name on symbols,
+        // container_kind / container_name / container_qualified_name / family_key on symbols,
         // no symbol_references, no file_issues,
         // no checksum / indexed_at on files. This mirrors what older cdidx binaries produced.
         // 旧 cdidx が生成していたスキーマ。追加カラム・テーブルをすべて欠落させる。
@@ -202,10 +202,10 @@ public class LegacySchemaMigrationTests : IDisposable
         // マイグレーションが実際に走ったことを確認。
         using (var check = db.Connection.CreateCommand())
         {
-            check.CommandText = "SELECT start_line, end_line, body_start_line, body_end_line, signature, visibility, return_type, container_kind, container_name, container_qualified_name FROM symbols WHERE name = 'Alpha'";
+            check.CommandText = "SELECT start_line, end_line, body_start_line, body_end_line, signature, visibility, return_type, container_kind, container_name, container_qualified_name, family_key FROM symbols WHERE name = 'Alpha'";
             using var r = check.ExecuteReader();
             Assert.True(r.Read());
-            for (int i = 0; i < 10; i++) Assert.True(r.IsDBNull(i));
+            for (int i = 0; i < 11; i++) Assert.True(r.IsDBNull(i));
         }
 
         var reader = new DbReader(db.Connection);

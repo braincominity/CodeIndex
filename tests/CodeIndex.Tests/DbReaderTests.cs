@@ -1051,6 +1051,118 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_DoesNotMergeSameContainerNameAcrossPythonModules()
+    {
+        InsertIndexedFile("src/alpha.py", "python",
+            """
+            class Api:
+                def Run(self):
+                    return True
+
+                def Use(self):
+                    self.Run()
+                    self.Run()
+            """);
+        InsertIndexedFile("src/beta.py", "python",
+            """
+            class Api:
+                def Run(self):
+                    return True
+
+                def Use(self):
+                    self.Run()
+                    self.Run()
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runs = results
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(runs,
+            first =>
+            {
+                Assert.Equal("src/alpha.py", first.Symbol.Path);
+                Assert.Equal("Api", first.Symbol.ContainerName);
+                Assert.Equal(2, first.ReferenceCount);
+            },
+            second =>
+            {
+                Assert.Equal("src/beta.py", second.Symbol.Path);
+                Assert.Equal("Api", second.Symbol.ContainerName);
+                Assert.Equal(2, second.ReferenceCount);
+            });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotMergeSameQualifiedTypeAcrossProjectRoots()
+    {
+        InsertIndexedFile("projA/src/Api.cs", "csharp",
+            """
+            namespace Shared;
+
+            public class Api
+            {
+                public void Run() { }
+
+                public void LocalA()
+                {
+                    Run();
+                }
+            }
+            """);
+        InsertIndexedFile("projB/src/Api.cs", "csharp",
+            """
+            namespace Shared;
+
+            public class Api
+            {
+                public void Run() { }
+
+                public void LocalB()
+                {
+                    Run();
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["projA/", "projB/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runs = results
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(runs,
+            first =>
+            {
+                Assert.Equal("projA/src/Api.cs", first.Symbol.Path);
+                Assert.Equal("Api", first.Symbol.ContainerName);
+                Assert.Equal(1, first.ReferenceCount);
+            },
+            second =>
+            {
+                Assert.Equal("projB/src/Api.cs", second.Symbol.Path);
+                Assert.Equal("Api", second.Symbol.ContainerName);
+                Assert.Equal(1, second.ReferenceCount);
+            });
+    }
+
+    [Fact]
     public void GetSymbolHotspots_GroupedFamilyReturnsRealDefinitionLocation()
     {
         InsertIndexedFile("src/APart.cs", "csharp",

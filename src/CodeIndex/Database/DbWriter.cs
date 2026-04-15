@@ -324,14 +324,14 @@ public class DbWriter
                 INSERT INTO symbols (
                     file_id, kind, name, line, start_line, end_line,
                     body_start_line, body_end_line, signature,
-                    container_kind, container_name, container_qualified_name,
+                    container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
                     name_folded
                 )
                 VALUES (
                     @fid, @kind, @name, @line, @startLine, @endLine,
                     @bodyStartLine, @bodyEndLine, @signature,
-                    @containerKind, @containerName, @containerQualifiedName,
+                    @containerKind, @containerName, @containerQualifiedName, @familyKey,
                     @visibility, @returnType,
                     @nameFolded
                 )";
@@ -347,6 +347,7 @@ public class DbWriter
             var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
             var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
             var pContainerQualifiedName = cmd.Parameters.Add("@containerQualifiedName", SqliteType.Text);
+            var pFamilyKey = cmd.Parameters.Add("@familyKey", SqliteType.Text);
             var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
             var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
             var pNameFolded = cmd.Parameters.Add("@nameFolded", SqliteType.Text);
@@ -369,6 +370,7 @@ public class DbWriter
                 pContainerKind.Value = (object?)symbol.ContainerKind ?? DBNull.Value;
                 pContainerName.Value = (object?)symbol.ContainerName ?? DBNull.Value;
                 pContainerQualifiedName.Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
+                pFamilyKey.Value = (object?)symbol.FamilyKey ?? DBNull.Value;
                 pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
                 pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
                 pNameFolded.Value = (object?)NameFold.Fold(symbol.Name) ?? DBNull.Value;
