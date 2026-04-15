@@ -96,8 +96,8 @@ public static class SymbolExtractor
         @"^\s*(?<visibility>export)\s+default\s+class\b",
         RegexOptions.Compiled);
 
-    private static readonly Regex JavaScriptTypeScriptClassExpressionRegex = new(
-        @"^\s*(?:(?<visibility>export)\s+)?(?:(?:const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|module\.exports\.(?<moduleExportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=\s*class(?:\s+(?<name>\w+))?\b",
+    private static readonly Regex JavaScriptTypeScriptClassExpressionBindingRegex = new(
+        @"^\s*(?:(?<visibility>export)\s+)?(?:(?:const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|module\.exports\.(?<moduleExportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=",
         RegexOptions.Compiled);
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
@@ -1019,18 +1019,20 @@ public static class SymbolExtractor
             return;
         }
 
-        var classExpressionMatch = JavaScriptTypeScriptClassExpressionRegex.Match(sanitizedLine);
-        if (!classExpressionMatch.Success)
+        var classExpressionBindingMatch = JavaScriptTypeScriptClassExpressionBindingRegex.Match(sanitizedLine);
+        if (!classExpressionBindingMatch.Success)
             return;
 
-        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, classExpressionMatch.Index, sanitizedLine))
+        if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, classExpressionBindingMatch.Index + classExpressionBindingMatch.Length))
             return;
 
-        var containerName = TryGetGroup(classExpressionMatch, "alias")
-            ?? TryGetGroup(classExpressionMatch, "exportsAlias")
-            ?? TryGetGroup(classExpressionMatch, "moduleExportsAlias")
-            ?? (classExpressionMatch.Groups["moduleExports"].Success ? "default" : null)
-            ?? TryGetGroup(classExpressionMatch, "name")
+        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, classExpressionBindingMatch.Index, sanitizedLine))
+            return;
+
+        var containerName = TryGetGroup(classExpressionBindingMatch, "alias")
+            ?? TryGetGroup(classExpressionBindingMatch, "exportsAlias")
+            ?? TryGetGroup(classExpressionBindingMatch, "moduleExportsAlias")
+            ?? (classExpressionBindingMatch.Groups["moduleExports"].Success ? "default" : null)
             ?? "class";
         AddJavaScriptTypeScriptSyntheticClassTarget(
             fileId,
@@ -1040,7 +1042,41 @@ public static class SymbolExtractor
             targets,
             startIndex,
             containerName,
-            TryGetGroup(classExpressionMatch, "visibility"));
+            TryGetGroup(classExpressionBindingMatch, "visibility"));
+    }
+
+    private static bool IsJavaScriptTypeScriptClassExpressionDeclaration(string[] lines, int startIndex, int startColumn)
+    {
+        var lexState = new JavaScriptLexState();
+        for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == startIndex ? startColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (!IsJavaScriptTypeScriptIdentifierStart(ch))
+                    return false;
+
+                var tokenStart = column;
+                column++;
+                while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                    column++;
+
+                return sanitizedLine[tokenStart..column] == "class";
+            }
+        }
+
+        return false;
     }
 
     private static void AddJavaScriptTypeScriptSyntheticClassTarget(

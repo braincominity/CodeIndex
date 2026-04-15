@@ -119,6 +119,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsMultilineExportedClassExpressionMethods()
+    {
+        var content = """
+            export const Service =
+                class {
+                    run() {}
+                };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsInlineClassMethods()
     {
         var content = "export class Inline { run() {} }";
@@ -212,6 +227,21 @@ public class SymbolExtractorTests
     public void Extract_JavaScript_DetectsCommonJsModuleExportsClassExpressionMethods()
     {
         var content = "module.exports = class { run() {} };";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMultilineCommonJsModuleExportsClassExpressionMethods()
+    {
+        var content = """
+            module.exports =
+                class {
+                    run() {}
+                };
+            """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
@@ -971,6 +1001,24 @@ public class SymbolExtractorTests
                 export const Service = class {
                     run(): void {}
                 };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineClassExpressionInsideNamespaceBlock()
+    {
+        var content = """
+            namespace Foo {
+                export const Service =
+                    class {
+                        run(): void {}
+                    };
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
