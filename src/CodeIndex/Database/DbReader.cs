@@ -244,9 +244,11 @@ public partial class DbReader
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
             var raw = TryGetMetaString(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
+            var fingerprint = TryGetMetaString(conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
             if (raw is string s
                 && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
-                && version == DbContext.HotspotFamilyVersion)
+                && version == DbContext.HotspotFamilyVersion
+                && !string.IsNullOrWhiteSpace(fingerprint))
             {
                 readyLangs.Add(lang);
             }

@@ -35,7 +35,7 @@ public class DbReaderTests : IDisposable
         // #86: full scan 後の本番 DB は fold ready も立つため、reader は fold 経路を通す。
         _writer.MarkFoldReady();
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            _writer.MarkHotspotFamilyReady(lang);
+            _writer.MarkHotspotFamilyReady(lang, $"{lang}-fixture-fingerprint");
         _reader = new DbReader(_db.Connection);
     }
 
@@ -1477,6 +1477,55 @@ public class DbReaderTests : IDisposable
         Assert.True(signal.Relevant);
         Assert.False(signal.Ready);
         Assert.Contains("csharp", signal.DegradedReason);
+    }
+
+    [Fact]
+    public void GetHotspotFamilySignal_MissingMarkerFingerprintIsStillDegraded()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        _writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("csharp", signal.DegradedReason);
+
+        var results = reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
     }
 
     [Fact]

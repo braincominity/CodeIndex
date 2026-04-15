@@ -1330,6 +1330,39 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_ZeroJson_ReportsMissingMarkerFingerprintAsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_missing_fingerprint_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_HumanOutput_WarnsWhenHotspotFamilyTrustIsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_zero_human");
@@ -4855,7 +4888,7 @@ public class QueryCommandRunnerTests
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         if (markHotspotFamilyReady)
-            writer.MarkHotspotFamilyReady("csharp");
+            writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
         return dbPath;
     }
 

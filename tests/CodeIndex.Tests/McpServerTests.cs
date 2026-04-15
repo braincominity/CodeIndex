@@ -2483,7 +2483,7 @@ public class McpServerTests : IDisposable
             {
                 var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
-                writer.MarkHotspotFamilyReady("csharp");
+                writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
 
                 using var cmd = db.Connection.CreateCommand();
                 cmd.CommandText = """
@@ -2506,6 +2506,46 @@ public class McpServerTests : IDisposable
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.True(structured["degraded"]!.GetValue<bool>());
+            Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_ReportsMissingMarkerFingerprintAsDegraded()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_hotspots_family_missing_fingerprint_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
             Assert.True(structured["degraded"]!.GetValue<bool>());
             Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
         }
