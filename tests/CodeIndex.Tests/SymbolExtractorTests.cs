@@ -337,6 +337,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotLeakBlockScopedClassesInsideConditionalBlocks()
+    {
+        var content = """
+            if (flag) {
+                const Hidden = class {
+                    run() {}
+                };
+
+                class LocalDecl {
+                    keep() {}
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "LocalDecl");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "keep");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakClassMethodLocalClassExpressionMethods()
     {
         var content = """
@@ -1150,6 +1172,28 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotLeakBlockScopedClassesInsideConditionalBlocks()
+    {
+        var content = """
+            if (flag) {
+                const Hidden = class {
+                    run(): void {}
+                };
+
+                class LocalDecl {
+                    keep(): void {}
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "LocalDecl");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "keep");
     }
 
     [Fact]

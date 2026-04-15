@@ -47,10 +47,19 @@ public static class SymbolExtractor
     private enum JavaScriptScopeKind
     {
         Other,
+        Block,
         Function,
         StaticBlock,
         Class,
         Object,
+    }
+
+    [Flags]
+    private enum JavaScriptScopePrivacyFlags
+    {
+        None = 0,
+        FunctionLike = 1,
+        Block = 2,
     }
 
     private readonly record struct JavaScriptLexState(
@@ -99,7 +108,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptClassExpressionBindingRegex = new(
-        @"^\s*(?:(?<visibility>export)\s+)?(?:(?:const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|module\.exports\.(?<moduleExportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=",
+        @"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|module\.exports\.(?<moduleExportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=",
         RegexOptions.Compiled);
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
@@ -516,7 +525,7 @@ public static class SymbolExtractor
 
         var lines = content.Split('\n');
         var privateScopeColumns = lang is "javascript" or "typescript"
-            ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines)
+            ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
             : null;
         var symbols = new List<SymbolRecord>();
 
@@ -537,7 +546,7 @@ public static class SymbolExtractor
                     var absoluteStartColumn = lineOffset + match.Index;
                     if (privateScopeColumns != null
                         && pattern.Kind == "class"
-                        && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine))
+                        && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine, includeBlockScope: true))
                     {
                         break;
                     }
@@ -605,7 +614,7 @@ public static class SymbolExtractor
         return symbols;
     }
 
-    private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, bool[][] privateScopeColumns)
+    private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
         var methodRegex = lang == "javascript" ? JavaScriptBareMethodRegex : TypeScriptBareMethodRegex;
         var existingClassTargets = GetJavaScriptTypeScriptExistingClassScanTargets(lang, lines, symbols);
@@ -632,7 +641,7 @@ public static class SymbolExtractor
             .ToList();
     }
 
-    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, bool[][] privateScopeColumns)
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
         var targets = new List<JavaScriptClassScanTarget>();
         var lexState = new JavaScriptLexState();
@@ -655,19 +664,31 @@ public static class SymbolExtractor
         return scopeStack.Any(scopeKind => scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock);
     }
 
+    private static JavaScriptScopePrivacyFlags GetJavaScriptTypeScriptPrivacyFlags(Stack<JavaScriptScopeKind> scopeStack, bool arrowExpressionActive)
+    {
+        var flags = JavaScriptScopePrivacyFlags.None;
+        if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
+            flags |= JavaScriptScopePrivacyFlags.FunctionLike;
+        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Block))
+            flags |= JavaScriptScopePrivacyFlags.Block;
+
+        return flags;
+    }
+
     private static bool IsInsideJavaScriptTypeScriptMethodContainer(Stack<JavaScriptScopeKind> scopeStack)
     {
         return scopeStack.Count > 0 && scopeStack.Peek() is JavaScriptScopeKind.Class or JavaScriptScopeKind.Object;
     }
 
-    private static bool[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines)
+    private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
     {
-        var privateColumns = new bool[lines.Length][];
+        var privateColumns = new JavaScriptScopePrivacyFlags[lines.Length][];
         var lexState = new JavaScriptLexState();
         var scopeStack = new Stack<JavaScriptScopeKind>();
         var pendingFunctionScope = false;
         var pendingStaticBlockScope = false;
         var pendingClassScope = false;
+        var pendingNamespaceScope = false;
         var pendingConciseMethodScope = false;
         var pendingArrowBody = false;
         var arrowExpressionActive = false;
@@ -683,7 +704,7 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
-            var linePrivateColumns = new bool[sanitizedLine.Length];
+            var linePrivateColumns = new JavaScriptScopePrivacyFlags[sanitizedLine.Length];
 
             if (arrowExpressionActive
                 && arrowExpressionBraceDepth == 0
@@ -697,8 +718,7 @@ public static class SymbolExtractor
             for (int column = 0; column < sanitizedLine.Length; column++)
             {
                 var ch = sanitizedLine[column];
-                if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
-                    linePrivateColumns[column] = true;
+                linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
 
                 if (char.IsWhiteSpace(ch))
                     continue;
@@ -708,13 +728,13 @@ public static class SymbolExtractor
                     if (ch == '{')
                     {
                         scopeStack.Push(JavaScriptScopeKind.Function);
-                        linePrivateColumns[column] = true;
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
                         pendingArrowBody = false;
                         continue;
                     }
 
                     arrowExpressionActive = true;
-                    linePrivateColumns[column] = true;
+                    linePrivateColumns[column] = JavaScriptScopePrivacyFlags.FunctionLike;
                     pendingArrowBody = false;
                 }
 
@@ -724,8 +744,7 @@ public static class SymbolExtractor
                     column++;
                     while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
                     {
-                        if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
-                            linePrivateColumns[column] = true;
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
 
                         column++;
                     }
@@ -747,6 +766,11 @@ public static class SymbolExtractor
                         pendingStaticBlockScope = false;
                         pendingConciseMethodScope = false;
                     }
+                    else if (lang == "typescript" && token is "namespace" or "module")
+                    {
+                        pendingNamespaceScope = true;
+                        pendingStaticBlockScope = false;
+                    }
                     else
                     {
                         pendingStaticBlockScope = false;
@@ -761,12 +785,13 @@ public static class SymbolExtractor
 
                 if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
                 {
-                    linePrivateColumns[column] = arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack);
-                    linePrivateColumns[column + 1] = arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack);
+                    linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                    linePrivateColumns[column + 1] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
                     pendingArrowBody = true;
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
+                    pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
                     previousTokenKind = JavaScriptPrevTokenKind.Other;
                     previousIdentifier = null;
@@ -833,11 +858,14 @@ public static class SymbolExtractor
                         scopeKind = JavaScriptScopeKind.StaticBlock;
                     else if (pendingClassScope)
                         scopeKind = JavaScriptScopeKind.Class;
+                    else if (pendingNamespaceScope)
+                        scopeKind = JavaScriptScopeKind.Other;
                     else if (CanStartJavaScriptTypeScriptObjectLiteral(previousTokenKind, previousIdentifier, previousSignificantChar))
                         scopeKind = JavaScriptScopeKind.Object;
+                    else
+                        scopeKind = JavaScriptScopeKind.Block;
 
-                    if (scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock)
-                        linePrivateColumns[column] = true;
+                    linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
 
                     scopeStack.Push(scopeKind);
                     if (arrowExpressionActive)
@@ -846,6 +874,7 @@ public static class SymbolExtractor
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
+                    pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
                     previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
                     previousIdentifier = null;
@@ -857,7 +886,7 @@ public static class SymbolExtractor
                 {
                     if (arrowExpressionActive)
                     {
-                        linePrivateColumns[column] = true;
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
                         if (arrowExpressionBraceDepth > 0)
                             arrowExpressionBraceDepth--;
                     }
@@ -868,6 +897,7 @@ public static class SymbolExtractor
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
+                    pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
                     previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
                     previousIdentifier = null;
@@ -882,13 +912,14 @@ public static class SymbolExtractor
                         && arrowExpressionParenDepth == 0
                         && arrowExpressionBracketDepth == 0)
                     {
-                        linePrivateColumns[column] = true;
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
                         arrowExpressionActive = false;
                     }
 
                     pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
+                    pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
                     previousTokenKind = JavaScriptPrevTokenKind.Other;
                     previousIdentifier = null;
@@ -906,6 +937,8 @@ public static class SymbolExtractor
 
                 if (pendingStaticBlockScope && ch != '{')
                     pendingStaticBlockScope = false;
+                if (pendingNamespaceScope && ch is not '{' and not '.')
+                    pendingNamespaceScope = false;
 
                 previousTokenKind = JavaScriptPrevTokenKind.Other;
                 previousIdentifier = null;
@@ -1002,7 +1035,12 @@ public static class SymbolExtractor
         return false;
     }
 
-    private static bool IsJavaScriptTypeScriptMatchInPrivateScope(bool[][] privateScopeColumns, int lineIndex, int startColumn, string matchLine)
+    private static bool IsJavaScriptTypeScriptMatchInPrivateScope(
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns,
+        int lineIndex,
+        int startColumn,
+        string matchLine,
+        bool includeBlockScope)
     {
         if (lineIndex < 0 || lineIndex >= privateScopeColumns.Length)
             return false;
@@ -1015,7 +1053,14 @@ public static class SymbolExtractor
         while (column < matchLine.Length && char.IsWhiteSpace(matchLine[column]))
             column++;
 
-        return column < linePrivateColumns.Length && linePrivateColumns[column];
+        if (column >= linePrivateColumns.Length)
+            return false;
+
+        var flags = linePrivateColumns[column];
+        if ((flags & JavaScriptScopePrivacyFlags.FunctionLike) != 0)
+            return true;
+
+        return includeBlockScope && (flags & JavaScriptScopePrivacyFlags.Block) != 0;
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInTargets(
@@ -1038,7 +1083,7 @@ public static class SymbolExtractor
         List<JavaScriptClassScanTarget> targets,
         int startIndex,
         string sanitizedLine,
-        bool[][] privateScopeColumns)
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
         var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultExportRegex.Match(sanitizedLine);
         if (anonymousDefaultMatch.Success)
@@ -1058,7 +1103,7 @@ public static class SymbolExtractor
                 return;
             }
 
-            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, anonymousDefaultMatch.Index, sanitizedLine))
+            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, anonymousDefaultMatch.Index, sanitizedLine, includeBlockScope: false))
                 return;
 
             AddJavaScriptTypeScriptSyntheticClassTarget(
@@ -1094,7 +1139,9 @@ public static class SymbolExtractor
             return;
         }
 
-        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, classExpressionBindingMatch.Index, sanitizedLine))
+        var includeBlockScope = classExpressionBindingMatch.Groups["bindingKind"].Success
+            && classExpressionBindingMatch.Groups["bindingKind"].Value is "const" or "let";
+        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, classExpressionBindingMatch.Index, sanitizedLine, includeBlockScope))
             return;
 
         var containerName = TryGetGroup(classExpressionBindingMatch, "alias")
