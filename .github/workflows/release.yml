@@ -126,10 +126,57 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
         run: |
-          gh release create "${TAG_NAME}" \
-            release-files/* \
-            --verify-tag \
-            --generate-notes
+          set -euo pipefail
+          # Idempotent on workflow re-runs: if a transient failure in a later
+          # step (e.g. CDN propagation race in the verify step) caused us to
+          # re-run from this point, the release with this tag already exists
+          # and `gh release create` would fail with
+          #   "a release with the same tag name already exists".
+          # In that case, upload any missing assets with --clobber instead so
+          # the release stays consistent without manual intervention.
+          # 再実行時の冪等性: 後続ステップの一時的失敗（例: verify ステップで
+          # CDN 伝播競合）でこのジョブが再実行された場合、同名タグの release
+          # は既に存在するため `gh release create` は
+          #   "a release with the same tag name already exists"
+          # で失敗する。その場合は不足アセットを --clobber 付きで upload し、
+          # release を手動介入なしに整合させる。
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} already exists; uploading missing assets with --clobber."
+            gh release upload "${TAG_NAME}" release-files/* --clobber
+          else
+            gh release create "${TAG_NAME}" \
+              release-files/* \
+              --verify-tag \
+              --generate-notes
+          fi
+
+      - name: Wait for release assets to be downloadable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+          ASSET_NAME: CodeIndex-linux-x64.tar.gz
+        run: |
+          set -euo pipefail
+          # gh release create returns once the GitHub API records the assets,
+          # but the public download URL (download/<tag>/<asset>) is served via
+          # a CDN that can lag a few seconds. Poll the actual download URL
+          # before running install.sh so the verify step doesn't 404 on a
+          # transient propagation gap.
+          # gh release create は API 反映直後に戻るが、download URL は CDN
+          # 経由で配信されるため数秒のラグが起きうる。install.sh が 404 で
+          # 落ちないよう、download URL 自体が取得可能になるまでポーリングする。
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${ASSET_NAME}"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            code="$(curl -fsSL -o /dev/null -w '%{http_code}' -I "$url" || true)"
+            if [ "$code" = "200" ]; then
+              echo "Asset reachable after $attempt attempt(s)."
+              exit 0
+            fi
+            echo "Attempt $attempt: HTTP $code, retrying in 5s..."
+            sleep 5
+          done
+          echo "Asset $url did not become reachable in time." >&2
+          exit 1
 
       - name: Verify install.sh against the published release
         env:
