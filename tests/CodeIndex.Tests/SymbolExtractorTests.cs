@@ -204,6 +204,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsCommonJsModuleExportsPropertyClassExpressionMethods()
+    {
+        var content = "module.exports.Service = class { run() {} };";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsCommonJsClassExpressionInsideTopLevelConditionalBlock()
+    {
+        var content = """
+            if (typeof module !== "undefined") {
+                module.exports = class {
+                    run() {}
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakFunctionLocalClassExpressionMethods()
     {
         var content = """
@@ -562,6 +588,23 @@ public class SymbolExtractorTests
         var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
         Assert.Equal("class", run.ContainerKind);
         Assert.Equal("Service", run.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassExpressionInsideNamespaceBlock()
+    {
+        var content = """
+            namespace Foo {
+                export const Service = class {
+                    run(): void {}
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
     }
 
     [Fact]

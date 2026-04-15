@@ -76,7 +76,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptClassExpressionRegex = new(
-        @"^\s*(?:(?<visibility>export)\s+)?(?:(?:const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=\s*class(?:\s+(?<name>\w+))?\b",
+        @"^\s*(?:(?<visibility>export)\s+)?(?:(?:const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|module\.exports\.(?<moduleExportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=\s*class(?:\s+(?<name>\w+))?\b",
         RegexOptions.Compiled);
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
@@ -564,21 +564,16 @@ public static class SymbolExtractor
             .ToList();
 
         var lexState = new JavaScriptLexState();
-        var lexicalDepth = 0;
         for (int i = 0; i < lines.Length; i++)
         {
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
 
-            if (lexicalDepth == 0)
-            {
-                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine);
-            }
+            if (IsInsideJavaScriptTypeScriptFunctionBody(symbols, i + 1))
+                continue;
 
-            lexicalDepth += CountBraces(sanitizedLine);
-            if (lexicalDepth < 0)
-                lexicalDepth = 0;
+            TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine);
         }
 
         return targets
@@ -617,6 +612,7 @@ public static class SymbolExtractor
 
         var containerName = TryGetGroup(classExpressionMatch, "alias")
             ?? TryGetGroup(classExpressionMatch, "exportsAlias")
+            ?? TryGetGroup(classExpressionMatch, "moduleExportsAlias")
             ?? (classExpressionMatch.Groups["moduleExports"].Success ? "default" : null)
             ?? TryGetGroup(classExpressionMatch, "name")
             ?? "class";
@@ -671,6 +667,16 @@ public static class SymbolExtractor
         {
             targets.Add(candidate);
         }
+    }
+
+    private static bool IsInsideJavaScriptTypeScriptFunctionBody(List<SymbolRecord> symbols, int lineNumber)
+    {
+        return symbols.Any(s =>
+            s.Kind == "function"
+            && s.BodyStartLine != null
+            && s.BodyEndLine != null
+            && lineNumber >= s.BodyStartLine.Value
+            && lineNumber <= s.BodyEndLine.Value);
     }
 
     private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int? bodyStartLine, int? bodyEndLine)
