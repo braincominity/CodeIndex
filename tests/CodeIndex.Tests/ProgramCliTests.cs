@@ -37,9 +37,9 @@ public class ProgramCliTests
     }
 
     [Fact]
-    public void Mcp_DbAcceptsLeadingDashPathValue()
+    public void Mcp_DbAcceptsLeadingDoubleDashPathValueViaInlineLiteral()
     {
-        var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db", "--tmp.db"]);
+        var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db=--tmp.db"]);
 
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("requires a value", stderr);
@@ -52,6 +52,17 @@ public class ProgramCliTests
 
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("requires a value", stderr);
+    }
+
+    [Fact]
+    public void Mcp_DbRejectsSeparatedUnknownDoubleDashValue()
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db", "--mystery"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Error: --db requires a value.", stderr);
+        Assert.Contains("`--db=<value>`", stderr);
+        Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
     }
 
     [Fact]

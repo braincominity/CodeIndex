@@ -122,20 +122,25 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("search-limit-tail", "Error: --limit requires a value.")]
-    [InlineData("search-top-tail", "Error: --limit requires a value.")]
-    [InlineData("search-db-tail", "Error: --db requires a value.")]
-    [InlineData("search-db-swallow", "Error: --db requires a value.")]
-    [InlineData("search-lang-swallow", "Error: --lang requires a value.")]
-    [InlineData("search-path-swallow", "Error: --path requires a value.")]
-    [InlineData("search-exclude-path-swallow", "Error: --exclude-path requires a value.")]
-    [InlineData("definition-kind-swallow", "Error: --kind requires a value.")]
-    public void QueryEntrypoints_MissingOrSwallowedOptionValuesReturnUsageError(string scenario, string expectedError)
+    [InlineData("search-limit-tail", "search", "Error: --limit requires a value.")]
+    [InlineData("search-top-tail", "search", "Error: --limit requires a value.")]
+    [InlineData("search-db-tail", "search", "Error: --db requires a value.")]
+    [InlineData("search-db-swallow", "search", "Error: --db requires a value.")]
+    [InlineData("search-db-unknown-double-dash", "search", "Error: --db requires a value.")]
+    [InlineData("search-db-recognized-double-dash", "search", "Error: --db requires a value.")]
+    [InlineData("search-lang-swallow", "search", "Error: --lang requires a value.")]
+    [InlineData("search-lang-unknown-double-dash", "search", "Error: --lang requires a value.")]
+    [InlineData("search-path-swallow", "search", "Error: --path requires a value.")]
+    [InlineData("search-exclude-path-swallow", "search", "Error: --exclude-path requires a value.")]
+    [InlineData("definition-kind-swallow", "definition", "Error: --kind requires a value.")]
+    public void QueryEntrypoints_MissingOrSwallowedOptionValuesReturnUsageError(string scenario, string command, string expectedError)
     {
         var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithMissingOrSwallowedValue(scenario));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains(expectedError, stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         Assert.DoesNotContain("database not found", stderr);
         Assert.DoesNotContain("Warning: unknown option", stderr);
     }
@@ -293,6 +298,8 @@ public class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: could not parse --since value 'nope' as a date/time.", stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         Assert.DoesNotContain("No ", stderr);
     }
 
@@ -348,20 +355,22 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("search-limit", "--limit requires a positive integer")]
-    [InlineData("search-top", "--limit requires a positive integer")]
-    [InlineData("search-snippet-lines", "--snippet-lines requires a positive integer")]
-    [InlineData("impact-depth", "--depth requires a non-negative integer")]
-    [InlineData("excerpt-start", "--start requires a positive integer")]
-    [InlineData("excerpt-end", "--end requires a positive integer")]
-    [InlineData("excerpt-before", "--before requires a non-negative integer")]
-    [InlineData("excerpt-after", "--after requires a non-negative integer")]
-    public void QueryEntrypoints_InvalidNumericOptionsReturnUsageError(string scenario, string expectedErrorFragment)
+    [InlineData("search-limit", "search", "--limit requires a positive integer")]
+    [InlineData("search-top", "search", "--limit requires a positive integer")]
+    [InlineData("search-snippet-lines", "search", "--snippet-lines requires a positive integer")]
+    [InlineData("impact-depth", "impact", "--depth requires a non-negative integer")]
+    [InlineData("excerpt-start", "excerpt", "--start requires a positive integer")]
+    [InlineData("excerpt-end", "excerpt", "--end requires a positive integer")]
+    [InlineData("excerpt-before", "excerpt", "--before requires a non-negative integer")]
+    [InlineData("excerpt-after", "excerpt", "--after requires a non-negative integer")]
+    public void QueryEntrypoints_InvalidNumericOptionsReturnUsageError(string scenario, string command, string expectedErrorFragment)
     {
         var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithInvalidNumeric(scenario));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains(expectedErrorFragment, stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         Assert.DoesNotContain("database not found", stderr);
     }
 
@@ -2927,7 +2936,10 @@ public class QueryCommandRunnerTests
             "search-top-tail" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--top"], _jsonOptions),
             "search-db-tail" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--db"], _jsonOptions),
             "search-db-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--db", "--count"], _jsonOptions),
+            "search-db-unknown-double-dash" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--db", "--mystery"], _jsonOptions),
+            "search-db-recognized-double-dash" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--db", "--lang", "--count"], _jsonOptions),
             "search-lang-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--lang", "--count"], _jsonOptions),
+            "search-lang-unknown-double-dash" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--lang", "--mystery", "--count"], _jsonOptions),
             "search-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--path", "--count"], _jsonOptions),
             "search-exclude-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--exclude-path", "--count"], _jsonOptions),
             "definition-kind-swallow" => QueryCommandRunner.RunDefinition(["QueryCommandRunner", "--kind", "--count"], _jsonOptions),
