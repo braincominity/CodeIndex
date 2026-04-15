@@ -381,11 +381,13 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
 | Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
 | Shell | function declarations | -- | -- | -- | -- | -- | -- | -- | -- |
-| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- | -- | -- | -- | -- | yes |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX, TYPE, SEQUENCE, DOMAIN | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
 | Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
+
+SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 | Makefile | targets | -- | -- | -- | -- | -- | -- | -- | -- |
 | Dockerfile | named stages (AS) | base images (FROM) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |
@@ -1339,11 +1341,13 @@ LIMIT 20;
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
 | Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
 | Shell | 関数宣言 | -- | -- | -- | -- | -- | -- | -- | -- |
-| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX | -- | -- | -- | -- | -- | -- | yes |
+| SQL | PROCEDURE, FUNCTION, TRIGGER | TABLE, VIEW, INDEX, TYPE, SEQUENCE, DOMAIN | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
 | Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
 | Gradle | task, def | -- | -- | -- | -- | -- | -- | apply plugin, id | -- |
+
+SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 | Makefile | ターゲット | -- | -- | -- | -- | -- | -- | -- | -- |
 | Dockerfile | 名前付きステージ (AS) | ベースイメージ (FROM) | -- | -- | -- | -- | -- | -- | -- |
 | Lua | function, local function | -- | -- | -- | -- | -- | -- | require | yes |

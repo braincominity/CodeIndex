@@ -525,7 +525,7 @@ The database reflects the working tree at the time of the last index. After swit
 | PowerShell | `.ps1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql` | -- |
+| SQL | `.sql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
@@ -1380,7 +1380,7 @@ cdidxはプロジェクトディレクトリを走査し、各ソースファイ
 | PowerShell | `.ps1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql` | -- |
+| SQL | `.sql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
