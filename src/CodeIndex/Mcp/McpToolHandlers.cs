@@ -779,11 +779,27 @@ public partial class McpServer
         var explicitFocusLength = args?["focusLength"] != null;
         var maxLineWidth = ClampMaxLineWidth(args);
 
+        if (focusLine.HasValue && focusLine.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
+        if (focusColumn.HasValue && focusColumn.Value <= 0)
+            return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
         if (!focusColumn.HasValue && (focusLine.HasValue || explicitFocusLength))
             return CreateToolErrorResponse(id, "focusLine and focusLength require focusColumn");
 
         return WithDbReader(id, reader =>
         {
+            if (focusLine.HasValue)
+            {
+                var file = reader.GetFileByPath(path);
+                if (file != null)
+                {
+                    var requestedStart = Math.Max(1, startLine.Value - before);
+                    var requestedEnd = Math.Min(file.Lines, endLine + after);
+                    if (focusLine.Value < requestedStart || focusLine.Value > requestedEnd)
+                        return CreateToolErrorResponse(id, $"focusLine ({focusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd})");
+                }
+            }
+
             var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after, maxLineWidth, focusLine ?? startLine.Value, focusColumn, focusLength);
             if (excerpt == null)
             {

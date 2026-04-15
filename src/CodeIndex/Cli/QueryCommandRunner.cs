@@ -694,6 +694,21 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            if (options.FocusLine.HasValue)
+            {
+                var file = reader.GetFileByPath(options.Query);
+                if (file != null)
+                {
+                    var requestedStart = Math.Max(1, options.StartLine.Value - options.ContextBefore);
+                    var requestedEnd = Math.Min(file.Lines, endLine + options.ContextAfter);
+                    if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
+                    {
+                        Console.Error.WriteLine($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
+                        return CommandExitCodes.UsageError;
+                    }
+                }
+            }
+
             var excerpt = reader.GetExcerpt(
                 options.Query,
                 options.StartLine.Value,
@@ -1923,20 +1938,38 @@ public static class QueryCommandRunner
                 case "--after" when i + 1 < args.Length:
                     contextAfter = ParseNonNegativeInt(args[++i], "--after");
                     break;
-                case "--focus-line" when i + 1 < args.Length:
-                    focusLine = ParsePositiveInt(args[++i], "--focus-line");
+                case "--focus-line" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
+                    {
+                        var rawValue = args[++i];
+                        if (!int.TryParse(rawValue, out var parsedFocusLine) || parsedFocusLine <= 0)
+                            parseError = $"Error: --focus-line requires a positive integer, got '{args[i]}'";
+                        else
+                            focusLine = parsedFocusLine;
+                    }
                     break;
                 case "--focus-line":
                     parseError = "Error: --focus-line requires a value";
                     break;
-                case "--focus-column" when i + 1 < args.Length:
-                    focusColumn = ParsePositiveInt(args[++i], "--focus-column");
+                case "--focus-column" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
+                    {
+                        var rawValue = args[++i];
+                        if (!int.TryParse(rawValue, out var parsedFocusColumn) || parsedFocusColumn <= 0)
+                            parseError = $"Error: --focus-column requires a positive integer, got '{args[i]}'";
+                        else
+                            focusColumn = parsedFocusColumn;
+                    }
                     break;
                 case "--focus-column":
                     parseError = "Error: --focus-column requires a value";
                     break;
-                case "--focus-length" when i + 1 < args.Length:
-                    focusLength = ParsePositiveInt(args[++i], "--focus-length") ?? 1;
+                case "--focus-length" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
+                    {
+                        var rawValue = args[++i];
+                        if (!int.TryParse(rawValue, out var parsedFocusLength) || parsedFocusLength <= 0)
+                            parseError = $"Error: --focus-length requires a positive integer, got '{args[i]}'";
+                        else
+                            focusLength = parsedFocusLength;
+                    }
                     break;
                 case "--focus-length":
                     parseError = "Error: --focus-length requires a value";
@@ -1951,8 +1984,14 @@ public static class QueryCommandRunner
                 case "--snippet-lines" when i + 1 < args.Length:
                     snippetLines = SearchSnippetFormatter.ClampSnippetLines(ParsePositiveInt(args[++i], "--snippet-lines") ?? SearchSnippetFormatter.DefaultSnippetLines);
                     break;
-                case "--max-line-width" when i + 1 < args.Length:
-                    maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(ParsePositiveInt(args[++i], "--max-line-width") ?? LineWidthFormatter.DefaultMaxLineWidth);
+                case "--max-line-width" when i + 1 < args.Length && !args[i + 1].StartsWith('-'):
+                    {
+                        var rawValue = args[++i];
+                        if (!int.TryParse(rawValue, out var parsedMaxLineWidth) || parsedMaxLineWidth <= 0)
+                            parseError = $"Error: --max-line-width requires a positive integer, got '{args[i]}'";
+                        else
+                            maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(parsedMaxLineWidth);
+                    }
                     break;
                 case "--max-line-width":
                     parseError = "Error: --max-line-width requires a value";

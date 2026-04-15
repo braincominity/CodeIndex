@@ -131,6 +131,70 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunExcerpt_RejectsMissingFocusColumnValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_missing_focus_column");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "sample");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md", "--db", dbPath, "--start", "1", "--focus-column", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-column requires a value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_RejectsMissingMaxLineWidthValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_missing_max_line_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--max-line-width", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--max-line-width requires a value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_RejectsMissingMaxLineWidthValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_missing_max_line_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["target", "--db", dbPath, "--max-line-width", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--max-line-width requires a value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_InvalidNumbersAndUnknownOptionsFallbackAndReportErrors()
     {
         var (options, _, stderr) = CaptureConsole(() => QueryCommandRunner.ParseArgs(
@@ -439,6 +503,28 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("--focus-line and --focus-length require --focus-column", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_FocusLineOutsideReturnedRangeReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md", "--db", dbPath, "--start", "2", "--end", "2", "--focus-line", "999", "--focus-column", "1", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-line (999) must be within the returned excerpt range", stderr);
         }
         finally
         {

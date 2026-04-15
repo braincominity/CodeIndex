@@ -182,8 +182,8 @@ public partial class McpServer
                         ["endLine"] = new JsonObject { ["type"] = "integer", ["description"] = "End line (default: startLine)" },
                         ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines before the range", ["default"] = 0 },
                         ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Extra context lines after the range", ["default"] = 0 },
-                        ["focusLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional line inside the excerpt whose focused column should stay visible when clamping; requires focusColumn" },
-                        ["focusColumn"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional 1-based column to keep centered when clamping long single-line content" },
+                        ["focusLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional line inside the excerpt whose focused column should stay visible when clamping; requires focusColumn", ["minimum"] = 1 },
+                        ["focusColumn"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional 1-based column to keep centered when clamping long single-line content", ["minimum"] = 1 },
                         ["focusLength"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional focused span width when clamping (default: 1); requires focusColumn", ["default"] = 1, ["minimum"] = 1 },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line excerpt payloads per line (default: 512)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 1, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth }
                     },
