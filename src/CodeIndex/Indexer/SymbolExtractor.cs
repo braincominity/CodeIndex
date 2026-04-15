@@ -24,6 +24,11 @@ public static class SymbolExtractor
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null);
 
+    // Control-flow keywords that can look like JS/TS method declarations (`if (...) {`)
+    // but must never be indexed as function definitions.
+    // JS/TS のメソッド宣言に見えてしまう制御構文キーワード（`if (...) {` など）を除外する。
+    private const string JavaScriptTypeScriptMethodControlFlowKeywords = "if|for|while|switch|catch|with";
+
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
     {
         ["python"] =
@@ -37,7 +42,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?!(?:" + JavaScriptTypeScriptMethodControlFlowKeywords + @")\b)(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["typescript"] =
@@ -53,7 +58,7 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex(@"^\s*(?!(?:" + JavaScriptTypeScriptMethodControlFlowKeywords + @")\b)(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["csharp"] =

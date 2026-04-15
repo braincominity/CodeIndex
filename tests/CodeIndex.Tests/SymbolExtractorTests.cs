@@ -59,6 +59,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotTreatControlFlowBlocksAsFunctions()
+    {
+        var content = """
+            class Parser {
+                parse(value) {
+                    if (value) {
+                    }
+
+                    for (const item of value.items) {
+                    }
+
+                    while (value.ready) {
+                    }
+
+                    switch (value.mode) {
+                        case "fast":
+                            break;
+                    }
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Parser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "if");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "for");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "while");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "switch");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
     {
         var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
@@ -69,6 +101,38 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "express");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "App.Models");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotTreatControlFlowBlocksAsFunctions()
+    {
+        var content = """
+            export class Parser {
+                override parse(value: Payload): Result {
+                    if (value.ready) {
+                    }
+
+                    for (const item of value.items) {
+                    }
+
+                    while (value.more) {
+                    }
+
+                    switch (value.mode) {
+                        case "fast":
+                            return value.result;
+                    }
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Parser");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "parse");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "if");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "for");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "while");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "switch");
     }
 
     [Fact]
