@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.10.0] - 2026-04-15
+
 #### Added
 - **Known-file substring finder for CLI and MCP (#128)** — Added `cdidx find <query> --path <pattern>` for literal substring navigation inside already-known indexed files, returning match line/column plus short surrounding context and supporting case-sensitive `--exact`, `--before`, `--after`, `--count`, and JSON output that is easy to chain into `excerpt`. Added matching MCP read-only tool `find_in_file` so AI clients can perform the same focused in-file navigation without falling back to raw-text tools. Updated help, docs, and regression coverage for CLI, DB reader, MCP, and usage text. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Program.cs`, `src/CodeIndex/Mcp/McpServer.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Models/QueryResults.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CLAUDE.md`. Closes #128.
 - **Bundle-level exact-zero hint for `inspect` / `analyze_symbol` (#99)** — `inspect --exact` and MCP `analyze_symbol` now emit a single `exact_zero_hint` when the whole exact bundle comes back empty (definitions, references, callers, and callees all zero) but a relaxed symbol-name probe would have found similarly named symbols. This preserves the one-round-trip contract of the bundled workflow: AI clients can distinguish "true no such symbol" from "exact miss, try the indexed name" without falling back to separate `symbols` calls. CLI human-readable `inspect` now prints the same exact-miss hint text as the leaf commands, CLI JSON includes the new bundle-level field, and MCP `analyze_symbol` adds the same snake_case payload plus a short "Substring would return N..." summary suffix. Affected: `src/CodeIndex/Database/DbSymbolReader.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Models/QueryResults.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`. Closes #99.
@@ -637,6 +639,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.10.0] - 2026-04-15
+
 #### 追加
 - **既知ファイル向け substring finder を CLI / MCP に追加 (#128)** — 既に対象ファイルが分かっているときのナビゲーション用に、`cdidx find <query> --path <pattern>` を追加した。インデックス済みファイル内のリテラル部分文字列一致を、行番号・列番号・短い前後文脈付きで返し、`--exact`、`--before`、`--after`、`--count`、JSON 出力にも対応するため、そのまま `excerpt` へつなぎやすい。あわせて MCP の read-only ツール `find_in_file` も追加し、AI クライアントが raw text ツールへ戻らずに同じ既知ファイル内ナビゲーションを行えるようにした。help、README、開発ガイド、CLI/DB reader/MCP の回帰テストも更新。対象: `src/CodeIndex/Database/DbReader.cs`、`src/CodeIndex/Cli/QueryCommandRunner.cs`、`src/CodeIndex/Cli/ConsoleUi.cs`、`src/CodeIndex/Program.cs`、`src/CodeIndex/Mcp/McpServer.cs`、`src/CodeIndex/Mcp/McpToolDefinitions.cs`、`src/CodeIndex/Mcp/McpToolHandlers.cs`、`src/CodeIndex/Models/QueryResults.cs`、`tests/CodeIndex.Tests/DbReaderTests.cs`、`tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`、`tests/CodeIndex.Tests/McpServerTests.cs`、`tests/CodeIndex.Tests/ConsoleUiTests.cs`、`README.md`、`DEVELOPER_GUIDE.md`、`CLAUDE.md`。Closes #128。
 - **`inspect` / `analyze_symbol` 向け bundle-level exact-zero ヒント (#99)** — `inspect --exact` と MCP `analyze_symbol` は、exact な bundle 全体が空（definitions / references / callers / callees がすべて 0 件）だが、緩和した symbol-name probe なら類似名が見つかる場合に、単一の `exact_zero_hint` を返すようになった。これにより bundled workflow の 1 往復契約を保ちつつ、AI クライアントは個別の `symbols` 呼び出しへフォールバックせずに「本当にそのシンボルが無い」のか「exact miss なので indexed name を使うべき」なのかを区別できる。CLI の人間向け `inspect` も leaf コマンドと同じ exact miss ヒント文を stderr に出し、CLI JSON には新しい bundle-level field が追加され、MCP `analyze_symbol` は同じ snake_case payload と短い "Substring would return N..." 要約サフィックスを返す。対象: `src/CodeIndex/Database/DbSymbolReader.cs`、`src/CodeIndex/Cli/QueryCommandRunner.cs`、`src/CodeIndex/Mcp/McpToolHandlers.cs`、`src/CodeIndex/Models/QueryResults.cs`、`tests/CodeIndex.Tests/DbReaderTests.cs`、`tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`、`tests/CodeIndex.Tests/McpServerTests.cs`、`README.md`。Closes #99。
@@ -1257,7 +1261,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/Widthdom/CodeIndex/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Widthdom/CodeIndex/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/Widthdom/CodeIndex/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/Widthdom/CodeIndex/compare/v1.7.0...v1.8.0
