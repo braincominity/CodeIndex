@@ -481,39 +481,47 @@ public static class IndexCommandRunner
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
-        var mutated = false;
+        var readinessDemoted = false;
         var projectRootWritten = false;
+        var ftsMutated = false;
         var purgedRefs = 0;
+        var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
 
-        void EnsureMutationContext(bool writeProjectRoot)
+        void DemoteReadinessOnce()
         {
-            if (!mutated)
-            {
-                // Demote readiness only inside the first real mutation transaction so a no-op
-                // update against a shared explicit DB cannot rewrite trust metadata or project root.
-                // 最初の実更新トランザクション内でのみ readiness を落とす。no-op update では
-                // 共有 explicit DB の trust metadata / project root を書き換えない。
-                writer.ClearReadyFlags();
-                mutated = true;
-            }
+            if (readinessDemoted)
+                return;
 
-            if (writeProjectRoot && !projectRootWritten)
-            {
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
-                projectRootWritten = true;
-            }
+            // Demote readiness in its own committed step once we know a real mutation is
+            // about to happen. If the following file update rolls back, readers must still
+            // see the DB as degraded rather than trusting stale ready bits. No-op updates
+            // never call this path, so shared explicit DB metadata stays stable.
+            // 実 mutation が必要と確定した時点で readiness を別コミットで下げる。直後の
+            // file update が rollback しても reader は stale ready bit を信じない。
+            // no-op update では呼ばないので、shared explicit DB の metadata も安定する。
+            writer.ClearReadyFlags();
+            readinessDemoted = true;
         }
 
-        using (var purgeTxn = writer.BeginTransaction())
+        void WriteProjectRootOnce()
         {
-            purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            projectRootWritten = true;
+        }
+
+        if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
+        {
+            DemoteReadinessOnce();
+
+            using var purgeTxn = writer.BeginTransaction();
+            purgedRefs = writer.PurgeUnsupportedReferences(supportedGraphLanguages);
             if (purgedRefs > 0)
-            {
-                EnsureMutationContext(writeProjectRoot: false);
                 purgeTxn.Commit();
-            }
         }
 
         foreach (var relPath in targetPaths)
@@ -523,12 +531,22 @@ public static class IndexCommandRunner
             {
                 if (!File.Exists(absPath))
                 {
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
                     using var deleteTxn = writer.BeginTransaction();
                     if (writer.DeleteFileByPath(relPath))
                     {
-                        EnsureMutationContext(writeProjectRoot: true);
+                        WriteProjectRootOnce();
                         deleteTxn.Commit();
                         removed++;
+                        ftsMutated = true;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [DEL ] {relPath}");
                     }
@@ -563,8 +581,9 @@ public static class IndexCommandRunner
                     continue;
                 }
 
+                DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
-                EnsureMutationContext(writeProjectRoot: true);
+                WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
@@ -578,6 +597,7 @@ public static class IndexCommandRunner
                 txn.Commit();
 
                 updated++;
+                ftsMutated = true;
                 if (options.Verbose && !options.Json)
                     Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
             }
@@ -598,24 +618,24 @@ public static class IndexCommandRunner
         if (purgedRefs > 0 && !options.Json)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
-        if (mutated)
+        if (ftsMutated)
             writer.OptimizeFts();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
-        // ClearReadyFlags() ran at the start.
+        // readiness was demoted before the first committed mutation.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var graphTableAvailableAfter = !mutated
+        var graphTableAvailableAfter = !readinessDemoted
             ? (priorReadiness & DbContext.GraphReadyFlag) != 0
             : false;
-        var issuesTableAvailableAfter = !mutated
+        var issuesTableAvailableAfter = !readinessDemoted
             ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
             : false;
-        var foldReadyAfter = !mutated
+        var foldReadyAfter = !readinessDemoted
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
             && priorFoldVersion == currentFoldVersion
             && priorFoldFingerprint == currentFoldFingerprint;
-        if (mutated && errors == 0)
+        if (readinessDemoted && errors == 0)
         {
             // Restore each readiness bit independently based on what the DB carried BEFORE
             // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but

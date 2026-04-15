@@ -291,6 +291,64 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_FailedFirstMutation_DemotesReadinessBeforeRollback()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TRIGGER fail_update
+                    BEFORE UPDATE ON files
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var verifyCmd = verify.CreateCommand();
+            verifyCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)verifyCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.GraphReadyFlag);
+            Assert.Equal(0, userVersion & DbContext.IssuesReadyFlag);
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_MissingDb_PrintsActionableHint()
     {
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_db_{Guid.NewGuid():N}.db");
@@ -1751,6 +1809,27 @@ public class IndexCommandRunnerTests
             {
                 Console.SetOut(originalOut);
                 Console.SetError(originalErr);
+            }
+        }
+    }
+
+    private (int ExitCode, JsonElement Json) RunStatusAndCaptureJson(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+
+            try
+            {
+                Console.SetOut(writer);
+                var exitCode = QueryCommandRunner.RunStatus(args, _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                return (exitCode, document.RootElement.Clone());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
             }
         }
     }
