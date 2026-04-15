@@ -134,6 +134,16 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedClassExpressionMethods()
+    {
+        var content = "const Service = (class { run() {} });";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsInlineClassMethods()
     {
         var content = "export class Inline { run() {} }";
@@ -163,6 +173,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsSameLineSiblingClassesWithDistinctMethodNames()
+    {
+        var content = "class A { first() {} } class B { second() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "B");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsSameLineSiblingClassesWithIdenticalMethodNames()
+    {
+        var content = "class A { run() {} } class B { run() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "B");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsInlineDefaultExportClassMethods()
     {
         var content = "export default class Inline { run() {} }";
@@ -183,6 +217,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "default");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedDefaultExportClassMembers()
+    {
+        var content = """
+            export default (class {
+                run() {}
+            });
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
     [Fact]
@@ -241,6 +289,20 @@ public class SymbolExtractorTests
                 class {
                     run() {}
                 };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedCommonJsModuleExportsClassExpressionMethods()
+    {
+        var content = """
+            module.exports = (class {
+                run() {}
+            });
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
@@ -901,6 +963,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsSameLineSiblingClassesWithDistinctMethodNames()
+    {
+        var content = "export class A { first(): void {} } export class B { second(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "B");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsSameLineSiblingClassesWithIdenticalMethodNames()
+    {
+        var content = "export class A { run(): void {} } export class B { run(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "B");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInlineDefaultExportClassMethods()
     {
         var content = "export default class Inline { run(): void {} }";
@@ -921,6 +1007,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "default");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsParenthesizedDefaultExportClassMembers()
+    {
+        var content = """
+            export default (class {
+                run(): void {}
+            });
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
     [Fact]
@@ -994,6 +1094,16 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsParenthesizedClassExpressionMethods()
+    {
+        var content = "const Service = (class { run(): void {} });";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsClassExpressionInsideNamespaceBlock()
     {
         var content = """
@@ -1026,6 +1136,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Foo");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsParenthesizedCommonJsModuleExportsClassExpressionMethods()
+    {
+        var content = """
+            module.exports = (class {
+                run(): void {}
+            });
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
     [Fact]
