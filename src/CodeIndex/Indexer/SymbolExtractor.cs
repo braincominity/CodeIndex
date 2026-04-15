@@ -653,7 +653,7 @@ public static class SymbolExtractor
                 && arrowExpressionBraceDepth == 0
                 && arrowExpressionParenDepth == 0
                 && arrowExpressionBracketDepth == 0
-                && StartsNewJavaScriptTypeScriptTopLevelStatement(sanitizedLine))
+                && !StartsJavaScriptTypeScriptExpressionContinuation(sanitizedLine))
             {
                 arrowExpressionActive = false;
             }
@@ -896,7 +896,7 @@ public static class SymbolExtractor
         return previousTokenKind == JavaScriptPrevTokenKind.None;
     }
 
-    private static bool StartsNewJavaScriptTypeScriptTopLevelStatement(string sanitizedLine)
+    private static bool StartsJavaScriptTypeScriptExpressionContinuation(string sanitizedLine)
     {
         var index = 0;
         while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
@@ -906,7 +906,18 @@ public static class SymbolExtractor
             return false;
 
         var remaining = sanitizedLine[index..];
-        if (Regex.IsMatch(remaining, @"^(?:(?:export|default|declare|abstract|async)\s+)*(?:class|function|const|let|var|interface|enum|type|namespace|module|import)\b"))
+        if (remaining.StartsWith(".", StringComparison.Ordinal)
+            || remaining.StartsWith("?.", StringComparison.Ordinal)
+            || remaining.StartsWith("[", StringComparison.Ordinal)
+            || remaining.StartsWith("(", StringComparison.Ordinal)
+            || remaining.StartsWith("`", StringComparison.Ordinal)
+            || remaining.StartsWith("?.[", StringComparison.Ordinal))
+            return true;
+
+        if (Regex.IsMatch(remaining, @"^(?:\+\+|--|\+|-|\*|/|%|\*\*|&&|\|\||\?\?|\?|:|==|===|!=|!==|<=|>=|<|>|=>|&|\||\^|<<|>>|>>>|,)\b?"))
+            return true;
+
+        if (Regex.IsMatch(remaining, @"^(?:instanceof|in|as|satisfies)\b"))
             return true;
 
         return false;
@@ -1594,7 +1605,7 @@ public static class SymbolExtractor
                 && arrowExpressionBraceDepth == 0
                 && arrowExpressionParenDepth == 0
                 && arrowExpressionBracketDepth == 0
-                && StartsNewJavaScriptTypeScriptTopLevelStatement(scanLine))
+                && !StartsJavaScriptTypeScriptExpressionContinuation(scanLine))
             {
                 return (i, bodyStartLine ?? startIndex + 1, i);
             }

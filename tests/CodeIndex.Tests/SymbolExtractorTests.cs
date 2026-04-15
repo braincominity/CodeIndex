@@ -382,6 +382,51 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingExpressionStatement()
+    {
+        var content = """
+            const factory = () =>
+                class Hidden {
+                    method() {}
+                }
+            foo();
+            class Visible {
+                keep() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(4, factory.EndLine);
+        Assert.Equal(4, factory.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_BlocklessArrowWithoutSemicolonDoesNotHideFollowingCommonJsClassExport()
+    {
+        var content = """
+            const factory = () =>
+                class Hidden {
+                    method() {}
+                }
+            exports.Service = class Visible {
+                keep() {}
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(4, factory.EndLine);
+        Assert.Equal(4, factory.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakIifeLocalClassMethods()
     {
         var content = """
@@ -1068,6 +1113,51 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_BlocklessArrowWithoutSemicolonDoesNotConsumeFollowingExpressionStatement()
+    {
+        var content = """
+            const factory = () =>
+                class Hidden {
+                    method(): void {}
+                }
+            foo();
+            export class Visible {
+                keep(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(4, factory.EndLine);
+        Assert.Equal(4, factory.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_BlocklessArrowWithoutSemicolonDoesNotHideFollowingCommonJsClassExport()
+    {
+        var content = """
+            const factory = () =>
+                class Hidden {
+                    method(): void {}
+                }
+            exports.Service = class Visible {
+                keep(): void {}
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        Assert.Equal(4, factory.EndLine);
+        Assert.Equal(4, factory.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
     }
 
     [Fact]
