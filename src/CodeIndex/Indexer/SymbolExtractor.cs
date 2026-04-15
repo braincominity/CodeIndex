@@ -29,7 +29,7 @@ public static class SymbolExtractor
 
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
     private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
-    private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async)";
+    private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async|Partial)";
     private const string VbPropertyModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Default|ReadOnly|WriteOnly)";
     private const string VbEventModifierPattern = @"(?:Shared|Custom)";
 

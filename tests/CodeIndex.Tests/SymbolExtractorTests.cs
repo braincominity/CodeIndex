@@ -878,6 +878,9 @@ public class SymbolExtractorTests
                 End Class
 
                 Public Class Widget
+                    Partial Private Sub OnReady()
+                    End Sub
+
                     Shared Sub Log()
                     End Sub
 
@@ -894,6 +897,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "vb", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Form1");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnReady");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Log");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
