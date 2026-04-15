@@ -95,6 +95,37 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData("node_modules", "dep.js")]
+    [InlineData("target", "main.rs")]
+    [InlineData("vendor", "dep.go")]
+    [InlineData("bin", "app.cs")]
+    public void ScanFiles_IndexesExplicitRootEvenWhenRootNameIsSkipped(string rootDirName, string fileName)
+    {
+        var tempParentDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var rootDir = Path.Combine(tempParentDir, rootDirName);
+        try
+        {
+            Directory.CreateDirectory(rootDir);
+            File.WriteAllText(Path.Combine(rootDir, fileName), "content");
+
+            var nestedNodeModules = Path.Combine(rootDir, "node_modules");
+            Directory.CreateDirectory(nestedNodeModules);
+            File.WriteAllText(Path.Combine(nestedNodeModules, "nested.js"), "module.exports = {}");
+
+            var indexer = new FileIndexer(rootDir);
+            var files = indexer.ScanFiles();
+
+            Assert.Single(files);
+            Assert.Contains(fileName, files[0]);
+        }
+        finally
+        {
+            if (Directory.Exists(tempParentDir))
+                Directory.Delete(tempParentDir, true);
+        }
+    }
+
     [Fact]
     public void ScanFiles_SkipsExcludedFiles()
     {

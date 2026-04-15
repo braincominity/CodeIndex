@@ -11,9 +11,9 @@ public static class SearchSnippetFormatter
     public const int DefaultSnippetLines = 8;
     public const int MaxSnippetLines = 20;
 
-    public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines)
+    public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false)
     {
-        var excerpt = BuildExcerpt(content, query, absoluteStartLine: 1, maxLines);
+        var excerpt = BuildExcerpt(content, query, absoluteStartLine: 1, maxLines, caseSensitive);
         if (excerpt.Lines.Count == 0)
             return [];
 
@@ -122,7 +122,7 @@ public static class SearchSnippetFormatter
             {
                 Line = absoluteLine,
                 Text = lines[i],
-                Terms = GetMatchedTerms(lines[i], normalizedQuery, tokens),
+                Terms = GetMatchedTerms(lines[i], normalizedQuery, tokens, caseSensitive),
             });
         }
 
@@ -169,17 +169,18 @@ public static class SearchSnippetFormatter
         return matches;
     }
 
-    private static List<string> GetMatchedTerms(string line, string query, string[] tokens)
+    private static List<string> GetMatchedTerms(string line, string query, string[] tokens, bool caseSensitive = false)
     {
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var terms = new List<string>();
-        if (!string.IsNullOrWhiteSpace(query) && line.Contains(query, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(query) && line.Contains(query, comparison))
             terms.Add(query);
 
         foreach (var token in tokens)
         {
             if (terms.Contains(token, StringComparer.OrdinalIgnoreCase))
                 continue;
-            if (line.Contains(token, StringComparison.OrdinalIgnoreCase))
+            if (line.Contains(token, comparison))
                 terms.Add(token);
         }
 

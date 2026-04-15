@@ -32,10 +32,12 @@ public partial class McpServer
             + "for other languages, use 'search' instead. "
             + "Use 'outline' to see the full symbol structure of a single file (functions, classes, properties, interfaces, enums with line numbers) without reading the file content. "
             + "Filter symbols by kind using the 'kind' parameter: function, class, struct, interface, enum, property, event, delegate, namespace, import. "
+            + "Use 'find_in_file' for literal substring navigation when the target file is already known. "
             + "Use 'excerpt' to read specific line ranges from indexed files. "
             + "Check 'status' to verify index freshness before trusting results. "
             + "Use 'languages' to discover all supported languages, file extensions, and which languages support call-graph queries. "
-            + "Use 'search' with 'exact: true' for case-sensitive substring matching when FTS5 returns too many results. "
+            + "Use 'search' with 'exactSubstring: true' for case-sensitive substring matching when FTS5 returns too many results; "
+            + "use 'exactName: true' on symbols/definition/references/callers/callees/analyze_symbol for exact symbol-name equality. "
             + "If 'status' reports fold_ready=false and Unicode exact-name matching matters, use 'backfill_fold' to upgrade folded keys without reparsing files. "
             + "Use 'files' with 'since' to find recently modified files without scanning all results. "
             + "Use 'batch_query' to execute multiple read-only queries in a single call (max 10), dramatically reducing round-trips. "
@@ -96,6 +98,34 @@ public partial class McpServer
                 .Cast<string>()
                 .ToList()
             : [];
+    }
+
+    private static bool TryResolveSearchExactArgument(JsonNode? args, out bool exact, out string? error)
+    {
+        if (args?["exactName"]?.GetValue<bool>() ?? false)
+        {
+            exact = false;
+            error = "Search does not accept 'exactName'. Use 'exactSubstring' for search, or keep 'exact' for backward compatibility.";
+            return false;
+        }
+
+        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactSubstring"]?.GetValue<bool>() ?? false);
+        error = null;
+        return true;
+    }
+
+    private static bool TryResolveNameExactArgument(JsonNode? args, string toolName, out bool exact, out string? error)
+    {
+        if (args?["exactSubstring"]?.GetValue<bool>() ?? false)
+        {
+            exact = false;
+            error = $"Tool '{toolName}' does not accept 'exactSubstring'. Use 'exactName', or keep 'exact' for backward compatibility.";
+            return false;
+        }
+
+        exact = (args?["exact"]?.GetValue<bool>() ?? false) || (args?["exactName"]?.GetValue<bool>() ?? false);
+        error = null;
+        return true;
     }
 
     /// <summary>
@@ -176,7 +206,8 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
         }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -249,7 +280,8 @@ public partial class McpServer
         DateTime? since = null;
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedSince))
             since = parsedSince;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "symbols", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         // Merge query + names into a de-duplicated OR list. `|` is treated as a literal name character
         // so operator symbols (e.g. `operator |`) stay searchable; multi-name must use repeated `names[]`.
@@ -341,7 +373,8 @@ public partial class McpServer
         DateTime? since = null;
         if (sinceStr != null && QueryCommandRunner.TryParseIso8601Since(sinceStr, out var parsedDefSince))
             since = parsedDefSince;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -391,7 +424,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -444,7 +478,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "callers", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -497,7 +532,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "callees", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -628,7 +664,8 @@ public partial class McpServer
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        if (!TryResolveNameExactArgument(args, "analyze_symbol", out var exact, out var exactError))
+            return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, reader =>
         {
@@ -748,6 +785,52 @@ public partial class McpServer
         });
     }
 
+    private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
+    {
+        var query = args?["query"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(query))
+            return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (query.Length > MaxQueryLength)
+            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+
+        var pathPatterns = ReadPathList(args, "path");
+        if (pathPatterns == null || pathPatterns.Count == 0)
+            return CreateToolErrorResponse(id, "Missing required parameter: path");
+
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var lang = args?["lang"]?.GetValue<string>();
+        var excludePaths = ReadStringList(args, "excludePaths");
+        var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
+        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var exact = args?["exact"]?.GetValue<bool>() ?? false;
+
+        return WithDbReader(id, reader =>
+        {
+            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact);
+            var structured = new JsonObject
+            {
+                ["query"] = query,
+                ["path"] = PathEcho(pathPatterns),
+                ["excludeTests"] = excludeTests,
+                ["before"] = before,
+                ["after"] = after,
+                ["exact"] = exact,
+                ["count"] = results.Count,
+                ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
+                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
+            };
+            if (results.Count == 0)
+            {
+                AddFreshnessHint(structured, reader);
+                return CreateToolResult(id, "No matches found.", structured);
+            }
+
+            var fileCount = structured["fileCount"]!.GetValue<int>();
+            return CreateToolResult(id, $"Found {results.Count} in-file match(es) across {fileCount} file(s).", structured);
+        });
+    }
+
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
     {
         var queries = args?["queries"]?.AsArray();
@@ -789,6 +872,7 @@ public partial class McpServer
                     "callees" => ExecuteCallees(null, toolArgs),
                     "symbols" => ExecuteSymbols(null, toolArgs),
                     "files" => ExecuteFiles(null, toolArgs),
+                    "find_in_file" => ExecuteFindInFile(null, toolArgs),
                     "excerpt" => ExecuteExcerpt(null, toolArgs),
                     "map" => ExecuteMap(null, toolArgs),
                     "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
@@ -1013,21 +1097,35 @@ public partial class McpServer
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
         bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
 
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var bucketCounts = results
+                .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+                .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
+                ["graph_support_reason"] = graphSupportReason,
+                ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             var summary = results.Count > 0
-                ? $"Found {results.Count} potentially unused symbol(s). Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
-                summary += $" Warning: '{lang}' does not support reference extraction. Results may be unreliable.";
+                summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
+            if (!reader._hasReferencesTable)
+            {
+                payload["graph_table_available"] = false;
+                payload["degraded"] = true;
+                payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                summary += " Warning: symbol_references table is missing in this index; zero-result unused output is degraded, not authoritative.";
+            }
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
@@ -1253,9 +1351,15 @@ public partial class McpServer
 
     private JsonNode ExecuteBackfillFold(JsonNode? id)
     {
-        var isUri = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
-        if (!isUri && !File.Exists(_dbPath))
-            return CreateToolErrorResponse(id, $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first.");
+        if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
+        {
+            var detail = isNotFound
+                ? $"Database not found: {_dbPath}. Run 'cdidx index <projectPath>' first."
+                : $"Database is not an existing CodeIndex DB: {_dbPath}. Run 'cdidx index <projectPath>' first.";
+            if (validationMessage.StartsWith("database must be writable", StringComparison.Ordinal))
+                detail = $"Database must be writable for backfill_fold: {_dbPath}.";
+            return CreateToolErrorResponse(id, detail);
+        }
 
         try
         {
@@ -1264,8 +1368,11 @@ public partial class McpServer
             var writer = new DbWriter(db.Connection);
             var userVersionBefore = db.GetUserVersion();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
-            var rewriteAll = storedFoldVersion != currentFoldVersion;
+            var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+            var rewriteAll = storedFoldVersion != currentFoldVersion
+                || storedFoldFingerprint != currentFoldFingerprint;
             var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
             var verified = writer.AllFoldedColumnsBackfilled();
             if (!verified)

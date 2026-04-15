@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -9,6 +10,7 @@ namespace CodeIndex.Tests;
 /// Tests for query-style CLI command execution.
 /// クエリ系CLIコマンド実行のテスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class QueryCommandRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -96,6 +98,18 @@ public class QueryCommandRunnerTests
         Assert.Contains("Error: --after requires a non-negative integer", options.ParseError);
         Assert.Contains("Error: --snippet-lines requires a positive integer", options.ParseError);
         Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
+    public void ParseArgs_ParsesExactAliases()
+    {
+        var search = QueryCommandRunner.ParseArgs(["needle", "--exact-substring"], jsonDefault: false);
+        Assert.True(search.ExactSubstring);
+        Assert.False(search.ExactName);
+
+        var symbols = QueryCommandRunner.ParseArgs(["Run", "--exact-name"], jsonDefault: false);
+        Assert.True(symbols.ExactName);
+        Assert.False(symbols.ExactSubstring);
     }
 
     [Fact]
@@ -491,6 +505,857 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_JsonZeroResults_ReturnEmptyStdout()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["MissingSymbol", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonZeroResults_ReturnEmptyStdout()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 32,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "bootstrap", Line = 1, StartLine = 1, EndLine = 1 }
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["MissingRef", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
+    {
+        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_zero_json_missing_graph");
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", readOnlyUri, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("symbol_references table missing", json.GetProperty("degraded_reason").GetString());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
+    {
+        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callers_zero_json_missing_graph");
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Run", "--db", readOnlyUri, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("symbol_references table missing", json.GetProperty("degraded_reason").GetString());
+            Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
+    {
+        var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callees_zero_json_missing_graph");
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["Run", "--db", readOnlyUri, "--json", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("symbol_references table missing", json.GetProperty("degraded_reason").GetString());
+            Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonIncludesConfidenceBuckets()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(9, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(6, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
+            Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
+            Assert.Equal("medium", symbols[0].GetProperty("unused_confidence").GetString());
+            Assert.Equal("PathResolver", symbols[2].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[2].GetProperty("unused_bucket").GetString());
+            Assert.Equal("ConnectionString", symbols[3].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[3].GetProperty("unused_bucket").GetString());
+            Assert.Equal("ApplyConfiguration", symbols[7].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
+            Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonUsesReturnedBucketCountsForCurrentPage()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.True(json.TryGetProperty("returned_bucket_counts", out var returnedBucketCounts));
+            Assert.False(json.TryGetProperty("bucket_counts", out _));
+            Assert.Equal(1, returnedBucketCounts.GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, returnedBucketCounts.GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.False(returnedBucketCounts.TryGetProperty("public_or_exported_no_refs", out _));
+            Assert.False(returnedBucketCounts.TryGetProperty("reflection_or_config_suspect", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonDiversifiesBucketsBeforeLimit()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "4"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMarksReflectionAttributedPropertyAsSuspect()
+    {
+        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("UserDto", symbols[0].GetProperty("name").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols[0].GetProperty("unused_bucket").GetString());
+            Assert.Equal("FullName", symbols[1].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[1].GetProperty("unused_bucket").GetString());
+            Assert.Contains("attribute-driven reflection surface", symbols[1].GetProperty("unused_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMarksCommentSeparatedReflectionAttributeAsSuspect()
+    {
+        var (projectRoot, dbPath) = CreateReflectionCommentedUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("FullName", symbols[1].GetProperty("name").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols[1].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMarksQualifiedAndSuffixedAttributesAsSuspect()
+    {
+        var (projectRoot, dbPath) = CreateQualifiedReflectionUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", symbols["QualifiedName"].GetProperty("unused_bucket").GetString());
+            Assert.Equal("reflection_or_config_suspect", symbols["SuffixedName"].GetProperty("unused_bucket").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols["IgnoredName"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonKeepsPlainCliOptionsPropertiesInPublicBucket()
+    {
+        var (projectRoot, dbPath) = CreatePlainCliOptionsUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("public_or_exported_no_refs", symbols["ShowHelp"].GetProperty("unused_bucket").GetString());
+            Assert.Equal("public_or_exported_no_refs", symbols["ProjectPath"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMarksBlockCommentSeparatedReflectionAttributeAsSuspect()
+    {
+        var (projectRoot, dbPath) = CreateBlockCommentReflectionUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", symbols["FullName"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonDiversifiesReflectionSuspectBeforeLimit()
+    {
+        var (projectRoot, dbPath) = CreateReflectionDiversifiedUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "4"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonIncludesGraphSupportMetadataForUnsupportedLanguage()
+    {
+        var (projectRoot, dbPath) = CreateUnsupportedLanguageUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "shell"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("symbols").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_CountJsonUnsupportedLanguage_ReturnsZero()
+    {
+        var (projectRoot, dbPath) = CreateUnsupportedLanguageUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "shell", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonZeroResults_UsesUnusedSchema()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--path", "does-not-exist"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("indexed", json.GetProperty("graph_support_reason").GetString());
+            Assert.True(json.TryGetProperty("symbols", out var symbols));
+            Assert.Equal(0, symbols.GetArrayLength());
+            Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
+            Assert.Empty(bucketCounts.EnumerateObject());
+            Assert.False(json.TryGetProperty("unused", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonUnsupportedLanguageZeroResults_UsesUnusedSchema()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "markdown"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.Contains("not indexed", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal(0, json.GetProperty("symbols").GetArrayLength());
+            Assert.Empty(json.GetProperty("returned_bucket_counts").EnumerateObject());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMissingGraphTable_UsesUnusedSchema()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.TryGetProperty("symbols", out var symbols));
+            Assert.Equal(0, symbols.GetArrayLength());
+            Assert.True(json.TryGetProperty("returned_bucket_counts", out var bucketCounts));
+            Assert.Empty(bucketCounts.EnumerateObject());
+            Assert.False(json.TryGetProperty("unused", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_CountJson_DoesNotNeedChunksForReflectionClassification()
+    {
+        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "DROP TABLE chunks;";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonMissingChunks_DegradesReflectionClassificationWithoutCrashing()
+    {
+        var (projectRoot, dbPath) = CreateReflectionUnusedFixtureDb();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "DROP TABLE chunks;";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .ToDictionary(symbol => symbol.GetProperty("name").GetString()!, StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("public_or_exported_no_refs", symbols["FullName"].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_CountHumanMissingGraphTable_WarnsDegradedZero()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_missing_graph_count_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.Contains("degraded", stderr);
+            Assert.Contains("symbol_references table missing", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithInlineAttributedProperty_ClassifiesPropertyAsReflectionSuspect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_inline_attr_property");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/user_dto.cs",
+                "csharp",
+                """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")] public string FullName { get; set; } = string.Empty;
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
+            var fullName = Assert.Single(symbols, symbol => symbol.GetProperty("name").GetString() == "FullName");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", fullName.GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_ExactNameAliasMatchesBackwardCompatibleExact()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App\n{\n    public void Run() { }\n    public void RunAsync() { }\n}\n");
+
+            var exact = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+            var alias = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(exact.Result, alias.Result);
+            Assert.Equal(exact.Stdout, alias.Stdout);
+            Assert.Equal(exact.Stderr, alias.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/user_dto.cs",
+                "csharp",
+                """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [property : JsonPropertyName("full_name")] public string FullName { get; set; } = string.Empty;
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var fullName = Assert.Single(
+                document.RootElement.GetProperty("symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() == "FullName");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", fullName.GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithPropertyTargetWhitespaceMultilineAttribute_ClassifiesPropertyAsReflectionSuspect()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_multiline_attr");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/user_dto.cs",
+                "csharp",
+                """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [property : JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var fullName = Assert.Single(
+                document.RootElement.GetProperty("symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() == "FullName");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("reflection_or_config_suspect", fullName.GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonLargePublicLimit_IsNotCappedAtBudget()
+    {
+        var (projectRoot, dbPath) = CreateLargePublicUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "3000"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2500, json.GetProperty("count").GetInt32());
+            Assert.Equal(2500, json.GetProperty("symbols").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_HumanOutputGroupsByConfidenceBucket()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Likely unused private (1)", stdout);
+            Assert.Contains("Maybe unused non-public (1)", stdout);
+            Assert.Contains("Public/exported with no refs (6)", stdout);
+            Assert.Contains("Reflection/config suspects (1)", stdout);
+            Assert.Contains("confidence=medium", stdout);
+            Assert.Contains("confidence=low", stdout);
+            Assert.Contains("returned potentially unused symbols; returned buckets:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_RejectsExactSubstringAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_wrong_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--exact-substring"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--exact-name", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_WithJsonOutputsCompactSnippetMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search");
@@ -527,11 +1392,106 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunSearch_ExactSubstringAliasMatchesBackwardCompatibleExact()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "void Run() { }\nvoid RunAsync() { Run(); }\nvoid run() { }\n");
+
+            var exact = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run();", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+            var alias = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run();", "--db", dbPath, "--json", "--exact-substring"],
+                _jsonOptions));
+
+            Assert.Equal(exact.Result, alias.Result);
+            Assert.Equal(exact.Stdout, alias.Stdout);
+            Assert.Equal(exact.Stderr, alias.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ExactSubstringHumanSnippetUsesCaseSensitiveFocusLine()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_human_snippet");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "void run() { }\nvoid Run() { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run()", "--db", dbPath, "--exact-substring", "--snippet-lines", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/app.cs:", stdout);
+            Assert.Contains("  void Run() { }", stdout);
+            Assert.DoesNotContain("  void run() { }", stdout);
+            Assert.Contains("(1 results in 1 files)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RejectsExactNameAlias()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_wrong_exact_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run", "--db", dbPath, "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--exact-substring", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MissingQueryUsageMentionsExactSubstringAlias()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--exact|--exact-substring", stderr);
+    }
+
+    [Fact]
+    public void RunDefinition_MissingQueryUsageMentionsExactNameAlias()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--exact|--exact-name", stderr);
+    }
+
     [Theory]
     [InlineData("search", "results")]
     [InlineData("files", "files")]
-    [InlineData("symbols", "symbols")]
-    [InlineData("definition", "definitions")]
     public void ZeroResultJson_SymbolAndTextCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
     {
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
@@ -554,10 +1514,10 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("references", "references")]
-    [InlineData("callers", "callers")]
-    [InlineData("callees", "callees")]
-    public void ZeroResultJson_GraphCommands_EmitEnvelopeGraphFlagsAndFreshness(string command, string resultsKey)
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    public void ZeroResultJson_GraphCommands_KeepAuthoritativeZeroStdoutSilent(string command)
     {
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
         try
@@ -565,13 +1525,9 @@ public class QueryCommandRunnerTests
             var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
             var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
-            AssertZeroResultPayload(json, resultsKey);
-            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.Equal(string.Empty, stdout);
         }
         finally
         {
@@ -581,7 +1537,6 @@ public class QueryCommandRunnerTests
 
     [Theory]
     [InlineData("deps", "edges")]
-    [InlineData("unused", "symbols")]
     [InlineData("hotspots", "hotspots")]
     public void ZeroResultJson_AggregateCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
     {
@@ -1335,6 +2290,16 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ZeroResultJsonPayloadRemainsStableAcrossRepeatedTempProjects()
+    {
+        for (var iteration = 0; iteration < 10; iteration++)
+        {
+            RunImpactPartialClassZeroResultIteration(iteration);
+            RunImpactImportOnlyZeroResultIteration(iteration);
+        }
+    }
+
+    [Fact]
     public void RunImpact_UnicodeTypeEvidenceStillReturnsHeuristicHints()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_unicode_type_evidence");
@@ -1862,7 +2827,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDefinition_ExactZeroJson_EmitsExactZeroHintPayload()
+    public void RunDefinition_ExactZeroJson_ReturnsEmptyStdout()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero");
         try
@@ -1884,15 +2849,9 @@ public class QueryCommandRunnerTests
                 ["Handle", "--db", dbPath, "--json", "--exact"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(2, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
-            Assert.Equal("HandleRequest", json.GetProperty("exact_zero_hint").GetProperty("sample_names")[0].GetString());
-            Assert.Equal("drop --exact or use the exact indexed name", json.GetProperty("exact_zero_hint").GetProperty("suggestion").GetString());
         }
         finally
         {
@@ -1925,13 +2884,13 @@ public class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Handle", "--db", dbPath, "--json", "--exact", "--limit", "99"],
+                ["Handle", "--db", dbPath, "--json", "--count", "--exact", "--limit", "99"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(7, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
@@ -1964,13 +2923,13 @@ public class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Handle", "--db", dbPath, "--json", "--exact", "--limit", "1"],
+                ["Handle", "--db", dbPath, "--json", "--count", "--exact", "--limit", "1"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
             Assert.Equal(1, json.GetProperty("exact_zero_hint").GetProperty("sample_names").GetArrayLength());
@@ -1994,13 +2953,13 @@ public class QueryCommandRunnerTests
             SeedGraphExactZeroFixture(dbPath, command);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
-                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: null),
+                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: null, countOnly: true),
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(6, json.GetProperty("exact_zero_hint").GetProperty("relaxed_count").GetInt32());
@@ -2025,13 +2984,13 @@ public class QueryCommandRunnerTests
             SeedGraphExactZeroFixture(dbPath, command);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command,
-                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: "DefinitelyMissing"),
+                GetExactZeroArgs(command, dbPath, limit: 6, queryOverride: "DefinitelyMissing", countOnly: true),
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.TryGetProperty("exact_zero_hint", out _));
@@ -2062,13 +3021,13 @@ public class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Alpha", "Beta", "--db", dbPath, "--json", "--exact", "--limit", "999"],
+                ["Alpha", "Beta", "--db", dbPath, "--json", "--count", "--exact", "--limit", "999"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("exact_zero_hint").TryGetProperty("relaxed_count", out _));
@@ -2558,6 +3517,298 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_RequiresPathScope()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("requires at least one --path", stderr);
+    }
+
+    [Fact]
+    public void RunFind_RejectsUnsupportedFlags()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--path", "src/Auth.cs", "--since", "2099-01-01"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --since", stderr);
+    }
+
+    [Fact]
+    public void RunFind_RejectsInvalidNumericOptions()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["FindUsage", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", "--before", "-1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--before requires a non-negative integer", stderr);
+    }
+
+    [Fact]
+    public void RunFind_RejectsInvalidLimit()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["FindUsage", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", "--limit", "nope"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--limit requires a positive integer", stderr);
+    }
+
+    [Fact]
+    public void RunFind_InvalidSinceFailsClosedInsteadOfRunning()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["guard", "--path", "src/Auth.cs", "--since", "not-a-date"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("unsupported option for find: --since", stderr);
+    }
+
+    [Fact]
+    public void RunFind_AllowsDashedLiteralViaQueryFlag()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_query_flag");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--json appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["--query", "--json", "--db", dbPath, "--path", "README.md", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", stdout.Trim());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_AllowsDashedLiteralViaDoubleDash()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_double_dash");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--path appears here\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["--db", dbPath, "--path", "README.md", "--count", "--", "--path"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("1", stdout.Trim());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RejectsFindOnlyQueryOption()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["RunFind", "--query", "PrepareFindArgs", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", "--count"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--query is only supported by 'find'", stderr);
+    }
+
+    [Fact]
+    public void RunExcerpt_RejectsFindOnlyQueryOption()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["src/CodeIndex/Cli/QueryCommandRunner.cs", "--start", "626", "--query", "src/CodeIndex/Cli/ConsoleUi.cs"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--query is only supported by 'find'", stderr);
+    }
+
+    [Fact]
+    public void RunFind_ZeroResultHintDoesNotSuggestRemovingRequiredPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "hello world\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["qqq__no_such_token__zzz", "--db", dbPath, "--path", "README.md"],
+                _jsonOptions));
+            var normalizedStderr = stderr.ToLowerInvariant();
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No matches found.", stderr);
+            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.DoesNotContain("try removing --lang, --path", normalizedStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_WithJsonOutputsLineColumnAndSnippet()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "class Auth\n{\n    void Guard() {}\n    void Next() {}\n}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["guard", "--db", dbPath, "--path", "src/Auth.cs", "--json", "--before", "1", "--after", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/Auth.cs", json.GetProperty("path").GetString());
+            Assert.Equal(3, json.GetProperty("line").GetInt32());
+            Assert.Equal(10, json.GetProperty("column").GetInt32());
+            Assert.Equal(2, json.GetProperty("start_line").GetInt32());
+            Assert.Equal(4, json.GetProperty("end_line").GetInt32());
+            Assert.Contains("void Guard()", json.GetProperty("snippet").GetString());
+            Assert.Contains("void Next()", json.GetProperty("snippet").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_CountOnlyJsonIncludesVisibleMatchAndFileCounts()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "guard one\nline two\nguard three\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["guard", "--db", dbPath, "--path", "src/Auth.cs", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_CountOnlyJsonCountsEverySameLineOccurrence()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_multi_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "alpha alpha alpha\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["alpha", "--db", dbPath, "--path", "src/Sample.cs", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_CountOnlyJsonCountsOverlappingOccurrences()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_overlap_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "// banana\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["ana", "--db", dbPath, "--path", "src/Sample.cs", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_RequiresStartLine()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
@@ -2997,7 +4248,7 @@ public class QueryCommandRunnerTests
         _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
     };
 
-    private static string[] GetExactZeroArgs(string command, string dbPath, int limit, string? queryOverride)
+    private static string[] GetExactZeroArgs(string command, string dbPath, int limit, string? queryOverride, bool countOnly = false)
     {
         var query = queryOverride ?? command switch
         {
@@ -3007,7 +4258,9 @@ public class QueryCommandRunnerTests
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
         };
 
-        return [query, "--db", dbPath, "--json", "--exact", "--limit", limit.ToString()];
+        return countOnly
+            ? [query, "--db", dbPath, "--json", "--count", "--exact", "--limit", limit.ToString()]
+            : [query, "--db", dbPath, "--json", "--exact", "--limit", limit.ToString()];
     }
 
     private static void SeedGraphExactZeroFixture(string dbPath, string command)
@@ -3170,6 +4423,684 @@ public class QueryCommandRunnerTests
         return JsonDocument.Parse(jsonLine);
     }
 
+    private static (string ProjectRoot, string DbPath) CreateUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_confidence");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/config/unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 20,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "ExportedApi",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "PathResolver",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "public class PathResolver",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "AdoptionService",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public class AdoptionService",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "TokenService",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "public class TokenService",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "AppSettings",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 11,
+                Signature = "public class AppSettings",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "ApplyConfiguration",
+                Line = 12,
+                StartLine = 12,
+                EndLine = 12,
+                Signature = "public void ApplyConfiguration()",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "AppSettings",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "UseIOptions",
+                Line = 13,
+                StartLine = 13,
+                EndLine = 13,
+                Signature = "public void UseIOptions()",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "AppSettings",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ConnectionString",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string ConnectionString { get; set; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "AppSettings",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreatePlainCliOptionsUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_cli_options");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/cli_options_fixture.cs",
+            Lang = "csharp",
+            Size = 180,
+            Lines = 6,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "CliOptions",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public sealed class CliOptions",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ShowHelp",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public bool ShowHelp { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "ProjectPath",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "public string? ProjectPath { get; init; }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "CliOptions",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateReflectionUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 10,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 8,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateReflectionDiversifiedUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_diversified");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_diversified_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 12,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    public string FullName { get; set; } = string.Empty;
+                    public void Run() { Hidden(); }
+                    private void Hidden() { }
+                    internal void InternalOnly() { }
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public void Run() { Hidden(); }",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Hidden",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "private void Hidden() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "InternalOnly",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "internal void InternalOnly() { }",
+                Visibility = "internal",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateReflectionCommentedUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_commented");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 220,
+            Lines = 9,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 8,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    /// Bound from JSON payload.
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateQualifiedReflectionUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_qualified");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_qualified_fixture.cs",
+            Lang = "csharp",
+            Size = 360,
+            Lines = 12,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 12,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [global::System.Text.Json.Serialization.JsonPropertyName("full_name")]
+                    public string QualifiedName { get; set; } = string.Empty;
+                    [JsonPropertyNameAttribute("display_name")]
+                    public string SuffixedName { get; set; } = string.Empty;
+                    [System.Text.Json.Serialization.JsonIgnoreAttribute]
+                    public string IgnoredName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 10,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "QualifiedName",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string QualifiedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "SuffixedName",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "public string SuffixedName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "IgnoredName",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string IgnoredName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateBlockCommentReflectionUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_reflection_block_comment");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_block_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 280,
+            Lines = 10,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class UserDto
+                {
+                    [JsonPropertyName("full_name")]
+                    /* bound from payload
+                       via serializer */
+                    public string FullName { get; set; } = string.Empty;
+                }
+                """,
+            }
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "UserDto",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class UserDto",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "FullName",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "public string FullName { get; set; } = string.Empty;",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "UserDto",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateUnsupportedLanguageUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_shell_json");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "script.sh",
+            Lang = "shell",
+            Size = 64,
+            Lines = 6,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "helper",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "helper() {",
+            },
+        ]);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateLargePublicUnusedFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_large_public");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/large_public_unused_fixture.cs",
+            Lang = "csharp",
+            Size = 16000,
+            Lines = 2600,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "public class PublicNoise0000 { }",
+            }
+        ]);
+
+        var symbols = new List<SymbolRecord>();
+        for (var i = 0; i < 2500; i++)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = $"PublicNoise{i:D4}",
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Signature = $"public class PublicNoise{i:D4} {{ }}",
+                Visibility = "public",
+            });
+        }
+        writer.InsertSymbols(symbols);
+        writer.MarkGraphReady();
+        return (projectRoot, dbPath);
+    }
+
     private static void MarkGraphAndFoldReady(string dbPath)
     {
         using var db = new DbContext(dbPath);
@@ -3289,6 +5220,26 @@ public class QueryCommandRunnerTests
         SqliteConnection.ClearAllPools();
     }
 
+    private static (string ProjectRoot, string ReadOnlyUri) CreateReadOnlyMissingGraphTableDb(string projectName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(projectName);
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+
+        using (var db = new DbContext(dbPath))
+        {
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = """
+                DROP TABLE symbol_references;
+                PRAGMA wal_checkpoint(TRUNCATE);
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+        return (projectRoot, new Uri(dbPath).AbsoluteUri + "?immutable=1");
+    }
+
     private static void DropSymbolExactFallbackIndex(string dbPath)
     {
         using var db = new DbContext(dbPath);
@@ -3319,5 +5270,80 @@ public class QueryCommandRunnerTests
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();
+    }
+
+    private void RunImpactPartialClassZeroResultIteration(int iteration)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_impact_partial_stability_{iteration}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part1.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Start() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.Part2.cs", "csharp",
+                """
+                public partial class Worker
+                {
+                    public void Stop() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Worker", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, "callers");
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
+            Assert.True(json.GetProperty("has_multiple_definition_files").GetBoolean());
+            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private void RunImpactImportOnlyZeroResultIteration(int iteration)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_query_runner_impact_import_stability_{iteration}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.py", "python",
+                """
+                import requests
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["requests", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, "callers");
+            Assert.Equal("none", json.GetProperty("impact_mode").GetString());
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 }

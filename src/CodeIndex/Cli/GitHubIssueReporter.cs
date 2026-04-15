@@ -80,7 +80,7 @@ internal static class GitHubIssueReporter
         {
             // Best-effort: log to stderr but do not propagate.
             // ベストエフォート: stderr にログ出力するが伝播しない。
-            Console.Error.WriteLine($"[cdidx] GitHub issue creation failed: {ex.Message}");
+            Console.Error.WriteLine(BuildSubmissionFailureMessage(ex.Message));
             return null;
         }
     }
@@ -176,7 +176,7 @@ internal static class GitHubIssueReporter
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync();
-            Console.Error.WriteLine($"[cdidx] GitHub API responded {(int)response.StatusCode}: {errorBody}");
+            Console.Error.WriteLine(BuildApiFailureMessage((int)response.StatusCode, errorBody));
             return null;
         }
 
@@ -210,4 +210,10 @@ internal static class GitHubIssueReporter
             @"`[^`]+`",
             "[code example removed]");
     }
+
+    internal static string BuildSubmissionFailureMessage(string detail) =>
+        $"[cdidx] GitHub issue creation failed: {detail}. The suggestion stays recorded locally; check `CDIDX_GITHUB_TOKEN` and network access, then retry `suggest_improvement` when ready.";
+
+    internal static string BuildApiFailureMessage(int statusCode, string errorBody) =>
+        $"[cdidx] GitHub API responded {statusCode}: {errorBody}. GitHub submission was skipped; the suggestion stays local. Check `CDIDX_GITHUB_TOKEN`, repository permissions, or network access, then retry `suggest_improvement`.";
 }

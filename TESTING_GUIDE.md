@@ -21,7 +21,9 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Framework: xUnit
 - Target framework: `net8.0`
 - Main test project: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
-- Common support packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`
+- Common direct test-only packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`
+- These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
+- Test parallelism: disabled at the assembly level. The suite mutates process-global `Console.Out` / `Console.Error`, clears SQLite pools during cleanup, and opens many temporary databases, so serial execution is the stable default.
 
 ## Test Layout
 
@@ -77,7 +79,8 @@ Prefer the existing helper before writing new setup code.
 - `CreateProjectDb(projectRoot)` creates `<projectRoot>/.cdidx/codeindex.db` and initializes schema.
 - `InsertIndexedFile(...)` inserts a realistic indexed file with chunks, symbols, and references.
 - `RunGit(...)` executes git without shell quoting issues.
-- `DeleteDirectory(path)` handles SQLite pool cleanup, retries, and Windows-friendly attribute normalization.
+- `DeleteDirectory(path)` retries temp-project cleanup and normalizes attributes. To avoid process-global cross-test interference, it only clears SQLite pools as a Windows-specific retry fallback after a delete failure.
+- Tests that intentionally call `SqliteConnection.ClearAllPools()` are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new pool-resetting tests to that collection instead of letting them run in parallel with unrelated SQLite tests.
 
 Use these helpers when possible so test behavior stays consistent across files and operating systems.
 
@@ -86,6 +89,8 @@ Use these helpers when possible so test behavior stays consistent across files a
 Any test that swaps `Console.Out` or `Console.Error` must lock on `TestConsoleLock.Gate`.
 
 This prevents parallel console redirection from corrupting captured output and avoids flaky assertions in CLI and console UI tests.
+
+The assembly also disables xUnit test parallelization. Keep the console lock anyway: it documents intent locally and protects helpers if a subset of tests is ever re-enabled for parallel execution.
 
 ## Writing Tests
 
@@ -165,7 +170,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - フレームワーク: xUnit
 - 対象フレームワーク: `net8.0`
 - メインのテストプロジェクト: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
-- 主な補助パッケージ: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`
+- 主な直接参照の test-only package: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`
+- これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
+- テスト並列実行: assembly 単位で無効。スイート全体で `Console.Out` / `Console.Error` の差し替え、SQLite pool のクリア、テンポラリ DB の大量 open/close を行うため、直列実行を既定の安定経路にしている。
 
 ## テスト構成
 
@@ -221,7 +228,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `CreateProjectDb(projectRoot)` は `<projectRoot>/.cdidx/codeindex.db` を作成し、スキーマを初期化します。
 - `InsertIndexedFile(...)` は chunks、symbols、references を含む現実的なインデックス済みファイルを挿入します。
 - `RunGit(...)` は shell の quoting 問題に依存せず git を実行します。
-- `DeleteDirectory(path)` は SQLite pool の解放、リトライ、Windows を意識した属性正規化を扱います。
+- `DeleteDirectory(path)` は temp project cleanup のリトライと属性正規化を扱います。プロセス全体への干渉を避けるため、SQLite pool の解放は Windows で削除に失敗した場合のリトライ時だけに限定します。
+- `SqliteConnection.ClearAllPools()` を意図的に呼ぶテストは、xUnit の non-parallel collection `SQLite pool sensitive` にまとめます。新しい pool-reset 系テストも、この collection に入れて無関係な SQLite テストとの並列実行を避けてください。
 
 テスト挙動をファイル間・OS間で揃えるため、可能な限りこれらを使ってください。
 
@@ -230,6 +238,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 `Console.Out` や `Console.Error` を差し替えるテストは、必ず `TestConsoleLock.Gate` で lock してください。
 
 これにより、並列実行時のコンソール出力取り込みの衝突を防ぎ、CLI や console UI テストの flaky な失敗を避けられます。
+
+加えて、assembly 全体で xUnit の並列実行も無効化しています。それでも console lock は残してください。各テストの意図が明確になり、将来一部のテストだけ並列実行を戻す場合の保険にもなります。
 
 ## テストの書き方
 

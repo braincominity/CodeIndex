@@ -20,16 +20,17 @@ cdidx index <projectPath> [--db <path>] [--rebuild] [--verbose] [--json]
 cdidx <projectPath>                          # shorthand for 'index'
 
 # Query (default output: human-readable; use --json for AI consumption)
-cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--count] [--json]
-cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--json]
-cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--json]
-cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--json]
-cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--json]
-cdidx symbols [query] [--name <name>] [--exact] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
+cdidx search <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--exact|--exact-substring] [--count] [--json]
+cdidx definition <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name] [--json]
+cdidx references <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--json]
+cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--json]
+cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--json]
+cdidx symbols [query] [--name <name>] [--exact|--exact-name] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
 cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
+cdidx find <query> --path <pattern> [--db <path>] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count] [--json]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
-cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--json]
+cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name] [--json]
 cdidx outline <path> [--db <path>] [--json]
 cdidx status [--json]
 cdidx deps [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
@@ -52,7 +53,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — Resolve default DB paths for index commands
   Cli/GitHelper.cs         — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
   Cli/IndexCommandRunner.cs — Index command execution, update/full-scan flows, git exclude helper
-  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/impact/unused/hotspots command execution and query arg parsing
+  Cli/QueryCommandRunner.cs — Search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status/impact/unused/hotspots command execution and query arg parsing
   Cli/SearchSnippetFormatter.cs — Build compact match-centered search snippets for human/JSON output
   Cli/WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
   Cli/SuggestionStore.cs    — Local JSON storage for AI suggestions with SHA256 dedup
@@ -61,7 +62,7 @@ src/CodeIndex/
   Database/DbContext.cs     — SQLite connection, schema init (WAL, FTS5, triggers, busy_timeout)
   Database/DbDebug.cs       — Opt-in reader diagnostics (CDIDX_DEBUG=1): tracks last SQL, params, and row snapshot, dumps to stderr on reader exceptions
   Database/DbWriter.cs      — UPSERT (ON CONFLICT DO UPDATE), batch insert, stale file purge, reference writes
-  Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, excerpt reconstruction, status, file-level deps)
+  Database/DbReader.cs      — Core query operations (file listing, reference/caller/callee lookup, in-file literal find, excerpt reconstruction, status, file-level deps)
   Database/DbSearchReader.cs — Full-text search operations (FTS5 search, deduplication) (partial class)
   Database/DbSymbolReader.cs — Symbol query operations (symbol search, definitions, outline, analyze bundle) (partial class)
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
@@ -123,7 +124,7 @@ tests/CodeIndex.Tests/
 - **MCP tool annotations** — All tools emit `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) per the MCP spec so AI clients can auto-approve safe read-only queries.
 - **MCP server instructions** — The `initialize` response includes an `instructions` string with tool-selection guidance so AI clients can choose the right tool on first connection.
 - **Backward-compatible read schema** — Opening an older DB with a newer cdidx binary auto-adds missing symbol columns and creates newer reference tables when possible. If a symbol read path cannot migrate the DB in place, symbol queries fall back to the legacy column layout instead of crashing. Query paths use `TryMigrateForRead()` instead of `InitializeSchema()` so that read-only databases (e.g. on read-only filesystems) silently degrade rather than crashing.
-- **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error.
+- **Structured exit codes** — 0=success, 1=usage error, 2=not found, 3=database error, 4=feature unavailable on this build (for example trimmed-release CLI `--json`).
 - **No direct Console output from library code** — `FileIndexer.BuildRecord()` returns warnings as a return value `(FileRecord, string, string?)` instead of writing to stderr. The caller (`Cli/IndexCommandRunner.cs`) handles display, clearing the progress bar line first via `ConsoleUi.ClearProgressLine()`.
 - **`.cdidx/` directory** — By default, `cdidx index` stores index files in `<projectPath>/.cdidx/codeindex.db` (not the caller's cwd). The directory is auto-created on first `cdidx index` and auto-added to `.git/info/exclude` so users don't touch `.gitignore`. In a git worktree, `.git` is a file (not a directory), so `GitHelper.ResolveGitCommonDir()` follows the chain to find the shared `.git/` where `info/exclude` lives. This is a standard Git mechanism (used by git-lfs, Husky, JetBrains IDEs, etc.).
 
@@ -164,12 +165,12 @@ tests/CodeIndex.Tests/
 - Comments are bilingual (English / Japanese), e.g. `// Enable WAL mode / WALモードを有効化`
 - Documentation (README, CHANGELOG) is structured: English first, then Japanese.
 - **Never mix languages within a section.** English sections must contain only English text; Japanese sections must contain only Japanese text. Bilingual inline code comments (`// Enable WAL mode / WALモードを有効化`) are the only exception. When adding bilingual content (e.g. CLAUDE.md rules), write the English paragraph in the English section and the Japanese paragraph in the Japanese section — never both in the same section.
-- No unnecessary packages — `System.CommandLine` was removed in favor of manual arg parsing.
+- No unnecessary production packages — `System.CommandLine` was removed in favor of manual arg parsing. Test-only packages under `tests/CodeIndex.Tests/` are a separate concern and do not relax the production dependency rule.
 
 ## Rules for changes (important)
 
 ### Dependency rule
-The only production dependency is **Microsoft.Data.Sqlite** — keep it that way. Do not add NuGet packages without explicit user approval. If a package would enable a significant improvement aligned with SELF_IMPROVEMENT.md goals, propose it to the user with a clear rationale before adding it.
+The only production/runtime dependency is **Microsoft.Data.Sqlite** — keep it that way. This rule applies to the shipping product under `src/CodeIndex/`; test-only packages under `tests/CodeIndex.Tests/` are allowed when justified for the test harness and do not weaken the production dependency policy. Do not add new production NuGet packages without explicit user approval. If a package would enable a significant improvement aligned with SELF_IMPROVEMENT.md goals, propose it to the user with a clear rationale before adding it.
 
 ### Absolute prohibition
 Code review uses the **locally built binary** from the current commit (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) to search and verify the codebase. This means the reviewer sees exactly what the code actually does — not what tests claim it does, not what documentation says it does, but what the running binary produces. **It is strictly forbidden to intentionally implement incomplete, hollow, or deceptive code that passes tests or review on paper but fails in practice.** Every feature must work correctly when exercised by the binary itself. Cutting corners to "pass review" defeats the purpose of the self-improvement loop and will be caught by dogfooding.
@@ -271,6 +272,7 @@ cdidx callers <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>
 cdidx callees <query> [--db <path>] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--json]
 cdidx symbols [query] [--name <name>] [--exact] [--kind <kind>] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
 cdidx files [query] [--lang <lang>] [--limit <n>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--since <datetime>]
+cdidx find <query> --path <pattern> [--db <path>] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count] [--json]
 cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--json]
 cdidx map [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--json]
 cdidx inspect <query> [--db <path>] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--json]
@@ -296,7 +298,7 @@ src/CodeIndex/
   Cli/DbPathResolver.cs    — indexコマンド用の既定DBパスを解決
   Cli/GitHelper.cs         — --commitsオプション用のgit diff-treeヘルパー
   Cli/IndexCommandRunner.cs — indexコマンド実行、更新/フルスキャンフロー、git excludeヘルパー
-  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/excerpt/map/inspect/outline/status/unused/hotspotsコマンド実行とクエリ引数解析
+  Cli/QueryCommandRunner.cs — search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status/unused/hotspotsコマンド実行とクエリ引数解析
   Cli/SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペットを構築
   Cli/WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
   Cli/SuggestionStore.cs    — AI提案のSHA256重複排除付きローカルJSON蓄積
@@ -305,7 +307,7 @@ src/CodeIndex/
   Database/DbContext.cs     — SQLite接続、スキーマ初期化（WAL, FTS5, トリガー, busy_timeout）
   Database/DbDebug.cs       — オプトインの reader 診断（CDIDX_DEBUG=1）: 直近 SQL・パラメータ・行スナップショットを追跡し、reader 例外時に stderr へ出力
   Database/DbWriter.cs      — UPSERT（ON CONFLICT DO UPDATE）、バッチ挿入、古いファイルのパージ、参照書き込み
-  Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、抜粋再構成、ステータス、ファイル間依存分析）
+  Database/DbReader.cs      — コアクエリ操作（ファイル一覧、参照/caller/callee検索、既知ファイル内 literal find、抜粋再構成、ステータス、ファイル間依存分析）
   Database/DbSearchReader.cs — 全文検索操作（FTS5検索、重複排除）（partial class）
   Database/DbSymbolReader.cs — シンボルクエリ操作（シンボル検索、定義、アウトライン、分析バンドル）（partial class）
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
@@ -406,12 +408,12 @@ tests/CodeIndex.Tests/
 - コメントは英日併記（例: `// Enable WAL mode / WALモードを有効化`）
 - ドキュメント（README, CHANGELOG）は前半英語、後半日本語の構成。
 - **セクション内で言語を混在させない。** 英語セクションには英語のみ、日本語セクションには日本語のみを記載する。バイリンガルのインラインコードコメント（`// Enable WAL mode / WALモードを有効化`）は唯一の例外。バイリンガルコンテンツ（CLAUDE.md のルール等）を追加するときは、英語パラグラフを英語セクションに、日本語パラグラフを日本語セクションに書く — 同一セクションに両方を入れない。
-- 不要なパッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。
+- 不要な本番パッケージは入れない — `System.CommandLine`は手動引数解析に置き換えて削除済み。`tests/CodeIndex.Tests/` 配下の test-only package は別扱いであり、本番依存のルールを緩めるものではない。
 
 ## 変更時のルール（重要）
 
 ### 依存関係ルール
-本番依存は **Microsoft.Data.Sqlite** の1個のみ — これを維持すること。ユーザーの明示的な承認なしに NuGet パッケージを追加しないこと。SELF_IMPROVEMENT.md の目的に沿った大きな改善を可能にするパッケージがある場合は、明確な理由を添えてユーザーに提案してから追加すること。
+本番/runtime 依存は `src/CodeIndex/` では **Microsoft.Data.Sqlite** の1個のみ — これを維持すること。このルールは出荷物に適用されるもので、`tests/CodeIndex.Tests/` の test-only package はテストハーネス用途として妥当な範囲で許容されるが、本番依存の方針を緩めるものではない。ユーザーの明示的な承認なしに新しい本番 NuGet パッケージを追加しないこと。SELF_IMPROVEMENT.md の目的に沿った大きな改善を可能にするパッケージがある場合は、明確な理由を添えてユーザーに提案してから追加すること。
 
 ### 絶対禁止事項
 コードレビューは現在のコミットから**ローカルビルドしたバイナリ**（`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`）を使ってコードベースを検索・検証します。つまりレビュアーは、テストが主張する動作でもドキュメントが述べる動作でもなく、実行中のバイナリが実際に出す結果を見ます。**テストやレビューを表面上パスするが実際には動作しない、不完全・中身のない・欺瞞的なコードを意図的に実装することは厳禁です。** すべての機能はバイナリ自身で実行したときに正しく動作しなければなりません。「レビューを通す」ための手抜きは自己改善ループの目的を損ない、ドッグフーディングで必ず発覚します。

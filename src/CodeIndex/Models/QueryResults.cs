@@ -34,6 +34,13 @@ public class SymbolResult
     public string? ReturnType { get; set; }
 }
 
+public class UnusedSymbolResult : SymbolResult
+{
+    public string UnusedBucket { get; set; } = string.Empty;
+    public string UnusedConfidence { get; set; } = string.Empty;
+    public string UnusedReason { get; set; } = string.Empty;
+}
+
 public class FileResult
 {
     public string Path { get; set; } = string.Empty;
@@ -54,6 +61,17 @@ public class FileExcerptResult
     public int StartLine { get; set; }
     public int EndLine { get; set; }
     public string Content { get; set; } = string.Empty;
+}
+
+public class FileFindResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Lang { get; set; }
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public string Snippet { get; set; } = string.Empty;
 }
 
 public class DefinitionResult : SymbolResult

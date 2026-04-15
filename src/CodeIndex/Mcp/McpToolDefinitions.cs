@@ -35,7 +35,8 @@ public partial class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" },
                         ["noDedup"] = new JsonObject { ["type"] = "boolean", ["description"] = "Disable overlapping-chunk deduplication for raw results", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive exact substring match (bypasses FTS5)", ["default"] = false }
+                        ["exactSubstring"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for search's exact mode: case-sensitive exact substring match (bypasses FTS5).", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactSubstring`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -57,7 +58,8 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + Unicode CaseFold exact name match (so `Ä`/`ä`, sharp-S, Greek sigma, and fullwidth/halfwidth collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` stays distinct from plain `i`. DBs with stale fold keys fall back to ASCII COLLATE NOCASE. Use to resolve a precise candidate list without LIKE substring expansion — e.g. `Run` no longer also returns `RunAsync`.", ["default"] = false }
+                        ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact symbol-name equality: NFKC + Unicode CaseFold exact name match instead of substring, so `Run` no longer also returns `RunAsync`.", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -77,7 +79,8 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + Unicode CaseFold exact match on the referenced symbol name. This covers sharp-S, Greek sigma, and fullwidth variants; Turkish dotted `İ` remains distinct by Unicode design. DBs with stale fold keys fall back to ASCII COLLATE NOCASE. Use to avoid LIKE substring expansion (e.g. `Run` matching `RunAsync`).", ["default"] = false }
+                        ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact referenced-symbol equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -97,7 +100,8 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + Unicode CaseFold exact match on the callee symbol name. This covers sharp-S, Greek sigma, and fullwidth variants; Turkish dotted `İ` remains distinct by Unicode design. DBs with stale fold keys fall back to ASCII COLLATE NOCASE. Use to avoid LIKE substring expansion.", ["default"] = false }
+                        ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact callee-name equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -117,7 +121,8 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + Unicode CaseFold exact match on the caller/container name. This covers sharp-S, Greek sigma, and fullwidth variants; Turkish dotted `İ` remains distinct by Unicode design. DBs with stale fold keys fall back to ASCII COLLATE NOCASE. Use to avoid LIKE substring expansion.", ["default"] = false }
+                        ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact caller/container equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -139,7 +144,8 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to symbols in files modified since this ISO 8601 timestamp" },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + Unicode CaseFold exact name match instead of substring (so `Ä`/`ä`, sharp-S, Greek sigma, and fullwidth/halfwidth collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` stays distinct from plain `i`. DBs with stale fold keys fall back to ASCII COLLATE NOCASE. Use when resolving a precise candidate list (e.g. names returned from an earlier search/inspect call) so `Run` no longer matches `RunAsync`/`RunImpact`.", ["default"] = false }
+                        ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact symbol-name equality instead of substring, so `Run` no longer matches `RunAsync`/`RunImpact`.", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -179,6 +185,27 @@ public partial class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "find_in_file",
+                "Find literal substring matches inside one known indexed file or a small explicit file list, with line numbers and short surrounding context. / 既知のインデックス済みファイル1件または少数の明示ファイル群の中で、行番号と短い前後文脈付きのリテラル部分文字列一致を探す。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Literal substring to look for" },
+                        ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Required file/path scope. Accepts a single string or an array; multiple values are OR'd together." },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max matching occurrences to return (default: 20)", ["default"] = 20 },
+                        ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
+                        ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines before the match (default: 0)", ["default"] = 0, ["minimum"] = 0 },
+                        ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines after the match (default: 0)", ["default"] = 0, ["minimum"] = 0 },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive literal substring match. Default is case-insensitive literal substring matching.", ["default"] = false }
+                    },
+                    ["required"] = new JsonArray { "query", "path" }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "map",
                 "Return a repo-level overview with languages, modules, top files, and likely entrypoints. / 言語、モジュール、主要ファイル、推定エントリポイントを含むリポジトリ俯瞰情報を返す。",
                 new JsonObject
@@ -209,7 +236,8 @@ public partial class McpServer
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "NFKC + Unicode CaseFold exact name match across the bundle (definitions, references, callers, callees), propagated into every sub-query so `Run` no longer pulls in `RunAsync` / `RunImpact`. Covers sharp-S, Greek sigma, and fullwidth variants; Turkish dotted `İ` remains distinct by Unicode design. DBs with stale fold keys fall back to ASCII COLLATE NOCASE until reindex.", ["default"] = false }
+                        ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact bundle symbol-name equality. Propagates through definitions, references, callers, and callees so `Run` no longer pulls in `RunAsync` / `RunImpact`.", ["default"] = false },
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -346,7 +374,7 @@ public partial class McpServer
                 IndexAnnotations()),
             CreateToolDefinition(
                 "backfill_fold",
-                "Upgrade folded-name keys in an existing DB without reparsing source files. Fills missing `name_folded` columns (or rewrites all keys after a fold-version mismatch) and stamps FoldReady on success. / ソース再解析なしで既存DBの folded-name key を更新する。欠損 `name_folded` 列を埋めるか、fold version 不一致時は全 key を再生成し、成功時に FoldReady を stamp する。",
+                "Upgrade folded-name keys in an existing CodeIndex DB without reparsing source files. Rejects missing or blank targets instead of creating a fresh DB. Fills missing `name_folded` columns (or rewrites all keys after fold metadata drift such as version/fingerprint mismatch) and stamps FoldReady on success. / ソース再解析なしで既存の CodeIndex DB の folded-name key を更新する。欠落したDBや空のDBを新規作成せず拒否し、欠損 `name_folded` 列を埋めるか、fold metadata の drift（version / fingerprint 不一致など）時は全 key を再生成し、成功時に FoldReady を stamp する。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -376,9 +404,9 @@ public partial class McpServer
             CreateToolDefinition(
                 "unused_symbols",
                 "Find symbols that are defined but never referenced in the indexed codebase. "
-                + "Useful for dead code detection. Only meaningful for languages with reference extraction support. "
+                + "Useful for dead code detection. Results include confidence buckets so private hits rank ahead of public/exported suspects, and the lowest-confidence bucket is reserved for config-bound properties or C#-style attribute-adjacent reflection surfaces. Only meaningful for languages with reference extraction support. "
                 + "/ インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する。"
-                + "デッドコード検出に有用。参照抽出対応言語でのみ意味がある。",
+                + "デッドコード検出に有用。private 候補を public/exported suspect より前に返し、最低信頼 bucket は config-bound な property または C# 風 attribute 隣接の reflection surface 用に使う。参照抽出対応言語でのみ意味がある。",
                 new JsonObject
                 {
                     ["type"] = "object",

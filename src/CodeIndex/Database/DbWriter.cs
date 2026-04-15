@@ -658,8 +658,8 @@ public class DbWriter
     /// </summary>
     /// <param name="rewriteAll">
     /// When true, rewrite every non-null source name even if the folded column is already
-    /// populated. Needed when the stored fold_key_version does not match the current binary.
-    /// true のとき、既に埋まっている folded 列も含めて全行再計算する。
+    /// populated. Needed when the stored fold metadata does not match the current binary/runtime.
+    /// true のとき、既に埋まっている folded 列も含めて全行再計算する（fold metadata 不一致時）。
     /// </param>
     /// <returns>Counts of symbol rows and reference rows rewritten.</returns>
     public (int Symbols, int SymbolReferences) BackfillFoldedColumns(bool rewriteAll = false)

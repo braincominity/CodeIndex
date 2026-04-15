@@ -7,6 +7,7 @@ namespace CodeIndex.Tests;
 /// Tests for DbContext and DbWriter integration.
 /// DbContextとDbWriterの統合テスト。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class DatabaseTests : IDisposable
 {
     private readonly string _dbPath;

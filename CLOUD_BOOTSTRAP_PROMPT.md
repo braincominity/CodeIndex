@@ -83,10 +83,13 @@ under `~/.local/bin/`, then peek inside the downloaded tarball with
 The published binary is built with `PublishTrimmed=true`, which disables
 reflection-based `System.Text.Json` serialization. Any CLI command invoked
 with `--json` (for example `cdidx index --json`, `cdidx status --json`)
-currently crashes with:
+currently fails fast with:
 
-> `InvalidOperationException: Reflection-based serialization has been
-> disabled for this application.`
+> `Error: --json is not available on this trimmed build.`
+>
+> `Hint: use `cdidx mcp` for structured output, omit `--json` for`
+> `human-readable output, or use the NuGet/global-tool build if you need`
+> `CLI JSON.`
 
 MCP output is unaffected because the MCP path hand-rolls JSON. Until the
 trimming / source-gen JSON issue is fixed in a future release, prefer the
@@ -212,7 +215,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp
 
 `cdidx --version` が `v0.0.0` を返すなら、バイナリの隣に `version.json` が
 ありません。どれかが `DllNotFoundException: Unable to load shared library
-'e_sqlite3'` で死んだら、ネイティブ SQLite ライブラリがバイナリの隣に
+'e_sqlite3'` で失敗した場合、ネイティブ SQLite ライブラリがバイナリの隣に
 インストールされていません。どちらもインストール経路のバグです — `install.sh`
 と `~/.local/bin/` のレイアウトを確認し、ダウンロード済み tarball を
 `tar tzf` で覗いて、リリースが配っている内容とインストーラが配置している
@@ -223,10 +226,13 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$CDIDX" mcp
 公開バイナリは `PublishTrimmed=true` でビルドされているため、リフレクション
 ベースの `System.Text.Json` 直列化が無効化されています。CLI で `--json` を
 付けたコマンド（例: `cdidx index --json`、`cdidx status --json`）は現状
-以下で死にます:
+以下の専用エラーで即時失敗します:
 
-> `InvalidOperationException: Reflection-based serialization has been
-> disabled for this application.`
+> `Error: --json is not available on this trimmed build.`
+>
+> `Hint: use `cdidx mcp` for structured output, omit `--json` for`
+> `human-readable output, or use the NuGet/global-tool build if you need`
+> `CLI JSON.`
 
 MCP 出力は手書き JSON のため影響を受けません。将来のリリースで trimming /
 source-gen JSON 問題が解決するまでは、デフォルトの人間向け出力を使い、

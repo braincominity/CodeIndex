@@ -9,6 +9,46 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    private const string UnusedBucketLikelyPrivate = "likely_unused_private";
+    private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
+    private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
+    private const string UnusedBucketReflectionOrConfig = "reflection_or_config_suspect";
+    private static readonly HashSet<string> ReflectionAttributeNames = new(StringComparer.Ordinal)
+    {
+        "jsonpropertyname",
+        "jsonproperty",
+        "jsoninclude",
+        "datamember",
+        "bsonelement",
+        "bsonid",
+        "xmlelement",
+        "xmlattribute",
+        "yamlmember",
+        "column",
+    };
+    private static readonly HashSet<string> ReflectionIgnoreAttributeNames = new(StringComparer.Ordinal)
+    {
+        "jsonignore",
+        "ignoredatamember",
+    };
+    private static readonly HashSet<string> AttributeTargetNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "assembly",
+        "module",
+        "field",
+        "event",
+        "method",
+        "param",
+        "property",
+        "return",
+        "type",
+    };
+    private const int UnusedAttributeContextWindow = 16;
+    private const int UnusedPublicOverfetchMultiplier = 16;
+    private const int UnusedPublicOverfetchMinimum = 64;
+    private const int UnusedPublicOverfetchMaximum = 1024;
+    private const int UnusedPublicCandidateBudget = 2048;
+
     /// <summary>
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
     /// ユーザー入力のLIKEワイルドカード（%, _）をエスケープして意図しないパターンマッチを防止。
@@ -622,55 +662,137 @@ public partial class DbReader
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
     /// グラフ対応言語でのみ意味がある — 未対応言語はデフォルトで除外。
     /// </summary>
-    public List<SymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<UnusedSymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
         // which is a meaningless signal. Return empty rather than drowning the caller in noise.
         // symbol_references が無いレガシー read-only DB では全シンボルが未使用扱いになってしまうため、
         // ノイズを返すより空を返す。
-        if (!_hasReferencesTable) return new List<SymbolResult>();
+        if (!_hasReferencesTable) return new List<UnusedSymbolResult>();
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+            return [];
         // Restrict to graph-supported languages to avoid false positives
         // (unsupported languages have no references indexed, so all symbols appear unused)
         // グラフ対応言語に制限して偽陽性を防ぐ
         // （未対応言語は参照がインデックスされないため全シンボルが未使用に見える）
+        var targetCount = Math.Max(limit, 1);
+        var privateLike = FetchUnusedCandidates(targetCount, 0, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var maybeNonPublic = FetchUnusedCandidates(targetCount, 1, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var reflectionOrConfig = FetchUnusedCandidates(targetCount, 3, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+
+        var publicOrExported = new List<UnusedSymbolResult>();
+        var publicBucketOffset = 0;
+        var publicBatchSize = Math.Min(
+            Math.Max(targetCount * UnusedPublicOverfetchMultiplier, UnusedPublicOverfetchMinimum),
+            UnusedPublicOverfetchMaximum);
+        var publicFetchBudget = Math.Max(targetCount, Math.Max(publicBatchSize, UnusedPublicCandidateBudget));
+        var publicCandidatesFetched = 0;
+        while ((publicOrExported.Count < targetCount || reflectionOrConfig.Count < targetCount)
+            && publicCandidatesFetched < publicFetchBudget)
+        {
+            var batch = FetchUnusedCandidates(publicBatchSize, 2, publicBucketOffset, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+            if (batch.Count == 0)
+                break;
+
+            foreach (var candidate in batch)
+            {
+                if (candidate.UnusedBucket == UnusedBucketReflectionOrConfig)
+                    reflectionOrConfig.Add(candidate);
+                else
+                    publicOrExported.Add(candidate);
+            }
+
+            publicBucketOffset += batch.Count;
+            publicCandidatesFetched += batch.Count;
+            if (batch.Count < publicBatchSize)
+                break;
+        }
+
+        var merged = new List<UnusedSymbolResult>(privateLike.Count + maybeNonPublic.Count + publicOrExported.Count + reflectionOrConfig.Count);
+        merged.AddRange(privateLike);
+        merged.AddRange(maybeNonPublic);
+        merged.AddRange(publicOrExported);
+        merged.AddRange(reflectionOrConfig);
+        return DiversifyUnusedResults(merged, limit);
+    }
+
+    private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
+        var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
+        const string pathSql = "lower(f.path)";
+        var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
+        var hasConfigContextSql = $@"(
+                {pathSql} LIKE 'config/%'
+                OR {pathSql} LIKE '%/config/%'
+                OR {pathSql} LIKE 'settings/%'
+                OR {pathSql} LIKE '%/settings/%'
+                OR {pathSql} LIKE 'options/%'
+                OR {pathSql} LIKE '%/options/%'
+                OR {signatureSql} LIKE '%iconfiguration%'
+                OR {signatureSql} LIKE '%configurationsection%'
+                OR {signatureSql} LIKE '%ioptions%'
+                OR {signatureSql} LIKE '%options<%'
+            )";
+        var isReflectionOrConfigSuspectSql = $@"(
+                {isPublicOrExportedSql}
+                AND s.kind = 'property'
+                AND {hasConfigContextSql}
+            )";
+        var provisionalBucketOrderSql = $@"
+            CASE
+                WHEN {isReflectionOrConfigSuspectSql} THEN 3
+                WHEN {isPublicOrExportedSql} THEN 2
+                WHEN {visibilitySql} IN ('private', 'fileprivate') THEN 0
+                ELSE 1
+            END";
 
         var sql = $@"
-            SELECT f.path, f.lang, s.kind, s.name, s.line,
-                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type,
-                   {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE s.kind NOT IN ('import', 'namespace')
-              AND NOT EXISTS (
-                  SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
-              )";
+            WITH unused_candidates AS (
+                SELECT f.path, f.lang, s.kind, s.name, s.line,
+                       {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                       {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
+                       {GetSymbolColumnSql("signature")} AS signature,
+                       {GetSymbolColumnSql("visibility")} AS visibility,
+                       {GetSymbolColumnSql("return_type")} AS return_type,
+                       {GetSymbolColumnSql("container_kind")} AS container_kind,
+                       {GetSymbolColumnSql("container_name")} AS container_name,
+                       CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
+                       CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
+                       {provisionalBucketOrderSql} AS provisional_bucket_order
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.kind NOT IN ('import', 'namespace')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+                  )";
 
         if (lang != null)
-        {
-            // If user specified a language, use it but warn if unsupported
-            // ユーザーが言語を指定した場合はそれを使うが、未対応なら警告
             sql += " AND f.lang = @lang";
-        }
         else
-        {
-            // Default: only graph-supported languages / デフォルト: グラフ対応言語のみ
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
-        }
+
         if (kind != null)
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += " ORDER BY f.path, s.line LIMIT @limit";
+        sql += @"
+            )
+            SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
+                   return_type, container_kind, container_name, is_public_or_exported,
+                   is_reflection_or_config_suspect
+            FROM unused_candidates
+            WHERE provisional_bucket_order = @bucketOrder
+            ORDER BY path, line, name
+            LIMIT @limit OFFSET @offset";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@bucketOrder", provisionalBucketOrder);
+        cmd.Parameters.AddWithValue("@limit", fetchLimit);
+        cmd.Parameters.AddWithValue("@offset", offset);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         else
@@ -679,30 +801,523 @@ public partial class DbReader
             for (int i = 0; i < langList.Count; i++)
                 cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
         }
-        if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        var results = new List<SymbolResult>();
+        var results = new List<UnusedSymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            results.Add(new SymbolResult
+            var path = reader.GetString(0);
+            var kindValue = reader.GetString(2);
+            var startLine = GetInt32OrFallback(reader, 5, 4);
+            var isPublicOrExported = reader.GetInt32(12) != 0;
+            var isReflectionOrConfigSuspect = reader.GetInt32(13) != 0;
+            if (!isReflectionOrConfigSuspect && isPublicOrExported && kindValue == "property")
+                isReflectionOrConfigSuspect = HasReflectionAttributeContext(path, startLine);
+
+            var visibility = GetNullableString(reader, 8);
+            var classification = ClassifyUnusedSymbol(isPublicOrExported, isReflectionOrConfigSuspect, visibility);
+            results.Add(new UnusedSymbolResult
             {
-                Path = reader.GetString(0),
+                Path = path,
                 Lang = GetNullableString(reader, 1),
-                Kind = reader.GetString(2),
+                Kind = kindValue,
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
-                StartLine = GetInt32OrFallback(reader, 5, 4),
+                StartLine = startLine,
                 EndLine = GetInt32OrFallback(reader, 6, 4),
                 Signature = GetNullableString(reader, 7),
-                Visibility = GetNullableString(reader, 8),
+                Visibility = visibility,
                 ReturnType = GetNullableString(reader, 9),
                 ContainerKind = GetNullableString(reader, 10),
                 ContainerName = GetNullableString(reader, 11),
+                UnusedBucket = classification.Bucket,
+                UnusedConfidence = classification.Confidence,
+                UnusedReason = classification.Reason,
             });
         }
+
         return results;
     }
+
+    private static List<UnusedSymbolResult> DiversifyUnusedResults(List<UnusedSymbolResult> results, int limit)
+    {
+        if (results.Count == 0 || limit <= 0)
+            return results;
+
+        var targetCount = Math.Min(limit, results.Count);
+        var buckets = OrderedUnusedBuckets
+            .ToDictionary(
+                bucket => bucket,
+                bucket => new Queue<UnusedSymbolResult>(results.Where(result => result.UnusedBucket == bucket)),
+                StringComparer.Ordinal);
+
+        var limited = new List<UnusedSymbolResult>(targetCount);
+        bool advanced;
+        do
+        {
+            advanced = false;
+            foreach (var bucket in OrderedUnusedBuckets)
+            {
+                var queue = buckets[bucket];
+                if (queue.Count == 0)
+                    continue;
+
+                limited.Add(queue.Dequeue());
+                advanced = true;
+                if (limited.Count >= targetCount)
+                    return limited;
+            }
+        } while (advanced);
+
+        return limited;
+    }
+
+    public (int Count, int FileCount) CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (!_hasReferencesTable)
+            return (0, 0);
+        if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
+            return (0, 0);
+
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages();
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT COUNT(*), COUNT(DISTINCT f.path)
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE s.kind NOT IN ('import', 'namespace')
+              AND NOT EXISTS (
+                  SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+              )";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        else
+            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
+
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        cmd.CommandText = sql;
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        else
+        {
+            var langList = graphLangs.ToList();
+            for (int i = 0; i < langList.Count; i++)
+                cmd.Parameters.AddWithValue($"@gl{i}", langList[i]);
+        }
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        if (!reader.TrackedRead())
+            return (0, 0);
+        return (reader.GetInt32(0), reader.GetInt32(1));
+    }
+
+    private bool HasReflectionAttributeContext(string path, int startLine)
+    {
+        if (!_hasChunksTable || startLine <= 1)
+            return false;
+
+        var excerptStart = Math.Max(1, startLine - UnusedAttributeContextWindow);
+        FileExcerptResult? excerpt;
+        try
+        {
+            excerpt = GetExcerpt(path, excerptStart, startLine + UnusedAttributeContextWindow);
+        }
+        catch (SqliteException ex) when (IsMissingChunksTableError(ex))
+        {
+            return false;
+        }
+        if (excerpt == null)
+            return false;
+
+        var lines = excerpt.Content.Replace("\r", string.Empty, StringComparison.Ordinal).Split('\n');
+        var currentIndex = startLine - excerptStart;
+        if (currentIndex < 0 || currentIndex >= lines.Length)
+            return false;
+
+        var triviaMask = BuildTriviaMask(lines);
+        var attributeBlock = GetAdjacentAttributeBlock(lines, triviaMask, currentIndex);
+        if (attributeBlock.Count == 0)
+            return false;
+
+        var attributeNames = ExtractNormalizedAttributeNames(attributeBlock);
+        if (attributeNames.Overlaps(ReflectionIgnoreAttributeNames))
+            return false;
+
+        return attributeNames.Overlaps(ReflectionAttributeNames);
+    }
+
+    private static bool IsMissingChunksTableError(SqliteException ex) =>
+        ex.SqliteErrorCode == 1
+        && ex.Message.Contains("no such table: chunks", StringComparison.OrdinalIgnoreCase);
+
+    private static List<string> GetAdjacentAttributeBlock(string[] lines, bool[] triviaMask, int anchorIndex)
+    {
+        var anchorLine = lines[anchorIndex];
+        if (LineContainsInlineAttributeAndDeclaration(anchorLine))
+            return [anchorLine.Trim()];
+
+        var declarationIndex = anchorIndex;
+        if (LooksLikeAttributeBoundaryLine(anchorLine))
+        {
+            declarationIndex = FindNextDeclarationLine(lines, triviaMask, anchorIndex + 1);
+            if (declarationIndex < 0)
+                return [];
+        }
+
+        var attributeBottom = FindPreviousNonTriviaLine(lines, triviaMask, declarationIndex - 1);
+        if (attributeBottom < 0 || !LooksLikeAttributeBoundaryLine(lines[attributeBottom]))
+            return [];
+
+        var block = new List<string>();
+        var bracketDepth = 0;
+        var sawBracket = false;
+
+        for (int i = attributeBottom; i >= 0; i--)
+        {
+            var trimmed = lines[i].Trim();
+            if (triviaMask[i])
+            {
+                if (sawBracket)
+                    block.Add(trimmed);
+                continue;
+            }
+
+            var hasBracketToken = LooksLikeAttributeBoundaryLine(trimmed);
+            if (!sawBracket)
+            {
+                if (!hasBracketToken)
+                    return [];
+                sawBracket = true;
+            }
+            else if (bracketDepth == 0 && !hasBracketToken)
+            {
+                break;
+            }
+
+            block.Add(trimmed);
+            bracketDepth += CountChar(trimmed, ']') - CountChar(trimmed, '[');
+            if (bracketDepth < 0)
+                bracketDepth = 0;
+        }
+
+        block.Reverse();
+        return block;
+    }
+
+    private static bool LineContainsInlineAttributeAndDeclaration(string line)
+    {
+        if (!LooksLikeAttributeBoundaryLine(line))
+            return false;
+
+        return !string.IsNullOrWhiteSpace(StripLeadingCSharpAttributeLists(line));
+    }
+
+    private static int FindNextDeclarationLine(string[] lines, bool[] triviaMask, int startIndex)
+    {
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            if (!triviaMask[i])
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindPreviousNonTriviaLine(string[] lines, bool[] triviaMask, int startIndex)
+    {
+        for (int i = startIndex; i >= 0; i--)
+        {
+            if (!triviaMask[i])
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool[] BuildTriviaMask(string[] lines)
+    {
+        var triviaMask = new bool[lines.Length];
+        var inBlockComment = false;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.Length == 0)
+            {
+                triviaMask[i] = true;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                triviaMask[i] = true;
+                if (trimmed.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = false;
+                continue;
+            }
+
+            if (trimmed.StartsWith("//", StringComparison.Ordinal))
+            {
+                triviaMask[i] = true;
+                continue;
+            }
+
+            if (trimmed.StartsWith("/*", StringComparison.Ordinal))
+            {
+                triviaMask[i] = true;
+                if (!trimmed.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = true;
+                continue;
+            }
+
+            if (trimmed.StartsWith('*') || trimmed.Contains("*/", StringComparison.Ordinal))
+            {
+                triviaMask[i] = true;
+                continue;
+            }
+        }
+
+        return triviaMask;
+    }
+
+    private static HashSet<string> ExtractNormalizedAttributeNames(IReadOnlyList<string> attributeBlock)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var content = string.Join("\n", attributeBlock.Where(line => !BuildSingleLineTrivia(line.Trim())));
+        var parenDepth = 0;
+
+        for (int i = 0; i < content.Length; i++)
+        {
+            var ch = content[i];
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+
+            if (parenDepth != 0 || (ch != '[' && ch != ','))
+                continue;
+
+            if (!TryReadAttributeIdentifier(content, ref i, out var identifier))
+                continue;
+
+            var normalized = NormalizeAttributeIdentifier(identifier);
+            if (normalized != null)
+                names.Add(normalized);
+        }
+
+        return names;
+    }
+
+    private static string StripLeadingCSharpAttributeLists(string line)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        if (index >= line.Length || line[index] != '[')
+            return line;
+
+        var cursor = index;
+        while (cursor < line.Length && line[cursor] == '[')
+        {
+            var depth = 0;
+            var sawBracket = false;
+            while (cursor < line.Length)
+            {
+                var ch = line[cursor++];
+                if (ch == '[')
+                {
+                    depth++;
+                    sawBracket = true;
+                }
+                else if (ch == ']')
+                {
+                    depth--;
+                    if (depth == 0 && sawBracket)
+                        break;
+                }
+            }
+
+            if (depth != 0)
+                return string.Empty;
+
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+        }
+
+        return cursor < line.Length ? line[cursor..] : string.Empty;
+    }
+
+    private static bool TryReadAttributeIdentifier(string content, ref int index, out string? identifier)
+    {
+        identifier = null;
+        var i = index + 1;
+        while (i < content.Length && char.IsWhiteSpace(content[i]))
+            i++;
+
+        var start = i;
+        if (!TryConsumeAttributeName(content, ref i))
+            return false;
+        if (i == start)
+            return false;
+
+        while (i < content.Length && char.IsWhiteSpace(content[i]))
+            i++;
+
+        // Skip attribute targets like `[property: JsonPropertyName]`.
+        var leadingIdentifier = content[start..i].Trim();
+        if (i < content.Length && content[i] == ':' && (i + 1 >= content.Length || content[i + 1] != ':') && AttributeTargetNames.Contains(leadingIdentifier))
+        {
+            i++;
+            while (i < content.Length && char.IsWhiteSpace(content[i]))
+                i++;
+            start = i;
+            if (!TryConsumeAttributeName(content, ref i))
+                return false;
+            if (i == start)
+                return false;
+        }
+
+        identifier = content[start..i];
+        index = i - 1;
+        return true;
+    }
+
+    private static bool TryConsumeAttributeName(string content, ref int index)
+    {
+        var consumed = false;
+        while (index < content.Length)
+        {
+            var segmentStart = index;
+            while (index < content.Length && (char.IsLetterOrDigit(content[index]) || content[index] == '_'))
+                index++;
+            if (index == segmentStart)
+                break;
+
+            consumed = true;
+            if (index + 1 < content.Length && content[index] == ':' && content[index + 1] == ':')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (index < content.Length && content[index] == '.')
+            {
+                index++;
+                continue;
+            }
+
+            break;
+        }
+
+        return consumed;
+    }
+
+    private static string? NormalizeAttributeIdentifier(string? identifier)
+    {
+        if (string.IsNullOrWhiteSpace(identifier))
+            return null;
+
+        var qualifierIndex = identifier.LastIndexOf("::", StringComparison.Ordinal);
+        if (qualifierIndex >= 0)
+            identifier = identifier[(qualifierIndex + 2)..];
+
+        var lastDot = identifier.LastIndexOf('.');
+        var simpleName = lastDot >= 0 ? identifier[(lastDot + 1)..] : identifier;
+        if (simpleName.EndsWith("Attribute", StringComparison.OrdinalIgnoreCase))
+            simpleName = simpleName[..^"Attribute".Length];
+
+        return simpleName.Length == 0 ? null : simpleName.ToLowerInvariant();
+    }
+
+    private static bool BuildSingleLineTrivia(string trimmed)
+    {
+        return trimmed.Length == 0
+            || trimmed.StartsWith("//", StringComparison.Ordinal)
+            || trimmed.StartsWith("/*", StringComparison.Ordinal)
+            || trimmed.StartsWith('*')
+            || trimmed.Contains("*/", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeAttributeBoundaryLine(string line)
+    {
+        return line.IndexOf('[') >= 0 || line.IndexOf(']') >= 0;
+    }
+
+    private static int CountChar(string text, char value)
+    {
+        var count = 0;
+        foreach (var ch in text)
+        {
+            if (ch == value)
+                count++;
+        }
+
+        return count;
+    }
+
+    private static (string Bucket, string Confidence, string Reason) ClassifyUnusedSymbol(bool isPublicOrExported, bool isReflectionOrConfigSuspect, string? visibility)
+    {
+        if (isReflectionOrConfigSuspect)
+        {
+            return (
+                UnusedBucketReflectionOrConfig,
+                "low",
+                "public/exported property with config or attribute-driven reflection surface and no indexed references");
+        }
+
+        if (isPublicOrExported)
+        {
+            return (
+                UnusedBucketPublicOrExported,
+                "low",
+                "public/exported symbol with no indexed references");
+        }
+
+        if (IsPrivateLikeVisibility(visibility))
+        {
+            return (
+                UnusedBucketLikelyPrivate,
+                "medium",
+                "private/file-local symbol with no indexed references; same-file uses may still be missed");
+        }
+
+        return (
+            UnusedBucketMaybeNonPublic,
+            "low",
+            "non-public symbol with no indexed references");
+    }
+
+    private static bool IsPrivateLikeVisibility(string? visibility)
+    {
+        return string.Equals(visibility, "private", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(visibility, "fileprivate", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static readonly string[] OrderedUnusedBuckets =
+    [
+        UnusedBucketLikelyPrivate,
+        UnusedBucketMaybeNonPublic,
+        UnusedBucketPublicOrExported,
+        UnusedBucketReflectionOrConfig,
+    ];
 
 }

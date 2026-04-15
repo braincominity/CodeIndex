@@ -188,6 +188,28 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void GetChangedFilesFromCommit_IncludesOldAndNewPathsForRenameCommit()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "old.txt"), "v1\n");
+        RunGit(repoDir, "add", "old.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+
+        File.Move(Path.Combine(repoDir, "old.txt"), Path.Combine(repoDir, "new.txt"));
+        File.AppendAllText(Path.Combine(repoDir, "new.txt"), "v2\n");
+        RunGit(repoDir, "add", "-A");
+        RunGit(repoDir, "commit", "-m", "rename file");
+
+        var commitId = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        var changedFiles = GitHelper.GetChangedFilesFromCommit(repoDir, commitId);
+
+        Assert.Contains("old.txt", changedFiles);
+        Assert.Contains("new.txt", changedFiles);
+    }
+
+    [Fact]
     public void TryGetHeadCommit_ReturnsHeadCommitForRepo()
     {
         var repoDir = CreateGitRepo();

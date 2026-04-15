@@ -14,16 +14,17 @@ public static class ConsoleUi
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
-        ("search", "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--count] [--since <datetime>] [--no-dedup] [--exact]"),
-        ("definition", "cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact] [--count] [--since <datetime>]"),
-        ("references", "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count]"),
-        ("callers", "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count]"),
-        ("callees", "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count]"),
-        ("symbols", "cdidx symbols [query] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count] [--since <datetime>]"),
+        ("search", "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]"),
+        ("definition", "cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("references", "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("callers", "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("callees", "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("symbols", "cdidx symbols [query] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("files", "cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]"),
+        ("find", "cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--db <path>] [--json]"),
         ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]"),
-        ("inspect", "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact]"),
+        ("inspect", "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
         ("status", "cdidx status [--db <path>] [--json]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <pattern>]"),
@@ -331,7 +332,7 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
-        Console.WriteLine("  backfill-fold              Upgrade folded-name columns without reparsing files");
+        Console.WriteLine("  backfill-fold              Upgrade folded-name columns in an existing index DB");
         Console.WriteLine("  search <query>             Full-text search across indexed chunks");
         Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
         Console.WriteLine("  references <query>         Find indexed references for a symbol");
@@ -339,6 +340,7 @@ public static class ConsoleUi
         Console.WriteLine("  callees <query>            Find callees used by a caller");
         Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
         Console.WriteLine("  files [query]              List indexed files");
+        Console.WriteLine("  find <query>               Find literal substring matches inside known indexed files");
         Console.WriteLine("  excerpt <path>             Reconstruct a line-range excerpt from indexed chunks");
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
@@ -358,19 +360,19 @@ public static class ConsoleUi
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
         Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
-        Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits");
-        Console.WriteLine("  --files <path> [path ...]  Update only the specified files (relative or absolute)");
+        Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
+        Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish)");
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
-        Console.WriteLine("  Use --commits with a project path to update only files changed by specific commits.");
-        Console.WriteLine("  Use --files with a project path to update only specific files.");
+        Console.WriteLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");
+        Console.WriteLine("  Use --files only for known in-place edits or new files; old rename/delete paths stay indexed unless also listed.");
         Console.WriteLine();
         Console.WriteLine("Query options:");
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
-        Console.WriteLine("  --json                     Output as JSON lines (for AI/machine use)");
+        Console.WriteLine("  --json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)");
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
         Console.WriteLine("  --path <pattern>           Restrict matches to paths containing this text");
@@ -378,7 +380,9 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search");
-        Console.WriteLine("  --exact                    search: case-sensitive exact substring (no FTS5); symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (covers Ä/ä, sharp-S, Greek sigma, fullwidth/halfwidth; Turkish İ remains distinct by Unicode design). Legacy or stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready");
+        Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect.");
+        Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
+        Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
         Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
         Console.WriteLine("  --count                    Return only the visible result count (for AI preflight)");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
@@ -394,11 +398,15 @@ public static class ConsoleUi
         Console.WriteLine("                                              Update DB from multiple commits");
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
+        Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
         Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
         Console.WriteLine("  cdidx callers ResolveGitCommonDir             Find callers");
         Console.WriteLine("  cdidx callees AddToGitExclude                 Find callees used by a caller");
-        Console.WriteLine("  cdidx symbols UserService --kind class         Find class definitions");
+        Console.WriteLine("  cdidx symbols Run --exact-name                Exact symbol-name match");
+        Console.WriteLine("  cdidx symbols UserService --kind class        Find class definitions");
+        Console.WriteLine("  cdidx find guard --path src/Auth.cs --after 2 Find literal matches inside a known file");
+        Console.WriteLine("  cdidx find --path README.md -- --path         Search a literal that starts with '-'");
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
@@ -429,28 +437,45 @@ public static class ConsoleUi
     // --- Did-you-mean / もしかして ---
 
     /// <summary>
-    /// Find the closest matching command name using Levenshtein distance.
-    /// Returns null if no command is close enough (distance > 3).
-    /// Levenshtein距離で最も近いコマンド名を返す。距離が3超なら null を返す。
+    /// Find the closest matching command name using Damerau-Levenshtein distance.
+    /// Short commands use a stricter threshold to avoid unrelated suggestions.
+    /// Damerau-Levenshtein距離で最も近いコマンド名を返す。短いコマンドは無関係な推薦を避けるため閾値を厳しくする。
     /// </summary>
     public static string? FindClosestCommand(string input)
     {
+        if (string.IsNullOrWhiteSpace(input))
+            return null;
+
+        input = input.ToLowerInvariant();
         string? best = null;
         var bestDist = int.MaxValue;
         foreach (var cmd in Commands)
         {
-            var dist = LevenshteinDistance(input.ToLowerInvariant(), cmd);
+            var dist = DamerauLevenshteinDistance(input, cmd);
+            if (dist > GetSuggestionDistanceThreshold(input.Length, cmd.Length))
+                continue;
+
             if (dist < bestDist)
             {
                 bestDist = dist;
                 best = cmd;
             }
         }
-        // Only suggest if edit distance is at most 3 / 編集距離3以下のみ推薦
-        return bestDist <= 3 ? best : null;
+        return best;
     }
 
-    private static int LevenshteinDistance(string s, string t)
+    private static int GetSuggestionDistanceThreshold(int inputLength, int commandLength)
+    {
+        var shorter = Math.Min(inputLength, commandLength);
+        return shorter switch
+        {
+            <= 4 => 1,
+            <= 10 => 2,
+            _ => 3,
+        };
+    }
+
+    private static int DamerauLevenshteinDistance(string s, string t)
     {
         var n = s.Length;
         var m = t.Length;
@@ -463,6 +488,8 @@ public static class ConsoleUi
             {
                 var cost = s[i - 1] == t[j - 1] ? 0 : 1;
                 d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+                if (i > 1 && j > 1 && s[i - 1] == t[j - 2] && s[i - 2] == t[j - 1])
+                    d[i, j] = Math.Min(d[i, j], d[i - 2, j - 2] + 1);
             }
         }
         return d[n, m];
@@ -473,7 +500,7 @@ public static class ConsoleUi
     private static readonly string[] Commands =
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
-        "symbols", "files", "excerpt", "map", "inspect", "outline", "status",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp",
     ];
 
@@ -517,8 +544,10 @@ public static class ConsoleUi
         var langs = GetCompletionLangs();
         Console.WriteLine($@"_cdidx() {{
     local cur prev commands
+    local cmd
     cur=""${{COMP_WORDS[COMP_CWORD]}}""
     prev=""${{COMP_WORDS[COMP_CWORD-1]}}""
+    cmd=""${{COMP_WORDS[1]}}""
     commands=""{cmds}""
 
     if [ $COMP_CWORD -eq 1 ]; then
@@ -530,7 +559,13 @@ public static class ConsoleUi
         --db|--path|--exclude-path) COMPREPLY=($(compgen -f -- ""$cur"")) ;;
         --lang) COMPREPLY=($(compgen -W ""{langs}"" -- ""$cur"")) ;;
         --kind) COMPREPLY=($(compgen -W ""function class struct interface enum property event delegate namespace import"" -- ""$cur"")) ;;
-        *) COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --help"" -- ""$cur"")) ;;
+        *)
+            if [ ""$cmd"" = ""find"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --no-json --limit --top --lang --path --exclude-path --exclude-tests --before --after --exact --count --query --help --"" -- ""$cur""))
+            else
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
+            fi
+            ;;
     esac
 }}
 complete -F _cdidx cdidx");
@@ -553,20 +588,44 @@ _cdidx() {{
     case $state in
         cmds) _describe 'command' commands ;;
         args)
-            _arguments \
-                '--db[Database path]:file:_files' \
-                '--json[JSON output]' \
-                '--limit[Max results]:number' \
-                '--lang[Filter by language]:language:({GetCompletionLangs()})' \
-                '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
-                '--path[Path filter]:pattern' \
-                '--exclude-path[Exclude path]:pattern' \
-                '--exclude-tests[Exclude tests]' \
-                '--body[Include body]' \
-                '--count[Count only]' \
-                '--fts[Raw FTS5 syntax]' \
-                '--snippet-lines[Snippet length]:number' \
-                '*:query'
+            local subcmd
+            subcmd=$words[2]
+            if [[ $subcmd == find ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--no-json[Disable JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--top[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--before[Context lines before]:number' \
+                    '--after[Context lines after]:number' \
+                    '--exact[Exact match]' \
+                    '--count[Count only]' \
+                    '--query[Literal query]' \
+                    '*:query'
+            else
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--body[Include body]' \
+                    '--count[Count only]' \
+                    '--fts[Raw FTS5 syntax]' \
+                    '--snippet-lines[Snippet length]:number' \
+                    '--exact[Backward-compatible exact shorthand]' \
+                    '--exact-substring[Search-only exact substring match]' \
+                    '--exact-name[Exact symbol-name equality]' \
+                    '*:query'
+            fi
             ;;
     esac
 }}
@@ -581,17 +640,24 @@ _cdidx");
         Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
         Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
 
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files excerpt map inspect outline status' -l db -r -d 'Database path'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files excerpt map inspect outline status' -l json -d 'JSON output'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l limit -r -d 'Max results'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l lang -r -d 'Filter by language'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l count -d 'Count only'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l path -r -d 'Path filter'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l exclude-path -r -d 'Exclude path'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files' -l exclude-tests -d 'Exclude tests'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l db -r -d 'Database path'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l json -d 'JSON output'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l limit -r -d 'Max results'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l lang -r -d 'Filter by language'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l count -d 'Count only'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l path -r -d 'Path filter'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-path -r -d 'Exclude path'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find' -l exclude-tests -d 'Exclude tests'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search find' -l exact -d 'Exact match'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols inspect' -l exact -d 'Backward-compatible exact shorthand'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l exact-substring -d 'Search-only exact substring match'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition references callers callees symbols inspect' -l exact-name -d 'Exact symbol-name equality'");
     }
 
     // --- Helpers / ヘルパー ---
