@@ -2079,6 +2079,9 @@ public static class QueryCommandRunner
     {
         for (var i = 0; i < args.Length; i++)
         {
+            if (args[i] == "--")
+                break;
+
             switch (args[i])
             {
                 case "--max-line-width":
@@ -2106,10 +2109,32 @@ public static class QueryCommandRunner
                         i++;
                     break;
             }
+
+            if (OptionConsumesNextArgument(args[i]) && i + 1 < args.Length)
+                i++;
         }
 
         return null;
     }
+
+    private static bool OptionConsumesNextArgument(string option) =>
+        option is
+            "--db" or
+            "--limit" or
+            "--top" or
+            "--lang" or
+            "--query" or
+            "--kind" or
+            "--since" or
+            "--start" or
+            "--end" or
+            "--before" or
+            "--after" or
+            "--depth" or
+            "--path" or
+            "--exclude-path" or
+            "--name" or
+            "--snippet-lines";
 
     private static int WithDb(string dbPath, Func<DbReader, int> action)
     {

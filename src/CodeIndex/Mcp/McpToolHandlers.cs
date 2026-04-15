@@ -771,13 +771,27 @@ public partial class McpServer
         if (endLine < startLine.Value)
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
-        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
-        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var beforeValue = args?["before"]?.GetValue<int>();
+        if (beforeValue.HasValue && beforeValue.Value < 0)
+            return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
+        var before = beforeValue ?? 0;
+
+        var afterValue = args?["after"]?.GetValue<int>();
+        if (afterValue.HasValue && afterValue.Value < 0)
+            return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
+        var after = afterValue ?? 0;
+
         var focusLine = args?["focusLine"]?.GetValue<int>();
         var focusColumn = args?["focusColumn"]?.GetValue<int>();
-        var focusLength = Math.Max(1, args?["focusLength"]?.GetValue<int>() ?? 1);
+        var focusLengthValue = args?["focusLength"]?.GetValue<int>();
+        if (focusLengthValue.HasValue && focusLengthValue.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLength must be greater than or equal to 1");
+        var focusLength = focusLengthValue ?? 1;
         var explicitFocusLength = args?["focusLength"] != null;
-        var maxLineWidth = ClampMaxLineWidth(args);
+        var maxLineWidthValue = args?["maxLineWidth"]?.GetValue<int>();
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value <= 0)
+            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
+        var maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth);
 
         if (focusLine.HasValue && focusLine.Value <= 0)
             return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");

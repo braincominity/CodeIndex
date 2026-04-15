@@ -131,6 +131,71 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_AllowsPathValueThatLooksLikePreviewOption()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_preview_like_path_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["foo", "--db", dbPath, "--path", "--max-line-width", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.DoesNotContain("unsupported option", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_AllowsExcludePathValueThatLooksLikePreviewOption()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_preview_like_exclude_path_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--exclude-path", "--focus-line", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.DoesNotContain("unsupported option", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_AllowsPathValueThatLooksLikePreviewOption()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_preview_like_path_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["target", "--db", dbPath, "--path", "--max-line-width", "--json"],
+                _jsonOptions));
+
+            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+            Assert.DoesNotContain("unsupported option", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_RejectsMissingFocusColumnValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_missing_focus_column");
