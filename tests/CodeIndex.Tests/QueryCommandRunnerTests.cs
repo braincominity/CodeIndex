@@ -146,6 +146,22 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("search-db-inline-empty", "search", "Error: --db requires a value.")]
+    [InlineData("search-lang-inline-empty", "search", "Error: --lang requires a value.")]
+    [InlineData("search-path-inline-empty", "search", "Error: --path requires a value.")]
+    [InlineData("search-exclude-path-inline-empty", "search", "Error: --exclude-path requires a value.")]
+    public void QueryEntrypoints_EmptyInlineStringOptionValuesReturnUsageError(string scenario, string command, string expectedError)
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithEmptyInlineStringValue(scenario));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains(expectedError, stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        Assert.DoesNotContain("Unhandled exception", stderr);
+    }
+
+    [Theory]
     [InlineData("search-extra", "unexpected extra positional argument(s) for search")]
     [InlineData("excerpt-extra", "unexpected extra positional argument(s) for excerpt")]
     [InlineData("map-extra", "map does not accept positional arguments")]
@@ -431,15 +447,14 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void BuildSymbolQueryList_FailsClosedOnlyWhenEveryInputIsEmptyString()
+    public void BuildSymbolQueryList_EmptyNameNowFailsAtParseTime()
     {
-        // --name "" is explicit input that normalizes to empty — must be flagged, not silently
-        // broadened into an all-symbols dump.
-        // --name "" は明示入力だが正規化で空になる。フラグを立てて全件ダンプを防ぐ。
+        // Empty inline/separated string values are now rejected during argument parsing before
+        // symbol-query normalization runs, so they cannot broaden into an all-symbols dump.
+        // 空文字の値は symbol-query 正規化まで進む前に引数解析で拒否される。
         var rejected = QueryCommandRunner.ParseArgs(["--name", ""], jsonDefault: false);
-        var (rejectedQueries, rejectedHadInput) = QueryCommandRunner.BuildSymbolQueryList(rejected);
-        Assert.Null(rejectedQueries);
-        Assert.True(rejectedHadInput);
+        Assert.NotNull(rejected.ParseError);
+        Assert.Contains("--name requires a value", rejected.ParseError);
     }
 
     [Fact]
@@ -451,7 +466,7 @@ public class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var (exit, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(["--name", "", "--db", dbPath], _jsonOptions));
             Assert.Equal(1, exit);
-            Assert.Contains("empty after normalization", stderr);
+            Assert.Contains("--name requires a value", stderr);
         }
         finally
         {
@@ -2943,6 +2958,18 @@ public class QueryCommandRunnerTests
             "search-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--path", "--count"], _jsonOptions),
             "search-exclude-path-swallow" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--exclude-path", "--count"], _jsonOptions),
             "definition-kind-swallow" => QueryCommandRunner.RunDefinition(["QueryCommandRunner", "--kind", "--count"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+    }
+
+    private int RunCommandWithEmptyInlineStringValue(string scenario)
+    {
+        return scenario switch
+        {
+            "search-db-inline-empty" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--db="], _jsonOptions),
+            "search-lang-inline-empty" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--lang="], _jsonOptions),
+            "search-path-inline-empty" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--path="], _jsonOptions),
+            "search-exclude-path-inline-empty" => QueryCommandRunner.RunSearch(["QueryCommandRunner", "--exclude-path="], _jsonOptions),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
         };
     }

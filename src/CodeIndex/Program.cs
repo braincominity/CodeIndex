@@ -29,12 +29,8 @@ if (args[0] is "--version" or "-V")
     return CommandExitCodes.Success;
 }
 
-if (args[0] == "--completions" && args.Length >= 2)
-{
-    return ConsoleUi.PrintCompletions(args[1])
-        ? CommandExitCodes.Success
-        : CommandExitCodes.UsageError;
-}
+if (args[0] == "--completions")
+    return RunCompletions(args[1..]);
 
 // Recognize --help / -h after a subcommand too (e.g. `cdidx unused --help`)
 // so that the near-universal help convention works everywhere. The scan is
@@ -124,6 +120,39 @@ int RunMcp(string[] cmdArgs)
     var server = new McpServer(options.DbPath, appVersion);
     server.RunAsync().GetAwaiter().GetResult();
     return CommandExitCodes.Success;
+}
+
+int RunCompletions(string[] cmdArgs)
+{
+    if (cmdArgs.Length == 0)
+    {
+        Console.Error.WriteLine("Error: --completions requires a shell value.");
+        Console.Error.WriteLine("Hint: rerun with one of `bash`, `zsh`, or `fish`.");
+        Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+        return CommandExitCodes.UsageError;
+    }
+
+    if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine($"Error: --completions requires a shell value, got option-like token '{cmdArgs[0]}'.");
+        Console.Error.WriteLine("Hint: rerun with one of `bash`, `zsh`, or `fish`.");
+        Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+        return CommandExitCodes.UsageError;
+    }
+
+    if (cmdArgs.Length > 1)
+    {
+        Console.Error.WriteLine($"Error: --completions accepts exactly one shell value, got extra argument(s): {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.");
+        Console.Error.WriteLine("Hint: rerun with exactly one shell name: `bash`, `zsh`, or `fish`.");
+        Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+        return CommandExitCodes.UsageError;
+    }
+
+    if (ConsoleUi.PrintCompletions(cmdArgs[0]))
+        return CommandExitCodes.Success;
+
+    Console.Error.WriteLine("Usage: cdidx --completions <shell>");
+    return CommandExitCodes.UsageError;
 }
 
 int ShowError(string message)

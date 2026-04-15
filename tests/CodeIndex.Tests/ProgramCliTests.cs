@@ -66,6 +66,16 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Mcp_DbRejectsEmptyInlineValue()
+    {
+        var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db="]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Error: --db requires a value.", stderr);
+        Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
+    }
+
+    [Fact]
     public void Symbols_NameHelpLikeValueReturnsUsageError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["symbols", "--name", "-h"]);
@@ -83,8 +93,43 @@ public class ProgramCliTests
 
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
-        Assert.Contains("Unknown shell", stderr);
-        Assert.DoesNotContain("Usage:", stderr);
+        Assert.Contains("requires a shell value, got option-like token '-h'", stderr);
+        Assert.Contains("Usage: cdidx --completions <shell>", stderr);
+    }
+
+    [Fact]
+    public void Completions_MissingShellReturnsUsageError()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--completions requires a shell value", stderr);
+        Assert.Contains("Usage: cdidx --completions <shell>", stderr);
+        Assert.DoesNotContain("Unknown command: --completions", stderr);
+    }
+
+    [Fact]
+    public void Completions_OptionLikeShellTokenReturnsUsageError()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "--json"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("requires a shell value, got option-like token '--json'", stderr);
+        Assert.Contains("Usage: cdidx --completions <shell>", stderr);
+        Assert.DoesNotContain("Unknown shell", stderr);
+    }
+
+    [Fact]
+    public void Completions_ExtraArgsReturnUsageError()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "bash", "extra"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("accepts exactly one shell value", stderr);
+        Assert.Contains("Usage: cdidx --completions <shell>", stderr);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)

@@ -1695,6 +1695,13 @@ public static class QueryCommandRunner
 
     private static int WithDb(string dbPath, Func<DbReader, int> action)
     {
+        if (string.IsNullOrWhiteSpace(dbPath))
+        {
+            Console.Error.WriteLine("Error: --db requires a value.");
+            Console.Error.WriteLine("Hint: pass a concrete database path with `--db <path>` or omit `--db` to use `.cdidx/codeindex.db`.");
+            return CommandExitCodes.UsageError;
+        }
+
         // Allow SQLite URI forms (file:///abs/path?immutable=1 etc.) so users and AI agents
         // on read-only mounts / sandboxes can opt into the immutable read-only escape hatch
         // explicitly when the automatic DbContext fallback cannot recover. File.Exists is
@@ -2202,6 +2209,13 @@ public static class QueryCommandRunner
     {
         if (inlineValue != null)
         {
+            if (string.IsNullOrWhiteSpace(inlineValue))
+            {
+                value = null;
+                error = $"Error: {optionName} requires a value.";
+                return false;
+            }
+
             value = inlineValue;
             error = null;
             return true;
@@ -2221,6 +2235,13 @@ public static class QueryCommandRunner
             error = allowSeparatedDashPrefixedLiteralValue && candidate.StartsWith("--", StringComparison.Ordinal)
                 ? $"Error: {optionName} requires a value. Hint: if the literal value starts with `--`, pass it as `{optionName}=<value>`."
                 : $"Error: {optionName} requires a value.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            value = null;
+            error = $"Error: {optionName} requires a value.";
             return false;
         }
 
