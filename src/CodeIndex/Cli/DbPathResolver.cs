@@ -29,7 +29,9 @@ public static class DbPathResolver
     public static string? ResolveProjectRootForQuery(string dbPath)
     {
         var fullDbPath = Path.GetFullPath(NormalizeDbPath(dbPath));
-        var indexedProjectRoot = TryReadIndexedProjectRoot(fullDbPath);
+        var indexedProjectRoot = TryReadIndexedProjectRoot(dbPath);
+        if (indexedProjectRoot == null && !string.Equals(dbPath, fullDbPath, StringComparison.Ordinal))
+            indexedProjectRoot = TryReadIndexedProjectRoot(fullDbPath);
         if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
             return Path.GetFullPath(indexedProjectRoot);
 
@@ -73,12 +75,7 @@ public static class DbPathResolver
     {
         try
         {
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadOnly,
-            };
-            using var connection = new SqliteConnection(builder.ConnectionString);
+            using var connection = OpenMetadataConnection(dbPath);
             connection.Open();
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
@@ -90,5 +87,32 @@ public static class DbPathResolver
         {
             return null;
         }
+    }
+
+    private static SqliteConnection OpenMetadataConnection(string dbPath)
+    {
+        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && UriRequestsReadOnly(dbPath))
+            return new SqliteConnection($"Data Source={dbPath}");
+
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+        };
+        return new SqliteConnection(builder.ConnectionString);
+    }
+
+    private static bool UriRequestsReadOnly(string uriText)
+    {
+        var qIdx = uriText.IndexOf('?');
+        if (qIdx < 0) return false;
+        var query = uriText[(qIdx + 1)..];
+        foreach (var raw in query.Split('&'))
+        {
+            var seg = raw.Trim();
+            if (seg.Equals("immutable=1", StringComparison.OrdinalIgnoreCase)) return true;
+            if (seg.Equals("mode=ro", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 }
