@@ -1183,17 +1183,18 @@ public static class SymbolExtractor
             if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + anonymousDefaultMatch.Index, sanitizedLine, includeBlockScope: false))
                 return;
 
-            AddJavaScriptTypeScriptSyntheticClassTarget(
-                fileId,
-                lang,
-                lines,
-                symbols,
-                targets,
-                startIndex,
-                classTokenLineIndex,
-                classTokenStartColumn,
-                containerName: "default",
-                visibility: TryGetGroup(anonymousDefaultMatch, "visibility"));
+        AddJavaScriptTypeScriptSyntheticClassTarget(
+            fileId,
+            lang,
+            lines,
+            symbols,
+            targets,
+            startIndex,
+            startColumn + anonymousDefaultMatch.Index,
+            classTokenLineIndex,
+            classTokenStartColumn,
+            containerName: "default",
+            visibility: TryGetGroup(anonymousDefaultMatch, "visibility"));
             return;
         }
 
@@ -1227,6 +1228,7 @@ public static class SymbolExtractor
                     symbols,
                     targets,
                     startIndex,
+                    startColumn + exportEqualsMatch.Index,
                     exportEqualsClassTokenLineIndex,
                     exportEqualsClassTokenStartColumn,
                     containerName: "default",
@@ -1271,6 +1273,7 @@ public static class SymbolExtractor
             symbols,
             targets,
             startIndex,
+            startColumn + classExpressionBindingMatch.Index,
             classExpressionTokenLineIndex,
             classExpressionTokenStartColumn,
             containerName,
@@ -1290,6 +1293,7 @@ public static class SymbolExtractor
         List<SymbolRecord> symbols,
         List<JavaScriptClassScanTarget> targets,
         int declarationStartIndex,
+        int declarationStartColumn,
         int classTokenLineIndex,
         int classTokenStartColumn,
         string containerName,
@@ -1312,7 +1316,7 @@ public static class SymbolExtractor
                 EndLine = Math.Max(declarationStartIndex + 1, endLine),
                 BodyStartLine = bodyStartLine,
                 BodyEndLine = bodyEndLine,
-                Signature = lines[declarationStartIndex].Trim(),
+                Signature = BuildJavaScriptTypeScriptSyntheticClassSignature(lines, declarationStartIndex, declarationStartColumn, classTokenLineIndex, classTokenStartColumn, bodyEndLine, lang),
                 Visibility = visibility,
             });
         }
@@ -1327,6 +1331,29 @@ public static class SymbolExtractor
         {
             targets.Add(candidate);
         }
+    }
+
+    private static string BuildJavaScriptTypeScriptSyntheticClassSignature(
+        string[] lines,
+        int declarationStartIndex,
+        int declarationStartColumn,
+        int classTokenLineIndex,
+        int classTokenStartColumn,
+        int? bodyEndLine,
+        string lang)
+    {
+        var line = lines[declarationStartIndex];
+        if (declarationStartColumn >= line.Length)
+            return string.Empty;
+
+        if (bodyEndLine == declarationStartIndex + 1)
+        {
+            var sameLineEndColumn = FindJavaScriptTypeScriptSameLineBraceEndColumn(line, classTokenStartColumn, lang);
+            if (sameLineEndColumn >= declarationStartColumn)
+                return line[declarationStartColumn..(sameLineEndColumn + 1)].Trim();
+        }
+
+        return line[declarationStartColumn..].Trim();
     }
 
     private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerName)
