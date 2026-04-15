@@ -335,6 +335,48 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.Signature == "[Symbol.iterator]() {}");
     }
 
+    [Theory]
+    [InlineData(
+        """
+        class Example {
+            handler = function namedHandler() {};
+            keep() {}
+        }
+        """,
+        "namedHandler")]
+    [InlineData(
+        """
+        class Example {
+            handler = function () {};
+            keep() {}
+        }
+        """,
+        "function")]
+    [InlineData(
+        """
+        class Example {
+            field = { inner() {} };
+            keep() {}
+        }
+        """,
+        "inner")]
+    [InlineData(
+        """
+        class Example {
+            field = class Inner { run() {} };
+            keep() {}
+        }
+        """,
+        "run")]
+    public void Extract_JavaScript_DoesNotTreatClassFieldInitializerMembersAsClassMethods(string content, string unexpectedMethod)
+    {
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Example");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == unexpectedMethod && s.ContainerName == "Example");
+    }
+
     [Fact]
     public void Extract_JavaScript_DetectsInlineClassExpressionMethods()
     {
@@ -1280,6 +1322,48 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "visible" && s.ContainerName == "Example" && s.ReturnType == "void");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "['computed']" && s.Signature == "['computed'](): void {}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[Symbol.iterator]" && s.Signature == "[Symbol.iterator](): Iterable<number> {}");
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        export class Example {
+            handler = function namedHandler(): void {};
+            keep(): void {}
+        }
+        """,
+        "namedHandler")]
+    [InlineData(
+        """
+        export class Example {
+            handler = function (): void {};
+            keep(): void {}
+        }
+        """,
+        "function")]
+    [InlineData(
+        """
+        export class Example {
+            field = { inner(): void {} };
+            keep(): void {}
+        }
+        """,
+        "inner")]
+    [InlineData(
+        """
+        export class Example {
+            field = class Inner { run(): void {} };
+            keep(): void {}
+        }
+        """,
+        "run")]
+    public void Extract_TypeScript_DoesNotTreatClassFieldInitializerMembersAsClassMethods(string content, string unexpectedMethod)
+    {
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Example");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == unexpectedMethod && s.ContainerName == "Example");
     }
 
     [Fact]
