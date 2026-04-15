@@ -545,6 +545,41 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_AnalyzeSymbol_KeepsSubscribeReferencesVisibleInBundle()
+    {
+        InsertIndexedFile("src/Publisher.cs", "csharp",
+            """
+            using System;
+
+            public class Publisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/Subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class Subscriber
+            {
+                public void Hook(Publisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var reference = response["result"]!["structuredContent"]!["references"]![0]!;
+
+        Assert.Equal("subscribe", reference["referenceKind"]!.GetValue<string>());
+        Assert.Equal("Hook", reference["containerName"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_References_ReturnsIndexedReference()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");

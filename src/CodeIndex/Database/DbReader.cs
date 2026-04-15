@@ -536,8 +536,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE 1=1
-                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}
-                  AND r.reference_kind IN {InvokeReferenceKindsSql}"
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.symbol_name, r.reference_kind, r.line, r.column_number,
                    r.context, r.container_kind, r.container_name
@@ -569,7 +568,7 @@ public partial class DbReader
         if (referenceKind == null)
         {
             sql += @"
-                GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number
+                GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @"
             )
             SELECT path, lang, symbol_name, reference_kind, line, column_number,
                    context, container_kind, container_name
@@ -652,8 +651,6 @@ public partial class DbReader
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
-        else
-            innerSql += $" AND r.reference_kind IN {InvokeReferenceKindsSql}";
         if (lang != null)
             innerSql += " AND f.lang = @lang";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);

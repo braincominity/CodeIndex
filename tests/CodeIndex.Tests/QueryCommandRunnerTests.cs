@@ -2399,6 +2399,107 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_CountJsonKeepsSubscribeRowsVisibleByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_subscribe_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Changed", "--db", dbPath, "--json", "--count", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonKeepsSubscribeReferencesVisibleInBundle()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_subscribe_bundle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("subscribe", reference.GetProperty("reference_kind").GetString());
+            Assert.Equal("Hook", reference.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_ClassSymbolJsonReturnsHeuristicFileDependencyHints()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_class_fallback");

@@ -2208,6 +2208,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GraphQueries_DefaultReferencesKeepSubscribeRowsVisibleInCountsAndAnalyzeSymbol()
+    {
+        InsertIndexedFile("src/event_publisher.cs", "csharp",
+            """
+            using System;
+
+            public class Publisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/event_subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class Subscriber
+            {
+                public void Hook(Publisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var reference = Assert.Single(_reader.SearchReferences("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+        Assert.Equal("subscribe", reference.ReferenceKind);
+        Assert.Equal("Hook", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("Changed", lang: "csharp", exact: true, pathPatterns: ["event_"]));
+
+        var analysis = _reader.AnalyzeSymbol("Changed", limit: 5, lang: "csharp", pathPatterns: ["event_"], exact: true);
+        var bundledReference = Assert.Single(analysis.References);
+        Assert.Equal("subscribe", bundledReference.ReferenceKind);
+        Assert.Equal("Hook", bundledReference.ContainerName);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_ReturnsAllDirectCallersAcrossPages()
     {
         const int callerCount = 205;
