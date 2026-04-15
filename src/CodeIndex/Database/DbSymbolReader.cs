@@ -601,27 +601,52 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
         var containerNameSql = GetSymbolColumnSql("container_name");
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
         var familyKeySql = GetSymbolColumnSql("family_key");
+        var familyTargetKeySql = _hotspotFamilyReady
+            ? $@"CASE
+                    WHEN COALESCE({familyKeySql}, '') <> ''
+                        THEN 'family|' || COALESCE(f.lang, '') || '|' || COALESCE(s.kind, '') || '|' || {familyKeySql}
+                    ELSE NULL
+                END"
+            : "NULL";
+        var containerTargetKeySql = $@"CASE
+                    WHEN COALESCE({containerQualifiedNameSql}, '') <> ''
+                        THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
+                    ELSE NULL
+                END";
         // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
         // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
         // back to codebase-wide counting. Cross-file grouping is allowed only when the
-        // extractor persisted an authoritative family key (currently partial-type families);
-        // everything else stays file-scoped so same-name containers in different modules or
-        // projects cannot collapse into one logical target.
+        // extractor persisted an authoritative family key on a DB that is stamped as fully
+        // current for hotspot-family semantics (currently partial-type families). Same-file
+        // same-container overloads can still share one conservative target key, but only
+        // unique names or authoritative families may promote to codebase-wide counts.
         // 曖昧性は path 非依存の候補集合で判定し、`--path` で隠れた重複定義が一意扱いに
-        // 戻ってしまうことを防ぐ。cross-file の集約は extractor が正式な family key を保存した
-        // 場合（現状は partial type family）のみに限定し、それ以外は module / project をまたぐ
-        // 同名 container が潰れないよう file 単位で扱う。
+        // 戻ってしまうことを防ぐ。cross-file の集約は current な hotspot-family semantics で
+        // fully-ready と判定された DB 上の正式な family key のみに限定し、same-file の
+        // same-container overload は保守的な target として扱いつつ、codebase-wide 集計への
+        // 昇格は一意名か authoritative family のみに限定する。
         var sql = $@"
             WITH all_candidate_symbols AS (
                 SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
                        {containerNameSql} AS container_name,
                        CASE
-                           WHEN COALESCE({familyKeySql}, '') <> ''
-                               THEN 'family|' || COALESCE(f.lang, '') || '|' || COALESCE(s.kind, '') || '|' || {familyKeySql}
+                           WHEN {familyTargetKeySql} IS NOT NULL
+                               THEN {familyTargetKeySql}
+                           WHEN {containerTargetKeySql} IS NOT NULL
+                               THEN {containerTargetKeySql}
                            ELSE 'file|' || CAST(s.file_id AS TEXT)
-                       END AS logical_target_key
+                       END AS logical_target_key,
+                       CASE
+                           WHEN {familyTargetKeySql} IS NOT NULL
+                               THEN {familyTargetKeySql}
+                           WHEN {containerTargetKeySql} IS NOT NULL
+                               THEN {containerTargetKeySql}
+                           ELSE 'file|' || CAST(s.file_id AS TEXT)
+                       END AS conservative_target_key,
+                       COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')";
@@ -640,7 +665,9 @@ public partial class DbReader
             name_cardinality AS (
                 SELECT name,
                        COUNT(*) AS defs,
-                       COUNT(DISTINCT logical_target_key) AS target_groups
+                       COUNT(DISTINCT logical_target_key) AS target_groups,
+                       COUNT(DISTINCT count_safe_key) AS count_safe_groups,
+                       COUNT(count_safe_key) AS count_safe_defs
                 FROM all_candidate_symbols
                 GROUP BY name
             ),
@@ -715,7 +742,9 @@ public partial class DbReader
                  AND fc.name = gr.name
                  AND fc.kind = gr.kind
                  AND fc.file_id = sr.file_id
-                WHERE nc.defs = 1 OR nc.target_groups = 1 OR fc.id IS NOT NULL
+                WHERE nc.defs = 1
+                   OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                   OR fc.id IS NOT NULL
                 GROUP BY gr.symbol_id
             )
             SELECT gr.name, rc.ref_count,

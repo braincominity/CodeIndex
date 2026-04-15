@@ -619,6 +619,19 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Stamp the current authoritative version for hotspot family grouping semantics.
+    /// Only fully authoritative DB states should call this; mixed legacy/current DBs must
+    /// stay unstamped so readers degrade to conservative same-file counting.
+    /// hotspots family grouping の current authoritative version を stamp する。
+    /// </summary>
+    public void MarkHotspotFamilyReady()
+    {
+        SetMeta(
+            DbContext.HotspotFamilyVersionMetaKey,
+            DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
     /// Upsert a metadata key/value into `codeindex_meta`.
     /// codeindex_meta への key/value の upsert。
     /// </summary>

@@ -161,6 +161,7 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorHotspotFamilyVersion = db.GetMetaString(DbContext.HotspotFamilyVersionMetaKey);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -183,8 +184,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersion)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersion);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -423,7 +424,8 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        string? priorHotspotFamilyVersion)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -604,6 +606,9 @@ public static class IndexCommandRunner
                 writer.MarkIssuesReady();
                 issuesTableAvailableAfter = true;
             }
+            var currentHotspotFamilyVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (priorHotspotFamilyVersion == currentHotspotFamilyVersion)
+                writer.MarkHotspotFamilyReady();
             // FoldReady restamp requires both the prior stored version and fingerprint to
             // match the current binary/runtime. Otherwise untouched rows still carry keys
             // from an older fold implementation or runtime table set, and advertising
@@ -704,7 +709,8 @@ public static class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        string? priorHotspotFamilyVersion)
     {
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
@@ -838,6 +844,9 @@ public static class IndexCommandRunner
             writer.MarkIssuesReady();
             graphTableAvailableAfter = true;
             issuesTableAvailableAfter = true;
+            var currentHotspotFamilyVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (skipped == 0 || priorHotspotFamilyVersion == currentHotspotFamilyVersion)
+                writer.MarkHotspotFamilyReady();
             // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
             // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
             // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip

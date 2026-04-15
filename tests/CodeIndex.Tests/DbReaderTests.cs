@@ -34,6 +34,7 @@ public class DbReaderTests : IDisposable
         // test that opens a DB without this flag.
         // #86: full scan 後の本番 DB は fold ready も立つため、reader は fold 経路を通す。
         _writer.MarkFoldReady();
+        _writer.MarkHotspotFamilyReady();
         _reader = new DbReader(_db.Connection);
     }
 
@@ -1369,6 +1370,98 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/duplicate_names.py", run.Symbol.Path);
         Assert.Equal(1, run.ReferenceCount);
         Assert.Equal(1, run.Symbol.Line);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_WithoutHotspotFamilyReadyFallsBackForMixedPartialFamilies()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                UPDATE symbols
+                SET family_key = NULL
+                WHERE file_id IN (
+                    SELECT id FROM files WHERE path = 'src/Api.Part2.cs'
+                )
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        _writer.SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+
+        var reader = new DbReader(_db.Connection);
+        var results = reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotPromoteSameFileDifferentContainersToGlobalCounts()
+    {
+        InsertIndexedFile("src/Duplicate.cs", "csharp",
+            """
+            public class A
+            {
+                public void Run() { }
+            }
+
+            public class B
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(A api)
+                {
+                    api.Run();
+                    api.Run();
+                }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
     }
 
     [Fact]

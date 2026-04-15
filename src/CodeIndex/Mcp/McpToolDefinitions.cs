@@ -384,9 +384,9 @@ public partial class McpServer
             CreateToolDefinition(
                 "symbol_hotspots",
                 "Find the most-referenced symbols in the codebase (hotspot analysis). "
-                + "Returns symbols ordered by reference count. Names that are unique within the active language/kind candidate set use codebase-wide totals; duplicate-name families fall back to conservative same-file counts, and same-file duplicate rows may be grouped when the DB cannot disambiguate targets. Useful for identifying central, high-impact code. "
+                + "Returns symbols ordered by reference count. Names that are unique within the active language/kind candidate set use codebase-wide totals; duplicate-name families fall back to conservative same-file counts, and same-file duplicate rows may be grouped when the DB cannot disambiguate targets. Cross-file grouping of duplicate families is trusted only on indexes stamped with the current authoritative hotspot-family version. Useful for identifying central, high-impact code. "
                 + "/ コードベースで最も参照されるシンボルを検索する（ホットスポット分析）。"
-                + "参照回数順にシンボルを返す。active な言語/種別候補集合で一意な名前は codebase 全体の件数を使い、同名ファミリーは保守的な same-file 件数へフォールバックし、DB が対象を曖昧なく結べない同一ファイル重複行は集約される。中心的で影響の大きいコードの特定に有用。",
+                + "参照回数順にシンボルを返す。active な言語/種別候補集合で一意な名前は codebase 全体の件数を使い、同名ファミリーは保守的な same-file 件数へフォールバックし、DB が対象を曖昧なく結べない同一ファイル重複行は集約される。duplicate family の cross-file 集約は current の authoritative hotspot-family version で stamp された index でのみ信頼する。中心的で影響の大きいコードの特定に有用。",
                 new JsonObject
                 {
                     ["type"] = "object",

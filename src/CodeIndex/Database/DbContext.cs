@@ -281,6 +281,13 @@ public class DbContext : IDisposable
     // bit 2 (FoldReadyFlag, #86): name_folded 列の完全バックフィル完了を示す。
     public const int FoldReadyFlag = 4;
     public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag; // 7 — full CLI readiness
+    // Query-semantic readiness for hotspot family grouping. Stored in codeindex_meta instead of
+    // PRAGMA user_version because this guards a higher-level interpretation contract
+    // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
+    // low-level table availability.
+    // hotspots family grouping 用 readiness。table の有無ではなく query 意味論の trust を表す。
+    public const int HotspotFamilyVersion = 1;
+    public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
 
     public int GetUserVersion()
     {

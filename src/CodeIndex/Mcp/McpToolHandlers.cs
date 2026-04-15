@@ -1207,6 +1207,7 @@ public partial class McpServer
         using var db = new DbContext(_dbPath);
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorHotspotFamilyVersion = db.GetMetaString(DbContext.HotspotFamilyVersionMetaKey);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1286,6 +1287,9 @@ public partial class McpServer
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            var currentHotspotFamilyVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (skipped == 0 || priorHotspotFamilyVersion == currentHotspotFamilyVersion)
+                writer.MarkHotspotFamilyReady();
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
             // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers

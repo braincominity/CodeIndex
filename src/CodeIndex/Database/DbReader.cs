@@ -31,6 +31,11 @@ public partial class DbReader
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
+    // True when `family_key` / `container_qualified_name` semantics are authoritative for
+    // the whole DB. Mixed legacy/update states degrade hotspot grouping until a fully
+    // trusted scan restamps the version marker.
+    // `family_key` / `container_qualified_name` が DB 全体で authoritative か。
+    internal readonly bool _hotspotFamilyReady;
     internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
@@ -130,6 +135,11 @@ public partial class DbReader
         _foldReady = foldBitSet
             && storedFoldVersion == NameFold.Version
             && string.Equals(storedFoldFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal);
+        var hotspotFamilyVersion = ParseHotspotFamilyVersion(connection);
+        _hotspotFamilyReady =
+            _symbolColumns.Contains("family_key")
+            && _symbolColumns.Contains("container_qualified_name")
+            && hotspotFamilyVersion == DbContext.HotspotFamilyVersion;
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
         // repo is untouched, which would flip trust on prematurely. Only an explicit
@@ -166,6 +176,14 @@ public partial class DbReader
     private static string? ParseFoldFingerprint(SqliteConnection conn)
     {
         return TryGetMetaString(conn, "fold_key_fingerprint");
+    }
+
+    private static int ParseHotspotFamilyVersion(SqliteConnection conn)
+    {
+        var raw = TryGetMetaString(conn, DbContext.HotspotFamilyVersionMetaKey);
+        if (raw is string s && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            return v;
+        return -1;
     }
 
     private static string? TryGetMetaString(SqliteConnection conn, string key)
