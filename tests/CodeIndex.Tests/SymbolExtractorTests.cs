@@ -447,7 +447,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_SQL_DetectsCreateStatements()
     {
-        var content = "CREATE TEMP TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE MATERIALIZED VIEW active_users AS SELECT * FROM users;\n\nCREATE TYPE color AS ENUM ('red', 'green');\nCREATE TYPE inventory_item AS (name text);\nCREATE SCHEMA analytics;\nCREATE SEQUENCE order_seq;\nCREATE EXTENSION IF NOT EXISTS pgcrypto;\nCREATE DOMAIN positive_int AS integer CHECK (VALUE > 0);\nCREATE UNIQUE INDEX users_email_idx ON users (id);\n\nALTER TABLE users ADD COLUMN email TEXT;";
+        var content = "CREATE TEMP TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE MATERIALIZED VIEW active_users AS SELECT * FROM users;\n\nCREATE TYPE color AS ENUM ('red', 'green');\nCREATE TYPE inventory_item AS (name text);\nCREATE SCHEMA analytics;\nCREATE SCHEMA AUTHORIZATION analytics_owner;\nCREATE SEQUENCE order_seq;\nCREATE EXTENSION IF NOT EXISTS pgcrypto;\nCREATE DOMAIN positive_int AS integer CHECK (VALUE > 0);\nCREATE UNIQUE INDEX users_email_idx ON users (id);\n\nALTER TABLE users ADD COLUMN email TEXT;";
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users");
@@ -456,6 +456,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "color");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "inventory_item");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "analytics");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "analytics_owner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "AUTHORIZATION");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "order_seq");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "pgcrypto");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "positive_int");
