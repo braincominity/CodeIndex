@@ -420,28 +420,45 @@ public static class ConsoleUi
     // --- Did-you-mean / もしかして ---
 
     /// <summary>
-    /// Find the closest matching command name using Levenshtein distance.
-    /// Returns null if no command is close enough (distance > 3).
-    /// Levenshtein距離で最も近いコマンド名を返す。距離が3超なら null を返す。
+    /// Find the closest matching command name using Damerau-Levenshtein distance.
+    /// Short commands use a stricter threshold to avoid unrelated suggestions.
+    /// Damerau-Levenshtein距離で最も近いコマンド名を返す。短いコマンドは無関係な推薦を避けるため閾値を厳しくする。
     /// </summary>
     public static string? FindClosestCommand(string input)
     {
+        if (string.IsNullOrWhiteSpace(input))
+            return null;
+
+        input = input.ToLowerInvariant();
         string? best = null;
         var bestDist = int.MaxValue;
         foreach (var cmd in Commands)
         {
-            var dist = LevenshteinDistance(input.ToLowerInvariant(), cmd);
+            var dist = DamerauLevenshteinDistance(input, cmd);
+            if (dist > GetSuggestionDistanceThreshold(input.Length, cmd.Length))
+                continue;
+
             if (dist < bestDist)
             {
                 bestDist = dist;
                 best = cmd;
             }
         }
-        // Only suggest if edit distance is at most 3 / 編集距離3以下のみ推薦
-        return bestDist <= 3 ? best : null;
+        return best;
     }
 
-    private static int LevenshteinDistance(string s, string t)
+    private static int GetSuggestionDistanceThreshold(int inputLength, int commandLength)
+    {
+        var shorter = Math.Min(inputLength, commandLength);
+        return shorter switch
+        {
+            <= 4 => 1,
+            <= 10 => 2,
+            _ => 3,
+        };
+    }
+
+    private static int DamerauLevenshteinDistance(string s, string t)
     {
         var n = s.Length;
         var m = t.Length;
@@ -454,6 +471,8 @@ public static class ConsoleUi
             {
                 var cost = s[i - 1] == t[j - 1] ? 0 : 1;
                 d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+                if (i > 1 && j > 1 && s[i - 1] == t[j - 2] && s[i - 2] == t[j - 1])
+                    d[i, j] = Math.Min(d[i, j], d[i - 2, j - 2] + 1);
             }
         }
         return d[n, m];

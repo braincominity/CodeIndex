@@ -169,7 +169,7 @@ public class FileIndexer
     public IReadOnlyList<string> ScanFiles()
     {
         var files = new List<string>();
-        ScanDirectory(_projectRoot, files);
+        EnumerateDirectory(_projectRoot, files);
         return files;
     }
 
@@ -180,6 +180,11 @@ public class FileIndexer
         if (SkipDirs.Contains(dirName))
             return;
 
+        EnumerateDirectory(dir, results);
+    }
+
+    private void EnumerateDirectory(string dir, List<string> results)
+    {
         try
         {
             foreach (var file in Directory.EnumerateFiles(dir))
