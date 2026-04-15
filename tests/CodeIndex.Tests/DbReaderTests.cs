@@ -119,6 +119,7 @@ public class DbReaderTests : IDisposable
         }]);
 
         var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
+        SymbolExtractor.ApplyFamilyScope(symbols, FileIndexer.DeriveFallbackFamilyScopeKey(path));
         _writer.InsertSymbols(symbols);
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
@@ -1160,6 +1161,120 @@ public class DbReaderTests : IDisposable
                 Assert.Equal("Api", second.Symbol.ContainerName);
                 Assert.Equal(1, second.ReferenceCount);
             });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_DoesNotMergePartialFamiliesAcrossProjectRoots()
+    {
+        InsertIndexedFile("projA/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """);
+        InsertIndexedFile("projA/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        InsertIndexedFile("projB/src/Api.Part1.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run()
+                {
+                    Run(1);
+                }
+            }
+            """);
+        InsertIndexedFile("projB/src/Api.Part2.cs", "csharp",
+            """
+            namespace Shared;
+
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["projA/", "projB/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var runs = results
+            .Where(result => result.Symbol.Name == "Run")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(runs,
+            first =>
+            {
+                Assert.Equal("projA/src/Api.Part1.cs", first.Symbol.Path);
+                Assert.Equal("Api", first.Symbol.ContainerName);
+                Assert.Equal(1, first.ReferenceCount);
+            },
+            second =>
+            {
+                Assert.Equal("projB/src/Api.Part1.cs", second.Symbol.Path);
+                Assert.Equal("Api", second.Symbol.ContainerName);
+                Assert.Equal(1, second.ReferenceCount);
+            });
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_KeepsCrossFileCountsForVbPartialClassFamily()
+    {
+        InsertIndexedFile("src/Api.Part1.vb", "vb",
+            """
+            Public Partial Class Api
+                Public Sub Run()
+                End Sub
+            End Class
+            """);
+        InsertIndexedFile("src/Api.Part2.vb", "vb",
+            """
+            Public Partial Class Api
+                Public Sub Run(value As Integer)
+                End Sub
+            End Class
+            """);
+        InsertIndexedFile("src/Caller.vb", "vb",
+            """
+            Public Class Caller
+                Public Sub Call(api As Api)
+                    api.Run()
+                    api.Run(1)
+                End Sub
+            End Class
+            """);
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "vb",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var run = Assert.Single(results.Where(result => result.Symbol.Name == "Run"));
+        Assert.Equal("Api", run.Symbol.ContainerName);
+        Assert.Equal(2, run.ReferenceCount);
     }
 
     [Fact]

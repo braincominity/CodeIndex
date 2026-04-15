@@ -162,6 +162,63 @@ public class FileIndexer
         return FileNameMap.TryGetValue(fileName, out var nameLang) ? nameLang : null;
     }
 
+    public string GetFamilyScopeKey(string absolutePath, string? lang)
+    {
+        var projectMarkerPattern = GetProjectMarkerPattern(lang);
+        if (projectMarkerPattern != null)
+        {
+            var currentDir = Path.GetDirectoryName(Path.GetFullPath(absolutePath));
+            while (!string.IsNullOrEmpty(currentDir))
+            {
+                if (Directory.EnumerateFiles(currentDir, projectMarkerPattern, SearchOption.TopDirectoryOnly).Any())
+                    return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
+
+                if (PathsEqual(currentDir, _projectRoot))
+                    break;
+
+                currentDir = Path.GetDirectoryName(currentDir);
+            }
+        }
+
+        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        return DeriveFallbackFamilyScopeKey(relativePath);
+    }
+
+    public static string DeriveFallbackFamilyScopeKey(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/').Trim('/');
+        if (string.IsNullOrEmpty(normalized))
+            return ".";
+
+        var firstSeparator = normalized.IndexOf('/');
+        if (firstSeparator < 0)
+            return ".";
+
+        return normalized[..firstSeparator];
+    }
+
+    private static string NormalizeScopeKey(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/').Trim('/');
+        return string.IsNullOrEmpty(normalized) || normalized == "."
+            ? "."
+            : normalized;
+    }
+
+    private static string? GetProjectMarkerPattern(string? lang) => lang switch
+    {
+        "csharp" => "*.csproj",
+        "vb" => "*.vbproj",
+        "fsharp" => "*.fsproj",
+        _ => null,
+    };
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
     /// <summary>
     /// Enumerate all indexable files under the project root.
     /// プロジェクトルート以下のインデックス対象ファイルを列挙する。
