@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **Developer Guide now distinguishes SQLite's role from "zero dependencies" and labels release numbers as examples** — Clarified that cdidx remains a zero-configuration, single-file CLI with exactly one production dependency (`Microsoft.Data.Sqlite`), and made the release-workflow checklist explicitly state that `1.9.0` is only an example version to substitute during an actual release. Affected: `DEVELOPER_GUIDE.md`.
+
 #### Fixed
 - **Release verify step waits for CDN-propagated download URL and `gh release create` is idempotent** — The `Verify install.sh against the published release` step in `.github/workflows/release.yml` previously called `install.sh` immediately after `gh release create`, which races the GitHub release download CDN. Asset URLs returned 404 for several seconds even though the API listed them, making the v1.10.0 release run fail despite the actual release being healthy. Added a preceding `Wait for release assets to be downloadable` step that polls the public `releases/download/<tag>/CodeIndex-linux-x64.tar.gz` URL with up to ten 5-second retries before the verify step runs. Also made `Create GitHub release` idempotent: when the same-tag release already exists (e.g. on a re-run after a transient verify failure), the step now uploads any missing assets via `gh release upload --clobber` instead of failing with `a release with the same tag name already exists`. Affected: `.github/workflows/release.yml`.
 
@@ -641,6 +644,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **DEVELOPER_GUIDE が SQLite の位置付けとリリース番号の例示を明確化** — cdidx が「設定ゼロ・単一ファイル・本番依存1個」の CLI であり、その唯一の本番依存が `Microsoft.Data.Sqlite` であることを明記した。あわせて、リリース手順のチェックリスト中に出てくる `1.9.0` は固定値ではなく例示であり、実際のリリース番号へ読み替える前提だと明示した。対象: `DEVELOPER_GUIDE.md`。
 
 #### 修正
 - **Release ワークフローの verify ステップを CDN 伝播待ち＋`gh release create` 冪等化** — `.github/workflows/release.yml` の `Verify install.sh against the published release` は `gh release create` 直後に `install.sh` を起動しており、GitHub Release の download CDN との競合で URL が数秒間 404 を返し、リリース自体は正常なのに verify が落ちることがあった（v1.10.0 で発生）。verify 前に `Wait for release assets to be downloadable` ステップを追加し、`releases/download/<tag>/CodeIndex-linux-x64.tar.gz` を 5 秒間隔で最大 10 回ポーリングしてから verify を回すようにした。あわせて `Create GitHub release` を冪等化し、同名タグの release が既に存在する場合は `gh release upload --clobber` で不足アセットのみ補完するため、verify ステップの再実行で `a release with the same tag name already exists` で落ちないようにした。対象: `.github/workflows/release.yml`。
