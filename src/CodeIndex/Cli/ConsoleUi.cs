@@ -384,6 +384,7 @@ public static class ConsoleUi
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis (default: 5)");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
+        Console.WriteLine("  Note: if a string value itself starts with '--', pass it as --opt=<value> (for example --path=--json-dir or --db=--tmp.db)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");

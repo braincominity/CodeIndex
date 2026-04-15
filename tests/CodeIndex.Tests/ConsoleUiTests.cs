@@ -41,6 +41,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx symbols [query] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <pattern>]", output);
+        Assert.Contains("Note: if a string value itself starts with '--', pass it as --opt=<value>", output);
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
         Assert.Contains("backfill-fold", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);

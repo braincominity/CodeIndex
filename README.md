@@ -424,6 +424,8 @@ cdidx map --path src/ --exclude-tests --json
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--top <n>` | Query commands | Alias for `--limit` |
 
+If a string value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value. For example, use `--path=--json-dir` or `--db=--tmp.db`.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -1240,6 +1242,8 @@ cdidx map --path src/ --exclude-tests --json
 | `--no-dedup` | `search` | オーバーラップチャンク重複排除を無効化 |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
+
+文字列の値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡してください。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
 
 ### 終了コード
 

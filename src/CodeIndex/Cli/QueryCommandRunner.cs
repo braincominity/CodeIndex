@@ -54,9 +54,9 @@ public static class QueryCommandRunner
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteParseError(options, "search"))
-            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--fts", "--count", "--since", "--no-dedup", "--exact"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "search"))
             return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
@@ -122,9 +122,9 @@ public static class QueryCommandRunner
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteParseError(options, "definition"))
-            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOptionError("definition", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--body", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -229,11 +229,9 @@ public static class QueryCommandRunner
     public static int RunReferences(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "references"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "references"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -313,11 +311,9 @@ public static class QueryCommandRunner
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callers"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "callers"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -393,11 +389,9 @@ public static class QueryCommandRunner
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callees"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "callees"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -493,9 +487,9 @@ public static class QueryCommandRunner
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteParseError(options, "symbols"))
-            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--name"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "symbols"))
             return CommandExitCodes.UsageError;
         var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
         if (hadExplicitInput && symbolQueries == null)
@@ -599,9 +593,9 @@ public static class QueryCommandRunner
     public static int RunFiles(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteParseError(options, "files"))
-            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "files"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedExtraPositionals("files", options))
             return CommandExitCodes.UsageError;
@@ -652,11 +646,9 @@ public static class QueryCommandRunner
     public static int RunExcerpt(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, ["--db", "--json", "--start", "--end", "--before", "--after"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "excerpt"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, ["--db", "--json", "--start", "--end", "--before", "--after", "--since"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "excerpt"))
             return CommandExitCodes.UsageError;
         if (options.Query == null)
         {
@@ -712,11 +704,9 @@ public static class QueryCommandRunner
     public static int RunMap(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("map", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "map"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("map", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--since"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "map"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
@@ -784,11 +774,9 @@ public static class QueryCommandRunner
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--body", "--exact"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "inspect"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--since", "--body", "--exact"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "inspect"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -866,11 +854,9 @@ public static class QueryCommandRunner
 
         var filePath = cmdArgs[0].Replace('\\', '/');
         var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], ["--db", "--json"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "outline"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], ["--db", "--json", "--since"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "outline"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("outline", options))
             return CommandExitCodes.UsageError;
@@ -916,11 +902,9 @@ public static class QueryCommandRunner
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("status", cmdArgs, ["--db", "--json"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "status"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("status", cmdArgs, ["--db", "--json", "--since"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "status"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
@@ -1000,11 +984,9 @@ public static class QueryCommandRunner
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "impact"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--depth"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "impact"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -1207,11 +1189,9 @@ public static class QueryCommandRunner
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("deps", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--reverse"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "deps"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("deps", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--since", "--reverse"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "deps"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("deps", options))
             return CommandExitCodes.UsageError;
@@ -1254,11 +1234,9 @@ public static class QueryCommandRunner
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "hotspots"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
@@ -1315,11 +1293,9 @@ public static class QueryCommandRunner
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("unused", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("unused", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "unused"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
@@ -1380,11 +1356,9 @@ public static class QueryCommandRunner
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("validate", cmdArgs, ["--db", "--json", "--kind", "--path"]))
+            return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "validate"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOptionError("validate", cmdArgs, ["--db", "--json", "--kind", "--path", "--since"]))
-            return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedSinceError(options, "validate"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("validate", options))
             return CommandExitCodes.UsageError;
@@ -1425,9 +1399,9 @@ public static class QueryCommandRunner
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteParseError(options, "languages"))
-            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOptionError("languages", cmdArgs, ["--json"]))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "languages"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("languages", options))
             return CommandExitCodes.UsageError;
@@ -1747,17 +1721,6 @@ public static class QueryCommandRunner
 
         Console.Error.WriteLine(options.ParseError);
         Console.Error.WriteLine("Hint: fix the invalid or missing option value, then rerun with the command shape below.");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
-        return true;
-    }
-
-    private static bool TryWriteUnsupportedSinceError(QueryCommandOptions options, string commandName)
-    {
-        if (!options.Since.HasValue)
-            return false;
-
-        Console.Error.WriteLine($"Error: --since is not supported for {commandName}.");
-        Console.Error.WriteLine("Hint: remove `--since` and rerun, or use it with `search`, `definition`, `symbols`, or `files`.");
         Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
         return true;
     }
