@@ -24,6 +24,12 @@ public static class WorkspaceMetadataEnricher
     private static void Apply(string dbPath, Action<string?, string?, bool?> setter)
     {
         var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+        if (projectRoot == null)
+        {
+            setter(null, null, null);
+            return;
+        }
+
         setter(projectRoot, GitHelper.TryGetHeadCommit(projectRoot), GitHelper.TryIsWorktreeDirty(projectRoot));
     }
 }

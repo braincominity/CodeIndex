@@ -1228,6 +1228,7 @@ public partial class McpServer
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
+        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectPath);
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);

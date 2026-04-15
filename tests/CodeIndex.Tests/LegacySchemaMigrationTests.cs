@@ -810,8 +810,10 @@ public class LegacySchemaMigrationTests : IDisposable
             var uri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var plainRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath);
             var uriRoot = DbPathResolver.ResolveProjectRootForQuery(uri);
+            Assert.NotNull(plainRoot);
+            Assert.NotNull(uriRoot);
             Assert.Equal(plainRoot, uriRoot);
-            Assert.Equal(Path.GetFullPath(dir), Path.GetFullPath(uriRoot));
+            Assert.Equal(Path.GetFullPath(dir), Path.GetFullPath(uriRoot!));
         }
         finally
         {

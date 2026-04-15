@@ -17,17 +17,20 @@ namespace CodeIndex.Tests;
 public class McpServerTests : IDisposable
 {
     private readonly string _dbPath;
+    private readonly string _projectRoot;
     private readonly DbContext _db;
     private readonly McpServer _server;
 
     public McpServerTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_test_{Guid.NewGuid():N}.db");
+        _projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_workspace");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
 
         // Seed test data / テストデータを投入
         var writer = new DbWriter(_db.Connection);
+        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, _projectRoot);
         // Stamp graph + issues ready so reads trust the seeded references like a completed index run.
         // seed したデータを完了 index と同等に扱うため readiness を stamp しておく。
         writer.MarkGraphReady();
@@ -3420,6 +3423,7 @@ public class McpServerTests : IDisposable
     {
         _db.Dispose();
         DeleteDbPath();
+        TestProjectHelper.DeleteDirectory(_projectRoot);
     }
 
     private void DeleteDbPath()

@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -41,5 +42,53 @@ public class DbPathResolverTests
         var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
 
         Assert.Equal(Path.GetFullPath(projectPath), resolved);
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_PrefersStoredIndexedProjectRootMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_meta_root");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            }
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+
+            Assert.Equal(projectRoot, resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectRootForQuery_ReturnsNullForExplicitDbWithoutMetadata()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+
+            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+
+            Assert.Null(resolved);
+        }
+        finally
+        {
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
     }
 }

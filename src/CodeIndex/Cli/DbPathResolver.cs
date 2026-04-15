@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace CodeIndex.Cli;
 
 /// <summary>
@@ -24,17 +26,21 @@ public static class DbPathResolver
     /// Resolve the most likely project root for query commands from the DB path.
     /// クエリ系コマンドのDBパスから、もっとも可能性が高いプロジェクトルートを解決する。
     /// </summary>
-    public static string ResolveProjectRootForQuery(string dbPath)
+    public static string? ResolveProjectRootForQuery(string dbPath)
     {
         var fullDbPath = Path.GetFullPath(NormalizeDbPath(dbPath));
+        var indexedProjectRoot = TryReadIndexedProjectRoot(fullDbPath);
+        if (!string.IsNullOrWhiteSpace(indexedProjectRoot))
+            return Path.GetFullPath(indexedProjectRoot);
+
         var dbDir = Path.GetDirectoryName(fullDbPath);
         if (dbDir == null)
-            return Path.GetFullPath(".");
+            return null;
 
         if (string.Equals(Path.GetFileName(dbDir), ".cdidx", StringComparison.OrdinalIgnoreCase))
-            return Path.GetDirectoryName(dbDir) ?? Path.GetFullPath(".");
+            return Path.GetDirectoryName(dbDir);
 
-        return Path.GetFullPath(".");
+        return null;
     }
 
     /// <summary>
@@ -60,6 +66,29 @@ public static class DbPathResolver
         catch
         {
             return dbPath;
+        }
+    }
+
+    private static string? TryReadIndexedProjectRoot(string dbPath)
+    {
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+            };
+            using var connection = new SqliteConnection(builder.ConnectionString);
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            cmd.Parameters.AddWithValue("@key", CodeIndex.Database.DbContext.IndexedProjectRootMetaKey);
+            var raw = cmd.ExecuteScalar();
+            return raw is string value && !string.IsNullOrWhiteSpace(value) ? value : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 }

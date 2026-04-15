@@ -281,6 +281,7 @@ public class DbContext : IDisposable
     // bit 2 (FoldReadyFlag, #86): name_folded 列の完全バックフィル完了を示す。
     public const int FoldReadyFlag = 4;
     public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag; // 7 — full CLI readiness
+    public const string IndexedProjectRootMetaKey = "indexed_project_root";
 
     public int GetUserVersion()
     {
