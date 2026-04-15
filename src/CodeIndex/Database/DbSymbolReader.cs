@@ -585,23 +585,23 @@ public partial class DbReader
 
     /// <summary>
     /// Find symbols with the most references (hotspots — heavily used code).
-    /// Uses file-scoped join: counts references from the same file where the symbol is defined,
-    /// plus cross-file references where the container name matches to reduce bare-name collisions.
+    /// Uses symbol-local reference counting: only counts same-file references for the exact
+    /// symbol row, which avoids inflating hotspots from unrelated same-named symbols in other files.
+    /// Cross-file disambiguation would require richer callee resolution than the bare reference name
+    /// currently stored in symbol_references.
     /// 最も多く参照されるシンボルを検索する（ホットスポット — 多用されるコード）。
-    /// ファイルスコープ JOIN を使用: シンボルが定義されたファイル内の参照と、
-    /// コンテナ名が一致するクロスファイル参照をカウントし、名前衝突を軽減する。
+    /// シンボル行ローカルな参照数を使い、同じファイル内の参照だけをカウントすることで、
+    /// 他ファイルの無関係な同名シンボルによるホットスポット水増しを防ぐ。
+    /// クロスファイルを正確に結び付けるには、symbol_references に現在保存している
+    /// bare name より豊かな callee 解決情報が必要になる。
     /// </summary>
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
-        // Count references where the symbol name matches AND either:
-        // 1. The reference is in the same file as the definition, OR
-        // 2. The reference's container/context mentions the symbol's container (cross-file usage)
-        // This reduces false inflation from unrelated same-named symbols.
-        // シンボル名が一致し、かつ以下のいずれかの参照をカウント:
-        // 1. 参照がシンボル定義と同じファイル内にある、または
-        // 2. 参照のコンテキストがシンボルのコンテナに言及している（クロスファイル使用）
-        // 無関係な同名シンボルによる水増しを軽減する。
+        // Only count same-file bare-name matches. Without true symbol resolution, cross-file
+        // references with the same callee name are too ambiguous and inflate the hotspot score.
+        // 同じファイル内の bare-name 一致だけを数える。真の symbol resolution が無い状態で
+        // クロスファイルの同名参照まで数えると hotspot が過大評価される。
         var sql = $@"
             SELECT s.name, COUNT(DISTINCT sr.id) as ref_count,
                    s.kind, f.path, f.lang, s.line,
@@ -609,7 +609,7 @@ public partial class DbReader
                    {GetSymbolColumnSql("container_name")} AS container_name
             FROM symbols s
             JOIN files f ON s.file_id = f.id
-            JOIN symbol_references sr ON sr.symbol_name = s.name
+            JOIN symbol_references sr ON sr.symbol_name = s.name AND sr.file_id = s.file_id
             WHERE s.kind NOT IN ('import', 'namespace')";
 
         // Restrict to graph-supported languages only / グラフ対応言語のみに制限
@@ -622,7 +622,11 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
+        sql += $@"
+            GROUP BY s.id, s.name, s.kind, f.path, f.lang, s.line,
+                     {GetSymbolColumnSql("visibility")}, {GetSymbolColumnSql("container_name")}
+            ORDER BY ref_count DESC
+            LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;

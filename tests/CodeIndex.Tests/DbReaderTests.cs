@@ -827,6 +827,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_CountsSameNameReferencesPerSymbolFile()
+    {
+        InsertIndexedFile("src/hotspots_alpha.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def alpha_use():\n    Shared()\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_beta.py", "python",
+            "def Shared():\n    return True\n\n" +
+            "def beta_use():\n    Shared()\n");
+        InsertIndexedFile("src/hotspots_gamma.py", "python",
+            "def gamma_use():\n    Shared()\n");
+
+        var results = _reader.GetSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/hotspots_alpha.py", "src/hotspots_beta.py"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var shared = results
+            .Where(result => result.Symbol.Name == "Shared")
+            .OrderBy(result => result.Symbol.Path, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Collection(shared,
+            alpha =>
+            {
+                Assert.Equal("src/hotspots_alpha.py", alpha.Symbol.Path);
+                Assert.Equal(2, alpha.ReferenceCount);
+            },
+            beta =>
+            {
+                Assert.Equal("src/hotspots_beta.py", beta.Symbol.Path);
+                Assert.Equal(1, beta.ReferenceCount);
+            });
+    }
+
+    [Fact]
     public void GraphReaders_ExactMatchesNameEquality()
     {
         // Seed content where `authenticate_v2` is both CALLED (so it appears as a reference

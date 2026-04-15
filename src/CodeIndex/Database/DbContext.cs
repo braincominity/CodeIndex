@@ -450,6 +450,7 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_kind            ON symbols(kind)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_kind   ON symbol_references(symbol_name, reference_kind)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file   ON symbol_references(symbol_name, file_id)");
         // Case-insensitive exact-match indexes for `references --exact` / `callers --exact` / `callees --exact` (#83).
         // Mirror idx_symbols_name_nocase so `= @q COLLATE NOCASE` stays O(log n) per name across graph commands.
         // `references / callers / callees --exact` 用の NOCASE index。idx_symbols_name_nocase と対になる。
