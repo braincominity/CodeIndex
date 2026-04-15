@@ -90,8 +90,8 @@ public static class IndexCommandRunner
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
-                dryCandidates = options.UpdateFiles
-                    .Select(f => Path.IsPathRooted(f) ? f : Path.Combine(options.ProjectPath, f))
+                dryCandidates = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json)
+                    .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
                     .Where(File.Exists)
                     .ToList();
             }
@@ -495,18 +495,8 @@ public static class IndexCommandRunner
 
         if (options.UpdateFiles.Count > 0)
         {
-            foreach (var f in options.UpdateFiles)
-            {
-                var absPath = Path.IsPathRooted(f) ? f : Path.GetFullPath(Path.Combine(projectRoot, f));
-                var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
-                if (IsOutsideProjectRoot(relPath))
-                {
-                    if (!options.Json)
-                        Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
-                    continue;
-                }
+            foreach (var relPath in NormalizeUpdateFileTargets(projectRoot, options.UpdateFiles, options.Json))
                 targetPaths.Add(relPath);
-            }
         }
 
         if (!options.Json)
@@ -815,6 +805,26 @@ public static class IndexCommandRunner
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
 
+    private static IReadOnlyList<string> NormalizeUpdateFileTargets(string projectRoot, IEnumerable<string> updateFiles, bool json)
+    {
+        var normalized = new List<string>();
+        foreach (var file in updateFiles)
+        {
+            var absPath = Path.IsPathRooted(file) ? file : Path.GetFullPath(Path.Combine(projectRoot, file));
+            var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
+            if (IsOutsideProjectRoot(relPath))
+            {
+                if (!json)
+                    Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {file}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
+                continue;
+            }
+
+            normalized.Add(relPath);
+        }
+
+        return normalized;
+    }
+
     private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
     {
         lang = string.Empty;
@@ -923,11 +933,24 @@ public static class IndexCommandRunner
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
-        var purged = scanResult.HadErrors
-            ? 0
-            : writer.PurgeFilesOutsideRetainedSet(files
+        var purged = 0;
+        if (scanResult.HadErrors)
+        {
+            foreach (var relPath in scanResult.NonIndexablePaths)
+            {
+                if (!writer.HasFileAtPath(relPath))
+                    continue;
+
+                if (writer.DeleteFileByPath(relPath))
+                    purged++;
+            }
+        }
+        else
+        {
+            purged = writer.PurgeFilesOutsideRetainedSet(files
                 .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
                 .ToHashSet(StringComparer.Ordinal));
+        }
         if (purged > 0)
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
@@ -936,7 +959,7 @@ public static class IndexCommandRunner
             if (purged > 0)
                 Console.WriteLine($"  Purged {purged:N0} stale files (missing or no longer indexable)");
             if (scanResult.HadErrors)
-                ConsoleUi.PrintWarning("Skipped authoritative purge because some paths could not be scanned.");
+                ConsoleUi.PrintWarning("Skipped authoritative purge outside positively observed non-indexable paths because some paths could not be scanned.");
         }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ

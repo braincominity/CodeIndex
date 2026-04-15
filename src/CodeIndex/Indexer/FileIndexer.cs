@@ -21,7 +21,10 @@ public class FileIndexer
 
     public readonly record struct ScanError(string Path, string Message);
 
-    public readonly record struct ScanFilesResult(IReadOnlyList<string> Files, IReadOnlyList<ScanError> Errors)
+    public readonly record struct ScanFilesResult(
+        IReadOnlyList<string> Files,
+        IReadOnlyList<ScanError> Errors,
+        IReadOnlyList<string> NonIndexablePaths)
     {
         public bool HadErrors => Errors.Count > 0;
     }
@@ -214,21 +217,22 @@ public class FileIndexer
     {
         var files = new List<string>();
         var errors = new List<ScanError>();
-        EnumerateDirectory(_projectRoot, files, errors);
-        return new ScanFilesResult(files, errors);
+        var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
+        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths);
+        return new ScanFilesResult(files, errors, nonIndexablePaths.ToList());
     }
 
-    private void ScanDirectory(string dir, List<string> results, List<ScanError> errors)
+    private void ScanDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths)
     {
         // Check for skip directories / スキップ対象ディレクトリかチェック
         var dirName = Path.GetFileName(dir);
         if (SkipDirs.Contains(dirName))
             return;
 
-        EnumerateDirectory(dir, results, errors);
+        EnumerateDirectory(dir, results, errors, nonIndexablePaths);
     }
 
-    private void EnumerateDirectory(string dir, List<string> results, List<ScanError> errors)
+    private void EnumerateDirectory(string dir, List<string> results, List<ScanError> errors, HashSet<string> nonIndexablePaths)
     {
         try
         {
@@ -250,7 +254,10 @@ public class FileIndexer
                 }
 
                 if (indexability != FileProbeStatus.Supported)
+                {
+                    nonIndexablePaths.Add(ToRelativePath(file));
                     continue;
+                }
 
                 // Include files with a known extension/filename or an extensionless recognized shebang
                 // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
@@ -263,11 +270,13 @@ public class FileIndexer
 
                 if (language.Status == FileProbeStatus.Supported)
                     results.Add(file);
+                else
+                    nonIndexablePaths.Add(ToRelativePath(file));
             }
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                ScanDirectory(subDir, results, errors);
+                ScanDirectory(subDir, results, errors, nonIndexablePaths);
             }
         }
         catch (UnauthorizedAccessException)
