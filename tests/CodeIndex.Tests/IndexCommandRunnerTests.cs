@@ -1312,7 +1312,7 @@ public class IndexCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var seededDb = new DbContext(dbPath))
-                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             WriteOversizedAsciiFile(Path.Combine(projectRoot, "app.cs"));
 
@@ -1322,7 +1322,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(1, json2.GetProperty("summary").GetProperty("errors").GetInt32());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
         }
         finally
         {
@@ -1339,9 +1339,31 @@ public class IndexCommandRunnerTests
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
-            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
-            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run() { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                        api.Run(1);
+                    }
+                }
+                """);
 
             var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode1);
@@ -1349,7 +1371,7 @@ public class IndexCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var seededDb = new DbContext(dbPath))
-                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
 
@@ -1358,8 +1380,8 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", json2.GetProperty("status").GetString());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyMarkerFingerprintMetaKey));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
         }
         finally
         {
@@ -1386,7 +1408,7 @@ public class IndexCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var seededDb = new DbContext(dbPath))
-                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
 
@@ -1395,8 +1417,48 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", json2.GetProperty("status").GetString());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyMarkerFingerprintMetaKey));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_KeepsCsharpHotspotFamilyTrustWhenOnlyVbMarkersChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+
+            File.WriteAllText(Path.Combine(projectRoot, "Unrelated.vbproj"), "<Project />");
+
+            var (rerunExitCode, rerunJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, rerunExitCode);
+            Assert.Equal("success", rerunJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("vb")));
+
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+            Assert.True(hotspotsExitCode is CommandExitCodes.Success or CommandExitCodes.NotFound);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+            if (hotspotsJson.TryGetProperty("degraded", out var degraded))
+                Assert.False(degraded.GetBoolean());
         }
         finally
         {
@@ -1695,6 +1757,27 @@ public class IndexCommandRunnerTests
             {
                 Console.SetOut(originalOut);
                 Console.SetError(originalErr);
+            }
+        }
+    }
+
+    private (int ExitCode, JsonElement Json) RunHotspotsJson(string dbPath, string lang, string kind)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+
+            try
+            {
+                Console.SetOut(writer);
+                var exitCode = QueryCommandRunner.RunHotspots(["--db", dbPath, "--json", "--lang", lang, "--kind", kind], _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                return (exitCode, document.RootElement.Clone());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
             }
         }
     }

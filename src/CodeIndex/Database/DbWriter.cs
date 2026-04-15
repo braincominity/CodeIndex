@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Database;
@@ -624,12 +625,16 @@ public class DbWriter
     /// stay unstamped so readers degrade to conservative same-file counting.
     /// hotspots family grouping の current authoritative version を stamp する。
     /// </summary>
-    public void MarkHotspotFamilyReady(string? markerFingerprint = null)
+    public void MarkHotspotFamilyReady(string lang, string? markerFingerprint = null)
     {
         SetMeta(
-            DbContext.HotspotFamilyVersionMetaKey,
+            DbContext.GetHotspotFamilyVersionMetaKey(lang),
             DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, markerFingerprint);
+        SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), markerFingerprint);
+        // Clear the superseded global keys so mixed-version DBs don't leave confusing stale metadata behind.
+        // 廃止した global key を掃除し、混在 DB に紛らわしい古い metadata を残さない。
+        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
     }
 
     /// <summary>
@@ -645,6 +650,11 @@ public class DbWriter
 
         SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
         SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            SetMeta(DbContext.GetHotspotFamilyVersionMetaKey(lang), null);
+            SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), null);
+        }
     }
 
     /// <summary>

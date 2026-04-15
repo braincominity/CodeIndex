@@ -1258,6 +1258,55 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_ZeroJson_ReportsDegradedHotspotFamilyTrust()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: false);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_HumanOutput_WarnsWhenHotspotFamilyTrustIsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_zero_human");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: false);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("cross-file hotspot family grouping", stderr);
+            Assert.Contains("authoritative cross-file hotspot families", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_ZeroJson_EmitsEnvelopeAndFreshness()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_impact");
@@ -4717,6 +4766,52 @@ public class QueryCommandRunnerTests
             writer.MarkGraphReady();
         }
 
+        return dbPath;
+    }
+
+    private static string CreateHotspotFamilyFixtureDb(string projectRoot, bool markHotspotFamilyReady)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Api.Part1.cs",
+            "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Api.Part2.cs",
+            "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Caller.cs",
+            "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        if (markHotspotFamilyReady)
+            writer.MarkHotspotFamilyReady("csharp");
         return dbPath;
     }
 

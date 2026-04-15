@@ -10,6 +10,11 @@ public readonly record struct ExactQuerySignal(
     bool HasMissingTable,
     string? DegradedReason);
 
+public readonly record struct HotspotFamilySignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -23,6 +28,7 @@ public partial class DbReader
     private readonly HashSet<string> _symbolColumns;
     private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
+    private readonly HashSet<string> _indexedHotspotFamilyLanguages;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasChunksTable;
@@ -31,11 +37,11 @@ public partial class DbReader
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
-    // True when `family_key` / `container_qualified_name` semantics are authoritative for
-    // the whole DB. Mixed legacy/update states degrade hotspot grouping until a fully
-    // trusted scan restamps the version marker.
-    // `family_key` / `container_qualified_name` が DB 全体で authoritative か。
-    internal readonly bool _hotspotFamilyReady;
+    // Tracks which languages have authoritative cross-file hotspot family semantics.
+    // Mixed legacy/update states can therefore degrade only the affected language instead of
+    // globally disabling families for unrelated marker types.
+    // authoritative な hotspot family semantics を保持する言語集合。
+    internal readonly HashSet<string> _hotspotFamilyReadyLanguages;
     internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
@@ -122,6 +128,7 @@ public partial class DbReader
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
         _referenceIndexes = LoadIndexes("symbol_references");
+        _indexedHotspotFamilyLanguages = LoadIndexedHotspotFamilyLanguages();
         // #86/#97: require the FoldReady bit plus matching fold metadata before trusting
         // folded columns. version guards intentional NameFold changes; fingerprint guards
         // runtime ICU / invariant-casing drift across .NET upgrades. Missing metadata on
@@ -135,17 +142,47 @@ public partial class DbReader
         _foldReady = foldBitSet
             && storedFoldVersion == NameFold.Version
             && string.Equals(storedFoldFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal);
-        var hotspotFamilyVersion = ParseHotspotFamilyVersion(connection);
-        _hotspotFamilyReady =
-            _symbolColumns.Contains("family_key")
-            && _symbolColumns.Contains("container_qualified_name")
-            && hotspotFamilyVersion == DbContext.HotspotFamilyVersion;
+        _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
         // repo is untouched, which would flip trust on prematurely. Only an explicit
         // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
         // get stamped — degradation is safer than silent false-clean zeroes.
         // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+    }
+
+    internal HotspotFamilySignal GetHotspotFamilySignal(string? lang)
+    {
+        if (lang != null)
+        {
+            if (!FileIndexer.SupportsHotspotFamilyMarkerLanguage(lang) || !_indexedHotspotFamilyLanguages.Contains(lang))
+                return new HotspotFamilySignal(Ready: true, Relevant: false, DegradedReason: null);
+
+            var ready = _hotspotFamilyReadyLanguages.Contains(lang);
+            return new HotspotFamilySignal(
+                Ready: ready,
+                Relevant: true,
+                DegradedReason: ready
+                    ? null
+                    : $"cross-file hotspot family grouping for '{lang}' is degraded; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
+        }
+
+        var relevantLanguages = _indexedHotspotFamilyLanguages
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+        if (relevantLanguages.Count == 0)
+            return new HotspotFamilySignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        var unreadyLanguages = relevantLanguages
+            .Where(language => !_hotspotFamilyReadyLanguages.Contains(language))
+            .ToList();
+        if (unreadyLanguages.Count == 0)
+            return new HotspotFamilySignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new HotspotFamilySignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: $"cross-file hotspot family grouping is degraded for: {string.Join(", ", unreadyLanguages)}; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
     }
 
     private HashSet<string> LoadIndexes(string tableName)
@@ -178,12 +215,49 @@ public partial class DbReader
         return TryGetMetaString(conn, "fold_key_fingerprint");
     }
 
-    private static int ParseHotspotFamilyVersion(SqliteConnection conn)
+    private HashSet<string> LoadIndexedHotspotFamilyLanguages()
     {
-        var raw = TryGetMetaString(conn, DbContext.HotspotFamilyVersionMetaKey);
-        if (raw is string s && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var v))
-            return v;
-        return -1;
+        var langs = new HashSet<string>(StringComparer.Ordinal);
+        if (!_symbolColumns.Contains("family_key"))
+            return langs;
+
+        var hotspotFamilyLangs = FileIndexer.GetHotspotFamilyMarkerLanguages();
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT DISTINCT f.lang
+            FROM files f
+            JOIN symbols s ON s.file_id = f.id
+            WHERE COALESCE({GetSymbolColumnSql("family_key")}, '') <> ''
+              AND f.lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hfl{i}"))})";
+        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
+            cmd.Parameters.AddWithValue($"@hfl{i}", hotspotFamilyLangs[i]);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (!reader.IsDBNull(0))
+                langs.Add(reader.GetString(0));
+        }
+        return langs;
+    }
+
+    private HashSet<string> LoadHotspotFamilyReadyLanguages(SqliteConnection conn)
+    {
+        var readyLangs = new HashSet<string>(StringComparer.Ordinal);
+        if (!_symbolColumns.Contains("family_key") || !_symbolColumns.Contains("container_qualified_name"))
+            return readyLangs;
+
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            var raw = TryGetMetaString(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
+            if (raw is string s
+                && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
+                && version == DbContext.HotspotFamilyVersion)
+            {
+                readyLangs.Add(lang);
+            }
+        }
+
+        return readyLangs;
     }
 
     private static string? TryGetMetaString(SqliteConnection conn, string key)

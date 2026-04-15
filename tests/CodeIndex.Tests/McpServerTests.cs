@@ -2190,7 +2190,7 @@ public class McpServerTests : IDisposable
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
             using (var seededDb = new DbContext(dbPath))
-                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
 
             WriteOversizedAsciiFile(Path.Combine(fixtureDir, "app.cs"));
 
@@ -2213,7 +2213,7 @@ public class McpServerTests : IDisposable
             Assert.Equal(1, secondResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
         }
         finally
         {
@@ -2275,6 +2275,96 @@ public class McpServerTests : IDisposable
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "Api.Part1.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run() { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(srcDir, "Api.Part2.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(srcDir, "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                        api.Run(1);
+                    }
+                }
+                """);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(firstIndex)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+
+            File.WriteAllText(Path.Combine(fixtureDir, "Extra.csproj"), "<Project />");
+
+            var secondIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 2,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var secondResponse = server.HandleMessage(secondIndex)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_KeepsCsharpHotspotFamilyTrustWhenOnlyVbMarkersChange()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_marker_isolation_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var srcDir = Path.Combine(fixtureDir, "src");
+        Directory.CreateDirectory(srcDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_marker_isolation_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
             File.WriteAllText(Path.Combine(srcDir, "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
             File.WriteAllText(Path.Combine(srcDir, "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
             File.WriteAllText(Path.Combine(srcDir, "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
@@ -2297,10 +2387,7 @@ public class McpServerTests : IDisposable
             var firstResponse = server.HandleMessage(firstIndex)!;
             Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
-            using (var seededDb = new DbContext(dbPath))
-                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
-
-            File.WriteAllText(Path.Combine(fixtureDir, "Extra.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(fixtureDir, "Unrelated.vbproj"), "<Project />");
 
             var secondIndex = new JsonObject
             {
@@ -2320,8 +2407,16 @@ public class McpServerTests : IDisposable
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyVersionMetaKey));
-            Assert.Null(verifyDb.GetMetaString(DbContext.HotspotFamilyMarkerFingerprintMetaKey));
+            Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("vb")));
+
+            var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
+            var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
+            var structured = hotspotsResponse["result"]!["structuredContent"]!;
+            Assert.True(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.True(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            if (structured["degraded"] is JsonNode degradedNode)
+                Assert.False(degradedNode.GetValue<bool>());
         }
         finally
         {
@@ -2329,6 +2424,45 @@ public class McpServerTests : IDisposable
             if (File.Exists(dbPath)) File.Delete(dbPath);
             if (Directory.Exists(fixtureDir))
                 Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_ReportsDegradedHotspotFamilyTrust()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_hotspots_family_signal_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.True(structured["degraded"]!.GetValue<bool>());
+            Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("degraded", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
         }
     }
 

@@ -603,9 +603,16 @@ public partial class DbReader
         var containerNameSql = GetSymbolColumnSql("container_name");
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
         var familyKeySql = GetSymbolColumnSql("family_key");
-        var familyTargetKeySql = _hotspotFamilyReady
+        var hotspotFamilyLangs = _hotspotFamilyReadyLanguages
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+        var familyLangConditionSql = hotspotFamilyLangs.Count > 0
+            ? $"f.lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hotspotFamilyLang{i}"))})"
+            : "0";
+        var familyTargetKeySql = hotspotFamilyLangs.Count > 0
             ? $@"CASE
-                    WHEN COALESCE({familyKeySql}, '') <> ''
+                    WHEN {familyLangConditionSql}
+                     AND COALESCE({familyKeySql}, '') <> ''
                         THEN 'family|' || COALESCE(f.lang, '') || '|' || COALESCE(s.kind, '') || '|' || {familyKeySql}
                     ELSE NULL
                 END"
@@ -781,6 +788,8 @@ public partial class DbReader
         }
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
+            cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
 
         var results = new List<(SymbolResult, int)>();
         using var reader = cmd.ExecuteTrackedReader();

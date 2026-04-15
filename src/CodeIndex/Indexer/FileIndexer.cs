@@ -10,6 +10,7 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public class FileIndexer
 {
+    private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp"];
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -187,17 +188,19 @@ public class FileIndexer
         return DeriveFallbackFamilyScopeKey(relativePath);
     }
 
-    public string GetProjectMarkerFingerprint()
+    public static IReadOnlyList<string> GetHotspotFamilyMarkerLanguages() => HotspotFamilyMarkerLanguages;
+
+    public static bool SupportsHotspotFamilyMarkerLanguage(string? lang) =>
+        GetProjectMarkerPattern(lang) != null;
+
+    public string? GetProjectMarkerFingerprint(string? lang)
     {
+        var projectMarkerPattern = GetProjectMarkerPattern(lang);
+        if (projectMarkerPattern == null)
+            return null;
+
         var projectMarkers = Directory
-            .EnumerateFiles(_projectRoot, "*.*proj", SearchOption.AllDirectories)
-            .Where(path =>
-            {
-                var ext = Path.GetExtension(path);
-                return ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
-                    || ext.Equals(".vbproj", StringComparison.OrdinalIgnoreCase)
-                    || ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase);
-            })
+            .EnumerateFiles(_projectRoot, projectMarkerPattern, SearchOption.AllDirectories)
             .Select(path => NormalizeScopeKey(Path.GetRelativePath(_projectRoot, path)))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();

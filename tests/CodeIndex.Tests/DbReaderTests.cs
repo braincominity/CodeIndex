@@ -34,7 +34,8 @@ public class DbReaderTests : IDisposable
         // test that opens a DB without this flag.
         // #86: full scan 後の本番 DB は fold ready も立つため、reader は fold 経路を通す。
         _writer.MarkFoldReady();
-        _writer.MarkHotspotFamilyReady();
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            _writer.MarkHotspotFamilyReady(lang);
         _reader = new DbReader(_db.Connection);
     }
 
@@ -1412,7 +1413,7 @@ public class DbReaderTests : IDisposable
                 """;
             cmd.ExecuteNonQuery();
         }
-        _writer.SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        _writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
 
         var reader = new DbReader(_db.Connection);
         var results = reader.GetSymbolHotspots(
