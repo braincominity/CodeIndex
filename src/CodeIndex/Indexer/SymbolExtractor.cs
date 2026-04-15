@@ -83,21 +83,15 @@ public static class SymbolExtractor
         int FirstLineScanOffset,
         string ContainerName);
 
-    private static readonly Regex JavaScriptBareMethodRegex = new(
-        @"^\s*(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{",
-        RegexOptions.Compiled);
-
-    private static readonly Regex TypeScriptBareMethodRegex = new(
-        @"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^{]+))?\s*\{",
-        RegexOptions.Compiled);
-
     private static readonly HashSet<string> TypeScriptBareMethodModifiers =
     [
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async"
     ];
 
     private readonly record struct JavaScriptTypeScriptMethodHeaderInfo(
+        string Name,
         int BodyStartColumn,
+        string? Visibility = null,
         int? GenericStartColumn = null,
         int? GenericEndColumn = null,
         int? ReturnTypeStartColumn = null,
@@ -641,12 +635,11 @@ public static class SymbolExtractor
 
     private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
-        var methodRegex = lang == "javascript" ? JavaScriptBareMethodRegex : TypeScriptBareMethodRegex;
         var existingClassTargets = GetJavaScriptTypeScriptExistingClassScanTargets(lang, lines, symbols);
-        ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, existingClassTargets, methodRegex);
+        ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, existingClassTargets);
 
         var syntheticClassTargets = CollectJavaScriptTypeScriptSyntheticClassScanTargets(fileId, lang, lines, symbols, privateScopeColumns);
-        ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets, methodRegex);
+        ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets);
     }
 
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
@@ -1157,11 +1150,10 @@ public static class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        List<JavaScriptClassScanTarget> classScanTargets,
-        Regex methodRegex)
+        List<JavaScriptClassScanTarget> classScanTargets)
     {
         foreach (var classScanTarget in classScanTargets)
-            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lang, lines, symbols, classScanTarget, methodRegex);
+            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lang, lines, symbols, classScanTarget);
     }
 
     private static void TryAddJavaScriptTypeScriptSyntheticClassTarget(
@@ -1361,8 +1353,7 @@ public static class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        JavaScriptClassScanTarget classScanTarget,
-        Regex methodRegex)
+        JavaScriptClassScanTarget classScanTarget)
     {
         if (classScanTarget.ScanStartIndex >= classScanTarget.ScanEndExclusive)
             return;
@@ -1396,22 +1387,20 @@ public static class SymbolExtractor
 
             if (nestedBraceDepth == 0)
             {
-                var lineOffset = 0;
-                while (lineOffset < matchInput.Length)
+                var lineOffset = FindNextJavaScriptTypeScriptMethodCandidateStart(matchInput, 0);
+                while (lineOffset >= 0 && lineOffset < matchInput.Length)
                 {
                     var lineRemainder = matchInput[lineOffset..];
                     var matchCandidate = lang == "typescript"
                         ? NormalizeTypeScriptBareMethodMatchInput(lineRemainder)
                         : lineRemainder;
-                    var match = methodRegex.Match(matchCandidate);
-                    if (!match.Success)
-                        break;
+                    if (!TryParseJavaScriptTypeScriptMethodHeader(matchCandidate, 0, lang, out var methodHeader))
+                    {
+                        lineOffset = FindNextJavaScriptTypeScriptMethodCandidateStart(matchInput, lineOffset + 1);
+                        continue;
+                    }
 
-                    var name = match.Groups["name"].Success
-                        ? match.Groups["name"].Value.Trim()
-                        : match.Value.Trim();
-
-                    var absoluteMethodStartColumn = methodStartColumn + lineOffset + match.Index;
+                    var absoluteMethodStartColumn = methodStartColumn + lineOffset;
 
                     var startLine = i + 1;
                     if (seenMethodStarts.Add((startLine, absoluteMethodStartColumn)))
@@ -1424,7 +1413,7 @@ public static class SymbolExtractor
                         {
                             FileId = fileId,
                             Kind = "function",
-                            Name = name,
+                            Name = methodHeader.Name,
                             Line = startLine,
                             StartLine = startLine,
                             EndLine = Math.Max(startLine, endLine),
@@ -1435,18 +1424,18 @@ public static class SymbolExtractor
                                 : line[absoluteMethodStartColumn..].Trim(),
                             ContainerKind = "class",
                             ContainerName = classScanTarget.ContainerName,
-                            Visibility = TryGetGroup(match, "visibility"),
-                            ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(line, absoluteMethodStartColumn, startLine, bodyEndLine, lang, match),
+                            Visibility = methodHeader.Visibility,
+                            ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(line, absoluteMethodStartColumn, startLine, bodyEndLine, lang),
                         });
 
                         if (bodyEndLine != startLine || sameLineMethodEndColumn < absoluteMethodStartColumn)
                             break;
 
-                        lineOffset = sameLineMethodEndColumn + 1 - methodStartColumn;
+                        lineOffset = FindNextJavaScriptTypeScriptMethodCandidateStart(matchInput, sameLineMethodEndColumn + 1 - methodStartColumn);
                         continue;
                     }
 
-                    lineOffset = absoluteMethodStartColumn + Math.Max(1, match.Length) - methodStartColumn;
+                    lineOffset = FindNextJavaScriptTypeScriptMethodCandidateStart(matchInput, lineOffset + 1);
                 }
             }
 
@@ -2292,46 +2281,96 @@ public static class SymbolExtractor
     {
         methodHeader = default;
         var index = Math.Max(0, startColumn);
+        string? visibility = null;
 
         while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
             index++;
 
         while (index < sanitizedLine.Length)
         {
-            if (!IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
-                return false;
-
-            var tokenStart = index;
-            index++;
-            while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
-                index++;
-
-            var token = sanitizedLine[tokenStart..index];
-            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
-                index++;
-
-            if (TypeScriptBareMethodModifiers.Contains(token)
-                && CanTreatJavaScriptTypeScriptMethodTokenAsModifier(sanitizedLine, index))
-                continue;
-
-            int? genericStartColumn = null;
-            int? genericEndColumn = null;
-            if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == '<')
+            while (true)
             {
-                genericStartColumn = index;
-                var angleDepth = 0;
+                if (!TryReadJavaScriptTypeScriptMethodToken(sanitizedLine, ref index, out var token))
+                    return false;
+
+                while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                    index++;
+
+                if (TypeScriptBareMethodModifiers.Contains(token)
+                    && CanTreatJavaScriptTypeScriptMethodTokenAsModifier(sanitizedLine, index))
+                {
+                    if (token is "public" or "private" or "protected")
+                        visibility = token;
+                    continue;
+                }
+
+                var isGenerator = token == "*";
+                if (!isGenerator && index < sanitizedLine.Length && sanitizedLine[index] == '*')
+                {
+                    isGenerator = true;
+                    index++;
+                    while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                        index++;
+                }
+
+                if (isGenerator)
+                {
+                    if (!TryReadJavaScriptTypeScriptMethodName(sanitizedLine, ref index, out var generatorName))
+                        return false;
+
+                    token = generatorName;
+                }
+
+                var name = token;
+
+                int? genericStartColumn = null;
+                int? genericEndColumn = null;
+                if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == '<')
+                {
+                    genericStartColumn = index;
+                    var angleDepth = 0;
+                    while (index < sanitizedLine.Length)
+                    {
+                        if (sanitizedLine[index] == '<')
+                        {
+                            angleDepth++;
+                        }
+                        else if (sanitizedLine[index] == '>')
+                        {
+                            angleDepth--;
+                            if (angleDepth == 0)
+                            {
+                                genericEndColumn = index;
+                                index++;
+                                break;
+                            }
+                        }
+
+                        index++;
+                    }
+
+                    if (genericEndColumn == null)
+                        return false;
+
+                    while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                        index++;
+                }
+
+                if (index >= sanitizedLine.Length || sanitizedLine[index] != '(')
+                    return false;
+
+                var parenDepth = 0;
                 while (index < sanitizedLine.Length)
                 {
-                    if (sanitizedLine[index] == '<')
+                    if (sanitizedLine[index] == '(')
                     {
-                        angleDepth++;
+                        parenDepth++;
                     }
-                    else if (sanitizedLine[index] == '>')
+                    else if (sanitizedLine[index] == ')')
                     {
-                        angleDepth--;
-                        if (angleDepth == 0)
+                        parenDepth--;
+                        if (parenDepth == 0)
                         {
-                            genericEndColumn = index;
                             index++;
                             break;
                         }
@@ -2340,212 +2379,183 @@ public static class SymbolExtractor
                     index++;
                 }
 
-                if (genericEndColumn == null)
+                if (parenDepth != 0)
                     return false;
 
                 while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
                     index++;
-            }
 
-            if (index >= sanitizedLine.Length || sanitizedLine[index] != '(')
-                return false;
-
-            var parenDepth = 0;
-            while (index < sanitizedLine.Length)
-            {
-                if (sanitizedLine[index] == '(')
+                int? returnTypeStartColumn = null;
+                int? returnTypeEndColumn = null;
+                if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == ':')
                 {
-                    parenDepth++;
-                }
-                else if (sanitizedLine[index] == ')')
-                {
-                    parenDepth--;
-                    if (parenDepth == 0)
+                    returnTypeStartColumn = index;
+                    index++;
+                    var returnParenDepth = 0;
+                    var returnBracketDepth = 0;
+                    var returnAngleDepth = 0;
+                    var returnBraceDepth = 0;
+                    var sawReturnTypeToken = false;
+                    string? previousReturnToken = ":";
+
+                    while (index < sanitizedLine.Length)
                     {
-                        index++;
-                        break;
-                    }
-                }
-
-                index++;
-            }
-
-            if (parenDepth != 0)
-                return false;
-
-            while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
-                index++;
-
-            int? returnTypeStartColumn = null;
-            int? returnTypeEndColumn = null;
-            if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == ':')
-            {
-                returnTypeStartColumn = index;
-                index++;
-                var returnParenDepth = 0;
-                var returnBracketDepth = 0;
-                var returnAngleDepth = 0;
-                var returnBraceDepth = 0;
-                var sawReturnTypeToken = false;
-                string? previousReturnToken = ":";
-
-                while (index < sanitizedLine.Length)
-                {
-                    var ch = sanitizedLine[index];
-                    if (char.IsWhiteSpace(ch))
-                    {
-                        index++;
-                        continue;
-                    }
-
-                    if (ch == '(')
-                    {
-                        returnParenDepth++;
-                        sawReturnTypeToken = true;
-                        previousReturnToken = "(";
-                        index++;
-                        continue;
-                    }
-
-                    if (ch == ')' && returnParenDepth > 0)
-                    {
-                        returnParenDepth--;
-                        previousReturnToken = ")";
-                        index++;
-                        continue;
-                    }
-
-                    if (ch == '[')
-                    {
-                        returnBracketDepth++;
-                        sawReturnTypeToken = true;
-                        previousReturnToken = "[";
-                        index++;
-                        continue;
-                    }
-
-                    if (ch == ']' && returnBracketDepth > 0)
-                    {
-                        returnBracketDepth--;
-                        previousReturnToken = "]";
-                        index++;
-                        continue;
-                    }
-
-                    if (ch == '<')
-                    {
-                        returnAngleDepth++;
-                        sawReturnTypeToken = true;
-                        previousReturnToken = "<";
-                        index++;
-                        continue;
-                    }
-
-                    if (ch == '>' && returnAngleDepth > 0)
-                    {
-                        returnAngleDepth--;
-                        previousReturnToken = ">";
-                        index++;
-                        continue;
-                    }
-
-                    if (ch == '{')
-                    {
-                        if (returnParenDepth == 0 && returnBracketDepth == 0 && returnAngleDepth == 0 && returnBraceDepth == 0)
+                        var ch = sanitizedLine[index];
+                        if (char.IsWhiteSpace(ch))
                         {
-                            if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(previousReturnToken))
-                            {
-                                returnBraceDepth++;
-                                sawReturnTypeToken = true;
-                                previousReturnToken = "{";
-                                index++;
-                                continue;
-                            }
-
-                            if (sawReturnTypeToken)
-                            {
-                                returnTypeEndColumn = index - 1;
-                                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(index, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
-                                return true;
-                            }
+                            index++;
+                            continue;
                         }
 
-                        returnBraceDepth++;
-                        sawReturnTypeToken = true;
-                        previousReturnToken = "{";
-                        index++;
-                        continue;
-                    }
+                        if (ch == '(')
+                        {
+                            returnParenDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "(";
+                            index++;
+                            continue;
+                        }
 
-                    if (ch == '}' && returnBraceDepth > 0)
-                    {
-                        returnBraceDepth--;
-                        previousReturnToken = "}";
-                        index++;
-                        continue;
-                    }
+                        if (ch == ')' && returnParenDepth > 0)
+                        {
+                            returnParenDepth--;
+                            previousReturnToken = ")";
+                            index++;
+                            continue;
+                        }
 
-                    if (ch == '?' || ch == ':' || ch == '|' || ch == '&' || ch == ',')
-                    {
+                        if (ch == '[')
+                        {
+                            returnBracketDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "[";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == ']' && returnBracketDepth > 0)
+                        {
+                            returnBracketDepth--;
+                            previousReturnToken = "]";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '<')
+                        {
+                            returnAngleDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "<";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '>' && returnAngleDepth > 0)
+                        {
+                            returnAngleDepth--;
+                            previousReturnToken = ">";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '{')
+                        {
+                            if (returnParenDepth == 0 && returnBracketDepth == 0 && returnAngleDepth == 0 && returnBraceDepth == 0)
+                            {
+                                if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(previousReturnToken))
+                                {
+                                    returnBraceDepth++;
+                                    sawReturnTypeToken = true;
+                                    previousReturnToken = "{";
+                                    index++;
+                                    continue;
+                                }
+
+                                if (sawReturnTypeToken)
+                                {
+                                    returnTypeEndColumn = index - 1;
+                                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
+                                    return true;
+                                }
+                            }
+
+                            returnBraceDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "{";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '}' && returnBraceDepth > 0)
+                        {
+                            returnBraceDepth--;
+                            previousReturnToken = "}";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '?' || ch == ':' || ch == '|' || ch == '&' || ch == ',')
+                        {
+                            sawReturnTypeToken = true;
+                            previousReturnToken = ch.ToString();
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
+                        {
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "=>";
+                            index += 2;
+                            continue;
+                        }
+
+                        if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                        {
+                            var returnTokenStart = index;
+                            index++;
+                            while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
+                                index++;
+
+                            sawReturnTypeToken = true;
+                            previousReturnToken = sanitizedLine[returnTokenStart..index];
+                            continue;
+                        }
+
                         sawReturnTypeToken = true;
                         previousReturnToken = ch.ToString();
                         index++;
-                        continue;
                     }
 
-                    if (ch == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
-                    {
-                        sawReturnTypeToken = true;
-                        previousReturnToken = "=>";
-                        index += 2;
-                        continue;
-                    }
-
-                    if (IsJavaScriptTypeScriptIdentifierStart(ch))
-                    {
-                        var returnTokenStart = index;
-                        index++;
-                        while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
-                            index++;
-
-                        sawReturnTypeToken = true;
-                        previousReturnToken = sanitizedLine[returnTokenStart..index];
-                        continue;
-                    }
-
-                    sawReturnTypeToken = true;
-                    previousReturnToken = ch.ToString();
-                    index++;
+                    return false;
                 }
 
-                return false;
+                if (index >= sanitizedLine.Length || sanitizedLine[index] != '{')
+                    return false;
+
+                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
+                return true;
             }
-
-            if (index >= sanitizedLine.Length || sanitizedLine[index] != '{')
-                return false;
-
-            methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(index, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
-            return true;
         }
 
         return false;
     }
 
-    private static string? GetJavaScriptTypeScriptBareMethodReturnType(string line, int startColumn, int startLine, int? bodyEndLine, string? lang, Match match)
+    private static string? GetJavaScriptTypeScriptBareMethodReturnType(string line, int startColumn, int startLine, int? bodyEndLine, string? lang)
     {
         if (lang != "typescript" || bodyEndLine != startLine)
-            return NormalizeMetadata(TryGetGroup(match, "returnType"));
+            return null;
 
         var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
         if (!TryParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out var methodHeader)
             || methodHeader.ReturnTypeStartColumn == null
             || methodHeader.ReturnTypeEndColumn == null)
-            return NormalizeMetadata(TryGetGroup(match, "returnType"));
+            return null;
 
         var returnTypeStartColumn = methodHeader.ReturnTypeStartColumn.Value + 1;
         var returnTypeEndColumn = methodHeader.ReturnTypeEndColumn.Value;
         if (returnTypeEndColumn < returnTypeStartColumn || returnTypeEndColumn >= line.Length)
-            return NormalizeMetadata(TryGetGroup(match, "returnType"));
+            return null;
 
         return NormalizeMetadata(line[returnTypeStartColumn..(returnTypeEndColumn + 1)]);
     }
@@ -2610,12 +2620,78 @@ public static class SymbolExtractor
     private static bool IsJavaScriptTypeScriptIdentifierPart(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_' || ch == '$';
 
+    private static bool TryReadJavaScriptTypeScriptMethodToken(string sanitizedLine, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        if (sanitizedLine[index] == '*')
+        {
+            token = "*";
+            index++;
+            return true;
+        }
+
+        return TryReadJavaScriptTypeScriptMethodName(sanitizedLine, ref index, out token);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptMethodName(string sanitizedLine, ref int index, out string name)
+    {
+        name = string.Empty;
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        var tokenStart = index;
+        if (sanitizedLine[index] == '#')
+        {
+            index++;
+            if (index >= sanitizedLine.Length || !IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+                return false;
+        }
+        else if (!IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+        {
+            return false;
+        }
+
+        index++;
+        while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
+            index++;
+
+        name = sanitizedLine[tokenStart..index];
+        return true;
+    }
+
     private static int FindNextJavaScriptTypeScriptTokenStart(string sanitizedLine, int startIndex)
     {
         var index = Math.Max(0, startIndex);
         while (index < sanitizedLine.Length)
         {
             if (!IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+            {
+                index++;
+                continue;
+            }
+
+            if (index > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index - 1]))
+            {
+                index++;
+                continue;
+            }
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int FindNextJavaScriptTypeScriptMethodCandidateStart(string sanitizedLine, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < sanitizedLine.Length)
+        {
+            var ch = sanitizedLine[index];
+            if (ch != '#' && ch != '*' && !IsJavaScriptTypeScriptIdentifierStart(ch))
             {
                 index++;
                 continue;
@@ -2668,7 +2744,19 @@ public static class SymbolExtractor
         if (ch is '(' or '<')
             return false;
 
-        return IsJavaScriptTypeScriptIdentifierStart(ch);
+        if (ch == '*')
+        {
+            lookahead++;
+            while (lookahead < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[lookahead]))
+                lookahead++;
+
+            if (lookahead >= sanitizedLine.Length)
+                return false;
+
+            return sanitizedLine[lookahead] == '#' || IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[lookahead]);
+        }
+
+        return ch == '#' || IsJavaScriptTypeScriptIdentifierStart(ch);
     }
 
     private static bool CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(string? previousReturnToken)

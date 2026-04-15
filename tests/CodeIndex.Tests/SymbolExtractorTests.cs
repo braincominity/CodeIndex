@@ -283,6 +283,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsInlineMethodsWithDefaultArguments()
+    {
+        var content = "class Example { method(x = 1) {} visible() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "visible" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.Signature == "method(x = 1) {}");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsInlinePrivateAndGeneratorMethods()
+    {
+        var content = "class Example { #hidden() {} *iterator() {} async *stream() {} visible() {} }";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "visible" && s.ContainerName == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.Signature == "#hidden() {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.Signature == "*iterator() {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.Signature == "async *stream() {}");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsInlineClassExpressionMethods()
     {
         var content = "const Service = class NamedService { run() {} };";
@@ -1174,6 +1202,34 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "async" && s.Signature == "async(): void {}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "static" && s.Signature == "static(): void {}");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.Signature == "keep(): void {}");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlineMethodsWithDefaultArguments()
+    {
+        var content = "class Example { method(x: number = 1): void {} visible(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Example" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "visible" && s.ContainerName == "Example" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.Signature == "method(x: number = 1): void {}");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsInlinePrivateAndGeneratorMethods()
+    {
+        var content = "class Example { #hidden(): void {} *iterator(): Iterable<number> {} async *stream(): AsyncIterable<number> {} visible(): void {} }";
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.ContainerName == "Example" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.ContainerName == "Example" && s.ReturnType == "Iterable<number>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.ContainerName == "Example" && s.ReturnType == "AsyncIterable<number>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "visible" && s.ContainerName == "Example" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#hidden" && s.Signature == "#hidden(): void {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "iterator" && s.Signature == "*iterator(): Iterable<number> {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stream" && s.Signature == "async *stream(): AsyncIterable<number> {}");
     }
 
     [Fact]
