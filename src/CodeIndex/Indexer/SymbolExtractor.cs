@@ -511,6 +511,9 @@ public static class SymbolExtractor
             return [];
 
         var lines = content.Split('\n');
+        var privateScopeColumns = lang is "javascript" or "typescript"
+            ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines)
+            : null;
         var symbols = new List<SymbolRecord>();
 
         for (int i = 0; i < lines.Length; i++)
@@ -522,6 +525,13 @@ public static class SymbolExtractor
                 var match = pattern.Regex.Match(matchLine);
                 if (!match.Success)
                     continue;
+
+                if (privateScopeColumns != null
+                    && pattern.Kind == "class"
+                    && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, match.Index, matchLine))
+                {
+                    continue;
+                }
 
                 var name = match.Groups["name"].Success
                     ? match.Groups["name"].Value.Trim()
@@ -558,19 +568,19 @@ public static class SymbolExtractor
         }
 
         if (lang is "javascript" or "typescript")
-            ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols);
+            ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
 
         AssignContainers(symbols);
         return symbols;
     }
 
-    private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, bool[][] privateScopeColumns)
     {
         var methodRegex = lang == "javascript" ? JavaScriptBareMethodRegex : TypeScriptBareMethodRegex;
         var existingClassTargets = GetJavaScriptTypeScriptExistingClassScanTargets(lang, lines, symbols);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, existingClassTargets, methodRegex);
 
-        var syntheticClassTargets = CollectJavaScriptTypeScriptSyntheticClassScanTargets(fileId, lang, lines, symbols);
+        var syntheticClassTargets = CollectJavaScriptTypeScriptSyntheticClassScanTargets(fileId, lang, lines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets, methodRegex);
     }
 
@@ -584,31 +594,20 @@ public static class SymbolExtractor
             .ToList();
     }
 
-    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols)
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, bool[][] privateScopeColumns)
     {
         var targets = new List<JavaScriptClassScanTarget>();
         var lexState = new JavaScriptLexState();
-        var scopeStack = new Stack<JavaScriptScopeKind>();
-        var pendingFunctionScope = false;
-        var pendingArrowFunctionScope = false;
-        var pendingStaticBlockScope = false;
         for (int i = 0; i < lines.Length; i++)
         {
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
 
-            var insidePrivateScope = IsInsideJavaScriptTypeScriptPrivateScope(scopeStack)
-                || IsInsideJavaScriptTypeScriptFunctionBody(symbols, i + 1);
-            if (!insidePrivateScope)
-                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine);
+            if (IsInsideJavaScriptTypeScriptFunctionBody(symbols, i + 1))
+                continue;
 
-            AdvanceJavaScriptTypeScriptSyntheticScope(
-                sanitizedLine,
-                scopeStack,
-                ref pendingFunctionScope,
-                ref pendingArrowFunctionScope,
-                ref pendingStaticBlockScope);
+            TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, sanitizedLine, privateScopeColumns);
         }
 
         return targets
@@ -622,93 +621,167 @@ public static class SymbolExtractor
         return scopeStack.Any(scopeKind => scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock);
     }
 
-    private static void AdvanceJavaScriptTypeScriptSyntheticScope(
-        string sanitizedLine,
-        Stack<JavaScriptScopeKind> scopeStack,
-        ref bool pendingFunctionScope,
-        ref bool pendingArrowFunctionScope,
-        ref bool pendingStaticBlockScope)
+    private static bool[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines)
     {
-        for (int column = 0; column < sanitizedLine.Length; column++)
+        var privateColumns = new bool[lines.Length][];
+        var lexState = new JavaScriptLexState();
+        var scopeStack = new Stack<JavaScriptScopeKind>();
+        var pendingFunctionScope = false;
+        var pendingStaticBlockScope = false;
+        var pendingArrowBody = false;
+        var arrowExpressionActive = false;
+        var arrowExpressionBraceDepth = 0;
+
+        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
-            var ch = sanitizedLine[column];
-            if (char.IsWhiteSpace(ch))
-                continue;
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var linePrivateColumns = new bool[sanitizedLine.Length];
 
-            if (pendingArrowFunctionScope && ch != '{')
-                pendingArrowFunctionScope = false;
-
-            if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+            for (int column = 0; column < sanitizedLine.Length; column++)
             {
-                pendingArrowFunctionScope = true;
-                pendingStaticBlockScope = false;
-                column++;
-                continue;
-            }
+                var ch = sanitizedLine[column];
+                if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
+                    linePrivateColumns[column] = true;
 
-            if (IsJavaScriptTypeScriptIdentifierStart(ch))
-            {
-                var tokenStart = column;
-                column++;
-                while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                if (char.IsWhiteSpace(ch))
+                    continue;
+
+                if (pendingArrowBody)
+                {
+                    if (ch == '{')
+                    {
+                        scopeStack.Push(JavaScriptScopeKind.Function);
+                        linePrivateColumns[column] = true;
+                        pendingArrowBody = false;
+                        continue;
+                    }
+
+                    arrowExpressionActive = true;
+                    linePrivateColumns[column] = true;
+                    pendingArrowBody = false;
+                }
+
+                if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
                     column++;
+                    while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                    {
+                        if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
+                            linePrivateColumns[column] = true;
 
-                var token = sanitizedLine[tokenStart..column];
-                if (token == "function")
+                        column++;
+                    }
+
+                    var token = sanitizedLine[tokenStart..column];
+                    if (token == "function")
+                    {
+                        pendingFunctionScope = true;
+                        pendingStaticBlockScope = false;
+                    }
+                    else if (token == "static")
+                    {
+                        pendingStaticBlockScope = true;
+                    }
+                    else if (pendingStaticBlockScope)
+                    {
+                        pendingStaticBlockScope = false;
+                    }
+
+                    column--;
+                    continue;
+                }
+
+                if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
                 {
-                    pendingFunctionScope = true;
+                    linePrivateColumns[column] = arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack);
+                    linePrivateColumns[column + 1] = arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack);
+                    pendingArrowBody = true;
+                    pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
+                    column++;
+                    continue;
                 }
-                else if (token == "static")
+
+                if (ch == '{')
                 {
-                    pendingStaticBlockScope = true;
-                }
-                else if (pendingStaticBlockScope)
-                {
+                    var scopeKind = JavaScriptScopeKind.Other;
+                    if (pendingFunctionScope)
+                        scopeKind = JavaScriptScopeKind.Function;
+                    else if (pendingStaticBlockScope)
+                        scopeKind = JavaScriptScopeKind.StaticBlock;
+
+                    if (scopeKind != JavaScriptScopeKind.Other)
+                        linePrivateColumns[column] = true;
+
+                    scopeStack.Push(scopeKind);
+                    if (arrowExpressionActive)
+                        arrowExpressionBraceDepth++;
+
+                    pendingFunctionScope = false;
                     pendingStaticBlockScope = false;
+                    continue;
                 }
 
-                column--;
-                continue;
+                if (ch == '}')
+                {
+                    if (arrowExpressionActive)
+                    {
+                        linePrivateColumns[column] = true;
+                        if (arrowExpressionBraceDepth > 0)
+                            arrowExpressionBraceDepth--;
+                    }
+
+                    if (scopeStack.Count > 0)
+                        scopeStack.Pop();
+
+                    pendingFunctionScope = false;
+                    pendingStaticBlockScope = false;
+                    continue;
+                }
+
+                if (ch == ';')
+                {
+                    if (arrowExpressionActive && arrowExpressionBraceDepth == 0)
+                    {
+                        linePrivateColumns[column] = true;
+                        arrowExpressionActive = false;
+                    }
+
+                    pendingFunctionScope = false;
+                    pendingStaticBlockScope = false;
+                    continue;
+                }
+
+                if (pendingStaticBlockScope && ch != '{')
+                    pendingStaticBlockScope = false;
             }
 
-            if (ch == '{')
-            {
-                var scopeKind = JavaScriptScopeKind.Other;
-                if (pendingFunctionScope || pendingArrowFunctionScope)
-                    scopeKind = JavaScriptScopeKind.Function;
-                else if (pendingStaticBlockScope)
-                    scopeKind = JavaScriptScopeKind.StaticBlock;
+            if (arrowExpressionActive && arrowExpressionBraceDepth == 0)
+                arrowExpressionActive = false;
 
-                scopeStack.Push(scopeKind);
-                pendingFunctionScope = false;
-                pendingArrowFunctionScope = false;
-                pendingStaticBlockScope = false;
-                continue;
-            }
-
-            if (ch == '}')
-            {
-                if (scopeStack.Count > 0)
-                    scopeStack.Pop();
-
-                pendingFunctionScope = false;
-                pendingArrowFunctionScope = false;
-                pendingStaticBlockScope = false;
-                continue;
-            }
-
-            if (ch == ';')
-            {
-                pendingFunctionScope = false;
-                pendingArrowFunctionScope = false;
-                pendingStaticBlockScope = false;
-                continue;
-            }
-
-            if (pendingStaticBlockScope && ch != '{')
-                pendingStaticBlockScope = false;
+            privateColumns[lineIndex] = linePrivateColumns;
         }
+
+        return privateColumns;
+    }
+
+    private static bool IsJavaScriptTypeScriptMatchInPrivateScope(bool[][] privateScopeColumns, int lineIndex, int startColumn, string matchLine)
+    {
+        if (lineIndex < 0 || lineIndex >= privateScopeColumns.Length)
+            return false;
+
+        var linePrivateColumns = privateScopeColumns[lineIndex];
+        if (linePrivateColumns.Length == 0)
+            return false;
+
+        var column = Math.Max(0, startColumn);
+        while (column < matchLine.Length && char.IsWhiteSpace(matchLine[column]))
+            column++;
+
+        return column < linePrivateColumns.Length && linePrivateColumns[column];
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInTargets(
@@ -730,11 +803,15 @@ public static class SymbolExtractor
         List<SymbolRecord> symbols,
         List<JavaScriptClassScanTarget> targets,
         int startIndex,
-        string sanitizedLine)
+        string sanitizedLine,
+        bool[][] privateScopeColumns)
     {
         var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultClassRegex.Match(sanitizedLine);
         if (anonymousDefaultMatch.Success)
         {
+            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, anonymousDefaultMatch.Index, sanitizedLine))
+                return;
+
             AddJavaScriptTypeScriptSyntheticClassTarget(
                 fileId,
                 lang,
@@ -749,6 +826,9 @@ public static class SymbolExtractor
 
         var classExpressionMatch = JavaScriptTypeScriptClassExpressionRegex.Match(sanitizedLine);
         if (!classExpressionMatch.Success)
+            return;
+
+        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, classExpressionMatch.Index, sanitizedLine))
             return;
 
         var containerName = TryGetGroup(classExpressionMatch, "alias")
