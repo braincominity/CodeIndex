@@ -889,7 +889,7 @@ the .NET host, `Program.Main`, CLI routing, and
 `ConsoleUi.LoadVersion()`, but not SQLite. (MCP tool *calls* like
 `search` do hit SQLite; `initialize` alone does not.)
 
-### Why `--json` currently crashes (and MCP does not)
+### Why published `--json` currently fails fast (and MCP does not)
 
 `release.yml` builds with `-p:PublishTrimmed=true`. In .NET 8, trimming
 sets `JsonSerializerIsReflectionEnabledByDefault=false` implicitly. Any
@@ -897,14 +897,15 @@ call to `JsonSerializer.Serialize<T>(...)` without a source-generated
 `JsonTypeInfo<T>` throws `InvalidOperationException: Reflection-based
 serialization has been disabled for this application`. The CLI
 `--json` paths in `IndexCommandRunner` / `QueryCommandRunner` use
-reflection-based serialization today, hence they crash. The MCP path
-does not — it manually builds `JsonObject` graphs and writes them — so
-it is unaffected. Fixing the CLI JSON paths requires either disabling
+reflection-based serialization today, so the published trimmed binary
+cannot honor CLI `--json`. The current user-visible behavior is a
+dedicated stderr message plus exit code `4` (`FeatureUnavailable`)
+instead of a misleading `database error`. The MCP path does not — it
+manually builds `JsonObject` graphs and writes them — so it is
+unaffected. A full fix for CLI JSON still requires either disabling
 `PublishTrimmed`, setting `JsonSerializerIsReflectionEnabledByDefault=true`
 in the `.csproj`, or adding source-generated `JsonSerializerContext`
-classes for the serialized DTOs. None of those can be validated in the
-cloud session (no SDK), so the fix is deferred and documented as a known
-caveat in `CLOUD_BOOTSTRAP_PROMPT.md`.
+classes for the serialized DTOs.
 
 ```mermaid
 flowchart TD
@@ -913,7 +914,7 @@ flowchart TD
     R -->|cdidx status / index with --json| A["CLI runners call<br/>JsonSerializer.Serialize&lt;T&gt;(value)"]
     R -->|cdidx search / status without --json| H["Human-readable writer<br/>(no JSON)"]
     R -->|cdidx mcp| M["McpServer builds<br/>JsonObject / JsonArray graphs<br/>by hand, then Write()"]
-    A --> AX["❌ InvalidOperationException:<br/>'Reflection-based serialization<br/>has been disabled'"]
+    A --> AX["❌ dedicated stderr error<br/>exit code 4 (FeatureUnavailable)"]
     H --> HX["✅ works"]
     M --> MX["✅ works (no reflection path)"]
 ```
@@ -927,7 +928,7 @@ flowchart TD
 | `install.sh` error: `musl-based Linux (e.g. Alpine) is not supported` | Container uses musl libc | Switch to a glibc-based image (debian/ubuntu) or install via `dotnet tool install -g cdidx` in an environment with the SDK |
 | `install.sh` error: `macOS x86_64 (Intel) binaries are not published` | Intel Mac hitting `osx-x64` RID | Run under Rosetta 2 with `osx-arm64`, or use `dotnet tool install -g cdidx` |
 | `install.sh` error: `Checksum mismatch!` | Tarball tampered with or transport corrupted | Retry; if persistent, check the `sha256sums.txt` and the tarball on the release page |
-| `InvalidOperationException: Reflection-based serialization has been disabled` on a `--json` command | `PublishTrimmed` + reflection-based `JsonSerializer` | Known issue; use the default human-readable output or the MCP server until a source-gen fix ships |
+| `Error: --json is not available on this trimmed build.` | `PublishTrimmed` + reflection-based `JsonSerializer` on the self-contained release | Current fail-fast behavior. Use the default human-readable output, the MCP server, or the NuGet/global-tool build until a source-gen or publish-configuration fix ships |
 | `cdidx status` shows `Files: 0` on a repo that clearly has files | Index DB never built, or pointing at the wrong `--db` | Run `cdidx <projectPath>` first; verify `.cdidx/codeindex.db` exists |
 | Every command shows `index fresh` but results are obviously stale | You indexed a different working copy | Re-run `cdidx . --commits HEAD` or `cdidx . --files <paths>` |
 
@@ -1749,9 +1750,9 @@ sequenceDiagram
 
 MCP は独立したシリアライズ戦略（オブジェクトを JSON などの転送形式に変換する方式のこと。CLI の `--json` 側は .NET 標準の `JsonSerializer` に任せる方式、MCP 側は `JsonObject` を手で組み立てる方式と、別の手段を採っている）を採るため、「そもそもバイナリは走るのか?」を確かめる最も頑健なスモークテスト（デプロイや起動直後に行う、基本動作だけを短時間で確認する簡易テストのこと。詳細な正しさではなく「煙が出ていないか＝致命的に壊れていないか」を見るためこの名で呼ばれる）となる — .NET ホスト、`Program.Main`、CLI ルーティング、`ConsoleUi.LoadVersion()` に負荷をかけるが、SQLite には触れない（`search` など MCP の*ツール呼び出し*は SQLite に触れるが、`initialize` 単独では触れない）。
 
-### なぜ `--json` は現在クラッシュする（そして MCP はしない）のか
+### なぜ公開版の `--json` は現在 fail-fast する（そして MCP はしない）のか
 
-`release.yml` は `-p:PublishTrimmed=true` でビルドする。.NET 8 ではトリミングが暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない `JsonSerializer.Serialize<T>(...)` 呼び出しはすべて `InvalidOperationException: Reflection-based serialization has been disabled for this application` を投げる。`IndexCommandRunner` / `QueryCommandRunner` の CLI `--json` パスは現在リフレクションベースのシリアライズを使うため、クラッシュする。MCP パスは `JsonObject` グラフを手で組み立てて書き出しているため影響を受けない。CLI の JSON パスの修正には、`PublishTrimmed` を無効にする、`.csproj` で `JsonSerializerIsReflectionEnabledByDefault=true` を設定する、シリアライズ対象 DTO に対するソース生成 `JsonSerializerContext` クラスを追加する、のいずれかが必要。いずれもCloud セッションでは検証できない（SDK が無い）ため、修正は保留し `CLOUD_BOOTSTRAP_PROMPT.md` に既知の注意点として記載している。
+`release.yml` は `-p:PublishTrimmed=true` でビルドする。.NET 8 ではトリミングが暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない `JsonSerializer.Serialize<T>(...)` 呼び出しはすべて `InvalidOperationException: Reflection-based serialization has been disabled for this application` を投げる。`IndexCommandRunner` / `QueryCommandRunner` の CLI `--json` パスは現在リフレクションベースのシリアライズを使うため、公開された trim 済みバイナリでは CLI `--json` を成立させられない。現在のユーザー可視の挙動は、誤解を招く `database error` ではなく、専用の stderr メッセージと終了コード `4`（`FeatureUnavailable`）で fail-fast する形である。MCP パスは `JsonObject` グラフを手で組み立てて書き出しているため影響を受けない。CLI の JSON パスを根本的に直すには、`PublishTrimmed` を無効にする、`.csproj` で `JsonSerializerIsReflectionEnabledByDefault=true` を設定する、シリアライズ対象 DTO に対するソース生成 `JsonSerializerContext` クラスを追加する、のいずれかが必要である。
 
 ```mermaid
 flowchart TD
@@ -1760,7 +1761,7 @@ flowchart TD
     R -->|cdidx status / index --json| A["CLI ランナーが<br/>JsonSerializer.Serialize&lt;T&gt;(value) を呼ぶ"]
     R -->|cdidx search / status（--json なし）| H["人間向け出力<br/>（JSON 不使用）"]
     R -->|cdidx mcp| M["McpServer が<br/>JsonObject / JsonArray を<br/>手組みして Write()"]
-    A --> AX["❌ InvalidOperationException:<br/>'Reflection-based serialization<br/>has been disabled'"]
+    A --> AX["❌ 専用の stderr エラー<br/>終了コード 4（FeatureUnavailable）"]
     H --> HX["✅ 成功"]
     M --> MX["✅ 成功（リフレクションパスを通らない）"]
 ```
@@ -1774,7 +1775,7 @@ flowchart TD
 | `install.sh` のエラー: `musl-based Linux (e.g. Alpine) is not supported` | コンテナが musl libc を使用 | glibc ベース（debian/ubuntu）に切り替えるか、SDK のある環境で `dotnet tool install -g cdidx` を使う |
 | `install.sh` のエラー: `macOS x86_64 (Intel) binaries are not published` | Intel Mac が `osx-x64` RID に到達 | Rosetta 2 下で `osx-arm64` を使うか、`dotnet tool install -g cdidx` を使う |
 | `install.sh` のエラー: `Checksum mismatch!` | tarball の改ざんまたは転送時破損 | 再実行。それでも起きるならリリースページの `sha256sums.txt` と tarball を確認 |
-| `--json` コマンドで `InvalidOperationException: Reflection-based serialization has been disabled` | `PublishTrimmed` + リフレクションベース `JsonSerializer` | 既知の問題。ソース生成対応版が出るまでは人間向け出力または MCP サーバーを使う |
+| `Error: --json is not available on this trimmed build.` | 自己完結リリースの `PublishTrimmed` + リフレクションベース `JsonSerializer` | 現在の fail-fast 挙動。ソース生成または publish 設定修正版が出るまでは、人間向け出力、MCP サーバー、または NuGet グローバルツール版を使う |
 | 明らかにファイルのあるリポジトリで `cdidx status` が `Files: 0` | インデックス DB を作っていない、あるいは別の `--db` を指している | 先に `cdidx <projectPath>` を実行。`.cdidx/codeindex.db` の存在を確認 |
 | 全コマンドが `index fresh` だが結果は明らかに古い | 別の作業コピーにインデックスを張っている | `cdidx . --commits HEAD` または `cdidx . --files <paths>` を再実行 |
 

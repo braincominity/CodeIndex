@@ -1908,6 +1908,9 @@ public static class QueryCommandRunner
         }
         catch (Exception ex)
         {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
             Console.Error.WriteLine($"Error: database error: {ex.Message}");
             Database.DbDebug.DumpToStderr(ex);
             return CommandExitCodes.DatabaseError;

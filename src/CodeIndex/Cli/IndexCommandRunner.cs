@@ -274,6 +274,9 @@ public static class IndexCommandRunner
         }
         catch (Exception ex)
         {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
