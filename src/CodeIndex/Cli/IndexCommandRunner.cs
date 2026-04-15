@@ -570,9 +570,31 @@ public static class IndexCommandRunner
 
                 if (FileIndexer.DetectLanguage(absPath) == null)
                 {
-                    skipped++;
-                    if (options.Verbose && !options.Json)
-                        Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
+                    if (writer.DeleteFileByPath(relPath))
+                    {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
+                        removed++;
+                        ftsMutated = true;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
+                    }
+                    else
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                    }
                     continue;
                 }
 

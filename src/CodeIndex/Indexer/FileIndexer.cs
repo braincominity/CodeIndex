@@ -162,6 +162,9 @@ public class FileIndexer
         if (FileNameMap.TryGetValue(fileName, out var nameLang))
             return nameLang;
 
+        if (!string.IsNullOrEmpty(ext))
+            return null;
+
         return TryDetectLanguageFromShebang(filePath);
     }
 
@@ -198,8 +201,8 @@ public class FileIndexer
                 if (SkipFiles.Contains(fileName))
                     continue;
 
-                // Include files with a known extension or known filename
-                // 既知の拡張子・既知ファイル名・認識済み shebang のファイルを含める
+                // Include files with a known extension/filename or an extensionless recognized shebang
+                // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
                 if (DetectLanguage(file) != null)
                     results.Add(file);
             }

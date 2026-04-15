@@ -111,6 +111,24 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void DetectLanguage_UnknownExtensionWithShebang_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "notes.txt");
+            File.WriteAllText(path, "#!/usr/bin/env bash\necho hi\n");
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
         // Create a temp directory structure to test scanning
@@ -213,6 +231,30 @@ public class FileIndexerTests
                 .ToList();
 
             Assert.Equal(["known.rb", "python-tool", "rbenv-init"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ExcludesUnknownExtensionEvenWhenShebangLooksSupported()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "#!/usr/bin/env bash\necho hi\n");
+            File.WriteAllText(Path.Combine(tempDir, "script"), "#!/usr/bin/env bash\necho hi\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["script"], files);
         }
         finally
         {
