@@ -1073,6 +1073,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_ExactJson_FindsTernaryContinuationCallSite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ternary");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "dispatcher.cs"),
+                """
+                public class Dispatcher
+                {
+                    private string Select(bool isUpdate)
+                        => isUpdate
+                            ? RunUpdateMode()
+                            : RunFullScan();
+
+                    private string RunUpdateMode() => "update";
+                    private string RunFullScan() => "full";
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["RunUpdateMode", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/dispatcher.cs", json.GetProperty("path").GetString());
+            Assert.Equal("class", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Dispatcher", json.GetProperty("caller_name").GetString());
+            Assert.Equal("RunUpdateMode", json.GetProperty("callee_name").GetString());
+            Assert.Equal(5, json.GetProperty("first_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallees_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callees_zero_json_missing_graph");
