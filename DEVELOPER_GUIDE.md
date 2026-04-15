@@ -30,6 +30,7 @@ src/CodeIndex/
     DbContext.cs              — SQLite connection, WAL mode, schema init
     DbWriter.cs               — UPSERT, batch insert, stale file purge, FTS cleanup, reference writes
     DbReader.cs               — FTS search, definition/reference/caller/callee lookup, symbol lookup, in-file literal find, excerpt reconstruction, outline, inspect bundles, file listing, status, file-level deps
+    LineWidthFormatter.cs     — Shared single-line payload clamp helper used by find/references/excerpt/inspect and MCP counterparts to keep focused tokens visible while shrinking long lines
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
     FileIndexer.cs            — Directory scan, language detection, FileRecord building
@@ -987,6 +988,7 @@ src/CodeIndex/
     DbContext.cs              — SQLite接続、WALモード、スキーマ初期化
     DbWriter.cs               — UPSERT、バッチ挿入、古いファイルのパージ、FTSクリーンアップ、参照書き込み
     DbReader.cs               — FTS検索、定義/参照/caller/callee検索、シンボル検索、既知ファイル内 literal find、抜粋再構成、アウトライン、inspect向け集約、ファイル一覧、ステータス
+    LineWidthFormatter.cs     — find/references/excerpt/inspect と MCP 側の長い単一行クランプを共有し、注目トークンを残したまま行幅を縮めるヘルパー
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築

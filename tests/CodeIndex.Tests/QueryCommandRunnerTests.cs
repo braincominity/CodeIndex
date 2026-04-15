@@ -38,7 +38,11 @@ public class QueryCommandRunnerTests
             "--end", "18",
             "--before", "2",
             "--after", "4",
+            "--focus-line", "9",
+            "--focus-column", "33",
+            "--focus-length", "6",
             "--snippet-lines", "99",
+            "--max-line-width", "77",
         ], jsonDefault: true);
 
         Assert.Equal("/tmp/query.db", options.DbPath);
@@ -56,7 +60,11 @@ public class QueryCommandRunnerTests
         Assert.Equal(18, options.EndLine);
         Assert.Equal(2, options.ContextBefore);
         Assert.Equal(4, options.ContextAfter);
+        Assert.Equal(9, options.FocusLine);
+        Assert.Equal(33, options.FocusColumn);
+        Assert.Equal(6, options.FocusLength);
         Assert.Equal(SearchSnippetFormatter.MaxSnippetLines, options.SnippetLines);
+        Assert.Equal(77, options.MaxLineWidth);
     }
 
     [Fact]
@@ -65,6 +73,184 @@ public class QueryCommandRunnerTests
         var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
         Assert.True(options.CountOnly);
         Assert.Equal("myquery", options.Query);
+    }
+
+    [Theory]
+    [InlineData("definition", "--focus-column", "10")]
+    [InlineData("definition", "--max-line-width", "10")]
+    [InlineData("search", "--focus-column", "10")]
+    [InlineData("symbols", "--max-line-width", "10")]
+    public void QueryCommands_RejectPreviewOptionsWhenUnsupported(string command, string option, string value)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_preview_reject_{command}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var args = new List<string>();
+            switch (command)
+            {
+                case "definition":
+                case "search":
+                case "symbols":
+                    args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
+                    break;
+            }
+
+            var (exitCode, _, stderr) = command switch
+            {
+                "definition" => CaptureConsole(() => QueryCommandRunner.RunDefinition([.. args], _jsonOptions)),
+                "search" => CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions)),
+                "symbols" => CaptureConsole(() => QueryCommandRunner.RunSymbols([.. args], _jsonOptions)),
+                _ => throw new InvalidOperationException($"Unexpected command: {command}")
+            };
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"{option} is not supported for {command}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_AllowsPathValueThatLooksLikePreviewOption()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_preview_like_path_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["foo", "--db", dbPath, "--path=--max-line-width", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.DoesNotContain("is not supported", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_AllowsExcludePathValueThatLooksLikePreviewOption()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_preview_like_exclude_path_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--exclude-path=--focus-line", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("0", stdout.Trim());
+            Assert.DoesNotContain("is not supported", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_AllowsPathValueThatLooksLikePreviewOption()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_preview_like_path_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["target", "--db", dbPath, "--path=--max-line-width", "--json"],
+                _jsonOptions));
+
+            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+            Assert.DoesNotContain("is not supported", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_RejectsMissingFocusColumnValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_missing_focus_column");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "sample");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md", "--db", dbPath, "--start", "1", "--focus-column", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-column requires a positive integer", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_RejectsMissingMaxLineWidthValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_missing_max_line_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--max-line-width", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--max-line-width requires a positive integer", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_RejectsMissingMaxLineWidthValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_missing_max_line_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["target", "--db", dbPath, "--max-line-width", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--max-line-width requires a positive integer", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_UsageIncludesCount()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+            [],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("[--count]", stderr);
     }
 
     [Fact]
@@ -575,6 +761,254 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonClampsLongSingleLineContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_long_line");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = "const x = 0; " + new string('a', 320) + " target(); " + new string('b', 320);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "dist/app.js",
+                    Lang = "javascript",
+                    Size = longLine.Length,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertChunks([
+                    new ChunkRecord { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = longLine }
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "target",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = longLine.IndexOf("target", StringComparison.Ordinal) + 1,
+                        Context = longLine,
+                    }
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--json", "--max-line-width", "96"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("context_truncated").GetBoolean());
+            Assert.Contains("target()", json.GetProperty("context").GetString());
+            Assert.True(json.GetProperty("context").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonClampsLongSingleLineContentAroundFocus()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_long_line");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-column", (longLine.IndexOf("TARGET", StringComparison.Ordinal) + 1).ToString(), "--focus-length", "6"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("content_truncated").GetBoolean());
+            Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
+            Assert.Contains("TARGET", json.GetProperty("content").GetString());
+            Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonClampsLongSingleLineContentWithoutFocus()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_long_line_no_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("content_truncated").GetBoolean());
+            Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
+            Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_FocusLineWithoutFocusColumnReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_dep");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "96", "--focus-line", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-line and --focus-length require --focus-column", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_FocusLineOutsideReturnedRangeReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "line one\nline two\nline three");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md", "--db", dbPath, "--start", "2", "--end", "2", "--focus-line", "999", "--focus-column", "1", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-line (999) must be within the returned excerpt range", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_FocusColumnOutsideFocusedLineReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_column_range");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--focus-column", "9999", "--max-line-width", "40", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-column (9999) must be within the focused line length", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_JsonClampsLongSingleLineSnippet()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "target" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "96"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("snippet_truncated").GetBoolean());
+            Assert.Contains("target", json.GetProperty("snippet").GetString());
+            Assert.True(json.GetProperty("snippet").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFindThenExcerpt_JsonKeepsMatchedTokenVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_excerpt_flow");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+
+            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["TARGET", "--db", dbPath, "--path", "dist/data.txt", "--json", "--exact", "--max-line-width", "96"],
+                _jsonOptions));
+
+            using var findDocument = ParseJsonOutput(findStdout);
+            var findJson = findDocument.RootElement;
+            var line = findJson.GetProperty("line").GetInt32();
+            var column = findJson.GetProperty("column").GetInt32();
+
+            var (excerptExitCode, excerptStdout, excerptStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", line.ToString(), "--end", line.ToString(), "--json", "--max-line-width", "96", "--focus-column", column.ToString(), "--focus-length", "6"],
+                _jsonOptions));
+
+            using var excerptDocument = ParseJsonOutput(excerptStdout);
+            var excerptJson = excerptDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, findExitCode);
+            Assert.Equal(string.Empty, findStderr);
+            Assert.Equal(CommandExitCodes.Success, excerptExitCode);
+            Assert.Equal(string.Empty, excerptStderr);
+            Assert.Contains("TARGET", excerptJson.GetProperty("content").GetString());
+            Assert.True(excerptJson.GetProperty("content_truncated").GetBoolean());
         }
         finally
         {
