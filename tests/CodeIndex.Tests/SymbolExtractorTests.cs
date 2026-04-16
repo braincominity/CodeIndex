@@ -1499,6 +1499,7 @@ public class SymbolExtractorTests
             @font-face { font-family: "Inline Font"; src: url("inline.woff2"); }
             @font-face { src: url("same-line.woff2"); font-family: "Trailing Font"; unicode-range: U+0-5FF; }
             @font-face { src: url("valid-last.woff2"); font-family: "Last No Semicolon" }
+            @font-face { font-family: /* keep */ "Comment Gap"; src: url("comment-gap.woff2"); }
             @font-face {
               font-family:
                 "Split Font";
@@ -1516,10 +1517,49 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Inline Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Trailing Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Last No Semicolon");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Comment Gap");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Upper Rule");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Mixed Last No Semicolon");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
+    }
+
+    [Fact]
+    public void Extract_CSS_OnlyCapturesTopLevelSelectors()
+    {
+        var content = """
+            .top-level {
+              color: red;
+            }
+
+            @media screen {
+              a:hover {
+                color: blue;
+              }
+
+              .nested {
+                color: green;
+              }
+            }
+
+            .parent {
+              .child {
+                color: purple;
+              }
+
+              #nested-id {
+                color: orange;
+              }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "top-level");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "parent");
+        Assert.DoesNotContain(symbols, s => s.Name == "a:hover");
+        Assert.DoesNotContain(symbols, s => s.Name == "nested");
+        Assert.DoesNotContain(symbols, s => s.Name == "child");
+        Assert.DoesNotContain(symbols, s => s.Name == "nested-id");
     }
 
     [Fact]

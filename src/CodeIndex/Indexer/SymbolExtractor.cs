@@ -474,6 +474,9 @@ public static class SymbolExtractor
         var csharpSwitchExpressionLines = lang == "csharp"
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
+        var cssBraceDepths = lang == "css"
+            ? FindCssBraceDepths(lines)
+            : null;
         var symbols = new List<SymbolRecord>();
 
         for (int i = 0; i < lines.Length; i++)
@@ -488,6 +491,9 @@ public static class SymbolExtractor
                     continue;
 
                 if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
+                    continue;
+
+                if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssBraceDepths, i))
                     continue;
 
                 var name = match.Groups["name"].Success
@@ -778,6 +784,10 @@ public static class SymbolExtractor
         if (rawName.Length == 0)
             return false;
 
+        rawName = RemoveCssBlockComments(rawName).Trim();
+        if (rawName.Length == 0)
+            return false;
+
         if ((rawName.StartsWith('\'') && rawName.EndsWith('\'')) || (rawName.StartsWith('"') && rawName.EndsWith('"')))
             rawName = rawName[1..^1].Trim();
 
@@ -786,6 +796,115 @@ public static class SymbolExtractor
 
         fontFamily = rawName;
         return true;
+    }
+
+    private static string RemoveCssBlockComments(string value)
+    {
+        if (!value.Contains("/*", StringComparison.Ordinal))
+            return value;
+
+        var result = new System.Text.StringBuilder(value.Length);
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+
+        for (int i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (!inSingleQuote && !inDoubleQuote && i + 1 < value.Length && ch == '/' && value[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < value.Length && !(value[i] == '*' && value[i + 1] == '/'))
+                    i++;
+
+                if (i + 1 < value.Length)
+                    i++;
+
+                continue;
+            }
+
+            result.Append(ch);
+            if (ch == '"' && !inSingleQuote)
+                inDoubleQuote = !inDoubleQuote;
+            else if (ch == '\'' && !inDoubleQuote)
+                inSingleQuote = !inSingleQuote;
+        }
+
+        return result.ToString();
+    }
+
+    private static bool ShouldSkipCssNestedSelectorCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        string matchLine,
+        int[]? cssBraceDepths,
+        int lineIndex)
+    {
+        if (lang != "css" || cssBraceDepths == null || cssBraceDepths[lineIndex] == 0)
+            return false;
+
+        var trimmed = matchLine.TrimStart();
+        return pattern.Kind == "class"
+            || (pattern.Kind == "function" && trimmed.StartsWith('#'));
+    }
+
+    private static int[] FindCssBraceDepths(string[] lines)
+    {
+        var depths = new int[lines.Length];
+        var depth = 0;
+        var insideBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+
+        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            depths[lineIndex] = depth;
+            var line = lines[lineIndex];
+
+            for (int i = 0; i < line.Length; i++)
+            {
+                var ch = line[i];
+
+                if (insideBlockComment)
+                {
+                    if (i + 1 < line.Length && ch == '*' && line[i + 1] == '/')
+                    {
+                        insideBlockComment = false;
+                        i++;
+                    }
+
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && i + 1 < line.Length && ch == '/' && line[i + 1] == '*')
+                {
+                    insideBlockComment = true;
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"' && !inSingleQuote)
+                {
+                    inDoubleQuote = !inDoubleQuote;
+                    continue;
+                }
+
+                if (ch == '\'' && !inDoubleQuote)
+                {
+                    inSingleQuote = !inSingleQuote;
+                    continue;
+                }
+
+                if (inSingleQuote || inDoubleQuote)
+                    continue;
+
+                if (ch == '{')
+                    depth++;
+                else if (ch == '}' && depth > 0)
+                    depth--;
+            }
+        }
+
+        return depths;
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
