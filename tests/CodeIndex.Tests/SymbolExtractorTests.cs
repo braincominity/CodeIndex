@@ -1563,6 +1563,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSS_TopLevelDetection_IgnoresScssLineCommentsAndEscapedQuotes()
+    {
+        var content = """
+            // {
+            .top-level { color: red; }
+            .foo::before { content: "\""; }
+            .bar { color: blue; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "top-level");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".foo::before");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "bar");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsSymbols()
     {
         var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";

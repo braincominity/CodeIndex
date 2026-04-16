@@ -882,6 +882,15 @@ public static class SymbolExtractor
                     continue;
                 }
 
+                if (!inSingleQuote && !inDoubleQuote && i + 1 < line.Length && ch == '/' && line[i + 1] == '/')
+                    break;
+
+                if ((inSingleQuote || inDoubleQuote) && ch == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
                 if (ch == '"' && !inSingleQuote)
                 {
                     inDoubleQuote = !inDoubleQuote;
