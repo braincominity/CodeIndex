@@ -2526,10 +2526,14 @@ public class QueryCommandRunnerTests
                 "src/Money.cs",
                 "csharp",
                 """
+                using System.Collections.Generic;
+
                 public struct Money
                 {
                     public Money(decimal amount) { }
                     public static explicit operator Money(decimal d) => new();
+                    public static explicit operator Dictionary<string, int>(Money m) => new();
+                    public static explicit operator (int whole, int cents)(Money m) => (0, 0);
                 }
                 """);
 
@@ -2543,6 +2547,28 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, operatorExitCode);
             Assert.Equal(string.Empty, operatorStderr);
             Assert.Equal("explicit operator Money", operatorSymbol.GetProperty("name").GetString());
+
+            var (genericExitCode, genericStdout, genericStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Dictionary<string, int>", "--exact-name"],
+                _jsonOptions));
+
+            using var genericDocument = ParseJsonOutput(genericStdout);
+            var genericSymbol = genericDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, genericExitCode);
+            Assert.Equal(string.Empty, genericStderr);
+            Assert.Equal("explicit operator Dictionary<string, int>", genericSymbol.GetProperty("name").GetString());
+
+            var (tupleExitCode, tupleStdout, tupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (int whole, int cents)", "--exact-name"],
+                _jsonOptions));
+
+            using var tupleDocument = ParseJsonOutput(tupleStdout);
+            var tupleSymbol = tupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, tupleExitCode);
+            Assert.Equal(string.Empty, tupleStderr);
+            Assert.Equal("explicit operator (int whole, int cents)", tupleSymbol.GetProperty("name").GetString());
 
             var (constructorExitCode, constructorStdout, constructorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "Money", "--exact-name"],

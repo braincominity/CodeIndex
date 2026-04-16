@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -242,7 +243,7 @@ public static class SymbolExtractor
             new("class",     new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern
             // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置
-            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?<name>(?:implicit|explicit)\s+operator\s+(?:checked\s+)?(?:global::)?[\w?.<>\[\],:]+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?<conversionKind>implicit|explicit)\s+operator\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern
             // 演算子オーバーロード — メソッドパターンより前に配置
             new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?:checked\s+)?\S+\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -697,7 +698,7 @@ public static class SymbolExtractor
                     var name = match.Groups["name"].Success
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
-                    name = NormalizeCSharpSymbolName(lang, name, match);
+                    name = NormalizeCSharpSymbolName(lang, name, match, matchLine);
 
                     var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(structuralLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     var startLine = i + 1;
@@ -5215,12 +5216,135 @@ public static class SymbolExtractor
         return value.Trim();
     }
 
-    private static string NormalizeCSharpSymbolName(string? lang, string name, Match match)
+    private static string NormalizeCSharpSymbolName(string? lang, string name, Match match, string matchLine)
     {
-        if (lang == "csharp" && name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
+        if (lang != "csharp")
+            return name;
+
+        if (match.Groups["conversionKind"].Success
+            && TryReadCSharpConversionOperatorName(match, matchLine, out var conversionOperatorName))
+        {
+            return conversionOperatorName;
+        }
+
+        if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
         return name;
+    }
+
+    private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)
+    {
+        name = string.Empty;
+
+        var conversionKind = match.Groups["conversionKind"].Value.Trim();
+        if (conversionKind.Length == 0)
+            return false;
+
+        var cursor = match.Index + match.Length;
+        while (cursor < matchLine.Length && char.IsWhiteSpace(matchLine[cursor]))
+            cursor++;
+
+        var hasChecked = false;
+        if (StartsWithKeyword(matchLine, cursor, "checked"))
+        {
+            hasChecked = true;
+            cursor += "checked".Length;
+            while (cursor < matchLine.Length && char.IsWhiteSpace(matchLine[cursor]))
+                cursor++;
+        }
+
+        if (!TryReadCSharpTypeUntilParameterList(matchLine, cursor, out var targetType))
+            return false;
+
+        name = hasChecked
+            ? $"{conversionKind} operator checked {targetType}"
+            : $"{conversionKind} operator {targetType}";
+        return true;
+    }
+
+    private static bool TryReadCSharpTypeUntilParameterList(string line, int startIndex, out string typeName)
+    {
+        typeName = string.Empty;
+        var builder = new StringBuilder();
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var parenDepth = 0;
+        var sawAnyTypeToken = false;
+
+        for (var index = startIndex; index < line.Length; index++)
+        {
+            var ch = line[index];
+            switch (ch)
+            {
+                case '(':
+                    if (angleDepth == 0 && bracketDepth == 0 && parenDepth == 0 && sawAnyTypeToken)
+                    {
+                        typeName = builder.ToString().Trim();
+                        return typeName.Length > 0;
+                    }
+
+                    parenDepth++;
+                    builder.Append(ch);
+                    if (!char.IsWhiteSpace(ch))
+                        sawAnyTypeToken = true;
+                    break;
+
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    builder.Append(ch);
+                    if (!char.IsWhiteSpace(ch))
+                        sawAnyTypeToken = true;
+                    break;
+
+                case '<':
+                    angleDepth++;
+                    builder.Append(ch);
+                    sawAnyTypeToken = true;
+                    break;
+
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    builder.Append(ch);
+                    sawAnyTypeToken = true;
+                    break;
+
+                case '[':
+                    bracketDepth++;
+                    builder.Append(ch);
+                    sawAnyTypeToken = true;
+                    break;
+
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    builder.Append(ch);
+                    sawAnyTypeToken = true;
+                    break;
+
+                default:
+                    builder.Append(ch);
+                    if (!char.IsWhiteSpace(ch))
+                        sawAnyTypeToken = true;
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool StartsWithKeyword(string line, int startIndex, string keyword)
+    {
+        if (startIndex < 0 || startIndex + keyword.Length > line.Length)
+            return false;
+
+        if (!string.Equals(line.Substring(startIndex, keyword.Length), keyword, StringComparison.Ordinal))
+            return false;
+
+        var nextIndex = startIndex + keyword.Length;
+        return nextIndex >= line.Length || char.IsWhiteSpace(line[nextIndex]);
     }
 
     private static readonly Regex ComplexityRegex = new(

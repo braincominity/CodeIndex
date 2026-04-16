@@ -248,6 +248,8 @@ public class DbReaderTests : IDisposable
     {
         InsertIndexedFile("src/csharp_special_names.cs", "csharp",
             """
+            using System.Collections.Generic;
+
             public struct Money
             {
                 public static Money operator +(Money a, Money b) => new();
@@ -256,6 +258,8 @@ public class DbReaderTests : IDisposable
                 public static explicit operator Money(decimal d) => new();
                 public Money(decimal amount) { }
                 public static explicit operator checked byte(Money m) => 0;
+                public static explicit operator Dictionary<string, int>(Money m) => new();
+                public static explicit operator (int whole, int cents)(Money m) => (0, 0);
             }
 
             public class Bag
@@ -270,6 +274,8 @@ public class DbReaderTests : IDisposable
         Assert.Single(_reader.SearchSymbols("implicit operator decimal", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("explicit operator Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Dictionary<string, int>", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int whole, int cents)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
     }
