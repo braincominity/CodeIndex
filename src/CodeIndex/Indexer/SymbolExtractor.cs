@@ -119,6 +119,9 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
+    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumMemberRegex = new(@"^\s{2,}(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
     [
         "if", "for", "while", "switch", "catch", "with"
@@ -239,7 +242,7 @@ public static class SymbolExtractor
             // Interface — visibility optional / インターフェース — visibility 省略可
             new("interface", new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:partial|unsafe)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
-            new("enum",      new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
             // Struct (including record struct, ref struct, readonly struct) — visibility optional
             // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可
             new("struct",    new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -292,7 +295,7 @@ public static class SymbolExtractor
             // and optional = with numeric/hex/identifier value. Does NOT match string/object assignments.
             // enum メンバー（例: Red, Green = 1,）— 4+スペースインデント必須、名前のみ、
             // 数値/16進/識別子の値指定はオプション。文字列/オブジェクト代入にはマッチしない。
-            new("function",  new Regex(@"^\s{2,}(?<name>[A-Z]\w*)\s*(?:=\s*(?:-?\d|0x|[A-Z]\w*(?:\s*\|))[^""']*)?,?\s*$", RegexOptions.Compiled), BodyStyle.None),
+            new("enum",      CSharpEnumMemberRegex, BodyStyle.None),
             // #region for navigation / ナビゲーション用 #region
             new("namespace", new Regex(@"^\s*#region\s+(?<name>.+)$", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -641,6 +644,9 @@ public static class SymbolExtractor
         var csharpSwitchExpressionLines = lang == "csharp"
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
+        var csharpEnumBodyLines = lang == "csharp"
+            ? FindCSharpEnumBodyLines(structuralLines)
+            : null;
         var cssQualifiedRuleAncestors = lang == "css"
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
             : null;
@@ -693,6 +699,9 @@ public static class SymbolExtractor
                     }
 
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
+                        break;
+
+                    if (ShouldSkipCSharpEnumMemberCandidate(lang, pattern, csharpEnumBodyLines, i))
                         break;
 
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssQualifiedRuleAncestors, i))
@@ -5181,6 +5190,35 @@ public static class SymbolExtractor
         && csharpSwitchExpressionLines != null
         && csharpSwitchExpressionLines[lineIndex]
         && matchLine.Contains("=>", StringComparison.Ordinal);
+
+    private static bool ShouldSkipCSharpEnumMemberCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        bool[]? csharpEnumBodyLines,
+        int lineIndex) =>
+        lang == "csharp"
+        && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex)
+        && (csharpEnumBodyLines == null || !csharpEnumBodyLines[lineIndex]);
+
+    private static bool[] FindCSharpEnumBodyLines(string[] structuralLines)
+    {
+        var enumBodyLines = new bool[structuralLines.Length];
+        for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            var match = CSharpEnumDeclarationRegex.Match(structuralLines[lineIndex]);
+            if (!match.Success)
+                continue;
+
+            var (_, bodyStartLine, bodyEndLine) = ResolveRange(structuralLines, lineIndex, BodyStyle.Brace, "csharp", match.Index);
+            if (bodyStartLine == null || bodyEndLine == null)
+                continue;
+
+            for (int bodyLine = bodyStartLine.Value; bodyLine <= bodyEndLine.Value && bodyLine <= structuralLines.Length; bodyLine++)
+                enumBodyLines[bodyLine - 1] = true;
+        }
+
+        return enumBodyLines;
+    }
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
     {

@@ -2627,6 +2627,50 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpExactNameFindsLowercaseEnumMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_exact_name");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "status.cs"),
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    active,
+                    inactive,
+                    pending
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["active", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("active", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_CSharpBraceCharLiteralKeepsMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_char");

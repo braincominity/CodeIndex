@@ -3394,9 +3394,21 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Red");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Green");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Blue");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Green");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Blue");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsLowercaseAndUnicodeEnumMembers()
+    {
+        var content = "public enum Status\n{\n    active,\n    inactive,\n    Δelta = active,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "active");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "inactive");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Δelta");
     }
 
     [Fact]
@@ -3407,8 +3419,9 @@ public class SymbolExtractorTests
         var content = "var user = new User\n{\n    Name = \"Alice\",\n    Age = 30,\n    Email = GetEmail(),\n};";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
-        Assert.DoesNotContain(symbols, s => s.Name == "Email" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "Name");
+        Assert.DoesNotContain(symbols, s => s.Name == "Age");
+        Assert.DoesNotContain(symbols, s => s.Name == "Email");
     }
 
     [Fact]
