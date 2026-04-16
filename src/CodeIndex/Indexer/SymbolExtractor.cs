@@ -102,7 +102,12 @@ public static class SymbolExtractor
     private readonly record struct RecordPrimaryComponent(
         string Name,
         string Type,
-        string Signature);
+        string Signature,
+        int Line);
+
+    private readonly record struct RecordPrimaryComponentSlice(
+        string Text,
+        int Line);
 
     private readonly record struct JavaScriptClassScanTarget(
         int StartIndex,
@@ -740,6 +745,7 @@ public static class SymbolExtractor
                         lang,
                         lines,
                         i,
+                        absoluteStartColumn,
                         kind,
                         name,
                         symbols);
@@ -5091,6 +5097,7 @@ public static class SymbolExtractor
         string lang,
         string[] lines,
         int declarationLineIndex,
+        int declarationStartColumn,
         string kind,
         string recordName,
         List<SymbolRecord> symbols)
@@ -5098,7 +5105,7 @@ public static class SymbolExtractor
         if (kind is not "class" and not "struct")
             return;
 
-        if (!TryGetRecordPrimaryComponents(lang, lines, declarationLineIndex, recordName, out var components))
+        if (!TryGetRecordPrimaryComponents(lang, lines, declarationLineIndex, declarationStartColumn, kind, recordName, out var components))
             return;
 
         foreach (var component in components)
@@ -5119,9 +5126,9 @@ public static class SymbolExtractor
                 FileId = fileId,
                 Kind = "property",
                 Name = component.Name,
-                Line = declarationLineIndex + 1,
-                StartLine = declarationLineIndex + 1,
-                EndLine = declarationLineIndex + 1,
+                Line = component.Line,
+                StartLine = component.Line,
+                EndLine = component.Line,
                 Signature = component.Signature,
                 ContainerKind = kind,
                 ContainerName = recordName,
@@ -5135,6 +5142,8 @@ public static class SymbolExtractor
         string lang,
         string[] lines,
         int declarationLineIndex,
+        int declarationStartColumn,
+        string kind,
         string recordName,
         out List<RecordPrimaryComponent> components)
     {
@@ -5143,13 +5152,11 @@ public static class SymbolExtractor
         if (lang is not "csharp" and not "java")
             return false;
 
-        var declaration = CollectRecordDeclarationText(lang, lines, declarationLineIndex, recordName);
+        var declaration = CollectRecordDeclarationText(lines, declarationLineIndex, declarationStartColumn);
         if (string.IsNullOrWhiteSpace(declaration))
             return false;
 
-        var recordRegex = lang == "csharp"
-            ? new Regex(@"\brecord(?:\s+class|\s+struct)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
-            : new Regex(@"\brecord\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
         var recordMatch = recordRegex.Match(declaration);
         if (!recordMatch.Success)
             return false;
@@ -5163,7 +5170,7 @@ public static class SymbolExtractor
             return false;
 
         var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
-        foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList))
+        foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, declarationLineIndex + 1))
         {
             if (TryParseRecordPrimaryComponent(lang, rawComponent, out var component))
                 components.Add(component);
@@ -5172,28 +5179,23 @@ public static class SymbolExtractor
         return components.Count > 0;
     }
 
-    private static string CollectRecordDeclarationText(string lang, string[] lines, int declarationLineIndex, string recordName)
+    private static string CollectRecordDeclarationText(string[] lines, int declarationLineIndex, int declarationStartColumn)
     {
         var builder = new System.Text.StringBuilder();
-        var recordRegex = lang == "csharp"
-            ? new Regex(@"\brecord(?:\s+class|\s+struct)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
-            : new Regex(@"\brecord\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
         var parameterOpenIndex = -1;
         for (int i = declarationLineIndex; i < lines.Length; i++)
         {
             if (builder.Length > 0)
                 builder.Append('\n');
 
-            builder.Append(lines[i]);
+            builder.Append(i == declarationLineIndex
+                ? lines[i][Math.Min(declarationStartColumn, lines[i].Length)..]
+                : lines[i]);
 
             var declaration = builder.ToString();
             if (parameterOpenIndex < 0)
             {
-                var recordMatch = recordRegex.Match(declaration);
-                if (!recordMatch.Success)
-                    continue;
-
-                parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, recordMatch.Index + recordMatch.Length);
+                parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, 0);
                 if (parameterOpenIndex < 0)
                     continue;
             }
@@ -5203,6 +5205,18 @@ public static class SymbolExtractor
         }
 
         return builder.ToString();
+    }
+
+    private static Regex GetCurrentDeclarationRecordRegex(string lang, string kind, string recordName)
+    {
+        if (lang == "csharp")
+        {
+            return kind == "struct"
+                ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*record\s+struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
+                : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        }
+
+        return new Regex(@"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
     }
 
     private static int FindRecordPrimaryComponentListStart(string declaration, int startIndex)
@@ -5341,9 +5355,9 @@ public static class SymbolExtractor
         return -1;
     }
 
-    private static List<string> SplitTopLevelRecordPrimaryComponents(string parameterList)
+    private static List<RecordPrimaryComponentSlice> SplitTopLevelRecordPrimaryComponents(string parameterList, int firstLineNumber)
     {
-        var components = new List<string>();
+        var components = new List<RecordPrimaryComponentSlice>();
         var builder = new System.Text.StringBuilder();
         var parenDepth = 0;
         var angleDepth = 0;
@@ -5352,13 +5366,24 @@ public static class SymbolExtractor
         var inSingleQuote = false;
         var inDoubleQuote = false;
         var escapeNext = false;
+        var currentLineNumber = firstLineNumber;
+        var componentLineNumber = firstLineNumber;
+        var componentHasToken = false;
 
         foreach (var ch in parameterList)
         {
+            if (!componentHasToken && !char.IsWhiteSpace(ch))
+            {
+                componentHasToken = true;
+                componentLineNumber = currentLineNumber;
+            }
+
             if (escapeNext)
             {
                 builder.Append(ch);
                 escapeNext = false;
+                if (ch == '\n')
+                    currentLineNumber++;
                 continue;
             }
 
@@ -5369,6 +5394,8 @@ public static class SymbolExtractor
                     escapeNext = true;
                 else if (ch == '\'')
                     inSingleQuote = false;
+                else if (ch == '\n')
+                    currentLineNumber++;
                 continue;
             }
 
@@ -5379,6 +5406,8 @@ public static class SymbolExtractor
                     escapeNext = true;
                 else if (ch == '"')
                     inDoubleQuote = false;
+                else if (ch == '\n')
+                    currentLineNumber++;
                 continue;
             }
 
@@ -5431,18 +5460,22 @@ public static class SymbolExtractor
                 case ',' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
                     var component = builder.ToString().Trim();
                     if (component.Length > 0)
-                        components.Add(component);
+                        components.Add(new RecordPrimaryComponentSlice(component, componentLineNumber));
                     builder.Clear();
+                    componentHasToken = false;
+                    componentLineNumber = currentLineNumber;
                     continue;
                 default:
                     builder.Append(ch);
+                    if (ch == '\n')
+                        currentLineNumber++;
                     continue;
             }
         }
 
         var trailingComponent = builder.ToString().Trim();
         if (trailingComponent.Length > 0)
-            components.Add(trailingComponent);
+            components.Add(new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber));
 
         return components;
     }
@@ -5549,13 +5582,13 @@ public static class SymbolExtractor
         return builder.ToString();
     }
 
-    private static bool TryParseRecordPrimaryComponent(string lang, string rawComponent, out RecordPrimaryComponent component)
+    private static bool TryParseRecordPrimaryComponent(string lang, RecordPrimaryComponentSlice rawComponent, out RecordPrimaryComponent component)
     {
         component = default;
-        if (string.IsNullOrWhiteSpace(rawComponent))
+        if (string.IsNullOrWhiteSpace(rawComponent.Text))
             return false;
 
-        var normalized = TrimAfterTopLevelEquals(rawComponent).Trim();
+        var normalized = TrimAfterTopLevelEquals(rawComponent.Text).Trim();
         if (normalized.Length == 0)
             return false;
 
@@ -5575,7 +5608,7 @@ public static class SymbolExtractor
         if (componentName.Length == 0 || componentType.Length == 0)
             return false;
 
-        component = new RecordPrimaryComponent(componentName, componentType, normalized);
+        component = new RecordPrimaryComponent(componentName, componentType, normalized, rawComponent.Line);
         return true;
     }
 

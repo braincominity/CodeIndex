@@ -3076,6 +3076,7 @@ public class SymbolExtractorTests
         var optionsHost = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Host" && s.ContainerName == "Options"));
         Assert.Equal("string", optionsHost.ReturnType);
         Assert.Contains("string Host", optionsHost.Signature);
+        Assert.Equal(8, optionsHost.Line);
 
         var containerValue = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Value" && s.ContainerName == "Container"));
         Assert.Equal("T", containerValue.ReturnType);
@@ -3105,6 +3106,32 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
+
+        var tail = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Tail" && s.ContainerName == "Big"));
+        Assert.Equal(34, tail.Line);
+
+        var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point"));
+        Assert.Equal(39, pointY.Line);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotInjectRecordPrimaryComponentsIntoEarlierSameNamedClass()
+    {
+        var content = """
+            namespace A
+            {
+                public class Point {}
+            }
+
+            namespace B
+            {
+                public record Point(int X);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "A.Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "B.Point");
     }
 
     [Fact]
@@ -3655,9 +3682,11 @@ public class SymbolExtractorTests
 
         var rangeLow = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "low" && s.ContainerName == "Range"));
         Assert.Equal("int", rangeLow.ReturnType);
+        Assert.Equal(5, rangeLow.Line);
 
         var rangeHigh = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "high" && s.ContainerName == "Range"));
         Assert.Equal("int", rangeHigh.ReturnType);
+        Assert.Equal(6, rangeHigh.Line);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "span");
     }
@@ -3688,6 +3717,12 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
+
+        var tail = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Big"));
+        Assert.Equal(34, tail.Line);
+
+        var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point"));
+        Assert.Equal(40, pointY.Line);
     }
 
     [Fact]
