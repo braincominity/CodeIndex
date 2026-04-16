@@ -146,7 +146,7 @@ public class IndexCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_root_{Guid.NewGuid():N}.db");
         try
         {
-            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('from a')\n");
+            File.WriteAllText(Path.Combine(projectRootA, "readme.md"), "# from a\n");
             var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
@@ -207,6 +207,15 @@ public class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
+            long CountReferences()
+            {
+                using var db = new DbContext(dbPath);
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
+                return (long)cmd.ExecuteScalar()!;
+            }
+
+            var baselineReferenceCount = CountReferences();
             using (var db = new DbContext(dbPath))
             {
                 var writer = new DbWriter(db.Connection);
@@ -231,16 +240,7 @@ public class IndexCommandRunnerTests
                     },
                 ]);
             }
-
-            long CountReferences()
-            {
-                using var db = new DbContext(dbPath);
-                using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
-                return (long)cmd.ExecuteScalar()!;
-            }
-
-            Assert.Equal(1, CountReferences());
+            Assert.Equal(baselineReferenceCount + 1, CountReferences());
 
             Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
             File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
@@ -250,12 +250,12 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
+            Assert.Equal(baselineReferenceCount, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
             Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
 
-            Assert.Equal(0, CountReferences());
+            Assert.Equal(baselineReferenceCount, CountReferences());
 
             using (var db = new DbContext(dbPath))
             {
@@ -273,7 +273,7 @@ public class IndexCommandRunnerTests
                     Assert.Equal(CommandExitCodes.Success, statusExitCode);
                     using var document = JsonDocument.Parse(stdout.ToString());
                     Assert.Equal(Path.GetFullPath(projectRootA), document.RootElement.GetProperty("project_root").GetString());
-                    Assert.Equal(0, document.RootElement.GetProperty("references").GetInt32());
+                    Assert.Equal(baselineReferenceCount, document.RootElement.GetProperty("references").GetInt32());
                 }
                 finally
                 {
@@ -445,7 +445,7 @@ public class IndexCommandRunnerTests
         try
         {
             RunGit(projectRoot, "init");
-            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "readme.md"), "# hello\n");
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "init");
 
@@ -453,6 +453,15 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             DeleteIndexedProjectRootMetadata(dbPath);
+            int CountReferences()
+            {
+                using var db = new DbContext(dbPath);
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
+                return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            var baselineReferenceCount = CountReferences();
             using (var db = new DbContext(dbPath))
             {
                 var writer = new DbWriter(db.Connection);
@@ -477,6 +486,7 @@ public class IndexCommandRunnerTests
                     },
                 ]);
             }
+            Assert.Equal(baselineReferenceCount + 1, CountReferences());
 
             Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
             File.WriteAllText(Path.Combine(projectRoot, "docs", "readme.txt"), "not indexable\n");
@@ -486,7 +496,7 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
+            Assert.Equal(baselineReferenceCount, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
 
             using (var db = new DbContext(dbPath))
             {
