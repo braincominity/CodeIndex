@@ -14,6 +14,7 @@ INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
 TMPDIR_CLEANUP=""
 STAGE_DIR_CLEANUP=""
+BACKUP_DIR_CLEANUP=""
 EXISTING_BIN=""
 EXISTING_VERSION=""
 RESOLVE_VERSION_SKIP=0
@@ -32,6 +33,9 @@ cleanup() {
     fi
     if [ -n "$STAGE_DIR_CLEANUP" ]; then
         rm -rf "$STAGE_DIR_CLEANUP"
+    fi
+    if [ -n "$BACKUP_DIR_CLEANUP" ]; then
+        rm -rf "$BACKUP_DIR_CLEANUP"
     fi
 }
 trap cleanup EXIT
@@ -91,7 +95,9 @@ fetch_latest_release_version() {
 
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local response_file
-    response_file="$(mktemp)"
+    if ! response_file="$(mktemp)"; then
+        error "Failed to create temporary file for latest-release lookup."
+    fi
 
     local http_code
     if ! http_code="$(curl_http_get "$api_url" "$response_file")"; then
@@ -397,7 +403,9 @@ download_and_install() {
     local checksums_url="${base_url}/sha256sums.txt"
 
     local tmpdir
-    tmpdir="$(mktemp -d)"
+    if ! tmpdir="$(mktemp -d)"; then
+        error "Failed to create temporary working directory for install."
+    fi
     TMPDIR_CLEANUP="$tmpdir"
 
     info "Downloading ${archive_name}..."
@@ -490,7 +498,9 @@ download_and_install() {
     mkdir -p "$INSTALL_DIR"
 
     local stage_dir
-    stage_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-stage.XXXXXX")"
+    if ! stage_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-stage.XXXXXX")"; then
+        error "Failed to create staging directory under ${INSTALL_DIR}."
+    fi
     STAGE_DIR_CLEANUP="$stage_dir"
 
     for asset in $required_files; do
@@ -499,7 +509,10 @@ download_and_install() {
     chmod +x "${stage_dir}/${BINARY_NAME}"
 
     local backup_dir
-    backup_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-backup.XXXXXX")"
+    if ! backup_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-backup.XXXXXX")"; then
+        error "Failed to create backup directory under ${INSTALL_DIR}."
+    fi
+    BACKUP_DIR_CLEANUP="$backup_dir"
 
     if ! promote_staged_install "$stage_dir" "$backup_dir" "$INSTALL_DIR" "$required_files" "$required_assets"; then
         return 1
@@ -507,6 +520,8 @@ download_and_install() {
 
     rm -rf "$stage_dir"
     STAGE_DIR_CLEANUP=""
+    rm -rf "$backup_dir"
+    BACKUP_DIR_CLEANUP=""
 
     info "Installed cdidx to ${INSTALL_DIR}/${BINARY_NAME}"
 }

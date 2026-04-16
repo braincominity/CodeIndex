@@ -301,6 +301,7 @@ public sealed class InstallScriptTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
+        var installDir = Path.Combine(_tempRoot, "rate_limited_lookup_bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
@@ -330,6 +331,10 @@ public sealed class InstallScriptTests : IDisposable
 
             main
             """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
             enforceStrictMode: false);
 
         Assert.Equal(1, exitCode);
@@ -345,6 +350,7 @@ public sealed class InstallScriptTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
+        var installDir = Path.Combine(_tempRoot, "network_failure_lookup_bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
             detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
@@ -356,6 +362,10 @@ public sealed class InstallScriptTests : IDisposable
 
             main
             """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
             enforceStrictMode: false);
 
         Assert.Equal(1, exitCode);
@@ -455,6 +465,204 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("VERSION_MISSING", stdout);
         Assert.Contains("LIB_MISSING", stdout);
         Assert.Contains("Required runtime asset missing from release tarball: libe_sqlite3.so", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_StageDirMktempFailure_AbortsBeforeInstallWritesUnderStrictMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "stage_mktemp_failure_target");
+        var payloadDir = Path.Combine(_tempRoot, "stage_mktemp_failure_payload");
+        var archivePath = Path.Combine(_tempRoot, "stage_mktemp_failure.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "stage_mktemp_failure.sha256sums.txt");
+        var cpLogPath = Path.Combine(_tempRoot, "stage_mktemp_failure_cp.log");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.2.3"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            if command -v sha256sum > /dev/null 2>&1; then
+                checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
+            elif command -v shasum > /dev/null 2>&1; then
+                checksum="$(shasum -a 256 "{{archivePath}}" | awk '{print $1}')"
+            else
+                checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
+            fi
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                case "$url" in
+                    */sha256sums.txt) command cp "{{checksumsPath}}" "$output_path" ;;
+                    *) command cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            cp() {
+                local dst="${@: -1}"
+                case "$dst" in
+                    /cdidx|/version.json|/libe_sqlite3.so)
+                        printf '%s\n' "$dst" >> "{{cpLogPath}}"
+                        ;;
+                esac
+                command cp "$@"
+            }
+
+            mktemp() {
+                if [ "${1:-}" = "-d" ] && [ "${2:-}" = "{{installDir}}/.cdidx-stage.XXXXXX" ]; then
+                    return 1
+                fi
+                command mktemp "$@"
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Failed to create staging directory under", stderr);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, "libe_sqlite3.so")));
+        Assert.Empty(Directory.Exists(installDir) ? Directory.GetFileSystemEntries(installDir, ".cdidx-*") : []);
+        Assert.True(!File.Exists(cpLogPath) || string.IsNullOrWhiteSpace(File.ReadAllText(cpLogPath)));
+    }
+
+    [Fact]
+    public void DownloadAndInstall_BackupDirMktempFailure_PreservesExistingHealthyInstallUnderStrictMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "backup_mktemp_failure_target");
+        var payloadDir = Path.Combine(_tempRoot, "backup_mktemp_failure_payload");
+        var archivePath = Path.Combine(_tempRoot, "backup_mktemp_failure.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "backup_mktemp_failure.sha256sums.txt");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{installDir}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "HEALTHY_OLD_BINARY"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.0.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf 'healthy-lib' > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "NEW_BINARY"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            if command -v sha256sum > /dev/null 2>&1; then
+                checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
+            elif command -v shasum > /dev/null 2>&1; then
+                checksum="$(shasum -a 256 "{{archivePath}}" | awk '{print $1}')"
+            else
+                checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
+            fi
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                case "$url" in
+                    */sha256sums.txt) command cp "{{checksumsPath}}" "$output_path" ;;
+                    *) command cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            mktemp() {
+                if [ "${1:-}" = "-d" ] && [ "${2:-}" = "{{installDir}}/.cdidx-backup.XXXXXX" ]; then
+                    return 1
+                fi
+                command mktemp "$@"
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Failed to create backup directory under", stderr);
+        Assert.True(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.True(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.True(File.Exists(Path.Combine(installDir, "libe_sqlite3.so")));
+        Assert.Contains("HEALTHY_OLD_BINARY", File.ReadAllText(Path.Combine(installDir, "cdidx")));
+        Assert.Equal("""{"version":"1.0.0"}""", File.ReadAllText(Path.Combine(installDir, "version.json")));
+        Assert.Equal("healthy-lib", File.ReadAllText(Path.Combine(installDir, "libe_sqlite3.so")));
+        Assert.Empty(Directory.GetFileSystemEntries(installDir, ".cdidx-*"));
     }
 
     [Fact]
