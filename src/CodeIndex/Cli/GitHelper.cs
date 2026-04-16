@@ -110,12 +110,9 @@ public static class GitHelper
     /// </summary>
     public static bool ResolveIgnoreCase(string projectRoot)
     {
-        if (ResolveGitCommonDir(projectRoot) != null)
-        {
-            var configured = TryRunGit(projectRoot, "config", "--bool", "--get", "core.ignorecase")?.Trim();
-            if (bool.TryParse(configured, out var ignoreCase))
-                return ignoreCase;
-        }
+        var configured = TryRunGit(projectRoot, "config", "--bool", "--get", "core.ignorecase")?.Trim();
+        if (bool.TryParse(configured, out var ignoreCase))
+            return ignoreCase;
 
         return ProbeFileSystemIgnoreCase(projectRoot);
     }
@@ -132,9 +129,6 @@ public static class GitHelper
 
     private static string? TryRunGit(string projectRoot, params string[] args)
     {
-        if (ResolveGitCommonDir(projectRoot) == null)
-            return null;
-
         try
         {
             var psi = new ProcessStartInfo

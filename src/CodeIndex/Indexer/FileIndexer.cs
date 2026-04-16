@@ -39,6 +39,7 @@ public class FileIndexer
         IgnoredByRules,
         ExcludedByDefaultDirectory,
         ExcludedByDefaultFile,
+        IgnoreRulesUnavailable,
     }
 
     internal readonly record struct PathFilterResult(
@@ -46,6 +47,10 @@ public class FileIndexer
         IReadOnlyList<ScanError> Errors)
     {
         public bool ShouldSkip => FilterKind != PathFilterKind.None;
+        public bool ShouldDeleteExisting => FilterKind is
+            PathFilterKind.IgnoredByRules or
+            PathFilterKind.ExcludedByDefaultDirectory or
+            PathFilterKind.ExcludedByDefaultFile;
     }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp"];
@@ -205,6 +210,10 @@ public class FileIndexer
             return ignored;
         }
     }
+
+    private readonly record struct IgnoreRuleLoadResult(
+        IgnoreRuleSet Rules,
+        bool IgnoreRulesAvailable);
 
     private sealed class IgnoreRule
     {
@@ -727,7 +736,10 @@ public class FileIndexer
         var activeIgnoreRules = IgnoreRuleSet.Empty;
         var currentDirectory = _projectRoot;
         var fullyScanned = true;
-        activeIgnoreRules = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+        var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+        activeIgnoreRules = loadResult.Rules;
+        if (!loadResult.IgnoreRulesAvailable)
+            return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
         var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
         for (var i = 0; i < directorySegmentCount; i++)
@@ -743,7 +755,10 @@ public class FileIndexer
 
             currentDirectory = childDirectory;
             fullyScanned = true;
-            activeIgnoreRules = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+            loadResult = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+            activeIgnoreRules = loadResult.Rules;
+            if (!loadResult.IgnoreRulesAvailable)
+                return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
         }
 
         if (isDirectory)
@@ -813,7 +828,10 @@ public class FileIndexer
         var fullyScanned = true;
         try
         {
-            var activeIgnoreRules = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, errors, ref fullyScanned);
+            var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, errors, ref fullyScanned);
+            var activeIgnoreRules = loadResult.Rules;
+            if (!loadResult.IgnoreRulesAvailable)
+                return false;
 
             foreach (var file in Directory.EnumerateFiles(dir))
             {
@@ -890,13 +908,14 @@ public class FileIndexer
         return fullyScanned;
     }
 
-    private IgnoreRuleSet LoadIgnoreRulesForDirectory(
+    private IgnoreRuleLoadResult LoadIgnoreRulesForDirectory(
         string dir,
         IgnoreRuleSet inheritedIgnoreRules,
         List<ScanError> errors,
         ref bool fullyScanned)
     {
         var rules = new List<IgnoreRule>();
+        var ignoreRulesAvailable = true;
 
         foreach (var ignoreFileName in IgnoreFileNames)
         {
@@ -920,15 +939,19 @@ public class FileIndexer
             {
                 errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
                 fullyScanned = false;
+                ignoreRulesAvailable = false;
             }
             catch (IOException)
             {
                 errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
                 fullyScanned = false;
+                ignoreRulesAvailable = false;
             }
         }
 
-        return IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules);
+        return ignoreRulesAvailable
+            ? new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true)
+            : new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
     }
 
     private static string NormalizeIgnorePath(string path)

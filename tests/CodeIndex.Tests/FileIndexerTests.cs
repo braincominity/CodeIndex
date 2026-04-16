@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Threading.Tasks;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
@@ -296,6 +297,78 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FailsClosedWhenRootIgnoreFileIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var ignorePath = Path.Combine(tempDir, ".gitignore");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(ignorePath, "secret.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Empty(result.Files);
+            Assert.Contains(result.Errors, error => error.Path == ".gitignore" && error.Message == "Could not read .gitignore.");
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FailsClosedWhenNestedIgnoreFileIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var nestedDir = Path.Combine(tempDir, "src");
+        var ignorePath = Path.Combine(nestedDir, ".gitignore");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            Directory.CreateDirectory(nestedDir);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(ignorePath, "secret.py\n");
+            File.WriteAllText(Path.Combine(nestedDir, "secret.py"), "print('secret')");
+            File.WriteAllText(Path.Combine(nestedDir, "keep_nested.py"), "print('nested keep')");
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["keep.py"], files);
+            Assert.Contains(result.Errors, error => error.Path == "src/.gitignore" && error.Message == "Could not read .gitignore.");
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
@@ -1053,5 +1126,11 @@ public class FileIndexerTests
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
 
         return stdout;
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void SetUnixPermissions(string path, UnixFileMode mode)
+    {
+        File.SetUnixFileMode(path, mode);
     }
 }

@@ -680,6 +680,14 @@ public static class IndexCommandRunner
                 RecordScanErrors(pathFilter.Errors);
                 if (pathFilter.ShouldSkip)
                 {
+                    if (!pathFilter.ShouldDeleteExisting)
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                        continue;
+                    }
+
                     if (!writer.HasFileAtPath(relPath))
                     {
                         skipped++;
@@ -995,6 +1003,7 @@ public static class IndexCommandRunner
             FileIndexer.PathFilterKind.IgnoredByRules => "ignored by .gitignore/.cdidxignore",
             FileIndexer.PathFilterKind.ExcludedByDefaultDirectory => "excluded by default directory rules",
             FileIndexer.PathFilterKind.ExcludedByDefaultFile => "excluded by default file rules",
+            FileIndexer.PathFilterKind.IgnoreRulesUnavailable => "ignore rules unavailable",
             _ => "filtered",
         };
 

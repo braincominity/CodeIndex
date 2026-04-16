@@ -258,6 +258,28 @@ public class GitHelperTests : IDisposable
         Assert.False(GitHelper.ResolveIgnoreCase(repoDir));
     }
 
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsTrue()
+    {
+        var repoDir = CreateGitRepo();
+        var subDir = Path.Combine(repoDir, "src", "module");
+        Directory.CreateDirectory(subDir);
+        RunGit(repoDir, "config", "core.ignorecase", "true");
+
+        Assert.True(GitHelper.ResolveIgnoreCase(subDir));
+    }
+
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsFalse()
+    {
+        var repoDir = CreateGitRepo();
+        var subDir = Path.Combine(repoDir, "src", "module");
+        Directory.CreateDirectory(subDir);
+        RunGit(repoDir, "config", "core.ignorecase", "false");
+
+        Assert.False(GitHelper.ResolveIgnoreCase(subDir));
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
