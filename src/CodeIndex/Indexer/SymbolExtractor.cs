@@ -97,6 +97,12 @@ public static class SymbolExtractor
         int? ReturnTypeStartColumn = null,
         int? ReturnTypeEndColumn = null);
 
+    private readonly record struct JavaScriptTypeScriptMethodHeaderCapture(
+        string SourceHeader,
+        JavaScriptTypeScriptMethodHeaderInfo HeaderInfo,
+        int BodyStartLineIndex,
+        int BodyStartColumn);
+
     private const string JavaScriptTypeScriptIdentifierPattern = @"[$\p{L}_][$\p{L}\p{Nd}_]*";
 
     private static readonly Regex JavaScriptTypeScriptAnonymousDefaultExportRegex = new(
@@ -1657,6 +1663,8 @@ public static class SymbolExtractor
         var initializerBraceDepth = 0;
         var lexState = new JavaScriptLexState();
         var seenMethodStarts = new HashSet<(int Line, int Column)>();
+        var pendingBodyStartLineIndex = -1;
+        var pendingBodyStartColumn = -1;
 
         for (int i = scanStartIndex; i < scanEndExclusive; i++)
         {
@@ -1664,6 +1672,27 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(line, lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
+
+            if (pendingBodyStartLineIndex >= 0)
+            {
+                if (i < pendingBodyStartLineIndex)
+                    continue;
+
+                if (i == pendingBodyStartLineIndex)
+                {
+                    if (pendingBodyStartColumn >= 0 && pendingBodyStartColumn < sanitizedLine.Length)
+                    {
+                        nestedBraceDepth += CountBraces(sanitizedLine[pendingBodyStartColumn..]);
+                        if (nestedBraceDepth < 0)
+                            nestedBraceDepth = 0;
+                    }
+
+                    pendingBodyStartLineIndex = -1;
+                    pendingBodyStartColumn = -1;
+                    continue;
+                }
+            }
+
             var scanStartColumn = i == scanStartIndex
                 ? Math.Min(classScanTarget.FirstLineScanOffset, sanitizedLine.Length)
                 : 0;
@@ -1708,11 +1737,17 @@ public static class SymbolExtractor
                 if (nestedBraceDepth == 0
                     && IsJavaScriptTypeScriptMethodCandidateStart(sanitizedLine, column))
                 {
-                    var matchCandidate = lang == "typescript"
-                        ? NormalizeTypeScriptBareMethodMatchInput(sanitizedLine[column..])
-                        : sanitizedLine[column..];
-                    if (TryParseJavaScriptTypeScriptMethodHeader(matchCandidate, 0, lang, out var methodHeader))
+                    if (TryCaptureJavaScriptTypeScriptMethodHeader(
+                        lines,
+                        i,
+                        column,
+                        scanEndExclusive,
+                        sanitizedLine,
+                        lexState,
+                        lang,
+                        out var methodCapture))
                     {
+                        var methodHeader = methodCapture.HeaderInfo;
                         var startLine = i + 1;
                         if (seenMethodStarts.Add((startLine, column)))
                         {
@@ -1724,19 +1759,24 @@ public static class SymbolExtractor
                             {
                                 FileId = fileId,
                                 Kind = "function",
-                                Name = GetJavaScriptTypeScriptMethodNameFromSource(line, column) ?? methodHeader.Name,
+                                Name = GetJavaScriptTypeScriptMethodNameFromSource(methodCapture.SourceHeader, 0) ?? methodHeader.Name,
                                 Line = startLine,
                                 StartLine = startLine,
                                 EndLine = Math.Max(startLine, endLine),
                                 BodyStartLine = bodyStartLine,
                                 BodyEndLine = bodyEndLine,
-                                Signature = sameLineMethodEndColumn >= column
-                                    ? line[column..(sameLineMethodEndColumn + 1)].Trim()
-                                    : line[column..].Trim(),
+                                Signature = BuildJavaScriptTypeScriptBareMethodSignature(
+                                    lines,
+                                    i,
+                                    column,
+                                    bodyEndLine,
+                                    sameLineMethodEndColumn,
+                                    methodCapture,
+                                    lang),
                                 ContainerKind = "class",
                                 ContainerName = classScanTarget.ContainerName,
                                 Visibility = methodHeader.Visibility,
-                                ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(line, column, startLine, bodyEndLine, lang),
+                                ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(methodCapture.SourceHeader, methodHeader, lang),
                             });
 
                             if (sameLineMethodEndColumn >= column)
@@ -1744,11 +1784,20 @@ public static class SymbolExtractor
                                 column = sameLineMethodEndColumn + 1;
                                 continue;
                             }
+
+                            if (methodCapture.BodyStartLineIndex > i)
+                            {
+                                pendingBodyStartLineIndex = methodCapture.BodyStartLineIndex;
+                                pendingBodyStartColumn = methodCapture.BodyStartColumn;
+                                break;
+                            }
                         }
 
-                        if (methodHeader.BodyStartColumn >= 0 && methodHeader.BodyStartColumn < sanitizedLine.Length)
+                        if (methodCapture.BodyStartLineIndex == i
+                            && methodCapture.BodyStartColumn >= 0
+                            && methodCapture.BodyStartColumn < sanitizedLine.Length)
                         {
-                            nestedBraceDepth += CountBraces(sanitizedLine[methodHeader.BodyStartColumn..]);
+                            nestedBraceDepth += CountBraces(sanitizedLine[methodCapture.BodyStartColumn..]);
                             if (nestedBraceDepth < 0)
                                 nestedBraceDepth = 0;
                             break;
@@ -2978,23 +3027,164 @@ public static class SymbolExtractor
         return false;
     }
 
-    private static string? GetJavaScriptTypeScriptBareMethodReturnType(string line, int startColumn, int startLine, int? bodyEndLine, string? lang)
+    private static bool TryCaptureJavaScriptTypeScriptMethodHeader(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        int scanEndExclusive,
+        string firstSanitizedLine,
+        JavaScriptLexState nextLineLexState,
+        string? lang,
+        out JavaScriptTypeScriptMethodHeaderCapture methodCapture)
     {
-        if (lang != "typescript" || bodyEndLine != startLine)
-            return null;
+        methodCapture = default;
+        var sourceBuilder = new System.Text.StringBuilder();
+        var sanitizedBuilder = new System.Text.StringBuilder();
 
-        var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
-        if (!TryParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out var methodHeader)
+        var firstSourceSegment = startColumn < lines[startIndex].Length
+            ? lines[startIndex][startColumn..]
+            : string.Empty;
+        var firstSanitizedSegment = startColumn < firstSanitizedLine.Length
+            ? firstSanitizedLine[startColumn..]
+            : string.Empty;
+        sourceBuilder.Append(firstSourceSegment);
+        sanitizedBuilder.Append(lang == "typescript"
+            ? NormalizeTypeScriptBareMethodMatchInput(firstSanitizedSegment)
+            : firstSanitizedSegment);
+
+        if (TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
+            sourceBuilder.ToString(),
+            sanitizedBuilder.ToString(),
+            startIndex,
+            startColumn,
+            lang,
+            out methodCapture))
+        {
+            return true;
+        }
+
+        var lexState = nextLineLexState;
+        for (int lineIndex = startIndex + 1; lineIndex < scanEndExclusive; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+
+            sourceBuilder.Append('\n');
+            sourceBuilder.Append(lines[lineIndex]);
+            sanitizedBuilder.Append('\n');
+            sanitizedBuilder.Append(lang == "typescript"
+                ? NormalizeTypeScriptBareMethodMatchInput(lexedLine.SanitizedLine)
+                : lexedLine.SanitizedLine);
+
+            if (TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
+                sourceBuilder.ToString(),
+                sanitizedBuilder.ToString(),
+                startIndex,
+                startColumn,
+                lang,
+                out methodCapture))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
+        string sourceHeader,
+        string sanitizedHeader,
+        int startIndex,
+        int startColumn,
+        string? lang,
+        out JavaScriptTypeScriptMethodHeaderCapture methodCapture)
+    {
+        methodCapture = default;
+        if (!TryParseJavaScriptTypeScriptMethodHeader(sanitizedHeader, 0, lang, out var methodHeader))
+            return false;
+
+        if (!TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+            sourceHeader,
+            startIndex,
+            startColumn,
+            methodHeader.BodyStartColumn,
+            out var bodyStartLineIndex,
+            out var bodyStartColumn))
+        {
+            return false;
+        }
+
+        methodCapture = new JavaScriptTypeScriptMethodHeaderCapture(
+            sourceHeader,
+            methodHeader,
+            bodyStartLineIndex,
+            bodyStartColumn);
+        return true;
+    }
+
+    private static bool TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+        string sourceHeader,
+        int startIndex,
+        int startColumn,
+        int headerColumn,
+        out int lineIndex,
+        out int column)
+    {
+        lineIndex = startIndex;
+        column = startColumn;
+        if (headerColumn < 0 || headerColumn >= sourceHeader.Length)
+            return false;
+
+        for (int i = 0; i < headerColumn; i++)
+        {
+            if (sourceHeader[i] == '\n')
+            {
+                lineIndex++;
+                column = 0;
+            }
+            else
+            {
+                column++;
+            }
+        }
+
+        return true;
+    }
+
+    private static string BuildJavaScriptTypeScriptBareMethodSignature(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        int? bodyEndLine,
+        int sameLineMethodEndColumn,
+        JavaScriptTypeScriptMethodHeaderCapture methodCapture,
+        string? lang)
+    {
+        if (bodyEndLine == startIndex + 1 && sameLineMethodEndColumn >= startColumn)
+            return lines[startIndex][startColumn..(sameLineMethodEndColumn + 1)].Trim();
+
+        if (methodCapture.HeaderInfo.BodyStartColumn < 0
+            || methodCapture.HeaderInfo.BodyStartColumn >= methodCapture.SourceHeader.Length)
+        {
+            return methodCapture.SourceHeader.Trim();
+        }
+
+        return methodCapture.SourceHeader[..(methodCapture.HeaderInfo.BodyStartColumn + 1)].Trim();
+    }
+
+    private static string? GetJavaScriptTypeScriptBareMethodReturnType(string sourceHeader, JavaScriptTypeScriptMethodHeaderInfo methodHeader, string? lang)
+    {
+        if (lang != "typescript"
             || methodHeader.ReturnTypeStartColumn == null
             || methodHeader.ReturnTypeEndColumn == null)
             return null;
 
         var returnTypeStartColumn = methodHeader.ReturnTypeStartColumn.Value + 1;
         var returnTypeEndColumn = methodHeader.ReturnTypeEndColumn.Value;
-        if (returnTypeEndColumn < returnTypeStartColumn || returnTypeEndColumn >= line.Length)
+        if (returnTypeEndColumn < returnTypeStartColumn || returnTypeEndColumn >= sourceHeader.Length)
             return null;
 
-        return NormalizeMetadata(line[returnTypeStartColumn..(returnTypeEndColumn + 1)]);
+        return NormalizeMetadata(sourceHeader[returnTypeStartColumn..(returnTypeEndColumn + 1)]);
     }
 
     private static bool TryGetJavaScriptTypeScriptNextToken(

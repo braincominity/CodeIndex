@@ -1680,6 +1680,81 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsMultilineClassMethodHeaders()
+    {
+        var content = """
+            export class MultiLineMethod {
+                run(
+                    value: string,
+                ): void {}
+
+                keep(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MultiLineMethod");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        var keep = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "keep"));
+        Assert.Equal("void", run.ReturnType);
+        Assert.Contains("run(", run.Signature);
+        Assert.Contains("): void {", run.Signature);
+        Assert.Equal("void", keep.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineGenericClassMethodHeaders()
+    {
+        var content = """
+            export class MultiLineGenericMethod {
+                run<T>(
+                    value: T,
+                ): Promise<T> {
+                    return Promise.resolve(value);
+                }
+
+                keep(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MultiLineGenericMethod");
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        Assert.Equal("Promise<T>", run.ReturnType);
+        Assert.Contains("run<T>(", run.Signature);
+        Assert.Contains("): Promise<T> {", run.Signature);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ReturnType == "void");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_PreservesReturnTypeMetadataForMethodsWithMultilineBodies()
+    {
+        var content = """
+            export class Example {
+                run(): void {
+                    return;
+                }
+
+                build(): (() => { value: string }) {
+                    return () => ({ value: "x" });
+                }
+
+                async *stream<T>(): AsyncGenerator<T> {
+                    yield default(T)!;
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var run = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "run"));
+        var build = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "build"));
+        var stream = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "stream"));
+        Assert.Equal("void", run.ReturnType);
+        Assert.Equal("(() => { value: string })", build.ReturnType);
+        Assert.Equal("AsyncGenerator<T>", stream.ReturnType);
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInlineClassExpressionMethods()
     {
         var content = "const Service = class NamedService { run(): void {} };";
@@ -1908,6 +1983,34 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ReturnType == "number");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsGenericClassMethodsWithMultilineFunctionTypeParameters()
+    {
+        var content = """
+            export class Example {
+                method<T = () => void>(
+                    value: T,
+                ): number {
+                    return 1;
+                }
+
+                constrained<T extends () => void>(
+                    value: T,
+                ): number {
+                    return 2;
+                }
+
+                keep(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ReturnType == "number");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "constrained" && s.ReturnType == "number");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ReturnType == "void");
     }
 
     [Fact]
