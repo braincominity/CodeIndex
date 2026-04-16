@@ -1505,6 +1505,15 @@ public class SymbolExtractorTests
             @font-face { src: url("same-line.woff2"); font-family: "Trailing Font"; unicode-range: U+0-5FF; }
             @font-face { src: url("valid-last.woff2"); font-family: "Last No Semicolon" }
             @font-face { font-family: /* keep */ "Comment Gap"; src: url("comment-gap.woff2"); }
+            @font-face {
+              /* font-family: bogus; */
+              font-family: "Comment Real Font";
+              src: url("comment-real.woff2");
+            }
+            @font-face {
+              src: url("data:font/woff2;base64,AAAA;font-family:bogus");
+              font-family: "Url Real Font";
+            }
             @font-face { src: url("no-family.woff2"); }
             @font-face {
               font-family:
@@ -1524,8 +1533,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Trailing Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Last No Semicolon");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Comment Gap");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Comment Real Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Upper Rule");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Url Real Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Mixed Last No Semicolon");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
     }
@@ -1554,6 +1565,9 @@ public class SymbolExtractorTests
               }
             }
 
+            @media screen { .inline-media { color: red; } }
+            @supports (display: grid) { .inline-supports { display: grid; } }
+
             .parent {
               .child {
                 color: purple;
@@ -1570,6 +1584,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".responsive:hover");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".media-class");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".supports-class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".inline-media");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".inline-supports");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".parent");
         Assert.DoesNotContain(symbols, s => s.Name == ".child");
         Assert.DoesNotContain(symbols, s => s.Name == "#nested-id");

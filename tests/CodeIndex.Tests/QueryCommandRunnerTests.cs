@@ -1858,6 +1858,7 @@ public class QueryCommandRunnerTests
                 .root { color: red; }
                 #root { color: blue; }
                 [hidden] { display: none; }
+                @media screen { .inline-media { color: green; } }
                 .btn:hover { color: green; }
                 %button-base { padding: 4px; }
                 @font-face { src: url("no-family.woff2"); }
@@ -1879,6 +1880,9 @@ public class QueryCommandRunnerTests
             var (attributeExitCode, attributeStdout, attributeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["[hidden]", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
                 _jsonOptions));
+            var (inlineMediaExitCode, inlineMediaStdout, inlineMediaStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                [".inline-media", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
             var (propertyExitCode, propertyStdout, propertyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--name=--accent", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
                 _jsonOptions));
@@ -1893,6 +1897,7 @@ public class QueryCommandRunnerTests
             var idRows = ParseJsonLines(idStdout);
             var pseudoRows = ParseJsonLines(pseudoStdout);
             var attributeRows = ParseJsonLines(attributeStdout);
+            var inlineMediaRows = ParseJsonLines(inlineMediaStdout);
             var propertyRows = ParseJsonLines(propertyStdout);
             var placeholderRows = ParseJsonLines(placeholderStdout);
 
@@ -1922,6 +1927,12 @@ public class QueryCommandRunnerTests
             Assert.Single(attributeRows);
             Assert.Equal("[hidden]", attributeRows[0].RootElement.GetProperty("name").GetString());
             Assert.Equal("class", attributeRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, inlineMediaExitCode);
+            Assert.Equal(string.Empty, inlineMediaStderr);
+            Assert.Single(inlineMediaRows);
+            Assert.Equal(".inline-media", inlineMediaRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", inlineMediaRows[0].RootElement.GetProperty("kind").GetString());
 
             Assert.Equal(CommandExitCodes.Success, propertyExitCode);
             Assert.Equal(string.Empty, propertyStderr);

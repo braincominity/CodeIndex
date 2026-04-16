@@ -462,7 +462,7 @@ public static class SymbolExtractor
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CssFontFaceFamilyRegex = new(@"(?:^|[;{])\s*font-family\s*:\s*(?<value>(?:""[^""]*""|'[^']*'|[^;}])+?)\s*(?=;|})", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
 
     /// <summary>
@@ -581,6 +581,16 @@ public static class SymbolExtractor
                             Signature = line.Trim(),
                         });
                 }
+
+                ExtractCssInlineGroupingSelectors(
+                    fileId,
+                    line,
+                    cssScannerLine,
+                    cssScannerLines!,
+                    i,
+                    patterns,
+                    symbols,
+                    cssSeenSymbols);
             }
         }
 
@@ -615,6 +625,111 @@ public static class SymbolExtractor
         symbols.Add(symbol);
     }
 
+    private static void ExtractCssInlineGroupingSelectors(
+        long fileId,
+        string rawLine,
+        string maskedLine,
+        string[] cssScannerLines,
+        int lineIndex,
+        IReadOnlyList<SymbolPattern> patterns,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        var groupingDepth = 0;
+        var qualifiedDepth = 0;
+        var segmentStart = 0;
+
+        for (int i = 0; i < maskedLine.Length; i++)
+        {
+            var ch = maskedLine[i];
+            if (ch == ';')
+            {
+                segmentStart = i + 1;
+                continue;
+            }
+
+            if (ch == '{')
+            {
+                var maskedSegment = maskedLine[segmentStart..i].Trim();
+                var rawSegment = rawLine[segmentStart..i].Trim();
+                var isGroupingAtRule = maskedSegment.StartsWith('@');
+
+                if (groupingDepth > 0 && qualifiedDepth == 0 && !isGroupingAtRule)
+                    TryAddCssInlineSelectorSegment(fileId, rawSegment, maskedSegment, cssScannerLines, lineIndex, i, patterns, symbols, cssSeenSymbols);
+
+                if (isGroupingAtRule)
+                    groupingDepth++;
+                else
+                    qualifiedDepth++;
+
+                segmentStart = i + 1;
+                continue;
+            }
+
+            if (ch == '}')
+            {
+                if (qualifiedDepth > 0)
+                    qualifiedDepth--;
+                else if (groupingDepth > 0)
+                    groupingDepth--;
+
+                segmentStart = i + 1;
+            }
+        }
+    }
+
+    private static void TryAddCssInlineSelectorSegment(
+        long fileId,
+        string rawSegment,
+        string maskedSegment,
+        string[] cssScannerLines,
+        int lineIndex,
+        int openingBraceIndex,
+        IReadOnlyList<SymbolPattern> patterns,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        if (string.IsNullOrWhiteSpace(maskedSegment))
+            return;
+
+        var matchLine = $"{maskedSegment} {{";
+        foreach (var pattern in patterns)
+        {
+            if (pattern.BodyStyle != BodyStyle.Brace)
+                continue;
+
+            var match = pattern.Regex.Match(matchLine);
+            if (!match.Success)
+                continue;
+
+            var name = match.Groups["name"].Success
+                ? match.Groups["name"].Value.Trim()
+                : match.Value.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                return;
+
+            var (endLine, bodyStartLine, bodyEndLine) = FindBraceRange(cssScannerLines, lineIndex, openingBraceIndex);
+            var startLine = lineIndex + 1;
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols,
+                startLine,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = pattern.Kind,
+                    Name = name,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = Math.Max(startLine, endLine),
+                    BodyStartLine = bodyStartLine,
+                    BodyEndLine = bodyEndLine,
+                    Signature = rawSegment.Length > 0 ? $"{rawSegment} {{" : "{",
+                });
+            return;
+        }
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle)
     {
         return bodyStyle switch
@@ -627,7 +742,7 @@ public static class SymbolExtractor
         };
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int openingBraceOffset = 0)
     {
         int depth = 0;
         bool opened = false;
@@ -635,8 +750,14 @@ public static class SymbolExtractor
 
         for (int i = startIndex; i < lines.Length; i++)
         {
-            foreach (var c in lines[i])
+            var line = lines[i];
+            var charStart = i == startIndex
+                ? Math.Clamp(openingBraceOffset, 0, Math.Max(0, line.Length - 1))
+                : 0;
+
+            for (int charIndex = charStart; charIndex < line.Length; charIndex++)
             {
+                var c = line[charIndex];
                 if (c == '{')
                 {
                     depth++;
@@ -842,12 +963,25 @@ public static class SymbolExtractor
     {
         fontFamily = string.Empty;
         var lastLineIndex = Math.Min(lines.Length, Math.Max(startIndex + 1, endLine)) - 1;
-        var blockText = string.Join('\n', lines[startIndex..(lastLineIndex + 1)]);
-        var match = CssFontFaceFamilyRegex.Match(blockText);
+        var blockLines = lines[startIndex..(lastLineIndex + 1)];
+        var rawBlockText = string.Join('\n', blockLines);
+        var maskedBlockText = string.Join('\n', MaskCssScannerLines(blockLines));
+        var match = CssFontFaceDeclarationRegex.Match(maskedBlockText);
         if (!match.Success)
             return false;
 
-        var rawName = match.Groups["value"].Value.Trim();
+        var valueStart = match.Index + match.Length;
+        while (valueStart < rawBlockText.Length && char.IsWhiteSpace(rawBlockText[valueStart]))
+            valueStart++;
+
+        var valueEnd = valueStart;
+        while (valueEnd < maskedBlockText.Length && maskedBlockText[valueEnd] is not ';' and not '}')
+            valueEnd++;
+
+        if (valueEnd <= valueStart || valueEnd > rawBlockText.Length)
+            return false;
+
+        var rawName = rawBlockText[valueStart..valueEnd].Trim();
         if (rawName.Length == 0)
             return false;
 
