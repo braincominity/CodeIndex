@@ -54,14 +54,15 @@ public static class ReferenceExtractor
         {
             "import", "super", "yield",
         },
-        // Python/Ruby exception syntax / Python/Ruby の例外送出構文
+        // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "raise",
+            "raise", "yield", "from",
         },
+        // Ruby contextual keywords / Ruby の文脈キーワード
         ["ruby"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "raise",
+            "raise", "yield", "super", "include",
         },
         // F# contextual keywords / F# 文脈キーワード
         ["fsharp"] = new HashSet<string>(StringComparer.Ordinal)

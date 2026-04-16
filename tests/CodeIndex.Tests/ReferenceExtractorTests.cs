@@ -276,6 +276,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonYieldSyntax_IsIgnored()
+    {
+        const string content = """
+            def stream(xs):
+                yield(item())
+                yield from(source())
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "from");
+        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "stream");
+        Assert.Contains(references, reference => reference.SymbolName == "source" && reference.ContainerName == "stream");
+    }
+
+    [Fact]
     public void Extract_JavaScriptRequireCall_IsNotDropped()
     {
         const string content = """
@@ -350,6 +368,32 @@ public class ReferenceExtractorTests
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
         Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
+    }
+
+    [Fact]
+    public void Extract_RubyContextualKeywords_AreIgnored()
+    {
+        const string content = """
+            module Shared
+            end
+
+            class Worker
+              include(Shared)
+
+              def run(x)
+                super(x)
+                yield(item())
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
+        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
     }
 
     [Fact]
