@@ -688,24 +688,25 @@ What `install.sh` does, in order (see `install.sh`):
    does not ship that RID.
 2. **Detect existing install first.** If `INSTALL_DIR/cdidx` already
    exists, the installer caches its parsed `--version` output before any
-   network work. This makes no-argument re-runs idempotent on hosts that
-   are rate-limited by GitHub.
+   network work so later version-selection and repair decisions can
+   distinguish a healthy match from an older or incomplete install.
 3. **Resolve version.** With an explicit argument, the installer accepts
    either the `v`-prefixed or bare form (`v1.8.0` or `1.8.0`). With no
-   argument and no existing install, it calls the GitHub API
+   argument, it calls the GitHub API
    (`/repos/Widthdom/CodeIndex/releases/latest`), prefers `jq` when
    available for `tag_name` parsing, and falls back to the existing
-   `grep` + `sed` extraction for portability. With no argument and an
-   existing healthy install, it exits 0 before the API call and tells
-   the user to pass an explicit version to reinstall or switch versions.
-   Broken `v0.0.0` installs or installs missing required adjacent assets
-   are treated as reinstall targets instead of idempotent successes. HTTP
+   `grep` + `sed` extraction for portability. The installer then compares
+   that latest release tag to any healthy existing install and skips the
+   download only when the installed version already matches the latest
+   tag. Broken `v0.0.0` installs or installs missing required adjacent
+   assets are treated as reinstall targets instead of idempotent
+   successes. HTTP
    failures are classified explicitly (`403` rate limit vs `404` vs
    `5xx` vs real curl network errors) instead of collapsing everything
    into a generic “check your network connection” message.
 4. **Reinstall or switch when an explicit version is requested.** A
-   healthy no-argument rerun short-circuits before the API call, but an
-   explicit target version always proceeds into reinstall/switch logic.
+   no-argument rerun still targets the latest release, but an explicit
+   target version always proceeds into reinstall/switch logic.
    Same-version explicit requests force a reinstall, while broken
    `v0.0.0` installs or same-version installs missing required assets
    are also treated as replacements, which is the desired behaviour.
@@ -753,11 +754,14 @@ sequenceDiagram
     S->>S: detect_platform (uname)
     Note over S: reject musl / osx-x64 early
     S->>FS: inspect existing cdidx --version
-    alt no explicit version and cdidx already installed healthy
-        S-->>U: exit 0 with explicit-version guidance
-    else no explicit version and clean install
+    alt no explicit version
         S->>API: GET /releases/latest
         API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
+        alt healthy existing install already matches latest
+            S-->>U: exit 0 after latest-version comparison
+        else upgrade or repair needed
+            S->>FS: switch/reinstall to resolved latest version
+        end
     else explicit version requested
         S->>S: normalize explicit version
         S->>FS: same version still proceeds into reinstall
@@ -1685,9 +1689,9 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
 1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
-2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、GitHub rate limit が厳しいホストでも引数なし再実行を idempotent にできる。
-3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしで既存インストールも無い場合だけ GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩き、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。引数なしで健全な既存インストールがある場合は API を叩かず 0 終了し、再インストールやバージョン切り替えには明示バージョン指定を促す。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
-4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なしの健全な再実行だけが API 呼び出し前に短絡終了する。明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。
+2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、後続のバージョン選択や repair 判定で「健全な一致」なのか「古い/不完全な install」なのかを区別できる。
+3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで健全な既存 install がその latest tag と一致している場合だけ download を skip する。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
+4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なし再実行も latest release を対象にするが、明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。
 5. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
 6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
 7. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
@@ -1710,11 +1714,14 @@ sequenceDiagram
     S->>S: detect_platform (uname)
     Note over S: musl / osx-x64 は早期に拒否
     S->>FS: 既存 cdidx --version を確認
-    alt 引数なし かつ cdidx 既存あり かつ健全
-        S-->>U: 明示バージョン指定を案内して exit 0
-    else 引数なし かつ新規 install
+    alt 引数なし
         S->>API: GET /releases/latest
         API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
+        alt 健全な既存 install が latest と一致
+            S-->>U: latest 比較後に exit 0
+        else upgrade または repair が必要
+            S->>FS: 解決した latest 版へ切り替え/再インストール
+        end
     else 明示バージョン指定あり
         S->>S: 明示バージョンを正規化
         S->>FS: 同版でも再インストールへ進む

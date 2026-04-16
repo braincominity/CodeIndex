@@ -17,7 +17,6 @@ STAGE_DIR_CLEANUP=""
 BACKUP_DIR_CLEANUP=""
 EXISTING_BIN=""
 EXISTING_VERSION=""
-RESOLVE_VERSION_SKIP=0
 EXPLICIT_VERSION_REQUESTED=0
 
 # --- Helpers / ヘルパー ---
@@ -349,7 +348,6 @@ detect_platform() {
 # --- Resolve version / バージョン解決 ---
 
 resolve_version() {
-    RESOLVE_VERSION_SKIP=0
     EXPLICIT_VERSION_REQUESTED=0
 
     if [ -n "${1:-}" ]; then
@@ -361,13 +359,6 @@ resolve_version() {
             *)  VERSION="v${VERSION}" ;;
         esac
     else
-        if existing_install_is_reusable; then
-            VERSION="v${EXISTING_VERSION}"
-            info "cdidx ${EXISTING_VERSION} is already installed at ${EXISTING_BIN}. Skipping latest-release lookup. Pass an explicit version to reinstall or switch versions."
-            RESOLVE_VERSION_SKIP=1
-            return 0
-        fi
-
         info "Fetching latest release version..."
         if ! VERSION="$(fetch_latest_release_version)"; then
             return 1
@@ -595,9 +586,6 @@ main() {
     detect_existing_install
     if ! resolve_version "${1:-}"; then
         exit 1
-    fi
-    if [ "$RESOLVE_VERSION_SKIP" = "1" ]; then
-        return 0
     fi
     check_existing
     download_and_install

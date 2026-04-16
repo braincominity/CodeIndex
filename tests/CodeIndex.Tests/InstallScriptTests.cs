@@ -24,7 +24,7 @@ public sealed class InstallScriptTests : IDisposable
     [Theory]
     [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
-    public void Main_WithoutExplicitVersion_SkipsLatestLookupWhenCdidxAlreadyInstalled(string osName, string archName, string rid, string nativeAssetName)
+    public void Main_WithoutExplicitVersion_SkipsDownloadWhenLatestAlreadyInstalled(string osName, string archName, string rid, string nativeAssetName)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -35,7 +35,27 @@ public sealed class InstallScriptTests : IDisposable
             detect_platform() { OS_NAME="{{osName}}"; ARCH_NAME="{{archName}}"; RID="{{rid}}"; }
             download_and_install() { echo "DOWNLOAD_SHOULD_NOT_RUN"; }
             check_path() { :; }
-            curl() { echo "CURL_SHOULD_NOT_RUN"; return 99; }
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"tag_name":"v1.10.0"}' > "$output_path"
+                printf '200'
+                return 0
+            }
 
             mkdir -p "{{installDir}}"
             cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
@@ -55,11 +75,70 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("Version: v1.10.0", stdout);
         Assert.Contains("cdidx 1.10.0 is already installed", stdout);
-        Assert.Contains("Skipping latest-release lookup", stdout);
-        Assert.DoesNotContain("Fetching latest release version", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
-        Assert.DoesNotContain("CURL_SHOULD_NOT_RUN", stdout);
+    }
+
+    [Theory]
+    [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
+    [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
+    public void Main_WithoutExplicitVersion_UpgradesHealthyOlderInstallToLatest(string osName, string archName, string rid, string nativeAssetName)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, $"upgrade_{osName}");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            detect_platform() { OS_NAME="{{osName}}"; ARCH_NAME="{{archName}}"; RID="{{rid}}"; }
+            download_and_install() { echo "DOWNLOAD_RAN"; }
+            check_path() { :; }
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"tag_name":"v1.2.3"}' > "$output_path"
+                printf '200'
+                return 0
+            }
+
+            mkdir -p "{{installDir}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.0.0"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.0.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            : > "{{Path.Combine(installDir, nativeAssetName)}}"
+
+            main
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("Version: v1.2.3", stdout);
+        Assert.Contains("Switching cdidx from 1.0.0 to 1.2.3", stdout);
+        Assert.Contains("DOWNLOAD_RAN", stdout);
     }
 
     [Fact]
