@@ -3184,6 +3184,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsEmptyBodylessRecordDeclarationRange()
+    {
+        var content = """
+            namespace Repro;
+
+            public record Empty(
+            )
+                : Base();
+
+            public record Base();
+
+            public record struct EmptyStruct(
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var empty = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Empty"));
+        Assert.Equal(5, empty.EndLine);
+
+        var emptyStruct = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "EmptyStruct"));
+        Assert.Equal(10, emptyStruct.EndLine);
+    }
+
+    [Fact]
     public void Extract_CSharp_TracksRecordPrimaryComponentLineAfterAttributes()
     {
         var content = """

@@ -5139,12 +5139,15 @@ public static class SymbolExtractor
         if (parentSymbol != null)
             parentSymbol.EndLine = Math.Max(parentSymbol.EndLine, declarationEndLine);
 
-        pendingRecordPrimaryComponents.Add(new PendingRecordPrimaryComponents(
-            fileId,
-            kind,
-            recordName,
-            declarationLineIndex + 1,
-            components));
+        if (components.Count > 0)
+        {
+            pendingRecordPrimaryComponents.Add(new PendingRecordPrimaryComponents(
+                fileId,
+                kind,
+                recordName,
+                declarationLineIndex + 1,
+                components));
+        }
     }
 
     private static void MaterializeRecordPrimaryComponentSymbols(
@@ -5236,7 +5239,7 @@ public static class SymbolExtractor
                 components.Add(component);
         }
 
-        return components.Count > 0;
+        return true;
     }
 
     private static string CollectRecordDeclarationText(string[] lines, int declarationLineIndex, int declarationStartColumn)
