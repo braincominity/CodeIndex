@@ -2216,6 +2216,110 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_JavaScriptTemplateLiteralBraceKeepsFollowingMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_template_brace");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "example.js"),
+                """
+                export class Example {
+                  foo() {
+                    const value = `}`;
+                    return value;
+                  }
+
+                  bar() {
+                    return 1;
+                  }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/example.js", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
+            var example = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "class" && symbol.GetProperty("name").GetString() == "Example"));
+            var foo = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "foo"));
+            var bar = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "bar"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(10, example.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, foo.GetProperty("end_line").GetInt32());
+            Assert.Equal("class", bar.GetProperty("container_kind").GetString());
+            Assert.Equal("Example", bar.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_TypeScriptTemplateInterpolationBracesKeepFollowingMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_ts_template_interp");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "example.ts"),
+                """
+                export class Example {
+                  foo() {
+                    const value = `${format({ answer: 42 })}`;
+                    return value;
+                  }
+
+                  bar() {
+                    return 1;
+                  }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/example.ts", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
+            var example = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "class" && symbol.GetProperty("name").GetString() == "Example"));
+            var foo = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "foo"));
+            var bar = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "bar"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(10, example.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, foo.GetProperty("end_line").GetInt32());
+            Assert.Equal("class", bar.GetProperty("container_kind").GetString());
+            Assert.Equal("Example", bar.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");

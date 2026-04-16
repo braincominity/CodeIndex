@@ -23,6 +23,7 @@ public static class SymbolExtractor
     private enum BraceScanMode
     {
         Standard,
+        JavaScriptLike,
         CSharp,
         Rust,
         Legacy,
@@ -530,6 +531,7 @@ public static class SymbolExtractor
                 var braceScanMode = lang switch
                 {
                     "css" => BraceScanMode.Legacy,
+                    "javascript" or "typescript" => BraceScanMode.JavaScriptLike,
                     "csharp" => BraceScanMode.CSharp,
                     "rust" => BraceScanMode.Rust,
                     _ => BraceScanMode.Standard,
@@ -769,6 +771,8 @@ public static class SymbolExtractor
         var insideBlockComment = false;
         var tracksSingleQuotes = braceScanMode != BraceScanMode.Rust;
         var usesRawCSharpLines = braceScanMode == BraceScanMode.CSharp && rawLines != null;
+        var tracksJavaScriptTemplates = braceScanMode == BraceScanMode.JavaScriptLike;
+        List<int>? templateInterpolationDepths = tracksJavaScriptTemplates ? new List<int>() : null;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -783,6 +787,29 @@ public static class SymbolExtractor
             for (int charIndex = charStart; charIndex < line.Length; charIndex++)
             {
                 var c = line[charIndex];
+
+                if (tracksJavaScriptTemplates && templateInterpolationDepths!.Count > 0 && templateInterpolationDepths[^1] == 0)
+                {
+                    if (c == '\\' && charIndex + 1 < line.Length)
+                    {
+                        charIndex++;
+                        continue;
+                    }
+
+                    if (c == '`')
+                    {
+                        templateInterpolationDepths.RemoveAt(templateInterpolationDepths.Count - 1);
+                        continue;
+                    }
+
+                    if (c == '$' && charIndex + 1 < line.Length && line[charIndex + 1] == '{')
+                    {
+                        templateInterpolationDepths[^1] = 1;
+                        charIndex++;
+                    }
+
+                    continue;
+                }
 
                 if (insideBlockComment)
                 {
@@ -826,11 +853,20 @@ public static class SymbolExtractor
                 if (inSingleQuote || inDoubleQuote)
                     continue;
 
+                if (tracksJavaScriptTemplates && c == '`')
+                {
+                    templateInterpolationDepths!.Add(0);
+                    continue;
+                }
+
                 if (braceScanMode == BraceScanMode.CSharp && (c == '{' || c == '}') && IsSingleCharLiteralBrace(rawLine, charIndex, c))
                     continue;
 
                 if (c == '{')
                 {
+                    if (tracksJavaScriptTemplates && templateInterpolationDepths!.Count > 0 && templateInterpolationDepths[^1] > 0)
+                        templateInterpolationDepths[^1]++;
+
                     depth++;
                     if (!opened)
                     {
@@ -840,6 +876,17 @@ public static class SymbolExtractor
                 }
                 else if (c == '}' && opened)
                 {
+                    if (tracksJavaScriptTemplates && templateInterpolationDepths!.Count > 0 && templateInterpolationDepths[^1] > 0)
+                    {
+                        if (templateInterpolationDepths[^1] == 1)
+                        {
+                            templateInterpolationDepths[^1] = 0;
+                            continue;
+                        }
+
+                        templateInterpolationDepths[^1]--;
+                    }
+
                     depth--;
                     if (depth == 0)
                         return (i + 1, bodyStartLine, i + 1);
