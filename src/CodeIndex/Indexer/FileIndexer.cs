@@ -545,13 +545,17 @@ public class FileIndexer
         private static string GetPosixCharacterClassPattern(string className)
             => className switch
             {
-                "alnum" => @"\p{L}\p{Nd}",
-                "alpha" => @"\p{L}",
+                "alnum" => "A-Za-z0-9",
+                "alpha" => "A-Za-z",
                 "blank" => " \t",
-                "digit" => @"\p{Nd}",
-                "lower" => @"\p{Ll}",
-                "space" => @"\s",
-                "upper" => @"\p{Lu}",
+                "cntrl" => @"\x00-\x1F\x7F",
+                "digit" => "0-9",
+                "graph" => "!-~",
+                "lower" => "a-z",
+                "print" => " -~",
+                "punct" => @"!-/:-@\[-`\{-~",
+                "space" => " \t\r\n\v\f",
+                "upper" => "A-Z",
                 "xdigit" => "0-9A-Fa-f",
                 _ => throw new ArgumentException($"unsupported POSIX character class '{className}'"),
             };

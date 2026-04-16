@@ -681,7 +681,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_RespectsGitignorePosixBracketCharacterClass()
+    public void ScanFiles_RespectsGitignoreAsciiPosixDigitBracketCharacterClass()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
@@ -689,6 +689,7 @@ public class FileIndexerTests
             Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:digit:]].py\n");
             File.WriteAllText(Path.Combine(tempDir, "1.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "١.py"), "print('kept non-ascii digit')");
             File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
 
             var indexer = new FileIndexer(tempDir);
@@ -697,7 +698,58 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal([".gitignore", "a.py"], files);
+            Assert.Equal([".gitignore", "a.py", "١.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreAsciiPosixUpperBracketCharacterClass()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:upper:]].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "A.cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "É.cs"), "class KeptNonAscii { }");
+            File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.cs", "É.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignorePosixPunctBracketCharacterClass()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:punct:]].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "!.cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class Kept { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "a.cs"], files);
         }
         finally
         {
