@@ -1493,6 +1493,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSS_DetectsInlineFontFaceFamilyNames()
+    {
+        var content = """
+            @font-face { font-family: "Inline Font"; src: url("inline.woff2"); }
+            @font-face { src: url("same-line.woff2"); font-family: "Trailing Font"; unicode-range: U+0-5FF; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Inline Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Trailing Font");
+        Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsSymbols()
     {
         var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";

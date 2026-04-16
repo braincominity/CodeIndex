@@ -454,6 +454,7 @@ public static class SymbolExtractor
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssFontFaceFamilyRegex = new(@"(?:^|[;{])\s*font-family\s*:\s*(?<value>[^;]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -769,18 +770,13 @@ public static class SymbolExtractor
         fontFamily = string.Empty;
         var lastLineIndex = Math.Min(lines.Length, Math.Max(startIndex + 1, endLine)) - 1;
 
-        for (int i = startIndex + 1; i <= lastLineIndex; i++)
+        for (int i = startIndex; i <= lastLineIndex; i++)
         {
-            var trimmed = lines[i].Trim();
-            if (!trimmed.StartsWith("font-family", StringComparison.OrdinalIgnoreCase))
+            var match = CssFontFaceFamilyRegex.Match(lines[i]);
+            if (!match.Success)
                 continue;
 
-            var colonIndex = trimmed.IndexOf(':');
-            var semicolonIndex = trimmed.LastIndexOf(';');
-            if (colonIndex < 0 || semicolonIndex <= colonIndex)
-                continue;
-
-            var rawName = trimmed[(colonIndex + 1)..semicolonIndex].Trim();
+            var rawName = match.Groups["value"].Value.Trim();
             if (rawName.Length == 0)
                 continue;
 
