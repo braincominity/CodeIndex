@@ -2254,9 +2254,12 @@ public class DbReaderTests : IDisposable
     {
         InsertIndexedFile("src/constructor_kind_target.cs", "csharp",
             """
-            public class Target
+            namespace N
             {
-                public Target() { }
+                public class Target
+                {
+                    public Target() { }
+                }
             }
             """);
         InsertIndexedFile("src/constructor_kind_caller.cs", "csharp",
@@ -2265,27 +2268,29 @@ public class DbReaderTests : IDisposable
             {
                 public void Run()
                 {
-                    var target = new Target();
+                    var target = new N.Target();
+                    var other = new global::N.Target();
                 }
             }
             """);
 
-        var instantiateRef = Assert.Single(_reader.SearchReferences("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
-        Assert.Equal("instantiate", instantiateRef.ReferenceKind);
+        var instantiateRefs = _reader.SearchReferences("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]).ToList();
+        Assert.Equal(2, instantiateRefs.Count);
+        Assert.All(instantiateRefs, reference => Assert.Equal("instantiate", reference.ReferenceKind));
 
         Assert.Empty(_reader.SearchReferences("Target", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
         Assert.Equal(0, _reader.CountSearchReferences("Target", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
-        Assert.Equal(1, _reader.CountSearchReferences("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
+        Assert.Equal(2, _reader.CountSearchReferences("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
 
         Assert.Empty(_reader.GetCallees("Run", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
 
         var instantiateCallee = Assert.Single(_reader.GetCallees("Run", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
         Assert.Equal("instantiate", instantiateCallee.ReferenceKind);
-        Assert.Equal(1, instantiateCallee.ReferenceCount);
+        Assert.Equal(2, instantiateCallee.ReferenceCount);
 
         Assert.Empty(_reader.GetCallers("Target", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["constructor_kind"]));
         var instantiateCaller = Assert.Single(_reader.GetCallers("Target", lang: "csharp", referenceKind: "instantiate", exact: true, pathPatterns: ["constructor_kind"]));
-        Assert.Equal(1, instantiateCaller.ReferenceCount);
+        Assert.Equal(2, instantiateCaller.ReferenceCount);
     }
 
     [Fact]

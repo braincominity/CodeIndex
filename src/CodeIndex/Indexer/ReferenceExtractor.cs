@@ -73,6 +73,7 @@ public static class ReferenceExtractor
         ["php"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "require", "require_once", "include", "include_once",
+            "echo", "print", "exit", "die", "eval", "unset", "isset", "empty",
         },
         // SQL keywords (uppercase only to avoid collisions with other languages)
         // SQL キーワード（他言語との衝突を避けるため大文字のみ）
@@ -125,8 +126,6 @@ public static class ReferenceExtractor
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
-    private static readonly Regex ConstructorCallRegex = new(@"\bnew\s+(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
-    private static readonly Regex PhpConstructorCallRegex = new(@"\bnew\s+(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
@@ -195,11 +194,6 @@ public static class ReferenceExtractor
                 : null;
             var container = FindInnermostContainer(containerCandidates, lineNumber);
 
-            foreach (Match match in GetConstructorCallRegex(language).Matches(preparedLine))
-            {
-                AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, container);
-            }
-
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
             if (language is "csharp")
             {
@@ -211,7 +205,10 @@ public static class ReferenceExtractor
             {
                 var name = match.Groups["name"].Value;
                 if (IsConstructorCallName(language, preparedLine, match.Groups["name"].Index))
+                {
+                    AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, container);
                     continue;
+                }
                 if (IsIgnoredCallName(language, name))
                     continue;
                 if (definitionNames != null && definitionNames.Contains(name))
@@ -318,12 +315,41 @@ public static class ReferenceExtractor
             && languageSpecificIgnoredNames.Contains(name);
     }
 
-    private static Regex GetConstructorCallRegex(string language) =>
-        language == "php" ? PhpConstructorCallRegex : ConstructorCallRegex;
-
     private static bool IsConstructorCallName(string language, string preparedLine, int nameIndex)
     {
         var probe = nameIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
+            probe--;
+
+        if (probe < 0)
+            return false;
+
+        while (probe >= 0)
+        {
+            char? separator = null;
+            if (probe >= 1 && preparedLine[probe] == ':' && preparedLine[probe - 1] == ':')
+            {
+                separator = ':';
+                probe -= 2;
+            }
+            else if (preparedLine[probe] is '.' or '\\')
+            {
+                separator = preparedLine[probe];
+                probe--;
+            }
+
+            if (separator == null)
+                break;
+
+            var segmentEnd = probe;
+            while (probe >= 0 && IsIdentifierChar(preparedLine[probe]))
+                probe--;
+
+            var consumedSegment = segmentEnd >= 0 && segmentEnd >= probe + 1;
+            if (!consumedSegment && separator != '\\')
+                return false;
+        }
+
         while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
             probe--;
 

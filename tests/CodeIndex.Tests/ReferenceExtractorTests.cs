@@ -375,11 +375,18 @@ public class ReferenceExtractorTests
     public void Extract_ConstructorCalls_AreInstantiateOnly()
     {
         const string content = """
+            namespace N
+            {
+                public class Foo { }
+                public class Bar { }
+            }
+
             public class Worker
             {
                 public void Execute()
                 {
-                    var foo = new Foo();
+                    var foo = new N.Foo();
+                    var bar = new global::N.Bar();
                 }
             }
             """;
@@ -388,7 +395,9 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.Contains(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "instantiate");
+        Assert.Contains(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "instantiate");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "call");
     }
 
     [Fact]
@@ -448,8 +457,8 @@ public class ReferenceExtractorTests
         const string content = """
             <?php
             function load() {
-                new Foo();
-                NEW Bar();
+                new \Foo();
+                NEW namespace\Bar();
             }
             ?>
             """;
@@ -461,6 +470,31 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "instantiate");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_PhpLanguageConstructCalls_AreIgnored()
+    {
+        const string content = """
+            <?php
+            function load($value) {
+                echo("hello");
+                EXIT();
+                Eval("return 1;");
+                empty($value);
+                custom();
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "echo");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "EXIT");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Eval");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "empty");
+        Assert.Contains(references, reference => reference.SymbolName == "custom" && reference.ContainerName == "load");
     }
 
     [Fact]
