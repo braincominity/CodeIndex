@@ -3134,6 +3134,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsWithTightComparisonDefaults()
+    {
+        var content = """
+            public record Threshold(bool Enabled = left<right, int Count = 0);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var enabled = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Enabled" && s.ContainerName == "Threshold"));
+        Assert.Equal("bool", enabled.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.ContainerName == "Threshold"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DoesNotInjectRecordPrimaryComponentsIntoEarlierSameNamedClass()
     {
         var content = """
@@ -3206,6 +3221,23 @@ public class SymbolExtractorTests
 
             public record Child(int X)
                 : Base(1 < 2);
+
+            public record Base(bool Flag);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal(4, child.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordTightBaseComparisonDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Child(int X)
+                : Base(left<right);
 
             public record Base(bool Flag);
             """;
@@ -3876,6 +3908,23 @@ public class SymbolExtractorTests
 
         var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point"));
         Assert.Equal(40, pointY.Line);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsRecordPrimaryComponentsWithSpacedGenericTypes()
+    {
+        var content = """
+            import java.util.Map;
+
+            public record Sample(Map <String, Integer> values, int count) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var values = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "values" && s.ContainerName == "Sample"));
+        Assert.Equal("Map <String, Integer>", values.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "count" && s.ContainerName == "Sample"));
+        Assert.Equal("int", count.ReturnType);
     }
 
     [Fact]

@@ -5907,7 +5907,7 @@ public static class SymbolExtractor
             return false;
 
         var previousIndex = FindPreviousNonWhitespaceIndex(text, index - 1);
-        if (previousIndex < 0 || previousIndex != index - 1)
+        if (previousIndex < 0)
             return false;
 
         var nextIndex = FindNextNonWhitespaceIndex(text, index + 1);
@@ -5916,8 +5916,13 @@ public static class SymbolExtractor
 
         var previous = text[previousIndex];
         var next = text[nextIndex];
-        return IsRecordGenericAnglePredecessor(previous)
-            && IsRecordGenericAngleSuccessor(next);
+        if (!IsRecordGenericAnglePredecessor(previous)
+            || !IsRecordGenericAngleSuccessor(next))
+        {
+            return false;
+        }
+
+        return TryFindRecordGenericAngleEnd(text, index, out _);
     }
 
     private static bool IsRecordGenericAnglePredecessor(char ch) =>
@@ -5948,6 +5953,254 @@ public static class SymbolExtractor
         }
 
         return -1;
+    }
+
+    private static bool TryFindRecordGenericAngleEnd(string text, int openIndex, out int closeIndex)
+    {
+        closeIndex = -1;
+
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = openIndex; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+                case '<' when i == openIndex || LooksLikeRecordGenericAngleCandidate(text, i):
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth == 0)
+                        continue;
+
+                    angleDepth--;
+                    if (angleDepth == 0)
+                    {
+                        if (!IsRecordGenericAnglePayloadTypeLike(text.AsSpan(openIndex + 1, i - openIndex - 1)))
+                            return false;
+
+                        closeIndex = i;
+                        return true;
+                    }
+
+                    continue;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool LooksLikeRecordGenericAngleCandidate(string text, int index)
+    {
+        if (index < 0 || index >= text.Length || text[index] != '<')
+            return false;
+
+        var previousIndex = FindPreviousNonWhitespaceIndex(text, index - 1);
+        if (previousIndex < 0)
+            return false;
+
+        var nextIndex = FindNextNonWhitespaceIndex(text, index + 1);
+        if (nextIndex < 0)
+            return false;
+
+        return IsRecordGenericAnglePredecessor(text[previousIndex])
+            && IsRecordGenericAngleSuccessor(text[nextIndex]);
+    }
+
+    private static bool IsRecordGenericAnglePayloadTypeLike(ReadOnlySpan<char> text)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+            }
+
+            if (parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0
+                && ch is '=' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '!' or '^' or '~' or ';')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static StrippedRecordComponentText StripLeadingJavaRecordComponentAnnotations(string component)
