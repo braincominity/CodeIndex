@@ -799,6 +799,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_LifetimeAnnotationsDoNotBreakBraceRanges()
+    {
+        var content = """
+            pub struct Holder<'a> {
+                value: &'a str,
+            }
+
+            impl<'a> Holder<'a> {
+                pub fn get(&self) -> &'a str {
+                    self.value
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        var holder = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Holder"));
+        var get = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "get"));
+
+        Assert.Equal(3, holder.EndLine);
+        Assert.Equal(8, get.EndLine);
+        Assert.Equal("class", get.ContainerKind);
+        Assert.Equal("Holder", get.ContainerName);
+    }
+
+    [Fact]
     public void Extract_UnknownLang_ReturnsEmpty()
     {
         // Unsupported languages return no symbols

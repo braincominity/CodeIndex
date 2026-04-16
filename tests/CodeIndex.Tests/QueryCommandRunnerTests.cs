@@ -2114,6 +2114,56 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_RustLifetimeAnnotationsKeepBodyRangesIntact()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_rust_lifetime");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.rs"),
+                """
+                pub struct Holder<'a> {
+                    value: &'a str,
+                }
+
+                impl<'a> Holder<'a> {
+                    pub fn get(&self) -> &'a str {
+                        self.value
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.rs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
+            var holder = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "struct" && symbol.GetProperty("name").GetString() == "Holder"));
+            var get = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "get"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(3, holder.GetProperty("end_line").GetInt32());
+            Assert.Equal(8, get.GetProperty("end_line").GetInt32());
+            Assert.Equal("class", get.GetProperty("container_kind").GetString());
+            Assert.Equal("Holder", get.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");

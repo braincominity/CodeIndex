@@ -745,6 +745,9 @@ public static class SymbolExtractor
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int openingBraceOffset = 0, string[]? rawLines = null)
     {
+        if (rawLines == null)
+            return FindBraceRangeLegacy(lines, startIndex, openingBraceOffset);
+
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
@@ -809,6 +812,48 @@ public static class SymbolExtractor
                 if ((c == '{' || c == '}') && IsSingleCharLiteralBrace(rawLine, charIndex, c))
                     continue;
 
+                if (c == '{')
+                {
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLine = i + 1;
+                    }
+                }
+                else if (c == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                }
+            }
+
+            if (!opened && lines[i].TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
+
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRangeLegacy(string[] lines, int startIndex, int openingBraceOffset)
+    {
+        int depth = 0;
+        bool opened = false;
+        int? bodyStartLine = null;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var charStart = i == startIndex
+                ? Math.Clamp(openingBraceOffset, 0, Math.Max(0, line.Length - 1))
+                : 0;
+
+            for (int charIndex = charStart; charIndex < line.Length; charIndex++)
+            {
+                var c = line[charIndex];
                 if (c == '{')
                 {
                     depth++;
