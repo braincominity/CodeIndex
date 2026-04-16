@@ -271,8 +271,13 @@ check_existing() {
     if [ -n "$EXISTING_VERSION" ]; then
         local target_version="${VERSION#v}"
         if [ "$EXISTING_VERSION" = "$target_version" ]; then
-            info "cdidx $target_version is already installed at $EXISTING_BIN. Skipping."
-            exit 0
+            if existing_install_is_reusable; then
+                info "cdidx $target_version is already installed at $EXISTING_BIN. Skipping."
+                exit 0
+            fi
+
+            info "Reinstalling cdidx $target_version because the existing install is incomplete..."
+            return 0
         fi
         info "Switching cdidx from $EXISTING_VERSION to ${VERSION#v}..."
     fi
@@ -334,11 +339,13 @@ download_and_install() {
     info "Extracting..."
     tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
 
-    # Install binary / バイナリをインストール
-    mkdir -p "$INSTALL_DIR"
-    cp "${extract_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
-
+    # Validate the extracted payload before copying anything into INSTALL_DIR.
+    # This avoids overwriting a healthy install with a partially broken one
+    # when the tarball is missing required files.
+    # INSTALL_DIR に何か書き込む前に展開済み payload 全体を検証する。
+    # tarball の必須ファイルが欠けているときに、健全な install を
+    # 部分的に壊れた内容で上書きしないため。
+    #
     # Install runtime assets alongside the binary. Fail fast if any required
     # asset is missing rather than silently installing a partially broken
     # binary that will crash on first use.
@@ -369,13 +376,24 @@ download_and_install() {
         *)     error "Internal error: unknown OS_NAME '$OS_NAME' for asset selection." ;;
     esac
 
+    local required_files="${BINARY_NAME} ${required_assets}"
     local asset
-    for asset in $required_assets; do
+    for asset in $required_files; do
         if [ ! -f "${extract_dir}/${asset}" ]; then
+            if [ "$asset" = "$BINARY_NAME" ]; then
+                error "Required release payload missing from tarball: ${asset}. Refusing to install a partially broken binary. Please report this at https://github.com/${REPO}/issues."
+            fi
+
             error "Required runtime asset missing from release tarball: ${asset}. Refusing to install a partially broken binary. Please report this at https://github.com/${REPO}/issues."
         fi
+    done
+
+    mkdir -p "$INSTALL_DIR"
+
+    for asset in $required_files; do
         cp "${extract_dir}/${asset}" "${INSTALL_DIR}/${asset}"
     done
+    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
     info "Installed cdidx to ${INSTALL_DIR}/${BINARY_NAME}"
 }
