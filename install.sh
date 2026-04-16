@@ -15,12 +15,14 @@ BINARY_NAME="cdidx"
 TMPDIR_CLEANUP=""
 EXISTING_BIN=""
 EXISTING_VERSION=""
+RESOLVE_VERSION_SKIP=0
 
 # --- Helpers / ヘルパー ---
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33mWARN:\033[0m %s\n' "$1" >&2; }
 error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
+report_error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; }
 
 cleanup() {
     if [ -n "$TMPDIR_CLEANUP" ]; then
@@ -59,21 +61,23 @@ curl_http_get() {
     local output_path="$2"
     local http_code
 
-    http_code="$(curl -sSL -o "$output_path" -w '%{http_code}' "$url")"
-    local curl_status=$?
+    if http_code="$(curl -sSL -o "$output_path" -w '%{http_code}' "$url")"; then
+        printf '%s' "$http_code"
+        return 0
+    else
+        local curl_status=$?
 
-    if [ $curl_status -ne 0 ]; then
         case "$curl_status" in
             6|7|28|35|52|56)
-                error "Network error reaching GitHub while fetching $url (curl exit $curl_status). Check your connection or corporate proxy."
+                report_error "Network error reaching GitHub while fetching $url (curl exit $curl_status). Check your connection or corporate proxy."
                 ;;
             *)
-                error "curl failed while fetching $url (exit $curl_status)."
+                report_error "curl failed while fetching $url (exit $curl_status)."
                 ;;
         esac
-    fi
 
-    printf '%s' "$http_code"
+        return 1
+    fi
 }
 
 fetch_latest_release_version() {
@@ -85,7 +89,10 @@ fetch_latest_release_version() {
     response_file="$(mktemp)"
 
     local http_code
-    http_code="$(curl_http_get "$api_url" "$response_file")"
+    if ! http_code="$(curl_http_get "$api_url" "$response_file")"; then
+        rm -f "$response_file"
+        return 1
+    fi
     local api_response
     api_response="$(cat "$response_file")"
     rm -f "$response_file"
@@ -94,28 +101,56 @@ fetch_latest_release_version() {
         200) ;;
         403)
             if printf '%s' "$api_response" | grep -qi "rate limit"; then
-                error "GitHub API rate limit exceeded while fetching the latest release. Retry later, or pass an explicit version: 'curl ... | bash -s -- vX.Y.Z'."
+                report_error "GitHub API rate limit exceeded while fetching the latest release. Retry later, or pass an explicit version: 'curl ... | bash -s -- vX.Y.Z'."
+                return 1
             fi
-            error "GitHub API returned HTTP 403 while fetching the latest release. Check your GitHub access or proxy configuration."
+            report_error "GitHub API returned HTTP 403 while fetching the latest release. Check your GitHub access or proxy configuration."
+            return 1
             ;;
         404)
-            error "GitHub API returned HTTP 404 while fetching the latest release. Check that REPO=${REPO} exists."
+            report_error "GitHub API returned HTTP 404 while fetching the latest release. Check that REPO=${REPO} exists."
+            return 1
             ;;
         5??)
-            error "GitHub API returned HTTP $http_code while fetching the latest release. GitHub may be temporarily unavailable; retry in a few minutes."
+            report_error "GitHub API returned HTTP $http_code while fetching the latest release. GitHub may be temporarily unavailable; retry in a few minutes."
+            return 1
             ;;
         *)
-            error "GitHub API returned HTTP $http_code while fetching the latest release."
+            report_error "GitHub API returned HTTP $http_code while fetching the latest release."
+            return 1
             ;;
     esac
 
     local version
     version="$(extract_release_tag_name "$api_response")"
     if [ -z "$version" ]; then
-        error "Could not determine latest version from GitHub API response."
+        report_error "Could not determine latest version from GitHub API response."
+        return 1
     fi
 
     printf '%s' "$version"
+    return 0
+}
+
+existing_install_is_reusable() {
+    if [ -z "$EXISTING_VERSION" ] || [ "$EXISTING_VERSION" = "0.0.0" ]; then
+        return 1
+    fi
+
+    if [ ! -f "${INSTALL_DIR}/version.json" ]; then
+        return 1
+    fi
+
+    case "${OS_NAME:-}" in
+        linux)
+            [ -f "${INSTALL_DIR}/libe_sqlite3.so" ] || return 1
+            ;;
+        osx)
+            [ -f "${INSTALL_DIR}/libe_sqlite3.dylib" ] || return 1
+            ;;
+    esac
+
+    return 0
 }
 
 download_release_file() {
@@ -124,23 +159,31 @@ download_release_file() {
     local description="$3"
 
     local http_code
-    http_code="$(curl_http_get "$url" "$output_path")"
+    if ! http_code="$(curl_http_get "$url" "$output_path")"; then
+        return 1
+    fi
 
     case "$http_code" in
         200) ;;
         403)
-            error "Failed to download ${description} from $url (HTTP 403). GitHub may be rate-limiting or blocking the request."
+            report_error "Failed to download ${description} from $url (HTTP 403). GitHub may be rate-limiting or blocking the request."
+            return 1
             ;;
         404)
-            error "Failed to download ${description} from $url (HTTP 404). Check that version ${VERSION} exists and publishes ${RID} assets."
+            report_error "Failed to download ${description} from $url (HTTP 404). Check that version ${VERSION} exists and publishes ${RID} assets."
+            return 1
             ;;
         5??)
-            error "Failed to download ${description} from $url (HTTP $http_code). GitHub may be temporarily unavailable; retry in a few minutes."
+            report_error "Failed to download ${description} from $url (HTTP $http_code). GitHub may be temporarily unavailable; retry in a few minutes."
+            return 1
             ;;
         *)
-            error "Failed to download ${description} from $url (HTTP $http_code)."
+            report_error "Failed to download ${description} from $url (HTTP $http_code)."
+            return 1
             ;;
     esac
+
+    return 0
 }
 
 # --- Detect OS and architecture / OS・アーキテクチャ検出 ---
@@ -181,6 +224,8 @@ detect_platform() {
 # --- Resolve version / バージョン解決 ---
 
 resolve_version() {
+    RESOLVE_VERSION_SKIP=0
+
     if [ -n "${1:-}" ]; then
         VERSION="$1"
         # Ensure v prefix / vプレフィックスを補完
@@ -189,14 +234,17 @@ resolve_version() {
             *)  VERSION="v${VERSION}" ;;
         esac
     else
-        if [ -n "$EXISTING_VERSION" ]; then
+        if existing_install_is_reusable; then
             VERSION="v${EXISTING_VERSION}"
             info "cdidx ${EXISTING_VERSION} is already installed at ${EXISTING_BIN}. Skipping latest-release lookup. Pass an explicit version to reinstall or switch versions."
-            return 1
+            RESOLVE_VERSION_SKIP=1
+            return 0
         fi
 
         info "Fetching latest release version..."
-        VERSION="$(fetch_latest_release_version)"
+        if ! VERSION="$(fetch_latest_release_version)"; then
+            return 1
+        fi
     fi
 
     info "Version: $VERSION"
@@ -373,6 +421,9 @@ main() {
     info "Detected platform: ${RID}"
     detect_existing_install
     if ! resolve_version "${1:-}"; then
+        exit 1
+    fi
+    if [ "$RESOLVE_VERSION_SKIP" = "1" ]; then
         return 0
     fi
     check_existing

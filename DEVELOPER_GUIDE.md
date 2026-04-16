@@ -696,8 +696,10 @@ What `install.sh` does, in order (see `install.sh`):
    (`/repos/Widthdom/CodeIndex/releases/latest`), prefers `jq` when
    available for `tag_name` parsing, and falls back to the existing
    `grep` + `sed` extraction for portability. With no argument and an
-   existing install, it exits 0 before the API call and tells the user
-   to pass an explicit version to reinstall or switch versions. HTTP
+   existing healthy install, it exits 0 before the API call and tells
+   the user to pass an explicit version to reinstall or switch versions.
+   Broken `v0.0.0` installs or installs missing required adjacent assets
+   are treated as reinstall targets instead of idempotent successes. HTTP
    failures are classified explicitly (`403` rate limit vs `404` vs
    `5xx` vs real curl network errors) instead of collapsing everything
    into a generic “check your network connection” message.
@@ -1661,7 +1663,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 
 1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
 2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、GitHub rate limit が厳しいホストでも引数なし再実行を idempotent にできる。
-3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしで既存インストールも無い場合だけ GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩き、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。引数なしで既存インストールがある場合は API を叩かず 0 終了し、再インストールやバージョン切り替えには明示バージョン指定を促す。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
+3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしで既存インストールも無い場合だけ GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩き、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。引数なしで健全な既存インストールがある場合は API を叩かず 0 終了し、再インストールやバージョン切り替えには明示バージョン指定を促す。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
 4. **明示ターゲットが既に入っていれば短絡終了。** `INSTALL_DIR/cdidx --version` が要求バージョンを返すなら 0 終了。ここも `version.json` の存在に依存する。過去の壊れたインストールは `v0.0.0` を返すため置き換え対象として扱われる — これは意図した挙動。
 5. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
 6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。

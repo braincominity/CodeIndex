@@ -88,7 +88,7 @@ Install a specific version (fetches the installer from that tag to avoid version
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.sh | bash -s -- v1.5.0
 ```
 
-If `cdidx` is already installed and you rerun the one-liner without a version, the installer exits 0 without calling the latest-release API. Pass an explicit version when you want to reinstall or switch versions.
+If `cdidx` is already installed in a healthy state and you rerun the one-liner without a version, the installer exits 0 without calling the latest-release API. Broken `v0.0.0` installs are treated as reinstall targets. Pass an explicit version when you want to reinstall or switch versions.
 
 Supported platforms: `linux-x64`, `linux-arm64`, `osx-arm64` (glibc-based Linux only; Alpine/musl is not supported). Installs to `~/.local/bin` by default (override with `CDIDX_INSTALL_DIR`).
 
@@ -606,7 +606,7 @@ dotnet tool install -g cdidx
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z
 ```
 
-Re-running the no-argument one-liner is intentionally idempotent: if `cdidx` is already present, the installer exits 0 without calling the latest-release API. Use the explicit-version form when you actually want to reinstall or switch versions.
+Re-running the no-argument one-liner is intentionally idempotent for healthy installs: if `cdidx` is already present and does not look broken, the installer exits 0 without calling the latest-release API. Broken `v0.0.0` installs are treated as reinstall targets. Use the explicit-version form when you actually want to reinstall or switch versions.
 
 If install fails (no network, unsupported platform), skip to the **"Direct SQL queries"** section below — you can query `.cdidx/codeindex.db` directly with `sqlite3`, provided the database was already built. If neither `cdidx` nor `sqlite3` is available, use the Claude Code built-in `Grep` / `Glob` tools (or your harness's equivalent) — do not fall back to shell `rg` / `grep` / `find` or a global `cdidx` in a Claude Code session, since those may be blocked by a repo-tracked deny list and bypassing them can hide stale-binary bugs.
 
@@ -951,7 +951,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.sh | bash -s -- v1.5.0
 ```
 
-すでに `cdidx` が入っている状態でバージョン指定なしのワンライナーを再実行すると、installer は latest-release API を叩かずに 0 終了します。再インストールやバージョン切り替えをしたい場合は、明示的にバージョンを指定してください。
+健全な `cdidx` が既に入っている状態でバージョン指定なしのワンライナーを再実行すると、installer は latest-release API を叩かずに 0 終了します。壊れた `v0.0.0` install は再インストール対象として扱われます。再インストールやバージョン切り替えをしたい場合は、明示的にバージョンを指定してください。
 
 対応プラットフォーム: `linux-x64`, `linux-arm64`, `osx-arm64`（glibc ベースの Linux のみ。Alpine/musl は非対応）。デフォルトで `~/.local/bin` にインストール（`CDIDX_INSTALL_DIR` で変更可）。
 
@@ -1468,7 +1468,7 @@ dotnet tool install -g cdidx
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z
 ```
 
-引数なしワンライナーの再実行は意図的に idempotent です。`cdidx` が既に入っている場合、installer は latest-release API を叩かずに 0 終了します。実際に再インストールやバージョン切り替えをしたいときだけ、上の明示バージョン形式を使ってください。
+引数なしワンライナーの再実行は、健全な install に対して意図的に idempotent です。`cdidx` が既に入り、壊れた `v0.0.0` 状態でもない場合、installer は latest-release API を叩かずに 0 終了します。実際に再インストールやバージョン切り替えをしたいときだけ、上の明示バージョン形式を使ってください。
 
 インストールに失敗した場合（ネットワーク不通、未対応プラットフォーム等）は、データベースが構築済みであれば下記の **「直接SQLクエリ」** セクションで `sqlite3` から `.cdidx/codeindex.db` を直接検索できます。`cdidx` も `sqlite3` も利用できない場合は、Claude Code の組み込み `Grep` / `Glob` ツール（もしくは使用ハーネスの同等機能）を使ってください — Claude Code セッション内では shell の `rg` / `grep` / `find` やグローバル `cdidx` にフォールバックしないでください。これらはリポジトリ追跡の deny リストで塞がれている可能性があり、迂回すると古いバイナリ由来のバグを隠してしまうためです。
 

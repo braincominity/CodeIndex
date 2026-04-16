@@ -41,6 +41,8 @@ public sealed class InstallScriptTests : IDisposable
             echo "cdidx v1.10.0"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            : > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
 
             main
             """,
@@ -56,6 +58,63 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Fetching latest release version", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
         Assert.DoesNotContain("CURL_SHOULD_NOT_RUN", stdout);
+    }
+
+    [Fact]
+    public void Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "broken_bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            download_and_install() { echo "DOWNLOAD_RAN"; }
+            check_path() { :; }
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"tag_name":"v1.2.3"}' > "$output_path"
+                printf '200'
+                return 0
+            }
+
+            mkdir -p "{{installDir}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v0.0.0"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+
+            main
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("Version: v1.2.3", stdout);
+        Assert.Contains("DOWNLOAD_RAN", stdout);
+        Assert.DoesNotContain("Skipping latest-release lookup", stdout);
     }
 
     [Fact]
@@ -96,6 +155,77 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("GitHub API rate limit exceeded while fetching the latest release", stderr);
         Assert.Contains("pass an explicit version", stderr);
         Assert.DoesNotContain("Check your network connection", stderr);
+    }
+
+    [Fact]
+    public void Main_RateLimitedLatestLookup_StopsBeforeSuccessPath()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            download_and_install() { echo "DOWNLOAD_SHOULD_NOT_RUN"; }
+            check_path() { :; }
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"message":"API rate limit exceeded for this IP."}' > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            main
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.DoesNotContain("Done!", stdout);
+        Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("GitHub API rate limit exceeded while fetching the latest release", stderr);
+    }
+
+    [Fact]
+    public void Main_NetworkFailureDuringLatestLookup_StopsBeforeSuccessPath()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            download_and_install() { echo "DOWNLOAD_SHOULD_NOT_RUN"; }
+            check_path() { :; }
+            curl() {
+                return 7
+            }
+
+            main
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.DoesNotContain("Done!", stdout);
+        Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("Network error reaching GitHub while fetching", stderr);
+        Assert.Contains("curl exit 7", stderr);
     }
 
     [Fact]
@@ -213,14 +343,14 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [UnsupportedOSPlatform("windows")]
-    private static (int ExitCode, string StdOut, string StdErr) RunInstallerSnippet(string snippet, IReadOnlyDictionary<string, string?>? extraEnvironment = null)
+    private static (int ExitCode, string StdOut, string StdErr) RunInstallerSnippet(string snippet, IReadOnlyDictionary<string, string?>? extraEnvironment = null, bool enforceStrictMode = true)
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx_install_snippet_{Guid.NewGuid():N}.sh");
         try
         {
             File.WriteAllText(scriptPath, $$"""
                 #!/usr/bin/env bash
-                set -euo pipefail
+                {{(enforceStrictMode ? "set -euo pipefail" : "")}}
                 export CDIDX_INSTALL_SH_LIB_ONLY=1
                 source "{{GetInstallScriptPath()}}"
                 {{snippet}}
