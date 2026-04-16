@@ -403,7 +403,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
-| CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
+| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
@@ -1419,7 +1419,7 @@ LIMIT 20;
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
-| CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
+| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 

@@ -2515,6 +2515,481 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CssExactNameSeparatesLiteralSelectors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_css_exact_name");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "styles.css"),
+                """
+                :root { --accent: #09f; }
+                .root { color: red; }
+                #root { color: blue; }
+                [hidden] { display: none; }
+                @media screen { .inline-media { color: green; } }
+                .btn:hover { color: green; }
+                %button-base { padding: 4px; }
+                @font-face { src: url("no-family.woff2"); }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                [".root", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (idExitCode, idStdout, idStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["#root", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (pseudoExitCode, pseudoStdout, pseudoStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                [".btn:hover", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (attributeExitCode, attributeStdout, attributeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["[hidden]", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (inlineMediaExitCode, inlineMediaStdout, inlineMediaStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                [".inline-media", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (propertyExitCode, propertyStdout, propertyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--name=--accent", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (placeholderExitCode, placeholderStdout, placeholderStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--name=%button-base", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (fontFaceExitCode, fontFaceStdout, fontFaceStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["@font-face", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+
+            var classRows = ParseJsonLines(classStdout);
+            var idRows = ParseJsonLines(idStdout);
+            var pseudoRows = ParseJsonLines(pseudoStdout);
+            var attributeRows = ParseJsonLines(attributeStdout);
+            var inlineMediaRows = ParseJsonLines(inlineMediaStdout);
+            var propertyRows = ParseJsonLines(propertyStdout);
+            var placeholderRows = ParseJsonLines(placeholderStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, classExitCode);
+            Assert.Equal(string.Empty, classStderr);
+            Assert.Single(classRows);
+            Assert.Equal(".root", classRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", classRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, idExitCode);
+            Assert.Equal(string.Empty, idStderr);
+            Assert.Single(idRows);
+            Assert.Equal("#root", idRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("function", idRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, pseudoExitCode);
+            Assert.Equal(string.Empty, pseudoStderr);
+            Assert.Single(pseudoRows);
+            Assert.Equal(".btn:hover", pseudoRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", pseudoRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, attributeExitCode);
+            Assert.Equal(string.Empty, attributeStderr);
+            Assert.Single(attributeRows);
+            Assert.Equal("[hidden]", attributeRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", attributeRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, inlineMediaExitCode);
+            Assert.Equal(string.Empty, inlineMediaStderr);
+            Assert.Single(inlineMediaRows);
+            Assert.Equal(".inline-media", inlineMediaRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", inlineMediaRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, propertyExitCode);
+            Assert.Equal(string.Empty, propertyStderr);
+            Assert.Single(propertyRows);
+            Assert.Equal("--accent", propertyRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("property", propertyRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, placeholderExitCode);
+            Assert.Equal(string.Empty, placeholderStderr);
+            Assert.Single(placeholderRows);
+            Assert.Equal("%button-base", placeholderRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", placeholderRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.NotFound, fontFaceExitCode);
+            Assert.Equal(string.Empty, fontFaceStderr);
+            Assert.Equal(string.Empty, fontFaceStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_CSharpBraceCharLiteralKeepsMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_char");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class FixtureHost
+                {
+                    public bool IsClosingBrace(char c)
+                    {
+                        return c is not '}';
+                    }
+
+                    public void AfterBraceLiteral()
+                    {
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["AfterBraceLiteral", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(inspectStdout);
+            var json = document.RootElement;
+            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+            Assert.Equal("AfterBraceLiteral", definition.GetProperty("name").GetString());
+            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
+            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_CSharpMultilineRawStringBraceKeepsMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_raw_string_brace");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """"
+                namespace Demo;
+
+                public class FixtureHost
+                {
+                    public string UsesRawFixture()
+                    {
+                        return """
+                            }
+                            """;
+                    }
+
+                    public void AfterRawString()
+                    {
+                    }
+                }
+                """");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["AfterRawString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(inspectStdout);
+            var json = document.RootElement;
+            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+            Assert.Equal("AfterRawString", definition.GetProperty("name").GetString());
+            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
+            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_CSharpMultilineVerbatimStringBraceKeepsMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_verbatim_string_brace");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class FixtureHost
+                {
+                    public string UsesVerbatimFixture()
+                    {
+                        return @"
+                {
+                ";
+                    }
+
+                    public void AfterVerbatimString()
+                    {
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["AfterVerbatimString", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(inspectStdout);
+            var json = document.RootElement;
+            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+            Assert.Equal("AfterVerbatimString", definition.GetProperty("name").GetString());
+            Assert.Equal("class", definition.GetProperty("container_kind").GetString());
+            Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_RustLifetimeAnnotationsKeepBodyRangesIntact()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_rust_lifetime");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.rs"),
+                """
+                pub struct Holder<'a> {
+                    value: &'a str,
+                }
+
+                impl<'a> Holder<'a> {
+                    pub fn get(&self) -> &'a str {
+                        self.value
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.rs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
+            var holder = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "struct" && symbol.GetProperty("name").GetString() == "Holder"));
+            var get = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "get"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(3, holder.GetProperty("end_line").GetInt32());
+            Assert.Equal(8, get.GetProperty("end_line").GetInt32());
+            Assert.Equal("class", get.GetProperty("container_kind").GetString());
+            Assert.Equal("Holder", get.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_JavaScriptStringBraceKeepsFollowingMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_string_brace");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "example.js"),
+                """
+                export class Example {
+                  foo() {
+                    const value = "}";
+                    return value;
+                  }
+
+                  bar() {
+                    return 1;
+                  }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/example.js", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
+            var example = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "class" && symbol.GetProperty("name").GetString() == "Example"));
+            var foo = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "foo"));
+            var bar = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "bar"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(10, example.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, foo.GetProperty("end_line").GetInt32());
+            Assert.Equal("class", bar.GetProperty("container_kind").GetString());
+            Assert.Equal("Example", bar.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_JavaScriptTemplateLiteralBraceKeepsFollowingMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_template_brace");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "example.js"),
+                """
+                export class Example {
+                  foo() {
+                    const value = `}`;
+                    return value;
+                  }
+
+                  bar() {
+                    return 1;
+                  }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/example.js", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
+            var example = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "class" && symbol.GetProperty("name").GetString() == "Example"));
+            var foo = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "foo"));
+            var bar = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "bar"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(10, example.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, foo.GetProperty("end_line").GetInt32());
+            Assert.Equal("class", bar.GetProperty("container_kind").GetString());
+            Assert.Equal("Example", bar.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_TypeScriptTemplateInterpolationBracesKeepFollowingMethodInsideClass()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_ts_template_interp");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "example.ts"),
+                """
+                export class Example {
+                  foo() {
+                    const value = `${format({ answer: 42 })}`;
+                    return value;
+                  }
+
+                  bar() {
+                    return 1;
+                  }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/example.ts", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var json = document.RootElement;
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
+            var example = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "class" && symbol.GetProperty("name").GetString() == "Example"));
+            var foo = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "foo"));
+            var bar = Assert.Single(symbols.Where(symbol => symbol.GetProperty("kind").GetString() == "function" && symbol.GetProperty("name").GetString() == "bar"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(10, example.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, foo.GetProperty("end_line").GetInt32());
+            Assert.Equal("class", bar.GetProperty("container_kind").GetString());
+            Assert.Equal("Example", bar.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");
@@ -7363,6 +7838,14 @@ public class QueryCommandRunnerTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Last();
         return JsonDocument.Parse(jsonLine);
+    }
+
+    private static List<JsonDocument> ParseJsonLines(string stdout)
+    {
+        return stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => JsonDocument.Parse(line))
+            .ToList();
     }
 
     private static (string ProjectRoot, string DbPath) CreateUnusedFixtureDb()
