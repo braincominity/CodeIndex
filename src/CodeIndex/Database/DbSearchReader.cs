@@ -99,6 +99,73 @@ public partial class DbReader
         return deduplicate ? DeduplicateOverlappingResults(raw) : raw;
     }
 
+    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return new QueryCountResult(0, 0);
+
+        using var cmd = _conn.CreateCommand();
+        string sql;
+
+        if (exact)
+        {
+            sql = @"
+                SELECT f.path, c.start_line, c.end_line,
+                       0.0 AS rank
+                FROM chunks c
+                JOIN files f ON c.file_id = f.id
+                WHERE instr(c.content, @exactQuery) > 0";
+        }
+        else
+        {
+            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(query);
+            sql = @"
+                SELECT f.path, c.start_line, c.end_line,
+                       rank
+                FROM fts_chunks
+                JOIN chunks c ON fts_chunks.rowid = c.id
+                JOIN files f ON c.file_id = f.id";
+            sql += " WHERE fts_chunks MATCH @query";
+            cmd.Parameters.AddWithValue("@query", sanitizedQuery);
+        }
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {GetSearchOrderSql()}";
+
+        cmd.CommandText = sql;
+        if (exact)
+            cmd.Parameters.AddWithValue("@exactQuery", query);
+        cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+        cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var raw = new List<SearchResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            raw.Add(new SearchResult
+            {
+                Path = reader.GetString(0),
+                StartLine = reader.GetInt32(1),
+                EndLine = reader.GetInt32(2),
+                Score = reader.GetDouble(3),
+            });
+        }
+
+        var counted = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
+        return new QueryCountResult(
+            counted.Count,
+            counted.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+    }
+
     /// <summary>
     /// Remove search results that overlap with a higher-ranked result in the same file.
     /// Chunks use 10-line overlap, so adjacent chunks can produce duplicate matches.

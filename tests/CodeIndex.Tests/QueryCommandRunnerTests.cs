@@ -3212,6 +3212,64 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("search", false)]
+    [InlineData("search", true)]
+    [InlineData("symbols", false)]
+    [InlineData("symbols", true)]
+    [InlineData("definition", false)]
+    [InlineData("definition", true)]
+    [InlineData("references", false)]
+    [InlineData("references", true)]
+    [InlineData("callers", false)]
+    [InlineData("callers", true)]
+    [InlineData("callees", false)]
+    [InlineData("callees", true)]
+    [InlineData("files", false)]
+    [InlineData("files", true)]
+    [InlineData("find", false)]
+    [InlineData("find", true)]
+    public void CountOnlyJson_IgnoresLimitAndReturnsTrueTotal(string command, bool useExplicitLimit)
+    {
+        var (projectRoot, dbPath) = CreateCountOnlyTotalFixtureDb();
+        try
+        {
+            var args = BuildTrueCountArgs(command, dbPath, useExplicitLimit);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunCountCommand(command, args));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(25, json.GetProperty("count").GetInt32());
+
+            switch (command)
+            {
+                case "search":
+                case "symbols":
+                case "definition":
+                case "references":
+                case "callers":
+                case "callees":
+                    Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    break;
+                case "find":
+                    Assert.Equal(1, json.GetProperty("files").GetInt32());
+                    Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+                    break;
+                case "files":
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(command), command, null);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunReferences_UnsupportedLanguageWithoutMatches_PrintsGraphSupportHint()
     {
@@ -7957,6 +8015,94 @@ public class QueryCommandRunnerTests
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkFoldReady();
+    }
+
+    private static (string ProjectRoot, string DbPath) CreateCountOnlyTotalFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_true_count");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+        for (int i = 1; i <= 25; i++)
+        {
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/search/Search{i:D2}.txt",
+                "text",
+                $"needletoken hit {i}\n");
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/symbols/CountTarget{i:D2}.cs",
+                "csharp",
+                $$"""
+                public class CountTarget{{i:D2}}
+                {
+                    public void Value{{i:D2}}() { }
+                }
+                """);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/graph/CountCaller{i:D2}.cs",
+                "csharp",
+                $$"""
+                public class CountCaller{{i:D2}}
+                {
+                    public void Invoke()
+                    {
+                        CountRun();
+                    }
+                }
+                """);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/files/CountFile{i:D2}.txt",
+                "text",
+                $"file fixture {i}\n");
+        }
+
+        var findContent = string.Join('\n', Enumerable.Range(1, 25).Select(i => $"guard {i:D2}")) + "\n";
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/find/Sample.cs", "csharp", findContent);
+        MarkGraphAndFoldReady(dbPath);
+        return (projectRoot, dbPath);
+    }
+
+    private string[] BuildTrueCountArgs(string command, string dbPath, bool useExplicitLimit)
+    {
+        var args = command switch
+        {
+            "search" => new List<string> { "needletoken", "--db", dbPath, "--json", "--count" },
+            "symbols" => new List<string> { "CountTarget", "--db", dbPath, "--json", "--count" },
+            "definition" => new List<string> { "CountTarget", "--db", dbPath, "--json", "--count" },
+            "references" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact" },
+            "callers" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact" },
+            "callees" => new List<string> { "Invoke", "--db", dbPath, "--json", "--count", "--exact" },
+            "files" => new List<string> { "CountFile", "--db", dbPath, "--json", "--count" },
+            "find" => new List<string> { "guard", "--db", dbPath, "--json", "--count", "--path", "src/find/Sample.cs" },
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        if (useExplicitLimit)
+            args.AddRange(["--limit", "5"]);
+
+        return [.. args];
+    }
+
+    private int RunCountCommand(string command, string[] args)
+    {
+        return command switch
+        {
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "definition" => QueryCommandRunner.RunDefinition(args, _jsonOptions),
+            "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(args, _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(args, _jsonOptions),
+            "files" => QueryCommandRunner.RunFiles(args, _jsonOptions),
+            "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
     }
 
     private static string CreateIndexedDbWithSingleFile(string projectRoot, bool markGraphReady = false)

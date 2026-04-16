@@ -16,6 +16,8 @@ public class SearchResult
     public double Score { get; set; }
 }
 
+public readonly record struct QueryCountResult(int Count, int FileCount);
+
 public class SymbolResult
 {
     public string Path { get; set; } = string.Empty;
