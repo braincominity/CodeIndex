@@ -847,18 +847,21 @@ public class FileIndexer
         var errors = new List<ScanError>();
         var fullPath = Path.GetFullPath(absolutePath);
         var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, fullPath));
-        if (relativePath.Length == 0 ||
-            relativePath == "." ||
-            relativePath.StartsWith("../", StringComparison.Ordinal))
-        {
+        if (relativePath.StartsWith("../", StringComparison.Ordinal))
             return new PathFilterResult(PathFilterKind.None, errors);
-        }
 
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         var activeIgnoreRules = preloadResult.Rules;
         if (!preloadResult.IgnoreRulesAvailable)
             return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+
+        var projectRootFilterKind = GetDirectoryFilterKind(_projectRoot, activeIgnoreRules);
+        if (projectRootFilterKind != PathFilterKind.None)
+            return new PathFilterResult(projectRootFilterKind, errors);
+
+        if (relativePath.Length == 0 || relativePath == ".")
+            return new PathFilterResult(PathFilterKind.None, errors);
 
         var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var currentDirectory = _projectRoot;
@@ -911,7 +914,7 @@ public class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules);
         }
         return new ScanFilesResult(
             files,
@@ -934,9 +937,8 @@ public class FileIndexer
     {
         var relativeDir = ToRelativePath(dir);
 
-        // Check for skip directories / スキップ対象ディレクトリかチェック
-        var dirName = Path.GetFileName(dir);
-        if (SkipDirs.Contains(dirName) || activeIgnoreRules.IsIgnored(dir, isDirectory: true))
+        var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules);
+        if (filterKind != PathFilterKind.None)
         {
             listedDirectories.Add(relativeDir);
             fullyScannedDirectories.Add(relativeDir);
@@ -1037,6 +1039,17 @@ public class FileIndexer
             fullyScannedDirectories.Add(ToRelativePath(dir));
 
         return fullyScanned;
+    }
+
+    private static PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules)
+    {
+        var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
+        if (SkipDirs.Contains(dirName))
+            return PathFilterKind.ExcludedByDefaultDirectory;
+
+        return activeIgnoreRules.IsIgnored(dir, isDirectory: true)
+            ? PathFilterKind.IgnoredByRules
+            : PathFilterKind.None;
     }
 
     private IgnoreRuleLoadResult LoadIgnoreRulesForDirectory(

@@ -188,7 +188,7 @@ public class FileIndexerTests
     [InlineData("target", "main.rs")]
     [InlineData("vendor", "dep.go")]
     [InlineData("bin", "app.cs")]
-    public void ScanFiles_IndexesExplicitRootEvenWhenRootNameIsSkipped(string rootDirName, string fileName)
+    public void ScanFiles_SkipsExplicitRootWhenRootNameIsSkipped(string rootDirName, string fileName)
     {
         var tempParentDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         var rootDir = Path.Combine(tempParentDir, rootDirName);
@@ -204,8 +204,7 @@ public class FileIndexerTests
             var indexer = new FileIndexer(rootDir);
             var files = indexer.ScanFiles();
 
-            Assert.Single(files);
-            Assert.Contains(fileName, files[0]);
+            Assert.Empty(files);
         }
         finally
         {
@@ -593,6 +592,60 @@ public class FileIndexerTests
                 .ToList();
 
             Assert.Equal(["keep.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignoreDirectoryRule()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(tempDir, "subproj");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "subproj/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ignored root dir')");
+
+            var indexer = new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Empty(files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ProjectRootNamedNodeModules_IsSkippedByDefaultDirectoryFilter()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(tempDir, "node_modules");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');");
+
+            var indexer = new FileIndexer(projectRoot);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Empty(files);
         }
         finally
         {

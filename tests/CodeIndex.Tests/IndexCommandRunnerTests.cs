@@ -1628,6 +1628,33 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_SubdirectoryProjectRoot_RespectsAncestorDirectoryGitignoreRule()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ignored root dir')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("app.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_RespectsAncestorGitignore()
     {
         var repoRoot = CreateTempProject();
@@ -1653,6 +1680,40 @@ public class IndexCommandRunnerTests
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.DoesNotContain("ignored.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_RespectsAncestorDirectoryGitignoreRule()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('indexed first')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("app.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("app.py", indexedPaths);
         }
         finally
         {
@@ -1692,6 +1753,94 @@ public class IndexCommandRunnerTests
         {
             SqliteConnection.ClearAllPools();
             DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_FallsBackToFullScanWhenAncestorDirectoryIgnoreRuleChanges()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var ancestorIgnorePath = Path.Combine(repoRoot, ".gitignore");
+            File.WriteAllText(ancestorIgnorePath, "subproj/\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", ancestorIgnorePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ProjectRootNamedNodeModules_IsSkippedByDefaultDirectoryFilter()
+    {
+        var tempRoot = CreateTempProject();
+        var projectRoot = Path.Combine(tempRoot, "node_modules");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("app.js", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(tempRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_ProjectRootNamedNodeModules_RemovesIndexedFile()
+    {
+        var tempRoot = CreateTempProject();
+        var projectRoot = Path.Combine(tempRoot, "node_modules");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');\n");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.js", "javascript", "console.log('stale');\n");
+            Assert.Contains("app.js", ReadIndexedPaths(dbPath));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.js", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.DoesNotContain("app.js", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(tempRoot);
         }
     }
 
