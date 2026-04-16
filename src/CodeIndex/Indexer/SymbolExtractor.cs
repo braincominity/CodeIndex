@@ -411,11 +411,11 @@ public static class SymbolExtractor
             // CSS ID selector at top level / トップレベルのIDセレクタ
             new("function", new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS custom property declaration / CSS カスタムプロパティ宣言
-            new("property", new Regex(@"^\s*--(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?<name>--[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             // SCSS $variable declaration / SCSS 変数宣言
             new("property", new Regex(@"^\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             // SCSS placeholder selector / SCSS プレースホルダーセレクタ
-            new("class",    new Regex(@"^\s*%(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>%[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
         ["powershell"] =
         [
@@ -517,6 +517,9 @@ public static class SymbolExtractor
 
                 if (lang == "css")
                     name = ResolveCssSymbolName(matchLine, name, lines, i, endLine);
+
+                if (lang == "css" && string.IsNullOrWhiteSpace(name))
+                    continue;
 
                 symbols.Add(new SymbolRecord
                 {
@@ -774,7 +777,7 @@ public static class SymbolExtractor
 
         return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)
             ? fontFamily
-            : name;
+            : string.Empty;
     }
 
     private static bool TryGetCssFontFaceFamilyName(string[] lines, int startIndex, int endLine, out string fontFamily)

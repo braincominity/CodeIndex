@@ -1481,15 +1481,15 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "main-color");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "padding");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "font-stack");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--main-color");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--padding");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--font-stack");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "My Font");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a:hover");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a::before");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "input[type=\"text\"]");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn:hover");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "button-base");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "%button-base");
     }
 
     [Fact]
@@ -1500,6 +1500,7 @@ public class SymbolExtractorTests
             @font-face { src: url("same-line.woff2"); font-family: "Trailing Font"; unicode-range: U+0-5FF; }
             @font-face { src: url("valid-last.woff2"); font-family: "Last No Semicolon" }
             @font-face { font-family: /* keep */ "Comment Gap"; src: url("comment-gap.woff2"); }
+            @font-face { src: url("no-family.woff2"); }
             @font-face {
               font-family:
                 "Split Font";
