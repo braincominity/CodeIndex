@@ -404,6 +404,8 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // :root selector / :root セレクタ
             new("class",    new Regex(@"^\s*(?<name>:root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // Standalone attribute selector / 単独属性セレクタ
+            new("class",    new Regex(@"^\s*(?<name>\[[^\]]+\](?:(?:::?[\w-]+)|(?:\[[^\]]+\]))*)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
             new("class",    new Regex(@"^\s*(?<name>(?:[#.]?[\w-]+|\*)(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
@@ -461,6 +463,7 @@ public static class SymbolExtractor
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssFontFaceFamilyRegex = new(@"(?:^|[;{])\s*font-family\s*:\s*(?<value>(?:""[^""]*""|'[^']*'|[^;}])+?)\s*(?=;|})", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -477,18 +480,25 @@ public static class SymbolExtractor
 
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var cssScannerLines = lang == "css"
+            ? MaskCssScannerLines(lines)
+            : null;
         var csharpSwitchExpressionLines = lang == "csharp"
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
         var cssQualifiedRuleAncestors = lang == "css"
-            ? FindCssQualifiedRuleAncestors(lines)
+            ? FindCssQualifiedRuleAncestors(cssScannerLines!)
             : null;
         var symbols = new List<SymbolRecord>();
+        var cssSeenSymbols = lang == "css"
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
 
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
             var structuralLine = structuralLines[i];
+            var cssScannerLine = cssScannerLines?[i];
             var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(structuralLine) : structuralLine;
             foreach (var pattern in patterns)
             {
@@ -506,7 +516,10 @@ public static class SymbolExtractor
                     ? match.Groups["name"].Value.Trim()
                     : match.Value.Trim();
 
-                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(structuralLines, i, pattern.BodyStyle);
+                var rangeLines = lang == "css" && cssScannerLines != null
+                    ? cssScannerLines
+                    : structuralLines;
+                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle);
                 var startLine = i + 1;
 
                 // Python @property decorator: reclassify the def as property
@@ -521,24 +534,53 @@ public static class SymbolExtractor
                 if (lang == "css" && string.IsNullOrWhiteSpace(name))
                     continue;
 
-                symbols.Add(new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = kind,
-                    Name = name,
-                    Line = startLine,
-                    StartLine = startLine,
-                    EndLine = Math.Max(startLine, endLine),
-                    BodyStartLine = bodyStartLine,
-                    BodyEndLine = bodyEndLine,
-                    Signature = line.Trim(),
-                    Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                    ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
-                });
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols,
+                    startLine,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = kind,
+                        Name = name,
+                        Line = startLine,
+                        StartLine = startLine,
+                        EndLine = Math.Max(startLine, endLine),
+                        BodyStartLine = bodyStartLine,
+                        BodyEndLine = bodyEndLine,
+                        Signature = line.Trim(),
+                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                        ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
+                    });
                 // Stop after first match per line to avoid duplicate symbols
                 // (e.g. C# method pattern + constructor pattern both matching)
                 // 1行につき最初のマッチのみ採用し重複を防ぐ
                 break;
+            }
+
+            if (lang == "css" && cssScannerLine != null)
+            {
+                foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
+                {
+                    var propertyName = match.Groups["name"].Value.Trim();
+                    if (propertyName.Length == 0)
+                        continue;
+
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols,
+                        i + 1,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = propertyName,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            EndLine = i + 1,
+                            Signature = line.Trim(),
+                        });
+                }
             }
         }
 
@@ -555,6 +597,22 @@ public static class SymbolExtractor
 
             symbol.FamilyKey = $"{scopeKey}|{symbol.FamilyKey}";
         }
+    }
+
+    private static void AddSymbolRecord(
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols,
+        int lineNumber,
+        SymbolRecord symbol)
+    {
+        if (cssSeenSymbols != null)
+        {
+            var key = $"{lineNumber}:{symbol.Kind}:{symbol.Name}";
+            if (!cssSeenSymbols.Add(key))
+                return;
+        }
+
+        symbols.Add(symbol);
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle)
@@ -861,10 +919,6 @@ public static class SymbolExtractor
         var qualifiedRuleAncestors = new bool[lines.Length];
         var contexts = new Stack<CssContextKind>();
         var qualifiedRuleDepth = 0;
-        var parenthesisDepth = 0;
-        var insideBlockComment = false;
-        var inSingleQuote = false;
-        var inDoubleQuote = false;
 
         for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
@@ -875,48 +929,6 @@ public static class SymbolExtractor
             for (int i = 0; i < line.Length; i++)
             {
                 var ch = line[i];
-
-                if (insideBlockComment)
-                {
-                    if (i + 1 < line.Length && ch == '*' && line[i + 1] == '/')
-                    {
-                        insideBlockComment = false;
-                        i++;
-                    }
-
-                    continue;
-                }
-
-                if (!inSingleQuote && !inDoubleQuote && i + 1 < line.Length && ch == '/' && line[i + 1] == '*')
-                {
-                    insideBlockComment = true;
-                    i++;
-                    continue;
-                }
-
-                if (!inSingleQuote && !inDoubleQuote && parenthesisDepth == 0 && i + 1 < line.Length && ch == '/' && line[i + 1] == '/' && HasOnlyWhitespaceBefore(line, i))
-                    break;
-
-                if ((inSingleQuote || inDoubleQuote) && ch == '\\' && i + 1 < line.Length)
-                {
-                    i++;
-                    continue;
-                }
-
-                if (ch == '"' && !inSingleQuote)
-                {
-                    inDoubleQuote = !inDoubleQuote;
-                    continue;
-                }
-
-                if (ch == '\'' && !inDoubleQuote)
-                {
-                    inSingleQuote = !inSingleQuote;
-                    continue;
-                }
-
-                if (inSingleQuote || inDoubleQuote)
-                    continue;
 
                 if (ch == '{')
                 {
@@ -937,10 +949,6 @@ public static class SymbolExtractor
 
                     segmentStart = i + 1;
                 }
-                else if (ch == '(')
-                    parenthesisDepth++;
-                else if (ch == ')' && parenthesisDepth > 0)
-                    parenthesisDepth--;
                 else if (ch == ';')
                     segmentStart = i + 1;
             }
@@ -949,15 +957,98 @@ public static class SymbolExtractor
         return qualifiedRuleAncestors;
     }
 
-    private static bool HasOnlyWhitespaceBefore(string line, int index)
+    private static string[] MaskCssScannerLines(string[] originalLines)
     {
-        for (int i = 0; i < index; i++)
+        var maskedLines = (string[])originalLines.Clone();
+        var insideBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var parenthesisDepth = 0;
+
+        for (int lineIndex = 0; lineIndex < maskedLines.Length; lineIndex++)
         {
-            if (!char.IsWhiteSpace(line[i]))
-                return false;
+            var line = maskedLines[lineIndex];
+            if (line.Length == 0)
+                continue;
+
+            var masked = line.ToCharArray();
+
+            for (int i = 0; i < line.Length; i++)
+            {
+                var ch = line[i];
+
+                if (insideBlockComment)
+                {
+                    masked[i] = ' ';
+                    if (i + 1 < line.Length && ch == '*' && line[i + 1] == '/')
+                    {
+                        masked[i + 1] = ' ';
+                        insideBlockComment = false;
+                        i++;
+                    }
+
+                    continue;
+                }
+
+                if (inSingleQuote || inDoubleQuote)
+                {
+                    masked[i] = ' ';
+                    if (ch == '\\' && i + 1 < line.Length)
+                    {
+                        masked[i + 1] = ' ';
+                        i++;
+                        continue;
+                    }
+
+                    if (ch == '"' && inDoubleQuote)
+                        inDoubleQuote = false;
+                    else if (ch == '\'' && inSingleQuote)
+                        inSingleQuote = false;
+
+                    continue;
+                }
+
+                if (i + 1 < line.Length && ch == '/' && line[i + 1] == '*')
+                {
+                    masked[i] = ' ';
+                    masked[i + 1] = ' ';
+                    insideBlockComment = true;
+                    i++;
+                    continue;
+                }
+
+                if (parenthesisDepth == 0 && i + 1 < line.Length && ch == '/' && line[i + 1] == '/')
+                {
+                    for (int j = i; j < line.Length; j++)
+                        masked[j] = ' ';
+
+                    break;
+                }
+
+                if (ch == '"')
+                {
+                    masked[i] = ' ';
+                    inDoubleQuote = true;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    masked[i] = ' ';
+                    inSingleQuote = true;
+                    continue;
+                }
+
+                if (ch == '(')
+                    parenthesisDepth++;
+                else if (ch == ')' && parenthesisDepth > 0)
+                    parenthesisDepth--;
+            }
+
+            maskedLines[lineIndex] = new string(masked);
         }
 
-        return true;
+        return maskedLines;
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(

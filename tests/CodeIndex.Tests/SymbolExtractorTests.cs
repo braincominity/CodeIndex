@@ -1470,6 +1470,10 @@ public class SymbolExtractorTests
               border: 1px solid;
             }
 
+            [hidden] {
+              display: none;
+            }
+
             .btn:hover {
               color: red;
             }
@@ -1488,6 +1492,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a:hover");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a::before");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "input[type=\"text\"]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[hidden]");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn:hover");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "%button-base");
     }
@@ -1576,6 +1581,12 @@ public class SymbolExtractorTests
         var content = """
             // {
             .top-level { color: red; }
+            .parent {
+              color: red; // comment with }
+              .child { color: blue; }
+            }
+            .after-comment { color: green; } // trailing comment with {
+            .next { color: purple; }
             .foo::before { content: "\""; }
             .url-http { background-image: url(http://example.com/a.png); }
             .url-cdn { background-image: url(//cdn.example.com/app.css); }
@@ -1584,10 +1595,15 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".top-level");
+        var parent = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == ".parent"));
+        Assert.Equal(6, parent.EndLine);
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".foo::before");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".after-comment");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".next");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".url-http");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".url-cdn");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".bar");
+        Assert.DoesNotContain(symbols, s => s.Name == ".child");
     }
 
     [Fact]
@@ -1601,6 +1617,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".root");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#root");
     }

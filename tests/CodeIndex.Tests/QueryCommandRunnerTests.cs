@@ -1854,11 +1854,10 @@ public class QueryCommandRunnerTests
             File.WriteAllText(
                 Path.Combine(projectRoot, "src", "styles.css"),
                 """
-                :root {
-                  --accent: #09f;
-                }
+                :root { --accent: #09f; }
                 .root { color: red; }
                 #root { color: blue; }
+                [hidden] { display: none; }
                 .btn:hover { color: green; }
                 %button-base { padding: 4px; }
                 @font-face { src: url("no-family.woff2"); }
@@ -1877,6 +1876,9 @@ public class QueryCommandRunnerTests
             var (pseudoExitCode, pseudoStdout, pseudoStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 [".btn:hover", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
                 _jsonOptions));
+            var (attributeExitCode, attributeStdout, attributeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["[hidden]", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
             var (propertyExitCode, propertyStdout, propertyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--name=--accent", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
                 _jsonOptions));
@@ -1890,6 +1892,7 @@ public class QueryCommandRunnerTests
             var classRows = ParseJsonLines(classStdout);
             var idRows = ParseJsonLines(idStdout);
             var pseudoRows = ParseJsonLines(pseudoStdout);
+            var attributeRows = ParseJsonLines(attributeStdout);
             var propertyRows = ParseJsonLines(propertyStdout);
             var placeholderRows = ParseJsonLines(placeholderStdout);
 
@@ -1913,6 +1916,12 @@ public class QueryCommandRunnerTests
             Assert.Single(pseudoRows);
             Assert.Equal(".btn:hover", pseudoRows[0].RootElement.GetProperty("name").GetString());
             Assert.Equal("class", pseudoRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, attributeExitCode);
+            Assert.Equal(string.Empty, attributeStderr);
+            Assert.Single(attributeRows);
+            Assert.Equal("[hidden]", attributeRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", attributeRows[0].RootElement.GetProperty("kind").GetString());
 
             Assert.Equal(CommandExitCodes.Success, propertyExitCode);
             Assert.Equal(string.Empty, propertyStderr);
