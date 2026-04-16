@@ -3203,6 +3203,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RecordComponents_DoNotDisruptBodyMembersOrDuplicateExplicitProperties()
+    {
+        var content = """
+            namespace App;
+
+            public record Person(string Name)
+            {
+                public string Name { get; init; } = Name;
+
+                public string Upper() => Name.ToUpperInvariant();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var nameProperties = symbols.Where(s => s.Kind == "property" && s.Name == "Name" && s.ContainerName == "Person").ToList();
+        var nameProperty = Assert.Single(nameProperties);
+        Assert.Equal(5, nameProperty.Line);
+        Assert.Equal("App.Person", nameProperty.ContainerQualifiedName);
+
+        var upper = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Upper"));
+        Assert.Equal("class", upper.ContainerKind);
+        Assert.Equal("Person", upper.ContainerName);
+        Assert.Equal("App.Person", upper.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsCompoundVisibility()
     {
         // protected internal and private protected / 複合アクセス修飾子
@@ -3756,7 +3782,10 @@ public class SymbolExtractorTests
         Assert.Equal("int", rangeHigh.ReturnType);
         Assert.Equal(6, rangeHigh.Line);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "span");
+        var span = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "span"));
+        Assert.Equal("class", span.ContainerKind);
+        Assert.Equal("Range", span.ContainerName);
+        Assert.Equal("Range", span.ContainerQualifiedName);
     }
 
     [Fact]
@@ -3811,6 +3840,24 @@ public class SymbolExtractorTests
 
         var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "Person"));
         Assert.Equal(5, age.Line);
+    }
+
+    [Fact]
+    public void Extract_Java_RecordComponents_DoNotDisruptBodyMembers()
+    {
+        var content = """
+            package repro;
+
+            public record Point(int x) {
+                public int doubled() { return x * 2; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var doubled = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "doubled"));
+        Assert.Equal("class", doubled.ContainerKind);
+        Assert.Equal("Point", doubled.ContainerName);
+        Assert.Equal("Point", doubled.ContainerQualifiedName);
     }
 
     [Fact]

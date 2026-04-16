@@ -109,6 +109,13 @@ public static class SymbolExtractor
         string Text,
         int Line);
 
+    private readonly record struct PendingRecordPrimaryComponents(
+        long FileId,
+        string Kind,
+        string RecordName,
+        int RecordStartLine,
+        List<RecordPrimaryComponent> Components);
+
     private readonly record struct StrippedRecordComponentText(
         string Text,
         int ConsumedNewlines);
@@ -633,6 +640,7 @@ public static class SymbolExtractor
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
         var symbols = new List<SymbolRecord>();
+        var pendingRecordPrimaryComponents = new List<PendingRecordPrimaryComponents>();
         var csharpLexState = new CSharpLexState();
 
         for (int i = 0; i < lines.Length; i++)
@@ -744,7 +752,7 @@ public static class SymbolExtractor
                         ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
                     });
 
-                    AddRecordPrimaryComponentSymbols(
+                    CollectRecordPrimaryComponentSymbols(
                         fileId,
                         lang,
                         lines,
@@ -752,6 +760,7 @@ public static class SymbolExtractor
                         absoluteStartColumn,
                         kind,
                         name,
+                        pendingRecordPrimaryComponents,
                         symbols);
 
                     if (lang is not "javascript" and not "typescript"
@@ -778,6 +787,7 @@ public static class SymbolExtractor
             ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
 
         AssignContainers(symbols);
+        MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
@@ -5096,7 +5106,7 @@ public static class SymbolExtractor
         return next != '_' && !char.IsLetterOrDigit(next);
     }
 
-    private static void AddRecordPrimaryComponentSymbols(
+    private static void CollectRecordPrimaryComponentSymbols(
         long fileId,
         string lang,
         string[] lines,
@@ -5104,6 +5114,7 @@ public static class SymbolExtractor
         int declarationStartColumn,
         string kind,
         string recordName,
+        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents,
         List<SymbolRecord> symbols)
     {
         if (kind is not "class" and not "struct")
@@ -5128,33 +5139,57 @@ public static class SymbolExtractor
         if (parentSymbol != null)
             parentSymbol.EndLine = Math.Max(parentSymbol.EndLine, declarationEndLine);
 
-        foreach (var component in components)
-        {
-            if (symbols.Any(symbol =>
-                symbol.FileId == fileId
-                && symbol.Kind == "property"
-                && symbol.Name == component.Name
-                && symbol.Line == declarationLineIndex + 1
-                && symbol.ContainerKind == kind
-                && symbol.ContainerName == recordName))
-            {
-                continue;
-            }
+        pendingRecordPrimaryComponents.Add(new PendingRecordPrimaryComponents(
+            fileId,
+            kind,
+            recordName,
+            declarationLineIndex + 1,
+            components));
+    }
 
-            symbols.Add(new SymbolRecord
+    private static void MaterializeRecordPrimaryComponentSymbols(
+        List<SymbolRecord> symbols,
+        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents)
+    {
+        foreach (var pending in pendingRecordPrimaryComponents)
+        {
+            var parentSymbol = symbols.LastOrDefault(symbol =>
+                symbol.FileId == pending.FileId
+                && symbol.Kind == pending.Kind
+                && symbol.Name == pending.RecordName
+                && symbol.StartLine == pending.RecordStartLine);
+            if (parentSymbol == null)
+                continue;
+
+            foreach (var component in pending.Components)
             {
-                FileId = fileId,
-                Kind = "property",
-                Name = component.Name,
-                Line = component.Line,
-                StartLine = component.Line,
-                EndLine = component.Line,
-                Signature = component.Signature,
-                ContainerKind = kind,
-                ContainerName = recordName,
-                Visibility = "public",
-                ReturnType = component.Type,
-            });
+                if (symbols.Any(symbol =>
+                    symbol.FileId == pending.FileId
+                    && symbol.Kind == "property"
+                    && symbol.Name == component.Name
+                    && symbol.ContainerKind == pending.Kind
+                    && symbol.ContainerName == pending.RecordName
+                    && symbol.StartLine >= parentSymbol.StartLine
+                    && symbol.EndLine <= parentSymbol.EndLine))
+                {
+                    continue;
+                }
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = pending.FileId,
+                    Kind = "property",
+                    Name = component.Name,
+                    Line = component.Line,
+                    StartLine = component.Line,
+                    EndLine = component.Line,
+                    Signature = component.Signature,
+                    ContainerKind = pending.Kind,
+                    ContainerName = pending.RecordName,
+                    Visibility = "public",
+                    ReturnType = component.Type,
+                });
+            }
         }
     }
 
