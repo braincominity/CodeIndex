@@ -422,6 +422,14 @@ public partial class DbReader
         return results;
     }
 
+    public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    {
+        var definitions = GetDefinitions(query, int.MaxValue, kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        return new QueryCountResult(
+            definitions.Count,
+            definitions.Select(definition => definition.Path).Distinct(StringComparer.Ordinal).Count());
+    }
+
     /// <summary>
     /// Get nearby symbols in the same file ordered by proximity to a focus line.
     /// 同一ファイル内の近傍シンボルを、注目行からの近さ順で取得する。

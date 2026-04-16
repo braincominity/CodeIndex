@@ -5382,6 +5382,40 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDefinition_CountOnlyOnReadOnlyDbMissingChunks_FailsLikeDefinition()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_count_missing_chunks");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n");
+            DropChunksTables(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", readOnlyUri, "--json", "--count"],
+                _jsonOptions));
+
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, countExitCode);
+            Assert.Equal(string.Empty, countStdout);
+            Assert.Contains("no such table: chunks", countStderr);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStdout);
+            Assert.Contains("no such table: chunks", definitionStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_NonExactJsonOnReadOnlyLegacyDb_OmitsExactDegradedFields()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_nonexact");
@@ -8308,10 +8342,23 @@ public class QueryCommandRunnerTests
         using var db = new DbContext(dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
-            DROP TABLE IF EXISTS symbol_references;
+                DROP TABLE IF EXISTS symbol_references;
+                PRAGMA wal_checkpoint(TRUNCATE);
+                """;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DropChunksTables(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP TABLE IF EXISTS fts_chunks;
+            DROP TABLE IF EXISTS chunks;
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
     }
 
     private void RunImpactPartialClassZeroResultIteration(int iteration)
