@@ -60,6 +60,7 @@ public static class SymbolExtractor
         Function,
         StaticBlock,
         Class,
+        Namespace,
         Object,
     }
 
@@ -69,6 +70,7 @@ public static class SymbolExtractor
         None = 0,
         FunctionLike = 1,
         Block = 2,
+        Namespace = 4,
     }
 
     private readonly record struct JavaScriptLexState(
@@ -98,11 +100,17 @@ public static class SymbolExtractor
         int ScanStartIndex,
         int ScanEndExclusive,
         int FirstLineScanOffset,
+        string ContainerKind,
         string ContainerName);
 
     private static readonly HashSet<string> TypeScriptBareMethodModifiers =
     [
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
+    ];
+
+    private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
+    [
+        "if", "for", "while", "switch", "catch", "with"
     ];
 
     private readonly record struct JavaScriptTypeScriptMethodHeaderInfo(
@@ -112,11 +120,15 @@ public static class SymbolExtractor
         int? GenericStartColumn = null,
         int? GenericEndColumn = null,
         int? ReturnTypeStartColumn = null,
-        int? ReturnTypeEndColumn = null);
+        int? ReturnTypeEndColumn = null,
+        int? HeaderEndColumn = null,
+        bool HasBody = true);
 
     private readonly record struct JavaScriptTypeScriptMethodHeaderCapture(
         string SourceHeader,
         JavaScriptTypeScriptMethodHeaderInfo HeaderInfo,
+        int HeaderEndLineIndex,
+        int HeaderEndColumn,
         int BodyStartLineIndex,
         int BodyStartColumn);
 
@@ -625,6 +637,25 @@ public static class SymbolExtractor
                         break;
                     }
 
+                    if (privateScopeColumns != null
+                        && pattern.Kind == "class"
+                        && TryGetGroup(match, pattern.VisibilityGroup) != "export"
+                        && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, absoluteStartColumn, matchLine))
+                    {
+                        if (lang is "javascript" or "typescript")
+                        {
+                            var skippedEndColumn = pattern.BodyStyle == BodyStyle.Brace
+                                ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
+                                : -1;
+                            lineOffset = skippedEndColumn >= absoluteStartColumn
+                                ? FindNextJavaScriptTypeScriptStatementStart(matchLine, skippedEndColumn + 1)
+                                : FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+                            continue;
+                        }
+
+                        break;
+                    }
+
                     var name = match.Groups["name"].Success
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
@@ -700,7 +731,7 @@ public static class SymbolExtractor
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
     {
         return symbols
-            .Where(s => s.Kind == "class" && s.BodyStartLine != null && s.BodyEndLine != null)
+            .Where(s => s.Kind is "class" or "interface" && s.BodyStartLine != null && s.BodyEndLine != null)
             .OrderBy(s => s.StartLine)
             .ThenByDescending(s => s.EndLine)
             .Select(s => CreateJavaScriptClassScanTarget(
@@ -710,6 +741,7 @@ public static class SymbolExtractor
                 FindJavaScriptTypeScriptSymbolStartColumn(lines[s.StartLine - 1], s.Signature),
                 s.BodyStartLine,
                 s.BodyEndLine,
+                s.Kind,
                 s.Name))
             .ToList();
     }
@@ -749,6 +781,8 @@ public static class SymbolExtractor
             flags |= JavaScriptScopePrivacyFlags.FunctionLike;
         if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Block))
             flags |= JavaScriptScopePrivacyFlags.Block;
+        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Namespace))
+            flags |= JavaScriptScopePrivacyFlags.Namespace;
 
         return flags;
     }
@@ -1374,7 +1408,7 @@ public static class SymbolExtractor
                     else if (pendingClassScope)
                         scopeKind = JavaScriptScopeKind.Class;
                     else if (pendingNamespaceScope)
-                        scopeKind = JavaScriptScopeKind.Other;
+                        scopeKind = JavaScriptScopeKind.Namespace;
                     else if (CanStartJavaScriptTypeScriptObjectLiteral(previousTokenKind, previousIdentifier, previousSignificantChar))
                         scopeKind = JavaScriptScopeKind.Object;
                     else
@@ -1808,6 +1842,53 @@ public static class SymbolExtractor
         return includeBlockScope && (flags & JavaScriptScopePrivacyFlags.Block) != 0;
     }
 
+    private static bool IsJavaScriptTypeScriptMatchInNamespaceScope(
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns,
+        int lineIndex,
+        int startColumn,
+        string matchLine)
+    {
+        if (lineIndex < 0 || lineIndex >= privateScopeColumns.Length)
+            return false;
+
+        var linePrivateColumns = privateScopeColumns[lineIndex];
+        if (linePrivateColumns.Length == 0)
+            return false;
+
+        var column = Math.Max(0, startColumn);
+        while (column < matchLine.Length && char.IsWhiteSpace(matchLine[column]))
+            column++;
+
+        if (column >= linePrivateColumns.Length)
+            return false;
+
+        return (linePrivateColumns[column] & JavaScriptScopePrivacyFlags.Namespace) != 0;
+    }
+
+    private static bool IsJavaScriptTypeScriptControlFlowHeader(string sanitizedLine, int startColumn)
+    {
+        var index = Math.Max(0, startColumn);
+        if (index >= sanitizedLine.Length || !IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+            return false;
+
+        var tokenStart = index;
+        index++;
+        while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
+            index++;
+
+        var token = sanitizedLine[tokenStart..index];
+        if (!JavaScriptTypeScriptControlFlowHeaderKeywords.Contains(token))
+            return false;
+
+        if (index >= sanitizedLine.Length || !char.IsWhiteSpace(sanitizedLine[index]))
+            return false;
+
+        while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+            index++;
+
+        return index < sanitizedLine.Length && sanitizedLine[index] == '(';
+    }
+
     private static void ExtractJavaScriptTypeScriptBareMethodsInTargets(
         long fileId,
         string lang,
@@ -1846,6 +1927,12 @@ public static class SymbolExtractor
             if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + anonymousDefaultMatch.Index, sanitizedLine, includeBlockScope: false))
                 return;
 
+            if (TryGetGroup(anonymousDefaultMatch, "visibility") != "export"
+                && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + anonymousDefaultMatch.Index, sanitizedLine))
+            {
+                return;
+            }
+
         AddJavaScriptTypeScriptSyntheticClassTarget(
             fileId,
             lang,
@@ -1882,6 +1969,9 @@ public static class SymbolExtractor
                 }
 
                 if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + exportEqualsMatch.Index, sanitizedLine, includeBlockScope: false))
+                    return;
+
+                if (IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + exportEqualsMatch.Index, sanitizedLine))
                     return;
 
                 AddJavaScriptTypeScriptSyntheticClassTarget(
@@ -1923,6 +2013,12 @@ public static class SymbolExtractor
             && classExpressionBindingMatch.Groups["bindingKind"].Value is "const" or "let";
         if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + classExpressionBindingMatch.Index, sanitizedLine, includeBlockScope))
             return;
+
+        if (TryGetGroup(classExpressionBindingMatch, "visibility") != "export"
+            && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + classExpressionBindingMatch.Index, sanitizedLine))
+        {
+            return;
+        }
 
         var containerName = TryGetGroup(classExpressionBindingMatch, "alias")
             ?? TryGetGroup(classExpressionBindingMatch, "exportsAlias")
@@ -1984,12 +2080,13 @@ public static class SymbolExtractor
             });
         }
 
-        var candidate = CreateJavaScriptClassScanTarget(lines, lang, classTokenLineIndex, classTokenStartColumn, bodyStartLine, bodyEndLine, containerName);
+        var candidate = CreateJavaScriptClassScanTarget(lines, lang, classTokenLineIndex, classTokenStartColumn, bodyStartLine, bodyEndLine, "class", containerName);
         if (!targets.Any(t => t.StartIndex == candidate.StartIndex
             && t.StartColumn == candidate.StartColumn
             && t.ScanStartIndex == candidate.ScanStartIndex
             && t.ScanEndExclusive == candidate.ScanEndExclusive
             && t.FirstLineScanOffset == candidate.FirstLineScanOffset
+            && t.ContainerKind == candidate.ContainerKind
             && t.ContainerName == candidate.ContainerName))
         {
             targets.Add(candidate);
@@ -2053,7 +2150,7 @@ public static class SymbolExtractor
             : line[declarationStartColumn..].Trim();
     }
 
-    private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerName)
+    private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerKind, string containerName)
     {
         var scanStartIndex = bodyStartLine!.Value - 1;
         var scanEndExclusive = bodyEndLine!.Value;
@@ -2069,6 +2166,7 @@ public static class SymbolExtractor
             scanStartIndex,
             scanEndExclusive,
             firstLineScanOffset,
+            containerKind,
             containerName);
     }
 
@@ -2091,6 +2189,8 @@ public static class SymbolExtractor
         var initializerBraceDepth = 0;
         var lexState = new JavaScriptLexState();
         var seenMethodStarts = new HashSet<(int Line, int Column)>();
+        var pendingHeaderEndLineIndex = -1;
+        var pendingHeaderEndColumn = -1;
         var pendingBodyStartLineIndex = -1;
         var pendingBodyStartColumn = -1;
 
@@ -2100,6 +2200,12 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(line, lexState);
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
+
+            if (pendingHeaderEndLineIndex >= 0)
+            {
+                if (i < pendingHeaderEndLineIndex)
+                    continue;
+            }
 
             if (pendingBodyStartLineIndex >= 0)
             {
@@ -2124,6 +2230,12 @@ public static class SymbolExtractor
             var scanStartColumn = i == scanStartIndex
                 ? Math.Min(classScanTarget.FirstLineScanOffset, sanitizedLine.Length)
                 : 0;
+            if (pendingHeaderEndLineIndex == i)
+            {
+                scanStartColumn = Math.Max(scanStartColumn, Math.Min(pendingHeaderEndColumn + 1, sanitizedLine.Length));
+                pendingHeaderEndLineIndex = -1;
+                pendingHeaderEndColumn = -1;
+            }
 
             if (inFieldInitializer
                 && initializerParenDepth == 0
@@ -2163,7 +2275,8 @@ public static class SymbolExtractor
                 }
 
                 if (nestedBraceDepth == 0
-                    && IsJavaScriptTypeScriptMethodCandidateStart(sanitizedLine, column))
+                    && IsJavaScriptTypeScriptMethodCandidateStart(sanitizedLine, column)
+                    && !IsJavaScriptTypeScriptControlFlowHeader(sanitizedLine, column))
                 {
                     if (TryCaptureJavaScriptTypeScriptMethodHeader(
                         lines,
@@ -2179,10 +2292,14 @@ public static class SymbolExtractor
                         var startLine = i + 1;
                         if (seenMethodStarts.Add((startLine, column)))
                         {
-                            var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang, column);
-                            var sameLineMethodEndColumn = bodyEndLine == startLine
+                            var (endLine, bodyStartLine, bodyEndLine) = methodHeader.HasBody
+                                ? ResolveRange(lines, i, BodyStyle.Brace, lang, column)
+                                : (methodCapture.HeaderEndLineIndex + 1, null, null);
+                            var sameLineMethodEndColumn = methodHeader.HasBody && bodyEndLine == startLine
                                 ? FindJavaScriptSameLineBodyEndColumn(line, column, lang)
-                                : -1;
+                                : methodCapture.HeaderEndLineIndex == i
+                                    ? methodCapture.HeaderEndColumn
+                                    : -1;
                             symbols.Add(new SymbolRecord
                             {
                                 FileId = fileId,
@@ -2201,7 +2318,7 @@ public static class SymbolExtractor
                                     sameLineMethodEndColumn,
                                     methodCapture,
                                     lang),
-                                ContainerKind = "class",
+                                ContainerKind = classScanTarget.ContainerKind,
                                 ContainerName = classScanTarget.ContainerName,
                                 Visibility = methodHeader.Visibility,
                                 ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(methodCapture.SourceHeader, methodHeader, lang),
@@ -2213,15 +2330,23 @@ public static class SymbolExtractor
                                 continue;
                             }
 
-                            if (methodCapture.BodyStartLineIndex > i)
+                            if (methodHeader.HasBody && methodCapture.BodyStartLineIndex > i)
                             {
                                 pendingBodyStartLineIndex = methodCapture.BodyStartLineIndex;
                                 pendingBodyStartColumn = methodCapture.BodyStartColumn;
                                 break;
                             }
+
+                            if (methodCapture.HeaderEndLineIndex > i)
+                            {
+                                pendingHeaderEndLineIndex = methodCapture.HeaderEndLineIndex;
+                                pendingHeaderEndColumn = methodCapture.HeaderEndColumn;
+                                break;
+                            }
                         }
 
-                        if (methodCapture.BodyStartLineIndex == i
+                        if (methodHeader.HasBody
+                            && methodCapture.BodyStartLineIndex == i
                             && methodCapture.BodyStartColumn >= 0
                             && methodCapture.BodyStartColumn < sanitizedLine.Length)
                         {
@@ -3656,6 +3781,8 @@ public static class SymbolExtractor
                             && returnAngleDepth == 0
                             && returnBraceDepth == 0)
                         {
+                            returnTypeEndColumn ??= index - 1;
+                            methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, -1, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, false);
                             return JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly;
                         }
 
@@ -3726,7 +3853,7 @@ public static class SymbolExtractor
                                 if (sawReturnTypeToken)
                                 {
                                     returnTypeEndColumn = index - 1;
-                                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
+                                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index);
                                     return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
                                 }
                             }
@@ -3778,12 +3905,15 @@ public static class SymbolExtractor
                 }
 
                 if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == ';')
+                {
+                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, -1, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, false);
                     return JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly;
+                }
 
                 if (index >= sanitizedLine.Length || sanitizedLine[index] != '{')
                     return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
-                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
+                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index);
                 return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
             }
         }
@@ -3822,14 +3952,10 @@ public static class SymbolExtractor
             startIndex,
             startColumn,
             lang,
-            out var firstHeaderIsDeclarationOnly,
             out methodCapture))
         {
             return true;
         }
-
-        if (firstHeaderIsDeclarationOnly)
-            return false;
 
         var lexState = nextLineLexState;
         for (int lineIndex = startIndex + 1; lineIndex < scanEndExclusive; lineIndex++)
@@ -3850,14 +3976,10 @@ public static class SymbolExtractor
                 startIndex,
                 startColumn,
                 lang,
-                out var headerIsDeclarationOnly,
                 out methodCapture))
             {
                 return true;
             }
-
-            if (headerIsDeclarationOnly)
-                return false;
         }
 
         return false;
@@ -3869,28 +3991,36 @@ public static class SymbolExtractor
         int startIndex,
         int startColumn,
         string? lang,
-        out bool isDeclarationOnly,
         out JavaScriptTypeScriptMethodHeaderCapture methodCapture)
     {
-        isDeclarationOnly = false;
         methodCapture = default;
         var parseStatus = ParseJavaScriptTypeScriptMethodHeader(sanitizedHeader, 0, lang, out var methodHeader);
-        if (parseStatus == JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly)
-        {
-            isDeclarationOnly = true;
-            return false;
-        }
-
-        if (parseStatus != JavaScriptTypeScriptMethodHeaderParseStatus.Parsed)
+        if (parseStatus == JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid)
             return false;
 
+        var headerEndLocationColumn = methodHeader.HasBody
+            ? methodHeader.BodyStartColumn
+            : methodHeader.HeaderEndColumn ?? -1;
         if (!TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
             sourceHeader,
             startIndex,
             startColumn,
+            headerEndLocationColumn,
+            out var headerEndLineIndex,
+            out var headerEndColumn))
+        {
+            return false;
+        }
+
+        var bodyStartLineIndex = -1;
+        var bodyStartColumn = -1;
+        if (methodHeader.HasBody && !TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+            sourceHeader,
+            startIndex,
+            startColumn,
             methodHeader.BodyStartColumn,
-            out var bodyStartLineIndex,
-            out var bodyStartColumn))
+            out bodyStartLineIndex,
+            out bodyStartColumn))
         {
             return false;
         }
@@ -3898,6 +4028,8 @@ public static class SymbolExtractor
         methodCapture = new JavaScriptTypeScriptMethodHeaderCapture(
             sourceHeader,
             methodHeader,
+            headerEndLineIndex,
+            headerEndColumn,
             bodyStartLineIndex,
             bodyStartColumn);
         return true;
@@ -3941,6 +4073,21 @@ public static class SymbolExtractor
         JavaScriptTypeScriptMethodHeaderCapture methodCapture,
         string? lang)
     {
+        if (!methodCapture.HeaderInfo.HasBody)
+        {
+            if (methodCapture.HeaderEndLineIndex == startIndex && methodCapture.HeaderEndColumn >= startColumn)
+                return lines[startIndex][startColumn..(methodCapture.HeaderEndColumn + 1)].Trim();
+
+            if (methodCapture.HeaderInfo.HeaderEndColumn != null
+                && methodCapture.HeaderInfo.HeaderEndColumn.Value >= 0
+                && methodCapture.HeaderInfo.HeaderEndColumn.Value < methodCapture.SourceHeader.Length)
+            {
+                return methodCapture.SourceHeader[..(methodCapture.HeaderInfo.HeaderEndColumn.Value + 1)].Trim();
+            }
+
+            return methodCapture.SourceHeader.Trim();
+        }
+
         if (bodyEndLine == startIndex + 1 && sameLineMethodEndColumn >= startColumn)
             return lines[startIndex][startColumn..(sameLineMethodEndColumn + 1)].Trim();
 

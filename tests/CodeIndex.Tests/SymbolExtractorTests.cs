@@ -1148,6 +1148,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsDeclarationOnlyMembersInDeclareClassAndInterface()
+    {
+        var content = """
+            declare class Service {
+                run(): void;
+                fetch<T>(id: string): Promise<T>;
+            }
+
+            interface Api {
+                ping(): void;
+                fetch<T>(id: string): Promise<T>;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerKind == "class" && s.ContainerName == "Service" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch" && s.ContainerKind == "class" && s.ContainerName == "Service" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Api");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ping" && s.ContainerKind == "interface" && s.ContainerName == "Api" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch" && s.ContainerKind == "interface" && s.ContainerName == "Api" && s.BodyStartLine == null);
+    }
+
+    [Fact]
     public void Extract_TypeScript_DoesNotMergeAbstractMemberIntoFollowingConcreteMethod()
     {
         var content = """
@@ -1951,6 +1975,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DoesNotLeakNonExportedNamespaceClasses()
+    {
+        var content = """
+            namespace Foo {
+                class Hidden {
+                    run(): void {}
+                }
+
+                const HiddenExpr = class {
+                    keep(): void {}
+                };
+
+                export class Visible {
+                    stay(): void {}
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Foo");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenExpr");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "keep");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "stay" && s.ContainerName == "Visible");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsParenthesizedCommonJsModuleExportsClassExpressionMethods()
     {
         var content = """
@@ -2051,7 +2104,9 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Overloaded");
-        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        var fooDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "foo" && s.BodyStartLine == null).ToList();
+        Assert.Equal(2, fooDeclarations.Count);
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo" && s.BodyStartLine != null));
         Assert.Equal(4, foo.Line);
         Assert.Equal("string | number", foo.ReturnType);
         Assert.Equal("foo(x: string | number): string | number {", foo.Signature);
