@@ -2685,6 +2685,84 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_GroupByName_ZeroJson_PreservesGroupedShape()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Helper.cs", "csharp",
+                """
+                public class Helper
+                {
+                    private void SharedHelper()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--group-by-name", "--path", "DOES_NOT_EXIST"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
+            Assert.Equal(0, json.GetProperty("hotspots").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByName_CountZeroJson_PreservesGroupedShape()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_count_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Helper.cs", "csharp",
+                """
+                public class Helper
+                {
+                    private void SharedHelper()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--group-by-name", "--count", "--path", "DOES_NOT_EXIST"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetInt32());
+            Assert.Equal(0, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_GroupByName_AppliesLimitAfterGrouping()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_limit");

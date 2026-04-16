@@ -19,6 +19,7 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
+    private const string HotspotsGroupedByNameKind = "name_kind";
     private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -1395,11 +1396,14 @@ public static class QueryCommandRunner
                 if (groupedResults.Count == 0)
                 {
                     if (options.CountOnly)
-                        WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, new ExactQuerySignal(true, HasMissingIndex: false, HasMissingTable: false, null));
-                    else if (options.Json && !reader._hasReferencesTable)
-                        WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions);
+                    {
+                        if (options.Json)
+                            Console.WriteLine(BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable).ToJsonString(jsonOptions));
+                        else
+                            WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, new ExactQuerySignal(true, HasMissingIndex: false, HasMissingTable: false, null));
+                    }
                     else if (options.Json)
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "hotspots", graphTableAvailable: true, degraded: false).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable).ToJsonString(jsonOptions));
                     else
                     {
                         Console.Error.WriteLine("No symbol hotspots found.");
@@ -1425,7 +1429,7 @@ public static class QueryCommandRunner
                             count = groupedResults.Count,
                             files = groupedFileCount,
                             definition_site_total = definitionSiteTotal,
-                            grouped_by = "name_kind",
+                            grouped_by = HotspotsGroupedByNameKind,
                         }, jsonOptions)
                         : $"{groupedResults.Count}");
                     return CommandExitCodes.Success;
@@ -1449,7 +1453,7 @@ public static class QueryCommandRunner
                     {
                         count = groupedResults.Count,
                         definition_site_total = definitionSiteTotal,
-                        grouped_by = "name_kind",
+                        grouped_by = HotspotsGroupedByNameKind,
                         hotspots = items,
                     }, jsonOptions));
                 }
@@ -2133,6 +2137,25 @@ public static class QueryCommandRunner
         extraFields?.Invoke(payload);
         AddFreshnessHint(payload, reader);
 
+        return payload;
+    }
+
+    private static JsonObject BuildGroupedHotspotsZeroJsonPayload(DbReader reader, JsonSerializerOptions jsonOptions, bool countOnly, bool graphAvailable)
+    {
+        var payload = BuildJsonZeroResultPayload(
+            reader,
+            jsonOptions,
+            resultsKey: countOnly ? null : "hotspots",
+            includeFiles: countOnly,
+            graphTableAvailable: graphAvailable,
+            degraded: !graphAvailable,
+            extraFields: static zeroPayload =>
+            {
+                zeroPayload["definition_site_total"] = 0;
+                zeroPayload["grouped_by"] = HotspotsGroupedByNameKind;
+            });
+        if (!graphAvailable)
+            payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
         return payload;
     }
 

@@ -422,7 +422,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exact-name` | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Preferred explicit name for symbol-name exactness: NFKC + Unicode CaseFold exact equality (`Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` is still distinct from plain `i`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` so AI clients can tell which path is active. When a read-only legacy DB is missing the fallback exact-match indexes, human-readable output warns and CLI JSON / MCP `structuredContent` expose degraded-state metadata. |
 | `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/struct/interface/enum/property/event/delegate/namespace/import) |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
-| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `unused` | Return only the result count (with `--json`: a single count object; graph-aware commands may add trust metadata) |
+| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `unused`, `hotspots` | Return only the result count (with `--json`: a single count object; graph-aware commands may add trust metadata) |
 | `--group-by-name` | `hotspots` | Collapse rows that share the same `(name, kind)` across files into one representative result while preserving `definition_sites` / `paths` metadata in JSON |
 | `--start <line>` | `excerpt` | Start line for excerpt reconstruction |
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`) |
@@ -1267,7 +1267,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--exact-name` | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | symbol-name exactness 用の推奨 explicit alias。NFKC + Unicode CaseFold による完全一致（`Ä` / `ä`、全角 `Ｒｕｎ` / `Run`、合字、sharp-S、Greek final sigma を畳み込む）。Unicode CaseFold は locale-invariant のため、トルコ語の dotted `İ` は plain `i` と同一視しない。DB に stale な fold metadata が残る間は ASCII `COLLATE NOCASE` に fallback するため、まず `cdidx backfill-fold`、または stale row を全置換できる通常の `cdidx index .`、それが無理なら `--rebuild` を使う（`status --json` の `fold_ready` で判定）。read-only な旧DBに fallback exact-match index が無い場合は、人間向け出力が WARN を表示し、CLI JSON と MCP `structuredContent` が縮退メタデータを返す。 |
 | `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/struct/interface/enum/property/event/delegate/namespace/import） |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
-| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `unused` | 結果のカウントだけを返す（`--json` 併用時は単一の count オブジェクト。graph 系は trust metadata を含む場合あり） |
+| `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `unused`, `hotspots` | 結果のカウントだけを返す（`--json` 併用時は単一の count オブジェクト。graph 系は trust metadata を含む場合あり） |
 | `--group-by-name` | `hotspots` | ファイルをまたいで同じ `(name, kind)` を共有する行を代表1件に集約し、JSON では `definition_sites` / `paths` metadata を保持したまま返す |
 | `--start <line>` | `excerpt` | 抜粋再構成の開始行 |
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ） |
