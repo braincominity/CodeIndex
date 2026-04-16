@@ -183,6 +183,98 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_CharLiteralBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """
+            namespace Demo;
+
+            public class FixtureHost
+            {
+                public bool IsClosingBrace(char c)
+                {
+                    return c is not '}';
+                }
+
+                public void AfterBraceLiteral()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
+        var after = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "AfterBraceLiteral"));
+
+        Assert.Equal(13, host.EndLine);
+        Assert.Equal("class", after.ContainerKind);
+        Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineRawStringBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """"
+            namespace Demo;
+
+            public class FixtureHost
+            {
+                public string UsesRawFixture()
+                {
+                    return """
+                        }
+                        """;
+                }
+
+                public void AfterRawString()
+                {
+                }
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
+        var uses = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "UsesRawFixture"));
+        var after = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "AfterRawString"));
+
+        Assert.Equal(15, host.EndLine);
+        Assert.Equal(10, uses.EndLine);
+        Assert.Equal("class", after.ContainerKind);
+        Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineVerbatimStringBraceDoesNotBreakFollowingRangeDetection()
+    {
+        var content = """
+            namespace Demo;
+
+            public class FixtureHost
+            {
+                public string UsesVerbatimFixture()
+                {
+                    return @"
+            {
+            ";
+                }
+
+                public void AfterVerbatimString()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
+        var uses = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "UsesVerbatimFixture"));
+        var after = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "AfterVerbatimString"));
+
+        Assert.Equal(15, host.EndLine);
+        Assert.Equal(10, uses.EndLine);
+        Assert.Equal("class", after.ContainerKind);
+        Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedNamespaceAndRecordStruct()
     {
         // C# 10+: file-scoped namespace, global using, record struct

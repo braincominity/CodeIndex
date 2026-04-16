@@ -519,7 +519,8 @@ public static class SymbolExtractor
                 var rangeLines = lang == "css" && cssScannerLines != null
                     ? cssScannerLines
                     : structuralLines;
-                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle);
+                var rangeRawLines = lang == "csharp" ? lines : null;
+                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, rangeRawLines);
                 var startLine = i + 1;
 
                 // Python @property decorator: reclassify the def as property
@@ -730,11 +731,11 @@ public static class SymbolExtractor
         }
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string[]? rawLines = null)
     {
         return bodyStyle switch
         {
-            BodyStyle.Brace => FindBraceRange(lines, startIndex),
+            BodyStyle.Brace => FindBraceRange(lines, startIndex, rawLines: rawLines),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
@@ -742,22 +743,72 @@ public static class SymbolExtractor
         };
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int openingBraceOffset = 0)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int openingBraceOffset = 0, string[]? rawLines = null)
     {
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
+        var insideBlockComment = false;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
             var line = lines[i];
+            var rawLine = rawLines != null && i < rawLines.Length ? rawLines[i] : line;
             var charStart = i == startIndex
                 ? Math.Clamp(openingBraceOffset, 0, Math.Max(0, line.Length - 1))
                 : 0;
+            var inSingleQuote = false;
+            var inDoubleQuote = false;
 
             for (int charIndex = charStart; charIndex < line.Length; charIndex++)
             {
                 var c = line[charIndex];
+
+                if (insideBlockComment)
+                {
+                    if (charIndex + 1 < line.Length && c == '*' && line[charIndex + 1] == '/')
+                    {
+                        insideBlockComment = false;
+                        charIndex++;
+                    }
+
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && charIndex + 1 < line.Length && c == '/' && line[charIndex + 1] == '*')
+                {
+                    insideBlockComment = true;
+                    charIndex++;
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && charIndex + 1 < line.Length && c == '/' && line[charIndex + 1] == '/')
+                    break;
+
+                if ((inSingleQuote || inDoubleQuote) && c == '\\' && charIndex + 1 < line.Length)
+                {
+                    charIndex++;
+                    continue;
+                }
+
+                if (c == '"' && !inSingleQuote)
+                {
+                    inDoubleQuote = !inDoubleQuote;
+                    continue;
+                }
+
+                if (c == '\'' && !inDoubleQuote)
+                {
+                    inSingleQuote = !inSingleQuote;
+                    continue;
+                }
+
+                if (inSingleQuote || inDoubleQuote)
+                    continue;
+
+                if ((c == '{' || c == '}') && IsSingleCharLiteralBrace(rawLine, charIndex, c))
+                    continue;
+
                 if (c == '{')
                 {
                     depth++;
@@ -782,6 +833,16 @@ public static class SymbolExtractor
         return opened
             ? (lines.Length, bodyStartLine, lines.Length)
             : (startIndex + 1, null, null);
+    }
+
+    private static bool IsSingleCharLiteralBrace(string rawLine, int charIndex, char brace)
+    {
+        if (charIndex <= 0 || charIndex + 1 >= rawLine.Length)
+            return false;
+
+        return rawLine[charIndex] == brace
+            && rawLine[charIndex - 1] == '\''
+            && rawLine[charIndex + 1] == '\'';
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindIndentRange(string[] lines, int startIndex)
