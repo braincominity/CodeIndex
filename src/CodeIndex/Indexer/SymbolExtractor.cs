@@ -5399,7 +5399,7 @@ public static class SymbolExtractor
                     if (parenDepth == 0)
                         return i;
                     continue;
-                case '<':
+                case '<' when LooksLikeRecordGenericAngleStart(declaration, i):
                     angleDepth++;
                     continue;
                 case '>':
@@ -5508,7 +5508,7 @@ public static class SymbolExtractor
                     if (parenDepth > 0)
                         parenDepth--;
                     continue;
-                case '<':
+                case '<' when LooksLikeRecordGenericAngleStart(declaration, i):
                     angleDepth++;
                     continue;
                 case '>':
@@ -5554,8 +5554,9 @@ public static class SymbolExtractor
         var componentLineNumber = firstLineNumber;
         var componentHasToken = false;
 
-        foreach (var ch in parameterList)
+        for (int index = 0; index < parameterList.Length; index++)
         {
+            var ch = parameterList[index];
             if (!componentHasToken && !char.IsWhiteSpace(ch))
             {
                 componentHasToken = true;
@@ -5614,7 +5615,7 @@ public static class SymbolExtractor
                         parenDepth--;
                     builder.Append(ch);
                     continue;
-                case '<':
+                case '<' when LooksLikeRecordGenericAngleStart(parameterList, index):
                     angleDepth++;
                     builder.Append(ch);
                     continue;
@@ -5854,7 +5855,7 @@ public static class SymbolExtractor
                     if (parenDepth > 0)
                         parenDepth--;
                     continue;
-                case '<':
+                case '<' when LooksLikeRecordGenericAngleStart(text, i):
                     angleDepth++;
                     continue;
                 case '>':
@@ -5898,6 +5899,55 @@ public static class SymbolExtractor
         }
 
         return new(trimmed, consumedNewlines);
+    }
+
+    private static bool LooksLikeRecordGenericAngleStart(string text, int index)
+    {
+        if (index < 0 || index >= text.Length || text[index] != '<')
+            return false;
+
+        var previousIndex = FindPreviousNonWhitespaceIndex(text, index - 1);
+        if (previousIndex < 0 || previousIndex != index - 1)
+            return false;
+
+        var nextIndex = FindNextNonWhitespaceIndex(text, index + 1);
+        if (nextIndex < 0)
+            return false;
+
+        var previous = text[previousIndex];
+        var next = text[nextIndex];
+        return IsRecordGenericAnglePredecessor(previous)
+            && IsRecordGenericAngleSuccessor(next);
+    }
+
+    private static bool IsRecordGenericAnglePredecessor(char ch) =>
+        char.IsLetterOrDigit(ch)
+        || ch is '_' or '$' or '@' or '.' or '>' or ')' or ']' or '?';
+
+    private static bool IsRecordGenericAngleSuccessor(char ch) =>
+        char.IsLetter(ch)
+        || ch is '_' or '$' or '@' or '?' or '(';
+
+    private static int FindPreviousNonWhitespaceIndex(string text, int index)
+    {
+        for (int i = Math.Min(index, text.Length - 1); i >= 0; i--)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindNextNonWhitespaceIndex(string text, int index)
+    {
+        for (int i = Math.Max(0, index); i < text.Length; i++)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+                return i;
+        }
+
+        return -1;
     }
 
     private static StrippedRecordComponentText StripLeadingJavaRecordComponentAnnotations(string component)

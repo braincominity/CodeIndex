@@ -3119,6 +3119,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsWithComparisonDefaults()
+    {
+        var content = """
+            public record Threshold(bool Enabled = 1 < 2, int Count = 0);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var enabled = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Enabled" && s.ContainerName == "Threshold"));
+        Assert.Equal("bool", enabled.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.ContainerName == "Threshold"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DoesNotInjectRecordPrimaryComponentsIntoEarlierSameNamedClass()
     {
         var content = """
@@ -3181,6 +3196,23 @@ public class SymbolExtractorTests
 
         var box = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Box"));
         Assert.Equal(11, box.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordBaseComparisonDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Child(int X)
+                : Base(1 < 2);
+
+            public record Base(bool Flag);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal(4, child.EndLine);
     }
 
     [Fact]
