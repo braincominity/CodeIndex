@@ -93,30 +93,34 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact);
-            if (results.Count == 0)
+            if (options.CountOnly)
             {
-                if (options.CountOnly)
+                var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact);
+                if (counts.Count == 0)
+                {
                     Console.WriteLine(options.Json
                         ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true).ToJsonString(jsonOptions)
                         : "0");
-                else if (options.Json)
+                    return CommandExitCodes.Success;
+                }
+
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = counts.Count, files = counts.FileCount }, jsonOptions)
+                    : $"{counts.Count}");
+                return CommandExitCodes.Success;
+            }
+
+            var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact);
+            if (results.Count == 0)
+            {
+                if (options.Json)
                     Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results").ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No results found.");
                     WriteZeroResultHints(options, reader);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc }, jsonOptions)
-                    : $"{results.Count}");
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
@@ -172,6 +176,43 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            if (options.CountOnly)
+            {
+                var counts = reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
+                var exactSignalForCount = reader.GetDefinitionExactQuerySignal();
+                var exactZeroHintForCount = BuildExactZeroHint(
+                    exact,
+                    () => reader.CountSearchSymbols(options.Query, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
+                    () => reader.CountSearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    () => reader.SearchSymbols(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                    r => r.Name);
+                WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                if (counts.Count == 0)
+                {
+                    Console.WriteLine(options.Json
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null).ToJsonString(jsonOptions)
+                        : "0");
+                    return CommandExitCodes.Success;
+                }
+
+                if (options.Json)
+                {
+                    var payload = new JsonObject
+                    {
+                        ["count"] = counts.Count,
+                        ["files"] = counts.FileCount,
+                    };
+                    if (exact)
+                        AddExactJsonFields(payload, exactSignalForCount);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{counts.Count}");
+                }
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
             var exactSignal = reader.GetDefinitionExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
@@ -183,39 +224,14 @@ public static class QueryCommandRunner
             WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHint, exactSignal: exact ? exactSignal : null).ToJsonString(jsonOptions)
-                        : "0");
-                else if (!options.Json)
+                if (!options.Json)
                 {
                     Console.Error.WriteLine("No definitions found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                if (options.Json)
-                {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = results.Count,
-                        ["files"] = fc,
-                    };
-                    if (exact)
-                        AddExactJsonFields(payload, exactSignal);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
-                }
-                else
-                {
-                    Console.WriteLine($"{results.Count}");
-                }
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
@@ -289,6 +305,27 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
+            if (options.CountOnly)
+            {
+                var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+                var exactSignalForCount = reader.GetReferencesExactQuerySignal();
+                var exactZeroHintForCount = BuildExactZeroHint(
+                    exact && reader._hasReferencesTable,
+                    () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                    () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    r => r.SymbolName);
+                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                if (counts.Count == 0)
+                {
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    return CommandExitCodes.Success;
+                }
+
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
@@ -300,9 +337,7 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
-                else if (options.Json && !reader._hasReferencesTable)
+                if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "references", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (!options.Json)
                 {
@@ -312,14 +347,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "references", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                WriteGraphCountResult(reader, results.Count, fc, options, jsonOptions, reader._hasReferencesTable, exactSignal);
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
@@ -379,6 +407,27 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
+            if (options.CountOnly)
+            {
+                var counts = reader.CountCallersTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+                var exactSignalForCount = reader.GetCallersExactQuerySignal();
+                var exactZeroHintForCount = BuildExactZeroHint(
+                    exact && reader._hasReferencesTable,
+                    () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                    () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    r => r.CalleeName);
+                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                if (counts.Count == 0)
+                {
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    return CommandExitCodes.Success;
+                }
+
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             var exactSignal = reader.GetCallersExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
@@ -390,9 +439,7 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
-                else if (options.Json && !reader._hasReferencesTable)
+                if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "callers", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (!options.Json)
                 {
@@ -402,14 +449,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                WriteGraphCountResult(reader, results.Count, fc, options, jsonOptions, reader._hasReferencesTable, exactSignal);
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
@@ -465,6 +505,27 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
+            if (options.CountOnly)
+            {
+                var counts = reader.CountCalleesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+                var exactSignalForCount = reader.GetCalleesExactQuerySignal();
+                var exactZeroHintForCount = BuildExactZeroHint(
+                    exact && reader._hasReferencesTable,
+                    () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
+                    () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
+                    r => r.CallerName);
+                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                if (counts.Count == 0)
+                {
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    return CommandExitCodes.Success;
+                }
+
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             var exactSignal = reader.GetCalleesExactQuerySignal();
             var exactZeroHint = BuildExactZeroHint(
@@ -476,9 +537,7 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignal, exactZeroHint);
-                else if (options.Json && !reader._hasReferencesTable)
+                if (options.Json && !reader._hasReferencesTable)
                     WriteDegradedGraphZeroResult(reader, "callees", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
                 else if (!options.Json)
                 {
@@ -488,14 +547,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callees", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                WriteGraphCountResult(reader, results.Count, fc, options, jsonOptions, reader._hasReferencesTable, exactSignal);
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
@@ -574,6 +626,51 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            if (options.CountOnly)
+            {
+                var counts = reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
+                var hasExactPredicateForCount = exact && symbolQueries is { Count: > 0 };
+                var exactSignalForCount = reader.GetSymbolsExactQuerySignal();
+                var multiNameExactHintForCount = symbolQueries != null && symbolQueries.Count > 1;
+                var exactZeroHintForCount = multiNameExactHintForCount
+                    ? BuildExactZeroHint(
+                        exact,
+                        () => reader.AnySearchSymbols(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                        () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                        r => r.Name)
+                    : BuildExactZeroHint(
+                        exact && symbolQueries != null && symbolQueries.Count > 0,
+                        () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
+                        () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                        () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
+                        r => r.Name);
+                WriteExactSymbolWarningIfNeeded(hasExactPredicateForCount, options.Json, exactSignalForCount);
+                if (counts.Count == 0)
+                {
+                    Console.WriteLine(options.Json
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHintForCount, exactSignal: hasExactPredicateForCount ? exactSignalForCount : null).ToJsonString(jsonOptions)
+                        : "0");
+                    return CommandExitCodes.Success;
+                }
+
+                if (options.Json)
+                {
+                    var payload = new JsonObject
+                    {
+                        ["count"] = counts.Count,
+                        ["files"] = counts.FileCount,
+                    };
+                    if (hasExactPredicateForCount)
+                        AddExactJsonFields(payload, exactSignalForCount);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{counts.Count}");
+                }
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
             var hasExactPredicate = exact && symbolQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal();
@@ -593,39 +690,14 @@ public static class QueryCommandRunner
             WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.CountOnly)
-                    Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, exactZeroHint: exactZeroHint, exactSignal: hasExactPredicate ? exactSignal : null).ToJsonString(jsonOptions)
-                        : "0");
-                else if (!options.Json)
+                if (!options.Json)
                 {
                     Console.Error.WriteLine("No symbols found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
                     WriteZeroResultHints(options, reader);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                if (options.Json)
-                {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = results.Count,
-                        ["files"] = fc,
-                    };
-                    if (hasExactPredicate)
-                        AddExactJsonFields(payload, exactSignal);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
-                }
-                else
-                {
-                    Console.WriteLine($"{results.Count}");
-                }
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
@@ -672,14 +744,27 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
-            if (results.Count == 0)
+            if (options.CountOnly)
             {
-                if (options.CountOnly)
+                var counts = reader.CountListFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+                if (counts.Count == 0)
+                {
                     Console.WriteLine(options.Json
                         ? BuildJsonZeroResultPayload(reader, jsonOptions).ToJsonString(jsonOptions)
                         : "0");
-                else if (options.Json)
+                    return CommandExitCodes.Success;
+                }
+
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = counts.Count }, jsonOptions)
+                    : $"{counts.Count}");
+                return CommandExitCodes.Success;
+            }
+
+            var results = reader.ListFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
+            if (results.Count == 0)
+            {
+                if (options.Json)
                     Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "files").ToJsonString(jsonOptions));
                 else if (!options.Json)
                 {
@@ -687,15 +772,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count }, jsonOptions)
-                    : $"{results.Count}");
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
@@ -864,10 +941,10 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
-            if (results.Count == 0)
+            if (options.CountOnly)
             {
-                if (options.CountOnly)
+                var counts = reader.CountFindInFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+                if (counts.Count == 0)
                 {
                     if (options.Json)
                     {
@@ -881,8 +958,19 @@ public static class QueryCommandRunner
                     {
                         Console.WriteLine("0");
                     }
+                    return CommandExitCodes.Success;
                 }
-                else if (options.Json)
+
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = counts.Count, files = counts.FileCount, file_count = counts.FileCount }, jsonOptions)
+                    : $"{counts.Count}");
+                return CommandExitCodes.Success;
+            }
+
+            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
+            if (results.Count == 0)
+            {
+                if (options.Json)
                 {
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", extraFields: payload =>
                     {
@@ -901,16 +989,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No matches found.");
                     WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
-            }
-
-            if (options.CountOnly)
-            {
-                var fc = results.Select(r => r.Path).Distinct().Count();
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new { count = results.Count, files = fc, file_count = fc }, jsonOptions)
-                    : $"{results.Count}");
-                return CommandExitCodes.Success;
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)
