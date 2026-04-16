@@ -244,6 +244,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_CSharpOperatorsConversionsAndIndexersUseNavigableNames()
+    {
+        InsertIndexedFile("src/csharp_special_names.cs", "csharp",
+            """
+            public struct Money
+            {
+                public static Money operator +(Money a, Money b) => new();
+                public static implicit operator decimal(Money m) => 0m;
+                public static explicit operator Money(decimal d) => new();
+            }
+
+            public class Bag
+            {
+                private string[] _items = new string[10];
+                public string this[int i] { get => _items[i]; set => _items[i] = value; }
+            }
+            """);
+
+        Assert.Single(_reader.SearchSymbols("operator +", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("decimal", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+    }
+
+    [Fact]
     public void SearchSymbols_AndDeps_DoNotTreatNamedArgumentLabelsAsLocalFunctions()
     {
         InsertIndexedFile("src/platform.cs", "csharp",

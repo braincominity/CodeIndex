@@ -3148,7 +3148,7 @@ public class SymbolExtractorTests
         var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var indexer = symbols.FirstOrDefault(s => s.Name == "this");
+        var indexer = symbols.FirstOrDefault(s => s.Name == "Item");
         Assert.NotNull(indexer);
         Assert.Equal("function", indexer.Kind);
         Assert.Equal("string", indexer.ReturnType);
@@ -3161,10 +3161,10 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator ==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "decimal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Money" && s.Signature != null && s.Signature.Contains("explicit operator", StringComparison.Ordinal));
     }
 
     [Fact]
