@@ -53,6 +53,15 @@ public static class ReferenceExtractor
         {
             "import", "super", "yield",
         },
+        // Python/Ruby exception syntax / Python/Ruby の例外送出構文
+        ["python"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "raise",
+        },
+        ["ruby"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "raise",
+        },
         // F# contextual keywords / F# 文脈キーワード
         ["fsharp"] = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -60,7 +69,7 @@ public static class ReferenceExtractor
             "module", "type", "of", "then", "elif", "done", "begin", "end",
         },
         // PHP include/require constructs / PHP の include/require 構文
-        ["php"] = new HashSet<string>(StringComparer.Ordinal)
+        ["php"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "require", "require_once", "include", "include_once",
         },

@@ -261,6 +261,21 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonRaiseSyntax_IsIgnored()
+    {
+        const string content = """
+            def fail():
+                raise(ValueError())
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
+        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
+    }
+
+    [Fact]
     public void Extract_JavaScriptRequireCall_IsNotDropped()
     {
         const string content = """
@@ -321,6 +336,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RubyRaiseSyntax_IsIgnored()
+    {
+        const string content = """
+            def fail
+              raise("boom")
+              ValueError()
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
+        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
+    }
+
+    [Fact]
     public void Extract_CsharpRunCall_IsNotDroppedByMakefileKeywordList()
     {
         const string content = """
@@ -346,8 +378,10 @@ public class ReferenceExtractorTests
             <?php
             function load() {
                 require("lib.php");
+                REQUIRE("lib_upper.php");
                 require_once("lib_once.php");
                 include("more.php");
+                Include_Once("more_once_mixed.php");
                 include_once("more_once.php");
                 custom();
             }
@@ -358,8 +392,10 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "php", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "require");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "REQUIRE");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "require_once");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Include_Once");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "include_once");
         Assert.Contains(references, reference => reference.SymbolName == "custom" && reference.ContainerName == "load");
     }
