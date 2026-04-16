@@ -192,6 +192,8 @@ public class FileIndexer
 
     private sealed class IgnoreRule
     {
+        private readonly record struct PatternToken(char Value, bool Escaped);
+
         private readonly string _sourceDirectory;
         private readonly Regex _matcher;
         private readonly bool _directoryOnly;
@@ -216,47 +218,38 @@ public class FileIndexer
         internal static bool TryParse(string sourceDirectory, string rawLine, out IgnoreRule? rule)
         {
             rule = null;
-            if (string.IsNullOrWhiteSpace(rawLine))
+            if (!TryTokenize(rawLine, out var tokens))
                 return false;
 
-            var pattern = rawLine.TrimEnd();
-            if (pattern.Length == 0)
-                return false;
-
-            if (pattern[0] == '#' && !pattern.StartsWith(@"\#", StringComparison.Ordinal))
+            if (tokens[0] is { Value: '#', Escaped: false })
                 return false;
 
             var negated = false;
-            if (pattern[0] == '!' && !pattern.StartsWith(@"\!", StringComparison.Ordinal))
+            if (tokens[0] is { Value: '!', Escaped: false })
             {
                 negated = true;
-                pattern = pattern[1..];
-            }
-            else if (pattern.StartsWith(@"\#", StringComparison.Ordinal) ||
-                     pattern.StartsWith(@"\!", StringComparison.Ordinal))
-            {
-                pattern = pattern[1..];
+                tokens.RemoveAt(0);
             }
 
-            if (pattern.Length == 0)
+            if (tokens.Count == 0)
                 return false;
 
-            var directoryOnly = pattern.EndsWith("/", StringComparison.Ordinal);
+            var directoryOnly = tokens[^1] is { Value: '/', Escaped: false };
             if (directoryOnly)
-                pattern = pattern[..^1];
+                tokens.RemoveAt(tokens.Count - 1);
 
-            if (pattern.Length == 0)
+            if (tokens.Count == 0)
                 return false;
 
-            var anchoredToSourceDirectory = pattern.StartsWith("/", StringComparison.Ordinal);
+            var anchoredToSourceDirectory = tokens[0] is { Value: '/', Escaped: false };
             if (anchoredToSourceDirectory)
-                pattern = pattern[1..];
+                tokens.RemoveAt(0);
 
-            pattern = pattern.Replace(@"\#", "#", StringComparison.Ordinal)
-                .Replace(@"\!", "!", StringComparison.Ordinal);
+            if (tokens.Count == 0)
+                return false;
 
-            var matchBasenameOnly = !anchoredToSourceDirectory && !pattern.Contains('/', StringComparison.Ordinal);
-            var matcher = BuildMatcher(pattern);
+            var matchBasenameOnly = !anchoredToSourceDirectory && !tokens.Any(token => token is { Value: '/', Escaped: false });
+            var matcher = BuildMatcher(tokens);
             rule = new IgnoreRule(sourceDirectory, matcher, negated, directoryOnly, matchBasenameOnly);
             return true;
         }
@@ -284,24 +277,75 @@ public class FileIndexer
             return _matcher.IsMatch(candidate);
         }
 
-        private static Regex BuildMatcher(string pattern)
+        private static bool TryTokenize(string rawLine, out List<PatternToken> tokens)
+        {
+            tokens = [];
+            if (string.IsNullOrEmpty(rawLine))
+                return false;
+
+            var escaping = false;
+            foreach (var ch in rawLine)
+            {
+                if (escaping)
+                {
+                    tokens.Add(new PatternToken(ch, Escaped: true));
+                    escaping = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escaping = true;
+                    continue;
+                }
+
+                tokens.Add(new PatternToken(ch, Escaped: false));
+            }
+
+            if (escaping)
+                tokens.Add(new PatternToken('\\', Escaped: false));
+
+            while (tokens.Count > 0 && tokens[^1] is { Value: ' ', Escaped: false })
+                tokens.RemoveAt(tokens.Count - 1);
+
+            return tokens.Count > 0;
+        }
+
+        private static Regex BuildMatcher(IReadOnlyList<PatternToken> pattern)
         {
             var builder = new StringBuilder();
             builder.Append('^');
 
-            for (var i = 0; i < pattern.Length; i++)
+            for (var i = 0; i < pattern.Count; i++)
             {
-                var ch = pattern[i];
+                var token = pattern[i];
+                var ch = token.Value;
+                if (token.Escaped)
+                {
+                    builder.Append(Regex.Escape(ch.ToString()));
+                    continue;
+                }
+
                 if (ch == '*')
                 {
-                    var isDoubleStar = i + 1 < pattern.Length && pattern[i + 1] == '*';
+                    var isDoubleStar = i + 1 < pattern.Count && pattern[i + 1] is { Value: '*', Escaped: false };
                     if (isDoubleStar)
                     {
-                        var nextChar = i + 2 < pattern.Length ? pattern[i + 2] : '\0';
+                        var nextChar = i + 2 < pattern.Count ? pattern[i + 2].Value : '\0';
                         if (nextChar == '/')
                         {
                             builder.Append("(?:[^/]+/)*");
                             i += 2;
+                            continue;
+                        }
+
+                        if (i > 0 &&
+                            pattern[i - 1] is { Value: '/', Escaped: false } &&
+                            i + 2 == pattern.Count)
+                        {
+                            builder.Length -= 1;
+                            builder.Append("(?:/.*)?");
+                            i++;
                             continue;
                         }
 
@@ -323,6 +367,9 @@ public class FileIndexer
                     continue;
                 }
 
+                if (ch == '[' && TryBuildCharacterClass(pattern, ref i, builder))
+                    continue;
+
                 builder.Append(Regex.Escape(ch.ToString()));
             }
 
@@ -332,6 +379,66 @@ public class FileIndexer
                 options |= RegexOptions.IgnoreCase;
             return new Regex(builder.ToString(), options);
         }
+
+        private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder)
+        {
+            var closingIndex = -1;
+            for (var i = index + 1; i < pattern.Count; i++)
+            {
+                if (pattern[i] is { Value: ']', Escaped: false })
+                {
+                    closingIndex = i;
+                    break;
+                }
+            }
+
+            if (closingIndex <= index + 1)
+                return false;
+
+            builder.Append('[');
+            var contentStart = index + 1;
+            if (pattern[contentStart] is { Value: '!', Escaped: false })
+            {
+                builder.Append('^');
+                contentStart++;
+            }
+            else if (pattern[contentStart] is { Value: '^', Escaped: false })
+            {
+                builder.Append(@"\^");
+                contentStart++;
+            }
+
+            for (var i = contentStart; i < closingIndex; i++)
+            {
+                var token = pattern[i];
+                var ch = token.Value;
+                if (token.Escaped)
+                {
+                    builder.Append(EscapeCharacterClassLiteral(ch));
+                    continue;
+                }
+
+                if (ch is '\\' or '[' or ']')
+                {
+                    builder.Append('\\');
+                    builder.Append(ch);
+                    continue;
+                }
+
+                builder.Append(ch);
+            }
+
+            builder.Append(']');
+            index = closingIndex;
+            return true;
+        }
+
+        private static string EscapeCharacterClassLiteral(char ch)
+            => ch switch
+            {
+                '\\' or '[' or ']' or '^' or '-' => $@"\{ch}",
+                _ => ch.ToString(),
+            };
     }
 
     public FileIndexer(string projectRoot)
