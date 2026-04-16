@@ -1443,6 +1443,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsAnonymousGenericDefaultExportClassMembers()
+    {
+        var content = """
+            export default class<T> extends Base<{ value: string }> {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsAnonymousAbstractGenericDefaultExportClassMembers()
+    {
+        var content = """
+            export default abstract class<T> extends Base<{ value: string }> {
+                run(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInlineModifierNamedMethods()
     {
         var content = "export class Example { async(): void {} static(): void {} keep(): void {} }";
@@ -3038,6 +3066,36 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Cache" && s.Line == 3);
         // Finalizer
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Cache" && s.Line == 8);
+    }
+
+    [Fact]
+    public void Extract_CSharp_RangeIgnoresLiteralBracesInsideMethodBodies()
+    {
+        var content = """
+            public class BraceExamples
+            {
+                public void First()
+                {
+                    var open = "{";
+                    var close = '}';
+                    var interpolated = $"{{";
+                    var verbatim = @"{";
+                }
+
+                public void Second()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "First"));
+        var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Second"));
+        Assert.Equal(3, first.Line);
+        Assert.Equal(9, first.EndLine);
+        Assert.Equal(11, second.Line);
+        Assert.Equal(13, second.EndLine);
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function"));
     }
 
     [Fact]

@@ -44,6 +44,15 @@ public static class SymbolExtractor
         Other,
     }
 
+    private enum CSharpLexMode
+    {
+        Code,
+        String,
+        Char,
+        VerbatimString,
+        BlockComment,
+    }
+
     private enum JavaScriptScopeKind
     {
         Other,
@@ -74,6 +83,14 @@ public static class SymbolExtractor
     private readonly record struct JavaScriptLexedLine(
         string SanitizedLine,
         JavaScriptLexState EndState);
+
+    private readonly record struct CSharpLexState(
+        CSharpLexMode Mode = CSharpLexMode.Code,
+        bool EscapeNext = false);
+
+    private readonly record struct CSharpLexedLine(
+        string SanitizedLine,
+        CSharpLexState EndState);
 
     private readonly record struct JavaScriptClassScanTarget(
         int StartIndex,
@@ -1532,6 +1549,9 @@ public static class SymbolExtractor
 
         startIndex = tokenLineIndex;
         startColumn = tokenStartColumn + "class".Length;
+        if (!TryAdvanceJavaScriptTypeScriptClassHeaderContinuation(lines, startIndex, startColumn, "javascript", out startIndex, out startColumn))
+            return false;
+
         var lexState = new JavaScriptLexState();
         for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
         {
@@ -1592,6 +1612,9 @@ public static class SymbolExtractor
 
         var inspectLineIndex = classLineIndex;
         var inspectStartColumn = classStartColumn + token.Length;
+        if (!TryAdvanceJavaScriptTypeScriptClassHeaderContinuation(lines, inspectLineIndex, inspectStartColumn, lang, out inspectLineIndex, out inspectStartColumn))
+            return false;
+
         var lexState = new JavaScriptLexState();
         for (int lineIndex = inspectLineIndex; lineIndex < lines.Length; lineIndex++)
         {
@@ -1625,6 +1648,136 @@ public static class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool TryAdvanceJavaScriptTypeScriptClassHeaderContinuation(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        string lang,
+        out int nextLineIndex,
+        out int nextColumn)
+    {
+        nextLineIndex = startIndex;
+        nextColumn = startColumn;
+        if (lang != "typescript")
+            return true;
+
+        var lexState = new JavaScriptLexState();
+        var sawTypeParameterList = false;
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == startIndex ? startColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (!sawTypeParameterList)
+                {
+                    if (ch != '<')
+                    {
+                        nextLineIndex = lineIndex;
+                        nextColumn = column;
+                        return true;
+                    }
+
+                    sawTypeParameterList = true;
+                    angleDepth = 1;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '{')
+                {
+                    braceDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '<')
+                {
+                    angleDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+                {
+                    column += 2;
+                    continue;
+                }
+
+                if (ch == '>' && angleDepth > 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                {
+                    angleDepth--;
+                    column++;
+                    if (angleDepth == 0)
+                    {
+                        while (column < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[column]))
+                            column++;
+
+                        nextLineIndex = lineIndex;
+                        nextColumn = column;
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                column++;
+            }
+        }
+
+        return !sawTypeParameterList;
     }
 
     private static bool IsJavaScriptTypeScriptMatchInPrivateScope(
@@ -2465,6 +2618,186 @@ public static class SymbolExtractor
         return new JavaScriptLexedLine(new string(sanitized), state);
     }
 
+    private static CSharpLexedLine LexCSharpLine(string line, CSharpLexState state)
+    {
+        var sanitized = new char[line.Length];
+        var i = 0;
+
+        while (i < line.Length)
+        {
+            var ch = line[i];
+            var next = i + 1 < line.Length ? line[i + 1] : '\0';
+
+            if (state.Mode == CSharpLexMode.BlockComment)
+            {
+                sanitized[i] = ' ';
+                if (ch == '*' && next == '/')
+                {
+                    sanitized[i + 1] = ' ';
+                    state = state with { Mode = CSharpLexMode.Code };
+                    i += 2;
+                    continue;
+                }
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.String)
+            {
+                sanitized[i] = ch is '"' or '\\' ? ch : ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.Char)
+            {
+                sanitized[i] = ch is '\'' or '\\' ? ch : ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.VerbatimString)
+            {
+                sanitized[i] = ch == '"' ? '"' : ' ';
+                if (ch == '"' && next == '"')
+                {
+                    sanitized[i + 1] = '"';
+                    i += 2;
+                    continue;
+                }
+
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                while (i < line.Length)
+                {
+                    sanitized[i] = ' ';
+                    i++;
+                }
+
+                break;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                state = state with { Mode = CSharpLexMode.BlockComment };
+                i += 2;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                sanitized[i] = ch;
+                i++;
+                continue;
+            }
+
+            if (ch == '@' && next == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 2;
+                continue;
+            }
+
+            if (ch == '$' && next == '@' && i + 2 < line.Length && line[i + 2] == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                sanitized[i + 2] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                continue;
+            }
+
+            if (ch == '@' && next == '$' && i + 2 < line.Length && line[i + 2] == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                sanitized[i + 2] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                continue;
+            }
+
+            if (ch == '$' && next == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = '"';
+                state = state with { Mode = CSharpLexMode.String };
+                i += 2;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                sanitized[i] = '"';
+                state = state with { Mode = CSharpLexMode.String };
+                i++;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                sanitized[i] = '\'';
+                state = state with { Mode = CSharpLexMode.Char };
+                i++;
+                continue;
+            }
+
+            sanitized[i] = ch;
+            i++;
+        }
+
+        return new CSharpLexedLine(new string(sanitized), state);
+    }
+
     private static bool CanStartJavaScriptRegexLiteral(JavaScriptLexState state)
     {
         if (state.PreviousTokenKind == JavaScriptPrevTokenKind.None)
@@ -2568,6 +2901,7 @@ public static class SymbolExtractor
         return bodyStyle switch
         {
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
+            BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
             BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
@@ -2816,6 +3150,52 @@ public static class SymbolExtractor
                 : i == startIndex && startColumn >= lines[i].Length
                     ? string.Empty
                     : lines[i];
+
+            foreach (var c in scanLine)
+            {
+                if (c == '{')
+                {
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLine = i + 1;
+                    }
+                }
+                else if (c == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                }
+            }
+
+            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
+
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCSharpBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    {
+        int depth = 0;
+        bool opened = false;
+        int? bodyStartLine = null;
+        var lexState = new CSharpLexState();
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var scanLine = i == startIndex && startColumn > 0 && startColumn < sanitizedLine.Length
+                ? sanitizedLine[startColumn..]
+                : i == startIndex && startColumn >= sanitizedLine.Length
+                    ? string.Empty
+                    : sanitizedLine;
 
             foreach (var c in scanLine)
             {
