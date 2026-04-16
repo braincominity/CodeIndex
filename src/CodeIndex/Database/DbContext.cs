@@ -281,6 +281,17 @@ public class DbContext : IDisposable
     // bit 2 (FoldReadyFlag, #86): name_folded 列の完全バックフィル完了を示す。
     public const int FoldReadyFlag = 4;
     public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag; // 7 — full CLI readiness
+    // Query-semantic readiness for hotspot family grouping. Stored in codeindex_meta instead of
+    // PRAGMA user_version because this guards a higher-level interpretation contract
+    // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
+    // low-level table availability.
+    // hotspots family grouping 用 readiness。table の有無ではなく query 意味論の trust を表す。
+    public const int HotspotFamilyVersion = 2;
+    public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
+    public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
+    public static string GetHotspotFamilyVersionMetaKey(string lang) => $"hotspot_family_version_{lang}";
+    public static string GetHotspotFamilyMarkerFingerprintMetaKey(string lang) => $"hotspot_family_marker_fingerprint_{lang}";
+    public const string IndexedProjectRootMetaKey = "indexed_project_root";
 
     public int GetUserVersion()
     {
@@ -364,6 +375,8 @@ public class DbContext : IDisposable
                 signature       TEXT,
                 container_kind  TEXT,
                 container_name  TEXT,
+                container_qualified_name TEXT,
+                family_key      TEXT,
                 visibility      TEXT,
                 return_type     TEXT
             )");
@@ -413,6 +426,8 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "signature", "TEXT");
         EnsureColumn("symbols", "container_kind", "TEXT");
         EnsureColumn("symbols", "container_name", "TEXT");
+        EnsureColumn("symbols", "container_qualified_name", "TEXT");
+        EnsureColumn("symbols", "family_key", "TEXT");
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
@@ -450,6 +465,7 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_kind            ON symbols(kind)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_kind   ON symbol_references(symbol_name, reference_kind)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file   ON symbol_references(symbol_name, file_id)");
         // Case-insensitive exact-match indexes for `references --exact` / `callers --exact` / `callees --exact` (#83).
         // Mirror idx_symbols_name_nocase so `= @q COLLATE NOCASE` stays O(log n) per name across graph commands.
         // `references / callers / callees --exact` 用の NOCASE index。idx_symbols_name_nocase と対になる。
@@ -562,6 +578,8 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "signature", "TEXT");
             EnsureColumn("symbols", "container_kind", "TEXT");
             EnsureColumn("symbols", "container_name", "TEXT");
+            EnsureColumn("symbols", "container_qualified_name", "TEXT");
+            EnsureColumn("symbols", "family_key", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");

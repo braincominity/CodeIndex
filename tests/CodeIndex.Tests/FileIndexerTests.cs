@@ -1,4 +1,6 @@
 using CodeIndex.Indexer;
+using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace CodeIndex.Tests;
 
@@ -11,7 +13,13 @@ public class FileIndexerTests
     [Theory]
     [InlineData("test.py", "python")]
     [InlineData("app.js", "javascript")]
+    [InlineData("app.cjs", "javascript")]
+    [InlineData("app.mjs", "javascript")]
     [InlineData("main.ts", "typescript")]
+    [InlineData("main.cts", "typescript")]
+    [InlineData("main.mts", "typescript")]
+    [InlineData("types.d.cts", "typescript")]
+    [InlineData("types.d.mts", "typescript")]
     [InlineData("lib.go", "go")]
     [InlineData("mod.rs", "rust")]
     [InlineData("App.java", "java")]
@@ -68,6 +76,84 @@ public class FileIndexerTests
         Assert.Null(FileIndexer.DetectLanguage(filename));
     }
 
+    [Theory]
+    [InlineData("rbenv", "#!/usr/bin/env bash\nexit 0\n", "shell")]
+    [InlineData("tool", "#!/bin/sh\necho hi\n", "shell")]
+    [InlineData("worker", "#!/usr/bin/python3\nprint('hi')\n", "python")]
+    [InlineData("bundle", "#!/usr/bin/env ruby\nputs 'hi'\n", "ruby")]
+    [InlineData("cli", "#!/usr/bin/env node\nconsole.log('hi')\n", "javascript")]
+    [InlineData("script", "#!/usr/bin/env pwsh\nWrite-Host hi\n", "powershell")]
+    public void DetectLanguage_ExtensionlessShebangScripts_ReturnCorrectLang(string fileName, string content, string expected)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, fileName);
+            File.WriteAllText(path, content);
+
+            Assert.Equal(expected, FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_ExtensionlessNonScript_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "README");
+            File.WriteAllText(path, "Hello world\n");
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_UnknownExtensionWithShebang_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "notes.txt");
+            File.WriteAllText(path, "#!/usr/bin/env bash\necho hi\n");
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_LeadingWhitespacePseudoShebang_ReturnsNull()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var path = Path.Combine(tempDir, "tool");
+            File.WriteAllText(path, "  #!/usr/bin/env bash\necho hi\n");
+
+            Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
     [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
@@ -95,6 +181,37 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData("node_modules", "dep.js")]
+    [InlineData("target", "main.rs")]
+    [InlineData("vendor", "dep.go")]
+    [InlineData("bin", "app.cs")]
+    public void ScanFiles_IndexesExplicitRootEvenWhenRootNameIsSkipped(string rootDirName, string fileName)
+    {
+        var tempParentDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var rootDir = Path.Combine(tempParentDir, rootDirName);
+        try
+        {
+            Directory.CreateDirectory(rootDir);
+            File.WriteAllText(Path.Combine(rootDir, fileName), "content");
+
+            var nestedNodeModules = Path.Combine(rootDir, "node_modules");
+            Directory.CreateDirectory(nestedNodeModules);
+            File.WriteAllText(Path.Combine(nestedNodeModules, "nested.js"), "module.exports = {}");
+
+            var indexer = new FileIndexer(rootDir);
+            var files = indexer.ScanFiles();
+
+            Assert.Single(files);
+            Assert.Contains(fileName, files[0]);
+        }
+        finally
+        {
+            if (Directory.Exists(tempParentDir))
+                Directory.Delete(tempParentDir, true);
+        }
+    }
+
     [Fact]
     public void ScanFiles_SkipsExcludedFiles()
     {
@@ -118,6 +235,108 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IncludesModernNodeModuleExtensions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "index.mjs"), "export const run = () => {};");
+            File.WriteAllText(Path.Combine(tempDir, "cli.cjs"), "module.exports = {};");
+            File.WriteAllText(Path.Combine(tempDir, "types.cts"), "export type Config = {};");
+            File.WriteAllText(Path.Combine(tempDir, "types.d.mts"), "export interface Config {}");
+            File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "ignored");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles().Select(Path.GetFileName).OrderBy(name => name).ToList();
+
+            Assert.Equal(["cli.cjs", "index.mjs", "types.cts", "types.d.mts"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IncludesExtensionlessShebangScripts()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "rbenv-init"), "#!/usr/bin/env bash\necho init\n");
+            File.WriteAllText(Path.Combine(tempDir, "python-tool"), "#!/usr/bin/python3\nprint('hi')\n");
+            File.WriteAllText(Path.Combine(tempDir, "plain-text"), "Hello world\n");
+            File.WriteAllText(Path.Combine(tempDir, "known.rb"), "puts 'known'\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["known.rb", "python-tool", "rbenv-init"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ExcludesUnknownExtensionEvenWhenShebangLooksSupported()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "#!/usr/bin/env bash\necho hi\n");
+            File.WriteAllText(Path.Combine(tempDir, "script"), "#!/usr/bin/env bash\necho hi\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["script"], files);
+        }
+        finally
+        {
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ScanFiles_IgnoresUnixFifoWithoutHanging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            CreateUnixFifo(Path.Combine(tempDir, "tool"));
+            CreateUnixFifo(Path.Combine(tempDir, "tool.sh"));
+            CreateUnixFifo(Path.Combine(tempDir, "Dockerfile"));
+
+            var indexer = new FileIndexer(tempDir);
+            var scanTask = Task.Run(() => indexer.ScanFiles());
+            var completedTask = await Task.WhenAny(scanTask, Task.Delay(TimeSpan.FromSeconds(2)));
+
+            Assert.Same(scanTask, completedTask);
+            Assert.Empty(await scanTask);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
@@ -212,6 +431,89 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "generated"));
+
+            var srcFile = Path.Combine(tempDir, "src", "Api.Part1.cs");
+            var generatedFile = Path.Combine(tempDir, "generated", "Api.Part2.cs");
+            File.WriteAllText(srcFile, "public partial class Api {}");
+            File.WriteAllText(generatedFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src", indexer.GetFamilyScopeKey(srcFile, "csharp"));
+            Assert.Equal("generated", indexer.GetFamilyScopeKey(generatedFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MarkerlessRootLevelFilesShareRootScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            var firstFile = Path.Combine(tempDir, "Api.Part1.cs");
+            var secondFile = Path.Combine(tempDir, "Api.Part2.cs");
+            File.WriteAllText(firstFile, "public partial class Api {}");
+            File.WriteAllText(secondFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal(".", indexer.GetFamilyScopeKey(firstFile, "csharp"));
+            Assert.Equal(".", indexer.GetFamilyScopeKey(secondFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var srcDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(Path.Combine(srcDir, "ProjA"));
+            Directory.CreateDirectory(Path.Combine(srcDir, "ProjB"));
+            File.WriteAllText(Path.Combine(srcDir, "ProjectA.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "ProjectB.csproj"), "<Project />");
+
+            var projAFile = Path.Combine(srcDir, "ProjA", "Api.Part1.cs");
+            var projBFile = Path.Combine(srcDir, "ProjB", "Api.Part1.cs");
+            var ambiguousFile = Path.Combine(srcDir, "Api.Part1.cs");
+            File.WriteAllText(projAFile, "public partial class Api {}");
+            File.WriteAllText(projBFile, "public partial class Api {}");
+            File.WriteAllText(ambiguousFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src/ProjA", indexer.GetFamilyScopeKey(projAFile, "csharp"));
+            Assert.Equal("src/ProjB", indexer.GetFamilyScopeKey(projBFile, "csharp"));
+            Assert.Equal("src/__file__/Api.Part1.cs", indexer.GetFamilyScopeKey(ambiguousFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
@@ -311,5 +613,47 @@ public class FileIndexerTests
         {
             Directory.Delete(tempDir, true);
         }
+    }
+
+    [Fact]
+    public void BuildRecord_ExtensionlessShebangScriptUsesDetectedLanguage()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "rbenv-hooks");
+            File.WriteAllText(filePath, "#!/usr/bin/env bash\necho hooks\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, warning) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("shell", record.Lang);
+            Assert.Null(warning);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    private static void CreateUnixFifo(string path)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "mkfifo",
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(path);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
     }
 }
