@@ -40,6 +40,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+preserve_recovery_artifacts() {
+    report_error "Rollback incomplete. Preserving recovery artifacts for manual recovery."
+    if [ -n "${BACKUP_DIR_CLEANUP:-}" ]; then
+        report_error "Backup: ${BACKUP_DIR_CLEANUP}"
+    fi
+    if [ -n "${STAGE_DIR_CLEANUP:-}" ]; then
+        report_error "Stage: ${STAGE_DIR_CLEANUP}"
+    fi
+
+    BACKUP_DIR_CLEANUP=""
+    STAGE_DIR_CLEANUP=""
+}
+
 need_cmd() {
     if ! command -v "$1" > /dev/null 2>&1; then
         error "Required command not found: $1"
@@ -213,8 +226,12 @@ promote_staged_install() {
         if [ -e "${install_dir}/${asset}" ]; then
             if ! mv "${install_dir}/${asset}" "${backup_dir}/${asset}"; then
                 report_error "Failed to stage existing ${asset} into backup at ${backup_dir}. Install aborted before replacing the current install."
-                if [ -n "$backed_up_files" ] && restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
-                    rm -rf "$backup_dir"
+                if [ -n "$backed_up_files" ]; then
+                    if restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
+                        rm -rf "$backup_dir"
+                    else
+                        preserve_recovery_artifacts
+                    fi
                 fi
                 return 1
             fi
@@ -226,10 +243,15 @@ promote_staged_install() {
         if ! mv "${stage_dir}/${asset}" "${install_dir}/${asset}"; then
             report_error "Failed to install ${asset} into ${install_dir}. Restoring previous install."
             if [ -n "$promoted_files" ] && ! remove_promoted_files "$install_dir" "$promoted_files"; then
+                preserve_recovery_artifacts
                 return 1
             fi
-            if [ -n "$backed_up_files" ] && restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
-                rm -rf "$backup_dir"
+            if [ -n "$backed_up_files" ]; then
+                if restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
+                    rm -rf "$backup_dir"
+                else
+                    preserve_recovery_artifacts
+                fi
             fi
             return 1
         fi
@@ -239,10 +261,15 @@ promote_staged_install() {
     if ! mv "${stage_dir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"; then
         report_error "Failed to install ${BINARY_NAME} into ${install_dir}. Restoring previous install."
         if [ -n "$promoted_files" ] && ! remove_promoted_files "$install_dir" "$promoted_files"; then
+            preserve_recovery_artifacts
             return 1
         fi
-        if [ -n "$backed_up_files" ] && restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
-            rm -rf "$backup_dir"
+        if [ -n "$backed_up_files" ]; then
+            if restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
+                rm -rf "$backup_dir"
+            else
+                preserve_recovery_artifacts
+            fi
         fi
         return 1
     fi
