@@ -1068,12 +1068,14 @@ public static class QueryCommandRunner
     /// <summary>
     /// Heuristic: hint only when a non-trivial C# file has no type/namespace declarations and
     /// its reconstructed content still contains file-scope executable code after skipping
-    /// imports and metadata-only attribute lines. This keeps the note off common files such as
-    /// GlobalUsings.cs and AssemblyInfo.cs while preserving statement-only Program.cs files.
+    /// imports, metadata-only attribute lines, comments, and preprocessor directives. This keeps
+    /// the note off common files such as GlobalUsings.cs and AssemblyInfo.cs while preserving
+    /// statement-only Program.cs files.
     /// Tiny files (snippets, partials under ~20 lines) are excluded to avoid noise.
     /// ヒューリスティック: 20 行以上の C# ファイルで型/名前空間宣言が無く、かつ
-    /// import 行や metadata-only 属性行を除いても file-scope の実行コードが残る場合だけ
-    /// ヒントを出す。これにより GlobalUsings.cs や AssemblyInfo.cs の誤検出を避けつつ、
+    /// import 行、metadata-only 属性行、コメント、プリプロセッサ行を除いても
+    /// file-scope の実行コードが残る場合だけヒントを出す。これにより GlobalUsings.cs や
+    /// AssemblyInfo.cs の誤検出を避けつつ、
     /// statement-only の Program.cs は拾い続ける。小さい断片はノイズ回避のため除外。
     /// </summary>
     private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline, string? content)
@@ -1101,6 +1103,16 @@ public static class QueryCommandRunner
             if (line.StartsWith("[assembly:", StringComparison.Ordinal))
                 continue;
             if (line.StartsWith("[module:", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("//", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("/*", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("*", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("*/", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("#", StringComparison.Ordinal))
                 continue;
             return true;
         }
