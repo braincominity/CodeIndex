@@ -97,12 +97,14 @@ public static class SymbolExtractor
         int? ReturnTypeStartColumn = null,
         int? ReturnTypeEndColumn = null);
 
+    private const string JavaScriptTypeScriptIdentifierPattern = @"[$\p{L}_][$\p{L}\p{Nd}_]*";
+
     private static readonly Regex JavaScriptTypeScriptAnonymousDefaultExportRegex = new(
         @"^\s*(?<visibility>export)\s+default\b",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptClassExpressionBindingRegex = new(
-        @"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>\w+)|exports\.(?<exportsAlias>\w+)|module\.exports\.(?<moduleExportsAlias>\w+)|(?<moduleExports>module\.exports))\s*=",
+        $@"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>{JavaScriptTypeScriptIdentifierPattern})|exports\.(?<exportsAlias>{JavaScriptTypeScriptIdentifierPattern})|module\.exports\.(?<moduleExportsAlias>{JavaScriptTypeScriptIdentifierPattern})|(?<moduleExports>module\.exports))\s*=",
         RegexOptions.Compiled);
 
     private static readonly Regex TypeScriptExportEqualsRegex = new(

@@ -438,6 +438,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsDollarPrefixedClassExpressionBindings()
+    {
+        var content = """
+            export const $Service = class {
+                run() {}
+            };
+
+            exports.$Handler = class {
+                keep() {}
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "$Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "$Service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "$Handler");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "$Handler");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsCommonJsModuleExportsClassExpressionMethods()
     {
         var content = "module.exports = class { run() {} };";
@@ -1598,6 +1618,35 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Foo");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsDollarPrefixedClassExpressionBindings()
+    {
+        var content = """
+            export const $Service = class {
+                run(): void {}
+            };
+
+            module.exports.$Handler = class {
+                keep(): void {}
+            };
+
+            export namespace PublicNs {
+                export const $Worker = class {
+                    job(): void {}
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "$Service");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "$Service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "$Handler");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "$Handler");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "PublicNs");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "$Worker");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "job" && s.ContainerName == "$Worker");
     }
 
     [Fact]
