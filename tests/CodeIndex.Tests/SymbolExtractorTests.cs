@@ -3454,6 +3454,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumDeclarationAttribute()
+    {
+        var content = "[Attr(\npublic enum Mode\n{\n    A,\n}\n\npublic class After\n{\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "After");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttribute()
+    {
+        var content = "public enum Mode\n{\n    [Attr(\n    A,\n    B,\n}\n\npublic class After\n{\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "After");
+    }
+
+    [Fact]
     public void Extract_CSharp_EnumMembersTrackOwningEnum()
     {
         var content = "namespace Demo;\n\npublic enum First\n{\n    None,\n}\n\npublic enum Second\n{\n    None,\n}";

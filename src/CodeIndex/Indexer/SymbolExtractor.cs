@@ -121,6 +121,12 @@ public static class SymbolExtractor
 
     private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s+(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] CSharpDeclarationRecoveryPrefixes =
+    [
+        "namespace ", "using ", "#region", "class ", "record ", "struct ", "interface ", "delegate ", "event ",
+        "public ", "private ", "protected ", "internal ", "static ", "partial ", "readonly ", "ref ", "unsafe ",
+        "sealed ", "abstract ", "new ", "file ", "const "
+    ];
 
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
     [
@@ -5151,6 +5157,13 @@ public static class SymbolExtractor
         if (!inLeadingAttributeBlock && line[index] != '[')
             return line;
 
+        if (inLeadingAttributeBlock && ShouldRecoverFromIncompleteLeadingCSharpAttribute(line, index))
+        {
+            inLeadingAttributeBlock = false;
+            attributeBracketDepth = 0;
+            return line;
+        }
+
         var cursor = index;
         var blankUntil = index;
         while (cursor < line.Length)
@@ -5196,6 +5209,31 @@ public static class SymbolExtractor
         return blankUntil < line.Length
             ? line[..index] + new string(' ', blankUntil - index) + line[blankUntil..]
             : line[..index] + new string(' ', blankUntil - index);
+    }
+
+    private static bool ShouldRecoverFromIncompleteLeadingCSharpAttribute(string line, int firstNonWhitespaceIndex)
+    {
+        if (firstNonWhitespaceIndex >= line.Length || line[firstNonWhitespaceIndex] == '[')
+            return false;
+
+        if (line.AsSpan(firstNonWhitespaceIndex).Contains(']'))
+            return false;
+
+        if (CSharpEnumDeclarationRegex.IsMatch(line) || CSharpEnumMemberRegex.IsMatch(line))
+            return true;
+
+        return LooksLikeCSharpDeclarationStart(line.AsSpan(firstNonWhitespaceIndex));
+    }
+
+    private static bool LooksLikeCSharpDeclarationStart(ReadOnlySpan<char> text)
+    {
+        foreach (var prefix in CSharpDeclarationRecoveryPrefixes)
+        {
+            if (text.StartsWith(prefix, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
