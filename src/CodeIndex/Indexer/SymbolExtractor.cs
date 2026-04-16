@@ -103,6 +103,13 @@ public static class SymbolExtractor
         int BodyStartLineIndex,
         int BodyStartColumn);
 
+    private enum JavaScriptTypeScriptMethodHeaderParseStatus
+    {
+        IncompleteOrInvalid = 0,
+        Parsed = 1,
+        DeclarationOnly = 2,
+    }
+
     private const string JavaScriptTypeScriptIdentifierPattern = @"[$\p{L}_][$\p{L}\p{Nd}_]*";
 
     private static readonly Regex JavaScriptTypeScriptAnonymousDefaultExportRegex = new(
@@ -2765,6 +2772,12 @@ public static class SymbolExtractor
 
     private static bool TryParseJavaScriptTypeScriptMethodHeader(string sanitizedLine, int startColumn, string? lang, out JavaScriptTypeScriptMethodHeaderInfo methodHeader)
     {
+        return ParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out methodHeader)
+            == JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
+    }
+
+    private static JavaScriptTypeScriptMethodHeaderParseStatus ParseJavaScriptTypeScriptMethodHeader(string sanitizedLine, int startColumn, string? lang, out JavaScriptTypeScriptMethodHeaderInfo methodHeader)
+    {
         methodHeader = default;
         var index = Math.Max(0, startColumn);
         string? visibility = null;
@@ -2777,7 +2790,7 @@ public static class SymbolExtractor
             while (true)
             {
                 if (!TryReadJavaScriptTypeScriptMethodToken(sanitizedLine, ref index, out var token))
-                    return false;
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
                 while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
                     index++;
@@ -2802,7 +2815,7 @@ public static class SymbolExtractor
                 if (isGenerator)
                 {
                     if (!TryReadJavaScriptTypeScriptMethodName(sanitizedLine, ref index, out var generatorName))
-                        return false;
+                        return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
                     token = generatorName;
                 }
@@ -2841,14 +2854,14 @@ public static class SymbolExtractor
                     }
 
                     if (genericEndColumn == null)
-                        return false;
+                        return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
                     while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
                         index++;
                 }
 
                 if (index >= sanitizedLine.Length || sanitizedLine[index] != '(')
-                    return false;
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
                 var parenDepth = 0;
                 while (index < sanitizedLine.Length)
@@ -2871,7 +2884,7 @@ public static class SymbolExtractor
                 }
 
                 if (parenDepth != 0)
-                    return false;
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
                 while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
                     index++;
@@ -2896,6 +2909,15 @@ public static class SymbolExtractor
                         {
                             index++;
                             continue;
+                        }
+
+                        if (ch == ';'
+                            && returnParenDepth == 0
+                            && returnBracketDepth == 0
+                            && returnAngleDepth == 0
+                            && returnBraceDepth == 0)
+                        {
+                            return JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly;
                         }
 
                         if (ch == '(')
@@ -2966,7 +2988,7 @@ public static class SymbolExtractor
                                 {
                                     returnTypeEndColumn = index - 1;
                                     methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
-                                    return true;
+                                    return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
                                 }
                             }
 
@@ -3013,18 +3035,21 @@ public static class SymbolExtractor
                         index++;
                     }
 
-                    return false;
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
                 }
 
+                if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == ';')
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly;
+
                 if (index >= sanitizedLine.Length || sanitizedLine[index] != '{')
-                    return false;
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
 
                 methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn);
-                return true;
+                return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
             }
         }
 
-        return false;
+        return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
     }
 
     private static bool TryCaptureJavaScriptTypeScriptMethodHeader(
@@ -3058,10 +3083,14 @@ public static class SymbolExtractor
             startIndex,
             startColumn,
             lang,
+            out var firstHeaderIsDeclarationOnly,
             out methodCapture))
         {
             return true;
         }
+
+        if (firstHeaderIsDeclarationOnly)
+            return false;
 
         var lexState = nextLineLexState;
         for (int lineIndex = startIndex + 1; lineIndex < scanEndExclusive; lineIndex++)
@@ -3082,10 +3111,14 @@ public static class SymbolExtractor
                 startIndex,
                 startColumn,
                 lang,
+                out var headerIsDeclarationOnly,
                 out methodCapture))
             {
                 return true;
             }
+
+            if (headerIsDeclarationOnly)
+                return false;
         }
 
         return false;
@@ -3097,10 +3130,19 @@ public static class SymbolExtractor
         int startIndex,
         int startColumn,
         string? lang,
+        out bool isDeclarationOnly,
         out JavaScriptTypeScriptMethodHeaderCapture methodCapture)
     {
+        isDeclarationOnly = false;
         methodCapture = default;
-        if (!TryParseJavaScriptTypeScriptMethodHeader(sanitizedHeader, 0, lang, out var methodHeader))
+        var parseStatus = ParseJavaScriptTypeScriptMethodHeader(sanitizedHeader, 0, lang, out var methodHeader);
+        if (parseStatus == JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly)
+        {
+            isDeclarationOnly = true;
+            return false;
+        }
+
+        if (parseStatus != JavaScriptTypeScriptMethodHeaderParseStatus.Parsed)
             return false;
 
         if (!TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(

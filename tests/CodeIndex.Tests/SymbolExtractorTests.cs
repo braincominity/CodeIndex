@@ -1148,6 +1148,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DoesNotMergeAbstractMemberIntoFollowingConcreteMethod()
+    {
+        var content = """
+            export default abstract class Example {
+                abstract run(): void;
+
+                keep(): { value: string } {
+                    return { value: "x" };
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run" && s.Signature != null && s.Signature.Contains("keep()", StringComparison.Ordinal));
+        var keep = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "keep"));
+        Assert.Equal("{ value: string }", keep.ReturnType);
+        Assert.Equal("keep(): { value: string } {", keep.Signature);
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsExportDefaultClassMembers()
     {
         var content = """
@@ -1983,6 +2004,30 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ReturnType == "number");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotMergeOverloadSignaturesIntoImplementationMethod()
+    {
+        var content = """
+            class Overloaded {
+                foo(x: string): string;
+                foo(x: number): number;
+                foo(x: string | number): string | number {
+                    return x;
+                }
+
+                bar(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Overloaded");
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        Assert.Equal(4, foo.Line);
+        Assert.Equal("string | number", foo.ReturnType);
+        Assert.Equal("foo(x: string | number): string | number {", foo.Signature);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ReturnType == "void");
     }
 
     [Fact]
