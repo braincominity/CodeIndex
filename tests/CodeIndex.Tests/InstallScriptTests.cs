@@ -654,6 +654,142 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_BackupMoveFailure_PreservesExistingHealthyInstall()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "backup_failure_existing_target");
+        var payloadDir = Path.Combine(_tempRoot, "backup_failure_existing_payload");
+        var archivePath = Path.Combine(_tempRoot, "backup_failure_existing.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "backup_failure_existing.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{installDir}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "HEALTHY_OLD_BINARY"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.0.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf 'healthy-lib' > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "NEW_BINARY"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            if command -v sha256sum > /dev/null 2>&1; then
+                checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
+            elif command -v shasum > /dev/null 2>&1; then
+                checksum="$(shasum -a 256 "{{archivePath}}" | awk '{print $1}')"
+            else
+                checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
+            fi
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            backup_move_failures=0
+            mv() {
+                local src="$1"
+                local dst="$2"
+                case "$src|$dst" in
+                    "{{Path.Combine(installDir, "version.json")}}"|*/.cdidx-backup.*/version.json)
+                        backup_move_failures=$((backup_move_failures + 1))
+                        return 1
+                        ;;
+                    *)
+                        command mv "$@"
+                        ;;
+                esac
+            }
+
+            download_status=0
+            if download_and_install; then
+                echo "UNEXPECTED_SUCCESS"
+            else
+                download_status=$?
+            fi
+
+            echo "DOWNLOAD_STATUS:$download_status"
+            echo "BACKUP_MOVE_FAILURES:$backup_move_failures"
+            [ -e "{{Path.Combine(installDir, "cdidx")}}" ] && echo "CDIDX_PRESENT" || echo "CDIDX_MISSING"
+            [ -e "{{Path.Combine(installDir, "version.json")}}" ] && echo "VERSION_PRESENT" || echo "VERSION_MISSING"
+            [ -e "{{Path.Combine(installDir, "libe_sqlite3.so")}}" ] && echo "LIB_PRESENT" || echo "LIB_MISSING"
+            grep -q 'HEALTHY_OLD_BINARY' "{{Path.Combine(installDir, "cdidx")}}" && echo "OLD_BINARY_PRESERVED"
+            [ "$(cat "{{Path.Combine(installDir, "version.json")}}")" = '{"version":"1.0.0"}' ] && echo "OLD_VERSION_JSON_PRESERVED"
+            [ "$(cat "{{Path.Combine(installDir, "libe_sqlite3.so")}}")" = 'healthy-lib' ] && echo "OLD_LIB_PRESERVED"
+            if grep -q 'NEW_BINARY' "{{Path.Combine(installDir, "cdidx")}}"; then
+                echo "NEW_BINARY_OVERWROTE"
+            fi
+            if [ "$(cat "{{Path.Combine(installDir, "version.json")}}")" = '{"version":"1.2.3"}' ]; then
+                echo "NEW_VERSION_JSON_OVERWROTE"
+            fi
+            if [ "$(cat "{{Path.Combine(installDir, "libe_sqlite3.so")}}")" = 'new-lib' ]; then
+                echo "NEW_LIB_OVERWROTE"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("UNEXPECTED_SUCCESS", stdout);
+        Assert.Contains("DOWNLOAD_STATUS:1", stdout);
+        Assert.Contains("BACKUP_MOVE_FAILURES:1", stdout);
+        Assert.Contains("CDIDX_PRESENT", stdout);
+        Assert.Contains("VERSION_PRESENT", stdout);
+        Assert.Contains("LIB_PRESENT", stdout);
+        Assert.Contains("OLD_BINARY_PRESERVED", stdout);
+        Assert.Contains("OLD_VERSION_JSON_PRESERVED", stdout);
+        Assert.Contains("OLD_LIB_PRESERVED", stdout);
+        Assert.DoesNotContain("NEW_BINARY_OVERWROTE", stdout);
+        Assert.DoesNotContain("NEW_VERSION_JSON_OVERWROTE", stdout);
+        Assert.DoesNotContain("NEW_LIB_OVERWROTE", stdout);
+        Assert.Contains("Install aborted before replacing the current install", stderr);
+    }
+
+    [Fact]
     public void DownloadReleaseFile_Http404_PrintsHttpSpecificError()
     {
         if (OperatingSystem.IsWindows())

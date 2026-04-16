@@ -157,19 +157,31 @@ existing_install_is_reusable() {
     return 0
 }
 
-restore_install_from_backup() {
+restore_backed_up_files() {
     local backup_dir="$1"
     local install_dir="$2"
-    local required_files="$3"
+    local backed_up_files="$3"
     local asset
 
-    for asset in $required_files; do
+    for asset in $backed_up_files; do
         if [ -e "${backup_dir}/${asset}" ]; then
             if ! mv "${backup_dir}/${asset}" "${install_dir}/${asset}"; then
                 report_error "Failed to restore previous install file ${asset} from backup at ${backup_dir}. Manual recovery may be required."
                 return 1
             fi
-        elif [ -e "${install_dir}/${asset}" ]; then
+        fi
+    done
+
+    return 0
+}
+
+remove_promoted_files() {
+    local install_dir="$1"
+    local promoted_files="$2"
+    local asset
+
+    for asset in $promoted_files; do
+        if [ -e "${install_dir}/${asset}" ]; then
             if ! rm -f "${install_dir}/${asset}"; then
                 report_error "Failed to remove partially installed file ${install_dir}/${asset} during rollback. Manual recovery may be required."
                 return 1
@@ -187,32 +199,42 @@ promote_staged_install() {
     local required_files="$4"
     local required_assets="$5"
     local asset
+    local backed_up_files=""
+    local promoted_files=""
 
     for asset in $required_files; do
         if [ -e "${install_dir}/${asset}" ]; then
             if ! mv "${install_dir}/${asset}" "${backup_dir}/${asset}"; then
                 report_error "Failed to stage existing ${asset} into backup at ${backup_dir}. Install aborted before replacing the current install."
-                if restore_install_from_backup "$backup_dir" "$install_dir" "$required_files"; then
+                if [ -n "$backed_up_files" ] && restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
                     rm -rf "$backup_dir"
                 fi
                 return 1
             fi
+            backed_up_files="${backed_up_files} ${asset}"
         fi
     done
 
     for asset in $required_assets; do
         if ! mv "${stage_dir}/${asset}" "${install_dir}/${asset}"; then
             report_error "Failed to install ${asset} into ${install_dir}. Restoring previous install."
-            if restore_install_from_backup "$backup_dir" "$install_dir" "$required_files"; then
+            if [ -n "$promoted_files" ] && ! remove_promoted_files "$install_dir" "$promoted_files"; then
+                return 1
+            fi
+            if [ -n "$backed_up_files" ] && restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
                 rm -rf "$backup_dir"
             fi
             return 1
         fi
+        promoted_files="${promoted_files} ${asset}"
     done
 
     if ! mv "${stage_dir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"; then
         report_error "Failed to install ${BINARY_NAME} into ${install_dir}. Restoring previous install."
-        if restore_install_from_backup "$backup_dir" "$install_dir" "$required_files"; then
+        if [ -n "$promoted_files" ] && ! remove_promoted_files "$install_dir" "$promoted_files"; then
+            return 1
+        fi
+        if [ -n "$backed_up_files" ] && restore_backed_up_files "$backup_dir" "$install_dir" "$backed_up_files"; then
             rm -rf "$backup_dir"
         fi
         return 1

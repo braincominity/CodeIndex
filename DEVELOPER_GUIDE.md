@@ -767,11 +767,24 @@ sequenceDiagram
     S->>GH: GET sha256sums.txt
     S->>S: sha256sum / shasum / openssl verify
     S->>TMP: tar xzf -C extract/
-    S->>FS: cp extract/cdidx + chmod +x
-    loop version.json, libe_sqlite3.so, libe_sqlite3.dylib
-        S->>FS: cp if file exists
+    S->>S: validate cdidx + required assets in extract/
+    S->>FS: copy required files into .cdidx-stage.*
+    S->>FS: chmod +x staged cdidx
+    S->>FS: mv existing files into .cdidx-backup.*
+    alt backup move fails
+        S->>FS: restore already-backed-up files
+        S-->>U: abort before replacing current install
+    else backup complete
+        S->>FS: mv staged runtime assets into place
+        S->>FS: mv staged cdidx last
+        alt promotion move fails
+            S->>FS: remove newly promoted files
+            S->>FS: restore backed-up files
+            S-->>U: rollback and abort
+        else success
+            S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
+        end
     end
-    S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
 ```
 
 ### Phase 2 — First invocation: `cdidx --version`
@@ -1711,11 +1724,24 @@ sequenceDiagram
     S->>GH: GET sha256sums.txt
     S->>S: sha256sum / shasum / openssl で検証
     S->>TMP: tar xzf -C extract/
-    S->>FS: cp extract/cdidx + chmod +x
-    loop version.json, libe_sqlite3.so, libe_sqlite3.dylib
-        S->>FS: ファイルがあればコピー
+    S->>S: extract/ 内の cdidx と必須資産を検証
+    S->>FS: 必須ファイルを .cdidx-stage.* へコピー
+    S->>FS: staged cdidx に chmod +x
+    S->>FS: 既存ファイルを .cdidx-backup.* へ mv
+    alt backup 退避で失敗
+        S->>FS: 退避済みファイルだけ元へ戻す
+        S-->>U: 既存 install を置き換える前に中断
+    else backup 完了
+        S->>FS: staged runtime asset を先に昇格
+        S->>FS: staged cdidx を最後に昇格
+        alt promotion で失敗
+            S->>FS: 新しく昇格したファイルだけ削除
+            S->>FS: backup から旧ファイルを復元
+            S-->>U: rollback して中断
+        else success
+            S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
+        end
     end
-    S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
 ```
 
 ### フェーズ2 — 初回起動: `cdidx --version`
