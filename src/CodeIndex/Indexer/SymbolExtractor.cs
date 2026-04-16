@@ -666,13 +666,10 @@ public static class SymbolExtractor
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
             : null;
         var symbols = new List<SymbolRecord>();
-<<<<<<< HEAD
         var pendingRecordPrimaryComponents = new List<PendingRecordPrimaryComponents>();
-=======
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
->>>>>>> origin/main
         var csharpLexState = new CSharpLexState();
 
         for (int i = 0; i < lines.Length; i++)
