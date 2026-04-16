@@ -1368,7 +1368,7 @@ public partial class McpServer
         db.InitializeSchema();
 
         var writer = new DbWriter(db.Connection);
-        var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath));
+        var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath));
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var normalizedProjectPath = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)

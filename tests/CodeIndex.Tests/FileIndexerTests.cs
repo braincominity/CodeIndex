@@ -572,6 +572,36 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignore()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(tempDir, "subproj");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "subproj/ignored.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["keep.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsGitignoreBracketCharacterClassesAndRanges()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

@@ -81,11 +81,12 @@ public static class IndexCommandRunner
         }
 
         var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
+        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath);
 
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
         {
-            var dryIndexer = new FileIndexer(options.ProjectPath, ignoreCase);
+            var dryIndexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
             IReadOnlyList<string> dryCandidates;
             var errorList = new List<object>();
             var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -126,18 +127,22 @@ public static class IndexCommandRunner
             {
                 // --commits: files changed in the specified commits / --commits: 指定コミットの変更ファイル
                 var changedFiles = new HashSet<string>(StringComparer.Ordinal);
+                var relevantIgnoreFileChanged = false;
+                var repoRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath);
                 foreach (var commit in options.Commits)
                 {
                     try
                     {
                         var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
-                        foreach (var path in changed)
+                        var normalized = NormalizeCommitFileTargets(options.ProjectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
+                        relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
+                        foreach (var path in normalized)
                             changedFiles.Add(path);
                     }
                     catch { /* ignore git errors in dry-run */ }
                 }
 
-                if (ContainsIgnoreFilePath(changedFiles))
+                if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
                 {
                     var scanResult = dryIndexer.ScanFilesDetailed();
                     dryCandidates = scanResult.Files;
@@ -251,7 +256,7 @@ public static class IndexCommandRunner
         AddToGitExclude(options.ProjectPath, dbPath);
 
         var writer = new DbWriter(db.Connection);
-        var indexer = new FileIndexer(options.ProjectPath, ignoreCase);
+        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
@@ -506,6 +511,7 @@ public static class IndexCommandRunner
         string? priorIndexedProjectRoot)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
+        var relevantIgnoreFileChanged = false;
 
         if (options.Commits.Count > 0)
         {
@@ -514,10 +520,13 @@ public static class IndexCommandRunner
             {
                 if (!options.Json)
                     spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
+                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
                 foreach (var commit in options.Commits)
                 {
                     var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
-                    foreach (var f in changedFiles)
+                    var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var commitTouchedRelevantIgnoreFile);
+                    relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
+                    foreach (var f in normalized)
                         targetPaths.Add(f);
                 }
             }
@@ -547,7 +556,7 @@ public static class IndexCommandRunner
                 targetPaths.Add(relPath);
         }
 
-        if (ContainsIgnoreFilePath(targetPaths))
+        if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths))
         {
             if (!options.Json)
             {
@@ -997,6 +1006,40 @@ public static class IndexCommandRunner
     private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
         => paths.Any(FileIndexer.IsIgnoreFilePath);
 
+    private static IReadOnlyList<string> NormalizeCommitFileTargets(
+        string projectRoot,
+        string repoRoot,
+        IEnumerable<string> changedFiles,
+        out bool relevantIgnoreFileChanged)
+    {
+        relevantIgnoreFileChanged = false;
+        var normalized = new List<string>();
+        foreach (var changedFile in changedFiles)
+        {
+            var absolutePath = Path.GetFullPath(Path.Combine(repoRoot, changedFile.Replace('/', Path.DirectorySeparatorChar)));
+            if (FileIndexer.IsIgnoreFilePath(absolutePath) && IsRelevantIgnoreFileForProjectRoot(projectRoot, absolutePath))
+                relevantIgnoreFileChanged = true;
+
+            var relativePath = Path.GetRelativePath(projectRoot, absolutePath).Replace('\\', '/');
+            if (IsOutsideProjectRoot(relativePath))
+                continue;
+
+            normalized.Add(relativePath);
+        }
+
+        return normalized;
+    }
+
+    private static bool IsRelevantIgnoreFileForProjectRoot(string projectRoot, string ignoreFileAbsolutePath)
+    {
+        var ignoreDirectory = Path.GetDirectoryName(ignoreFileAbsolutePath);
+        if (string.IsNullOrEmpty(ignoreDirectory))
+            return false;
+
+        return IsPathEqualOrParent(ignoreDirectory, projectRoot)
+            || IsPathEqualOrParent(projectRoot, ignoreDirectory);
+    }
+
     private static string DescribePathFilter(FileIndexer.PathFilterKind filterKind)
         => filterKind switch
         {
@@ -1025,6 +1068,25 @@ public static class IndexCommandRunner
         }
 
         return normalized;
+    }
+
+    private static bool IsPathEqualOrParent(string candidateParent, string candidateChild)
+    {
+        var normalizedParent = Path.GetFullPath(candidateParent)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedChild = Path.GetFullPath(candidateChild)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.Equals(normalizedParent, normalizedChild, comparison))
+            return true;
+
+        var parentWithDirectorySeparator = normalizedParent + Path.DirectorySeparatorChar;
+        var parentWithAltDirectorySeparator = normalizedParent + Path.AltDirectorySeparatorChar;
+        return normalizedChild.StartsWith(parentWithDirectorySeparator, comparison)
+            || normalizedChild.StartsWith(parentWithAltDirectorySeparator, comparison);
     }
 
     private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)

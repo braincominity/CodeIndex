@@ -280,6 +280,28 @@ public class GitHelperTests : IDisposable
         Assert.False(GitHelper.ResolveIgnoreCase(subDir));
     }
 
+    [Fact]
+    public void ResolveIgnoreCase_NonRepoIgnoresGlobalGitConfigAndFallsBackToFileSystemProbe()
+    {
+        var nonRepoDir = Path.Combine(_tempDir, $"non_repo_{Guid.NewGuid():N}");
+        var fakeHome = Path.Combine(_tempDir, $"fake_home_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(nonRepoDir);
+        Directory.CreateDirectory(fakeHome);
+
+        var environment = new Dictionary<string, string?>
+        {
+            ["HOME"] = fakeHome,
+            ["XDG_CONFIG_HOME"] = Path.Combine(fakeHome, ".config"),
+            ["GIT_CONFIG_NOSYSTEM"] = "1",
+        };
+
+        RunGitWithEnvironment(fakeHome, environment, "config", "--global", "core.ignorecase", "false");
+
+        var resolved = GitHelper.ResolveIgnoreCase(nonRepoDir, environment);
+
+        Assert.True(resolved);
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
@@ -293,6 +315,9 @@ public class GitHelperTests : IDisposable
     }
 
     private static string RunGit(string workDir, params string[] args)
+        => RunGitWithEnvironment(workDir, environment: null, args);
+
+    private static string RunGitWithEnvironment(string workDir, IReadOnlyDictionary<string, string?>? environment, params string[] args)
     {
         var psi = new ProcessStartInfo
         {
@@ -306,6 +331,17 @@ public class GitHelperTests : IDisposable
 
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
+
+        if (environment != null)
+        {
+            foreach (var (key, value) in environment)
+            {
+                if (value == null)
+                    psi.Environment.Remove(key);
+                else
+                    psi.Environment[key] = value;
+            }
+        }
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");

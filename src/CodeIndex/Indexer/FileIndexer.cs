@@ -180,6 +180,8 @@ public class FileIndexer
     private const long MaxFileSize = 10 * 1024 * 1024;
 
     private readonly string _projectRoot;
+    private readonly string _ignoreRuleRoot;
+    private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
 
     private sealed class IgnoreRuleSet
@@ -476,13 +478,20 @@ public class FileIndexer
     }
 
     public FileIndexer(string projectRoot)
-        : this(projectRoot, ignoreCase: ProbeFileSystemIgnoreCase(projectRoot))
+        : this(projectRoot, ignoreCase: ProbeFileSystemIgnoreCase(projectRoot), ignoreRuleRoot: null)
     {
     }
 
     public FileIndexer(string projectRoot, bool ignoreCase)
+        : this(projectRoot, ignoreCase, ignoreRuleRoot: null)
+    {
+    }
+
+    public FileIndexer(string projectRoot, bool ignoreCase, string? ignoreRuleRoot)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
+        _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
+        _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
     }
 
@@ -713,6 +722,25 @@ public class FileIndexer
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
+    private static bool IsPathEqualOrParent(string candidateParent, string candidateChild)
+    {
+        var normalizedParent = Path.GetFullPath(candidateParent)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedChild = Path.GetFullPath(candidateChild)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.Equals(normalizedParent, normalizedChild, comparison))
+            return true;
+
+        var parentWithDirectorySeparator = normalizedParent + Path.DirectorySeparatorChar;
+        var parentWithAltDirectorySeparator = normalizedParent + Path.AltDirectorySeparatorChar;
+        return normalizedChild.StartsWith(parentWithDirectorySeparator, comparison)
+            || normalizedChild.StartsWith(parentWithAltDirectorySeparator, comparison);
+    }
+
     /// <summary>
     /// Enumerate all indexable files under the project root.
     /// プロジェクトルート以下のインデックス対象ファイルを列挙する。
@@ -732,10 +760,14 @@ public class FileIndexer
             return new PathFilterResult(PathFilterKind.None, errors);
         }
 
-        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var activeIgnoreRules = IgnoreRuleSet.Empty;
-        var currentDirectory = _projectRoot;
         var fullyScanned = true;
+        var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
+        var activeIgnoreRules = preloadResult.Rules;
+        if (!preloadResult.IgnoreRulesAvailable)
+            return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var currentDirectory = _projectRoot;
         var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
         activeIgnoreRules = loadResult.Rules;
         if (!loadResult.IgnoreRulesAvailable)
@@ -781,7 +813,12 @@ public class FileIndexer
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, IgnoreRuleSet.Empty);
+        var fullyScanned = true;
+        var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
+        if (preloadResult.IgnoreRulesAvailable)
+        {
+            EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules);
+        }
         return new ScanFilesResult(
             files,
             errors,
@@ -952,6 +989,55 @@ public class FileIndexer
         return ignoreRulesAvailable
             ? new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true)
             : new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+    }
+
+    private IgnoreRuleLoadResult LoadAncestorIgnoreRules(List<ScanError> errors, ref bool fullyScanned)
+    {
+        var activeIgnoreRules = IgnoreRuleSet.Empty;
+        foreach (var dir in _ancestorIgnoreDirectories)
+        {
+            var loadResult = LoadIgnoreRulesForDirectory(dir, activeIgnoreRules, errors, ref fullyScanned);
+            activeIgnoreRules = loadResult.Rules;
+            if (!loadResult.IgnoreRulesAvailable)
+                return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: false);
+        }
+
+        return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: true);
+    }
+
+    private string NormalizeIgnoreRuleRoot(string? ignoreRuleRoot)
+    {
+        if (string.IsNullOrWhiteSpace(ignoreRuleRoot))
+            return _projectRoot;
+
+        var candidate = Path.GetFullPath(ignoreRuleRoot);
+        return IsPathEqualOrParent(candidate, _projectRoot)
+            ? candidate
+            : _projectRoot;
+    }
+
+    private static IReadOnlyList<string> BuildAncestorIgnoreDirectories(string ignoreRuleRoot, string projectRoot)
+    {
+        if (PathsEqual(ignoreRuleRoot, projectRoot))
+            return [];
+
+        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(ignoreRuleRoot, projectRoot));
+        if (relativePath.Length == 0 || relativePath == "." || relativePath.StartsWith("../", StringComparison.Ordinal))
+            return [];
+
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+            return [];
+
+        var directories = new List<string> { ignoreRuleRoot };
+        var currentDirectory = ignoreRuleRoot;
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            currentDirectory = Path.Combine(currentDirectory, segments[i]);
+            directories.Add(currentDirectory);
+        }
+
+        return directories;
     }
 
     private static string NormalizeIgnorePath(string path)
