@@ -261,6 +261,112 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Human_CSharpTopLevelStatementsFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_toplevel_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+                using System.Linq;
+
+                var values = new[] { 1, 2, 3 };
+                foreach (var value in values)
+                {
+                    Console.WriteLine(value);
+                }
+
+                Console.WriteLine(Sum(values));
+
+                static int Sum(int[] values)
+                {
+                    var total = 0;
+                    foreach (var value in values)
+                    {
+                        total += value;
+                    }
+
+                    return total;
+                }
+
+                Console.WriteLine("done");
+                Console.WriteLine(values.Length);
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_CSharpTopLevelStatementsFile_LeavesJsonContractUnchanged()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_toplevel_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+
+                Console.WriteLine("boot");
+                Console.WriteLine("run");
+                Console.WriteLine("more");
+                Console.WriteLine("lines");
+                Console.WriteLine("to");
+                Console.WriteLine("cross");
+                Console.WriteLine("the");
+                Console.WriteLine("top-level");
+                Console.WriteLine("statement");
+                Console.WriteLine("threshold");
+                Console.WriteLine("without");
+                Console.WriteLine("declaring");
+                Console.WriteLine("types");
+                Console.WriteLine("or");
+                Console.WriteLine("namespaces");
+                Console.WriteLine("in");
+                Console.WriteLine("this");
+                Console.WriteLine("file");
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/program.cs", json.GetProperty("path").GetString());
+            Assert.Equal("csharp", json.GetProperty("lang").GetString());
+            Assert.True(json.TryGetProperty("symbols", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_zero_json_missing_graph");
