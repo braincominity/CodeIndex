@@ -1027,6 +1027,8 @@ public static class QueryCommandRunner
             }
             else
             {
+                var outlineContent = reader.GetExcerpt(filePath, 1, outline.TotalLines)?.Content;
+
                 Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {outline.SymbolCount} symbols)");
                 Console.WriteLine();
                 foreach (var sym in outline.Symbols)
@@ -1052,7 +1054,7 @@ public static class QueryCommandRunner
                 // （class / struct / interface / enum / namespace / record / delegate が一切無い）は、
                 // 実行本体が import と local function の間に書かれるため outline に現れない。
                 // 人間向け本体を汚さないよう、理由を短く stderr に出す。
-                if (LooksLikeCsharpTopLevelStatements(outline))
+                if (LooksLikeCsharpTopLevelStatements(outline, outlineContent))
                 {
                     Console.Error.WriteLine();
                     Console.Error.WriteLine("Note: no type/namespace declarations found; this file likely uses C# top-level statements.");
@@ -1064,13 +1066,20 @@ public static class QueryCommandRunner
     }
 
     /// <summary>
-    /// Heuristic: a C# file with no type/namespace-scoped declarations is almost certainly
-    /// using top-level statements, so the executable body won't appear in outline.
+    /// Heuristic: hint only when a non-trivial C# file has no type/namespace declarations and
+    /// its reconstructed content still contains uncovered file-scope executable code after
+    /// skipping symbol-covered lines, imports, metadata-only attribute lines, comments, and
+    /// preprocessor directives. This keeps the note off common files such as GlobalUsings.cs,
+    /// AssemblyInfo.cs, and local-function-only files while preserving statement-only Program.cs
+    /// files.
     /// Tiny files (snippets, partials under ~20 lines) are excluded to avoid noise.
-    /// ヒューリスティック: C# で型/名前空間宣言が一切無いファイルはトップレベルステートメント
-    /// の可能性が高く、実行本体が outline に出ない。20 行未満の小さい断片は誤検出回避のため除外。
+    /// ヒューリスティック: 20 行以上の C# ファイルで型/名前空間宣言が無く、かつ
+    /// import 行、metadata-only 属性行、コメント、プリプロセッサ行を除いても
+    /// file-scope の実行コードが残る場合だけヒントを出す。これにより GlobalUsings.cs や
+    /// AssemblyInfo.cs の誤検出を避けつつ、
+    /// statement-only の Program.cs は拾い続ける。小さい断片はノイズ回避のため除外。
     /// </summary>
-    private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline)
+    private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline, string? content)
     {
         if (outline.Lang != "csharp") return false;
         if (outline.TotalLines < 20) return false;
@@ -1079,7 +1088,74 @@ public static class QueryCommandRunner
             if (sym.Kind is "class" or "struct" or "interface" or "enum" or "namespace" or "delegate" or "record")
                 return false;
         }
-        return true;
+
+        if (string.IsNullOrWhiteSpace(content))
+            return false;
+
+        var coveredLines = new bool[Math.Max(outline.TotalLines, 0) + 1];
+        foreach (var sym in outline.Symbols)
+        {
+            var startLine = sym.StartLine > 0 ? sym.StartLine : sym.Line;
+            var endLine = sym.EndLine >= startLine ? sym.EndLine : startLine;
+            startLine = Math.Max(1, startLine);
+            endLine = Math.Min(outline.TotalLines, endLine);
+            for (var lineNumber = startLine; lineNumber <= endLine; lineNumber++)
+                coveredLines[lineNumber] = true;
+        }
+
+        var inBlockComment = false;
+        var currentLineNumber = 0;
+        foreach (var rawLine in content.Split('\n'))
+        {
+            currentLineNumber++;
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+            if (currentLineNumber < coveredLines.Length && coveredLines[currentLineNumber])
+                continue;
+
+            if (inBlockComment)
+            {
+                if (line.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = false;
+                continue;
+            }
+
+            if (line.StartsWith("/*", StringComparison.Ordinal))
+            {
+                if (!line.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = true;
+                continue;
+            }
+
+            if (line.StartsWith("using ", StringComparison.Ordinal))
+            {
+                if (line.StartsWith("using var ", StringComparison.Ordinal))
+                    return true;
+                if (line.StartsWith("using (", StringComparison.Ordinal))
+                    return true;
+                continue;
+            }
+            if (line.StartsWith("global using ", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("extern alias ", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("[assembly:", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("[module:", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("//", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("*", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("*/", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("#", StringComparison.Ordinal))
+                continue;
+            return true;
+        }
+
+        return false;
     }
 
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
