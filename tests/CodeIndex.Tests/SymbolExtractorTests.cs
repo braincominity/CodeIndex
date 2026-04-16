@@ -82,6 +82,107 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RawStringFixturesDoNotLeakPhantomSymbols()
+    {
+        var content = """""
+            public class FixtureHost
+            {
+                public void UsesRawFixture()
+                {
+                    const string fixture = """
+                        public class App
+                        {
+                            public void Run()
+                            {
+                            }
+                        }
+
+                        function main()
+                        end
+                        """;
+
+                    const string wider = """"
+                        public class Wider
+                        """";
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "UsesRawFixture"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "FixtureHost");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "App");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Wider");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "main");
+        Assert.Equal(20, method.EndLine);
+        Assert.Equal(20, method.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_NestedRawStringInsideInterpolation_DoesNotLeakPhantomSymbols()
+    {
+        var content = """""
+            public class FixtureHost
+            {
+                public int Run() => 1;
+                public string Id(string value) => value;
+
+                public int UsesRawFixture()
+                {
+                    return $"""
+                        value = {Id("""
+                            public class Phantom
+                            {
+                                public void Go() { }
+                            }
+                            """) + Run()}
+                        """.Length;
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "FixtureHost");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "UsesRawFixture");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Id");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Phantom");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Go");
+    }
+
+    [Fact]
+    public void Extract_CSharp_InterpolatedVerbatimStringWithEscapedBraces_DoesNotLeakPhantomSymbols()
+    {
+        var content = """
+            public class FixtureHost
+            {
+                public string Render()
+                {
+                    return $@"{{
+                        public class Phantom
+                    }}";
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "FixtureHost");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Render");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Phantom");
+    }
+
+    [Fact]
+    public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
+    {
+        var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "FixtureHost");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedNamespaceAndRecordStruct()
     {
         // C# 10+: file-scoped namespace, global using, record struct
