@@ -10,6 +10,11 @@ public readonly record struct ExactQuerySignal(
     bool HasMissingTable,
     string? DegradedReason);
 
+public readonly record struct HotspotFamilySignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -23,6 +28,7 @@ public partial class DbReader
     private readonly HashSet<string> _symbolColumns;
     private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
+    private readonly HashSet<string> _indexedHotspotFamilyLanguages;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasChunksTable;
@@ -31,6 +37,11 @@ public partial class DbReader
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
+    // Tracks which languages have authoritative cross-file hotspot family semantics.
+    // Mixed legacy/update states can therefore degrade only the affected language instead of
+    // globally disabling families for unrelated marker types.
+    // authoritative な hotspot family semantics を保持する言語集合。
+    internal readonly HashSet<string> _hotspotFamilyReadyLanguages;
     internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
@@ -50,6 +61,7 @@ public partial class DbReader
                 THEN 2
             ELSE 0
         END";
+    private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
 
     /// <summary>
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
@@ -99,6 +111,15 @@ public partial class DbReader
             WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
             ELSE 1
         END";
+    private static string GetLogicalReferenceKindSql(string referenceKindSql)
+        => $"CASE WHEN {referenceKindSql} IN {InvokeReferenceKindsSql} THEN 'invoke' ELSE {referenceKindSql} END";
+
+    private static string GetPreferredReferenceKindSql(string referenceKindSql)
+        => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' ELSE MIN({referenceKindSql}) END";
+
+    private static string GetPathBucketOrderSql(string pathSql)
+        => PathBucketOrder.Replace("f.path", pathSql, StringComparison.Ordinal);
+
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
@@ -117,6 +138,7 @@ public partial class DbReader
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
         _referenceIndexes = LoadIndexes("symbol_references");
+        _indexedHotspotFamilyLanguages = LoadIndexedHotspotFamilyLanguages();
         // #86/#97: require the FoldReady bit plus matching fold metadata before trusting
         // folded columns. version guards intentional NameFold changes; fingerprint guards
         // runtime ICU / invariant-casing drift across .NET upgrades. Missing metadata on
@@ -130,12 +152,47 @@ public partial class DbReader
         _foldReady = foldBitSet
             && storedFoldVersion == NameFold.Version
             && string.Equals(storedFoldFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal);
+        _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
         // repo is untouched, which would flip trust on prematurely. Only an explicit
         // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
         // get stamped — degradation is safer than silent false-clean zeroes.
         // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+    }
+
+    internal HotspotFamilySignal GetHotspotFamilySignal(string? lang)
+    {
+        if (lang != null)
+        {
+            if (!FileIndexer.SupportsHotspotFamilyMarkerLanguage(lang) || !_indexedHotspotFamilyLanguages.Contains(lang))
+                return new HotspotFamilySignal(Ready: true, Relevant: false, DegradedReason: null);
+
+            var ready = _hotspotFamilyReadyLanguages.Contains(lang);
+            return new HotspotFamilySignal(
+                Ready: ready,
+                Relevant: true,
+                DegradedReason: ready
+                    ? null
+                    : $"cross-file hotspot family grouping for '{lang}' is degraded; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
+        }
+
+        var relevantLanguages = _indexedHotspotFamilyLanguages
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+        if (relevantLanguages.Count == 0)
+            return new HotspotFamilySignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        var unreadyLanguages = relevantLanguages
+            .Where(language => !_hotspotFamilyReadyLanguages.Contains(language))
+            .ToList();
+        if (unreadyLanguages.Count == 0)
+            return new HotspotFamilySignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new HotspotFamilySignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: $"cross-file hotspot family grouping is degraded for: {string.Join(", ", unreadyLanguages)}; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
     }
 
     private HashSet<string> LoadIndexes(string tableName)
@@ -166,6 +223,48 @@ public partial class DbReader
     private static string? ParseFoldFingerprint(SqliteConnection conn)
     {
         return TryGetMetaString(conn, "fold_key_fingerprint");
+    }
+
+    private HashSet<string> LoadIndexedHotspotFamilyLanguages()
+    {
+        var langs = new HashSet<string>(StringComparer.Ordinal);
+        var hotspotFamilyLangs = FileIndexer.GetHotspotFamilyMarkerLanguages();
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT DISTINCT lang
+            FROM files
+            WHERE lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hfl{i}"))})";
+        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
+            cmd.Parameters.AddWithValue($"@hfl{i}", hotspotFamilyLangs[i]);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (!reader.IsDBNull(0))
+                langs.Add(reader.GetString(0));
+        }
+        return langs;
+    }
+
+    private HashSet<string> LoadHotspotFamilyReadyLanguages(SqliteConnection conn)
+    {
+        var readyLangs = new HashSet<string>(StringComparer.Ordinal);
+        if (!_symbolColumns.Contains("family_key") || !_symbolColumns.Contains("container_qualified_name"))
+            return readyLangs;
+
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            var raw = TryGetMetaString(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
+            var fingerprint = TryGetMetaString(conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
+            if (raw is string s
+                && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
+                && version == DbContext.HotspotFamilyVersion
+                && !string.IsNullOrWhiteSpace(fingerprint))
+            {
+                readyLangs.Add(lang);
+            }
+        }
+
+        return readyLangs;
     }
 
     private static string? TryGetMetaString(SqliteConnection conn, string key)
@@ -425,14 +524,28 @@ public partial class DbReader
         if (!_hasReferencesTable) return new List<ReferenceResult>();
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         using var cmd = _conn.CreateCommand();
-
-        var sql = @"
+        var sql = referenceKind == null
+            ? $@"
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.symbol_name,
+                       {GetPreferredReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       r.line, r.column_number,
+                       MIN(r.context) AS context,
+                       CASE WHEN COUNT(DISTINCT COALESCE(r.container_kind, '')) = 1 THEN MIN(r.container_kind) ELSE NULL END AS container_kind,
+                       CASE WHEN COUNT(DISTINCT COALESCE(r.container_name, '')) = 1 THEN MIN(r.container_name) ELSE NULL END AS container_name
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE 1=1
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
+            : @"
             SELECT f.path, f.lang, r.symbol_name, r.reference_kind, r.line, r.column_number,
                    r.context, r.container_kind, r.container_name
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE 1=1";
-        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (query != null)
         {
@@ -452,7 +565,16 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
+        if (referenceKind == null)
+        {
+            sql += @"
+                GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @"
+            )
+            SELECT path, lang, symbol_name, reference_kind, line, column_number,
+                   context, container_kind, container_name
+            FROM logical_references r";
+        }
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -532,6 +654,8 @@ public partial class DbReader
         if (lang != null)
             innerSql += " AND f.lang = @lang";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            innerSql += $" GROUP BY r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         innerSql += " LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
@@ -564,18 +688,25 @@ public partial class DbReader
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
-        var sql = @"
+        var sql = referenceKind == null
+            ? $@"
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
+            : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    MIN(r.line) AS first_line, COUNT(*) AS reference_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (referenceKind != null)
+            sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
-        else
-            sql += " AND r.reference_kind IN ('call', 'instantiate')";
         if (exact && _foldReady)
             sql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -585,7 +716,21 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        if (referenceKind == null)
+        {
+            sql += @"
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            )
+            SELECT path, lang, container_kind, container_name, symbol_name,
+                   MIN(line) AS first_line, COUNT(*) AS reference_count
+            FROM logical_references r
+            GROUP BY path, lang, container_kind, container_name, symbol_name";
+        }
+        else
+        {
+            sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name";
+        }
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -628,30 +773,32 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
-
-        var innerSql = @"
-            SELECT 1
+        var groupedSql = @"
+            SELECT path, lang, container_kind, container_name, symbol_name
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
-            innerSql += " AND r.reference_kind = @referenceKind";
-        else
-            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+            groupedSql += " AND r.reference_kind = @referenceKind";
         if (exact && _foldReady)
-            innerSql += " AND r.symbol_name_folded = @query";
+            groupedSql += " AND r.symbol_name_folded = @query";
         else if (exact)
-            innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
         if (lang != null)
-            innerSql += " AND f.lang = @lang";
-        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
-        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name LIMIT @limit";
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name LIMIT @limit";
 
-        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -678,18 +825,27 @@ public partial class DbReader
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
-        var sql = @"
+        var sql = referenceKind == null
+            ? $@"
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                       {GetPreferredReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       r.line
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
+            : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (referenceKind != null)
+            sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
-        else
-            sql += " AND r.reference_kind IN ('call', 'instantiate')";
         if (exact && _foldReady)
             sql += " AND r.container_name_folded = @query";
         else if (exact)
@@ -699,7 +855,21 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        if (referenceKind == null)
+        {
+            sql += @"
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            )
+            SELECT path, lang, container_kind, container_name, symbol_name,
+                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count
+            FROM logical_references r
+            GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
+        }
+        else
+        {
+            sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind";
+        }
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -743,30 +913,35 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
-
-        var innerSql = @"
-            SELECT 1
+        var groupedSql = @"
+            SELECT path, lang, container_kind, container_name, symbol_name, reference_kind
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name,
+                       " + (referenceKind == null
+                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           : "r.reference_kind") + @" AS reference_kind
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
-            innerSql += " AND r.reference_kind = @referenceKind";
-        else
-            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+            groupedSql += " AND r.reference_kind = @referenceKind";
         if (exact && _foldReady)
-            innerSql += " AND r.container_name_folded = @query";
+            groupedSql += " AND r.container_name_folded = @query";
         else if (exact)
-            innerSql += " AND r.container_name = @query COLLATE NOCASE";
+            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
         else
-            innerSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
         if (lang != null)
-            innerSql += " AND f.lang = @lang";
-        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
-        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit";
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind LIMIT @limit";
 
-        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -842,18 +1017,25 @@ public partial class DbReader
               AND r.symbol_name = @symbolName COLLATE NOCASE";
 
         var sql = $@"
-            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   MIN(r.line) AS first_line, COUNT(*) AS reference_count
-            FROM symbol_references r
-            JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL
-              AND r.reference_kind IN ('call', 'instantiate')
-              AND {supportedLangFilter}
-              {nameCondition}";
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL
+                  AND r.reference_kind IN {InvokeReferenceKindsSql}
+                  AND {supportedLangFilter}
+                  {nameCondition}";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, reference_count DESC, f.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
+        sql += @"
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            )
+            SELECT path, lang, container_kind, container_name, symbol_name,
+                   MIN(line) AS first_line, COUNT(*) AS reference_count
+            FROM logical_references r
+            GROUP BY path, lang, container_kind, container_name, symbol_name";
+        sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
@@ -1182,7 +1364,10 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         var innerSql = @"
                 SELECT src.id AS source_file_id, src.path AS source_path, @impactTargetPath AS target_path,
-                       r.symbol_name AS symbol_name
+                       r.symbol_name AS symbol_name,
+                       r.line,
+                       r.column_number,
+                       " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
                 WHERE src.path != @impactTargetPath";
@@ -1208,6 +1393,7 @@ public partial class DbReader
         }
         if (excludeTests)
             innerSql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
+        innerSql = "SELECT DISTINCT * FROM (" + innerSql + ")";
 
         cmd.CommandText = $@"
             SELECT source_file_id, source_path, target_path,
@@ -1766,7 +1952,10 @@ public partial class DbReader
         var filterAlias = reverse ? "dst" : "src";
         var innerSql = @"
                 SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
-                       r.symbol_name AS symbol_name
+                       r.symbol_name AS symbol_name,
+                       r.line,
+                       r.column_number,
+                       " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
                 JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id

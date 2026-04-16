@@ -2388,6 +2388,26 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RebuildFlag_SucceedsOnFreshDb()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_total").GetInt32() >= 1);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DoesNotStampFoldReadyWhenLegacyRowsRemain()
     {
         // Codex #86 review regression: on a legacy DB (pre-#86) opened by a new binary, the
@@ -2570,6 +2590,350 @@ public class IndexCommandRunnerTests
             // reader treat mixed-state rows as fully fold-ready.
             // version は "0" のままで OK。現在の NameFold.Version に昇格してはいけない。
             Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_ClearsHotspotFamilyTrustOnPartialFailure()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+
+            WriteOversizedAsciiFile(Path.Combine(projectRoot, "app.cs"));
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("partial", json2.GetProperty("status").GetString());
+            Assert.Equal(1, json2.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run() { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                        api.Run(1);
+                    }
+                }
+                """);
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+
+            File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+
+            File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "Extra.csproj", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_KeepsCsharpHotspotFamilyTrustWhenOnlyVbMarkersChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+
+            File.WriteAllText(Path.Combine(projectRoot, "Unrelated.vbproj"), "<Project />");
+
+            var (rerunExitCode, rerunJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, rerunExitCode);
+            Assert.Equal("success", rerunJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("vb")));
+
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+            Assert.True(hotspotsExitCode is CommandExitCodes.Success or CommandExitCodes.NotFound);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+            if (hotspotsJson.TryGetProperty("degraded", out var degraded))
+                Assert.False(degraded.GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var unreadableDir = Path.Combine(projectRoot, "secret");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+            Directory.CreateDirectory(unreadableDir);
+            File.WriteAllText(Path.Combine(unreadableDir, "Hidden.csproj"), "<Project />");
+            originalMode = File.GetUnixFileMode(unreadableDir);
+            File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("app.cs", indexedPaths);
+        }
+        finally
+        {
+            if (originalMode.HasValue && Directory.Exists(unreadableDir))
+                File.SetUnixFileMode(unreadableDir, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_MarkerlessMultiSubtreePartialsStaySeparatedInHotspots()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "projA", "src"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "projB", "src"));
+
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Api.Part1.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run()
+                    {
+                        Run(1);
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Api.Part2.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part1.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run()
+                    {
+                        Run(1);
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part2.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal("success", indexJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            var runRows = hotspotsJson.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(item => item.GetProperty("name").GetString() == "Run")
+                .OrderBy(item => item.GetProperty("path").GetString(), StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(2, runRows.Count);
+            Assert.StartsWith("projA/src/Api.Part", runRows[0].GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, runRows[0].GetProperty("reference_count").GetInt32());
+            Assert.StartsWith("projB/src/Api.Part", runRows[1].GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, runRows[1].GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_MarkerlessRootLevelPartialsStayVisibleInHotspots()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Api.Part1.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run() { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "Api.Part2.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                        api.Run(1);
+                    }
+                }
+                """);
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal("success", indexJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            var runRows = hotspotsJson.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(item => item.GetProperty("name").GetString() == "Run")
+                .ToList();
+
+            var runRow = Assert.Single(runRows);
+            Assert.Matches(@"Api\.Part[12]\.cs", runRow.GetProperty("path").GetString() ?? string.Empty);
+            Assert.Equal(2, runRow.GetProperty("reference_count").GetInt32());
         }
         finally
         {
@@ -2895,6 +3259,40 @@ public class IndexCommandRunnerTests
         }
     }
 
+    private (int ExitCode, JsonElement Json) RunHotspotsJson(string dbPath, string lang, string kind)
+        => RunHotspotsJsonWithPaths(dbPath, lang, kind, null);
+
+    private (int ExitCode, JsonElement Json) RunHotspotsJsonWithPaths(string dbPath, string lang, string kind, IReadOnlyList<string>? paths)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+
+            try
+            {
+                Console.SetOut(writer);
+                var args = new List<string> { "--db", dbPath, "--json", "--lang", lang, "--kind", kind };
+                if (paths != null)
+                {
+                    foreach (var path in paths)
+                    {
+                        args.Add("--path");
+                        args.Add(path);
+                    }
+                }
+
+                var exitCode = QueryCommandRunner.RunHotspots(args.ToArray(), _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                return (exitCode, document.RootElement.Clone());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         lock (TestConsoleLock.Gate)
@@ -3053,6 +3451,22 @@ public class IndexCommandRunnerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
+    private static void WriteOversizedAsciiFile(string path)
+    {
+        const int targetBytes = 10 * 1024 * 1024 + 1;
+        var chunk = new byte[8192];
+        Array.Fill(chunk, (byte)'a');
+
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        int written = 0;
+        while (written < targetBytes)
+        {
+            var toWrite = Math.Min(chunk.Length, targetBytes - written);
+            stream.Write(chunk, 0, toWrite);
+            written += toWrite;
+        }
     }
 
     private static void RunGit(string workDir, params string[] args)

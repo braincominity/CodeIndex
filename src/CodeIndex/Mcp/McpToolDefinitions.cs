@@ -67,14 +67,14 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "references",
-                "Search indexed symbol references such as call sites. / 呼び出し箇所などのインデックス済みシンボル参照を検索。",
+                "Search indexed symbol references such as call sites. When `kind` is omitted, identical constructor `call` + `instantiate` rows at one physical site are collapsed. / 呼び出し箇所などのインデックス済みシンボル参照を検索。`kind` 未指定時は、同じ物理位置にある constructor の `call` + `instantiate` 重複行を集約する。",
                 new JsonObject
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Referenced symbol name pattern to search for" },
-                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate, subscribe)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line context payloads per result (default: 512)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 1, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
@@ -89,14 +89,14 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callers",
-                "Find caller symbols that reference a callee. / 指定シンボルを参照している呼び出し元シンボルを探す。",
+                "Find caller symbols that reference a callee. When `kind` is omitted, all indexed reference kinds stay visible while identical constructor `call` + `instantiate` rows at one physical site collapse. / 指定シンボルを参照している呼び出し元シンボルを探す。`kind` 未指定時は全 reference kind を表示したまま、同じ物理位置にある constructor の `call` + `instantiate` 重複行を集約する。",
                 new JsonObject
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Callee symbol name pattern to search for" },
-                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate, subscribe)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
@@ -110,14 +110,14 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "callees",
-                "Find callees used by a caller/container symbol. / 呼び出し元シンボルが使っている呼び出し先を探す。",
+                "Find callees used by a caller/container symbol. When `kind` is omitted, all indexed reference kinds stay visible while identical constructor `call` + `instantiate` rows at one physical site collapse. / 呼び出し元シンボルが使っている呼び出し先を探す。`kind` 未指定時は全 reference kind を表示したまま、同じ物理位置にある constructor の `call` + `instantiate` 重複行を集約する。",
                 new JsonObject
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Caller/container symbol name pattern to search for" },
-                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate)" },
+                        ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (for example: call, instantiate, subscribe)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
@@ -392,9 +392,9 @@ public partial class McpServer
             CreateToolDefinition(
                 "symbol_hotspots",
                 "Find the most-referenced symbols in the codebase (hotspot analysis). "
-                + "Returns symbols ordered by total reference count. Useful for identifying central, high-impact code. "
+                + "Returns symbols ordered by reference count. Names that are unique within the active language/kind candidate set use codebase-wide totals; duplicate-name families fall back to conservative same-file counts, and same-file duplicate rows may be grouped when the DB cannot disambiguate targets. Cross-file grouping of duplicate families is trusted only on indexes stamped with the current authoritative hotspot-family version. Useful for identifying central, high-impact code. "
                 + "/ コードベースで最も参照されるシンボルを検索する（ホットスポット分析）。"
-                + "参照回数順にシンボルを返す。中心的で影響の大きいコードの特定に有用。",
+                + "参照回数順にシンボルを返す。active な言語/種別候補集合で一意な名前は codebase 全体の件数を使い、同名ファミリーは保守的な same-file 件数へフォールバックし、DB が対象を曖昧なく結べない同一ファイル重複行は集約される。duplicate family の cross-file 集約は current の authoritative hotspot-family version で stamp された index でのみ信頼する。中心的で影響の大きいコードの特定に有用。",
                 new JsonObject
                 {
                     ["type"] = "object",

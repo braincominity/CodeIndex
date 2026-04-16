@@ -13,7 +13,13 @@ public class FileIndexerTests
     [Theory]
     [InlineData("test.py", "python")]
     [InlineData("app.js", "javascript")]
+    [InlineData("app.cjs", "javascript")]
+    [InlineData("app.mjs", "javascript")]
     [InlineData("main.ts", "typescript")]
+    [InlineData("main.cts", "typescript")]
+    [InlineData("main.mts", "typescript")]
+    [InlineData("types.d.cts", "typescript")]
+    [InlineData("types.d.mts", "typescript")]
     [InlineData("lib.go", "go")]
     [InlineData("mod.rs", "rust")]
     [InlineData("App.java", "java")]
@@ -233,6 +239,30 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_IncludesModernNodeModuleExtensions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "index.mjs"), "export const run = () => {};");
+            File.WriteAllText(Path.Combine(tempDir, "cli.cjs"), "module.exports = {};");
+            File.WriteAllText(Path.Combine(tempDir, "types.cts"), "export type Config = {};");
+            File.WriteAllText(Path.Combine(tempDir, "types.d.mts"), "export interface Config {}");
+            File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "ignored");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles().Select(Path.GetFileName).OrderBy(name => name).ToList();
+
+            Assert.Equal(["cli.cjs", "index.mjs", "types.cts", "types.d.mts"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_IncludesExtensionlessShebangScripts()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -278,7 +308,7 @@ public class FileIndexerTests
         }
         finally
         {
-            Directory.Delete(tempDir, true);
+                Directory.Delete(tempDir, true);
         }
     }
 
@@ -401,6 +431,89 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "generated"));
+
+            var srcFile = Path.Combine(tempDir, "src", "Api.Part1.cs");
+            var generatedFile = Path.Combine(tempDir, "generated", "Api.Part2.cs");
+            File.WriteAllText(srcFile, "public partial class Api {}");
+            File.WriteAllText(generatedFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src", indexer.GetFamilyScopeKey(srcFile, "csharp"));
+            Assert.Equal("generated", indexer.GetFamilyScopeKey(generatedFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MarkerlessRootLevelFilesShareRootScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            var firstFile = Path.Combine(tempDir, "Api.Part1.cs");
+            var secondFile = Path.Combine(tempDir, "Api.Part2.cs");
+            File.WriteAllText(firstFile, "public partial class Api {}");
+            File.WriteAllText(secondFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal(".", indexer.GetFamilyScopeKey(firstFile, "csharp"));
+            Assert.Equal(".", indexer.GetFamilyScopeKey(secondFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var srcDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(Path.Combine(srcDir, "ProjA"));
+            Directory.CreateDirectory(Path.Combine(srcDir, "ProjB"));
+            File.WriteAllText(Path.Combine(srcDir, "ProjectA.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "ProjectB.csproj"), "<Project />");
+
+            var projAFile = Path.Combine(srcDir, "ProjA", "Api.Part1.cs");
+            var projBFile = Path.Combine(srcDir, "ProjB", "Api.Part1.cs");
+            var ambiguousFile = Path.Combine(srcDir, "Api.Part1.cs");
+            File.WriteAllText(projAFile, "public partial class Api {}");
+            File.WriteAllText(projBFile, "public partial class Api {}");
+            File.WriteAllText(ambiguousFile, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("src/ProjA", indexer.GetFamilyScopeKey(projAFile, "csharp"));
+            Assert.Equal("src/ProjB", indexer.GetFamilyScopeKey(projBFile, "csharp"));
+            Assert.Equal("src/__file__/Api.Part1.cs", indexer.GetFamilyScopeKey(ambiguousFile, "csharp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 

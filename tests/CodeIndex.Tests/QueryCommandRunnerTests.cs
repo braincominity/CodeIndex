@@ -494,6 +494,25 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain("Warning: unknown option", stderr);
     }
 
+    [Fact]
+    public void RunLanguages_JsonListsModernNodeModuleExtensions()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var javascript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "javascript");
+        var typescript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "typescript");
+
+        Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]
@@ -1046,6 +1065,57 @@ public class QueryCommandRunnerTests
             Assert.False(json.GetProperty("exact_index_available").GetBoolean());
             Assert.Contains("symbol_references table missing", json.GetProperty("degraded_reason").GetString());
             Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_FindsTernaryContinuationCallSite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ternary");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "dispatcher.cs"),
+                """
+                public class Dispatcher
+                {
+                    private string Select(bool isUpdate)
+                        => isUpdate
+                            ? RunUpdateMode()
+                            : RunFullScan();
+
+                    private string RunUpdateMode() => "update";
+                    private string RunFullScan() => "full";
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["RunUpdateMode", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/dispatcher.cs", json.GetProperty("path").GetString());
+            Assert.Equal("class", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Dispatcher", json.GetProperty("caller_name").GetString());
+            Assert.Equal("RunUpdateMode", json.GetProperty("callee_name").GetString());
+            Assert.Equal(5, json.GetProperty("first_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
         }
         finally
         {
@@ -1995,6 +2065,132 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_ZeroJson_ReportsDegradedHotspotFamilyTrust()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: false);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_ZeroJson_ReportsLegacyNullFamilyKeysAsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_legacy_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols
+                    SET family_key = NULL,
+                        container_qualified_name = NULL
+                    WHERE file_id IN (
+                        SELECT id FROM files WHERE lang = 'csharp'
+                    );
+                    """;
+                cmd.ExecuteNonQuery();
+
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_ZeroJson_ReportsMissingMarkerFingerprintAsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_missing_fingerprint_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_HumanOutput_WarnsWhenHotspotFamilyTrustIsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_zero_human");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: false);
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("cross-file hotspot family grouping", stderr);
+            Assert.Contains("authoritative cross-file hotspot families", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_ZeroJson_EmitsEnvelopeAndFreshness()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_zero_json_impact");
@@ -2218,6 +2414,294 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Contains("No references found.", stderr);
             Assert.Contains("call-graph queries are not indexed for 'markdown'", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("references", "MissingSymbol")]
+    [InlineData("callers", "MissingSymbol")]
+    [InlineData("callees", "MissingSymbol")]
+    public void GraphCommands_SymbolKindArgumentWarnsAboutReferenceKindSemantics(string command, string query)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_kind_warning");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => RunGraphCommand(
+                command,
+                [query, "--db", dbPath, "--kind", "class"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("symbol kind", stderr);
+            Assert.Contains("filters by reference kind", stderr);
+            Assert.Contains("call, instantiate, subscribe", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_CountJsonKeepsSubscribeRowsVisibleByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_subscribe_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Changed", "--db", dbPath, "--json", "--count", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_JsonKeepsSubscribeRowsVisibleByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_subscribe_default");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_JsonKeepsSubscribeRowsVisibleByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_subscribe_default");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["Hook", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonKeepsSubscribeReferencesVisibleInBundle()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_subscribe_bundle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            var caller = Assert.Single(json.GetProperty("callers").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("subscribe", reference.GetProperty("reference_kind").GetString());
+            Assert.Equal("Hook", reference.GetProperty("container_name").GetString());
+            Assert.Equal("Hook", caller.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", caller.GetProperty("callee_name").GetString());
+            Assert.Empty(json.GetProperty("callees").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonKeepsSubscribeCalleesVisibleForCallerSymbols()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_subscribe_callee_bundle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Publisher.cs", "csharp",
+                """
+                using System;
+
+                public class Publisher
+                {
+                    public event EventHandler? Changed;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Subscriber.cs", "csharp",
+                """
+                using System;
+
+                public class Subscriber
+                {
+                    public void Hook(Publisher publisher)
+                    {
+                        publisher.Changed += OnChanged;
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Hook", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var callee = Assert.Single(json.GetProperty("callees").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hook", callee.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", callee.GetProperty("callee_name").GetString());
+            Assert.Equal("subscribe", callee.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -6089,6 +6573,52 @@ public class QueryCommandRunnerTests
             writer.MarkGraphReady();
         }
 
+        return dbPath;
+    }
+
+    private static string CreateHotspotFamilyFixtureDb(string projectRoot, bool markHotspotFamilyReady)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Api.Part1.cs",
+            "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Api.Part2.cs",
+            "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Caller.cs",
+            "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        if (markHotspotFamilyReady)
+            writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
         return dbPath;
     }
 

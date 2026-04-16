@@ -732,6 +732,55 @@ public partial class McpServer
             payload["degraded_reason"] = camelReason.DeepClone();
     }
 
+    private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = db.GetMetaString(keyFactory(lang));
+        return values;
+    }
+
+    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = indexer.GetProjectMarkerFingerprint(lang);
+        return values;
+    }
+
+    private static void RestampHotspotFamilyTrust(
+        DbWriter writer,
+        bool allFilesRewritten,
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            priorVersions.TryGetValue(lang, out var priorVersion);
+            priorFingerprints.TryGetValue(lang, out var priorFingerprint);
+            if (allFilesRewritten || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+        }
+    }
+
+    private static void AddHotspotFamilySignal(JsonObject payload, HotspotFamilySignal signal)
+    {
+        payload["hotspot_family_ready"] = signal.Ready;
+        payload["hotspotFamilyReady"] = signal.Ready;
+        if (!signal.Ready)
+        {
+            payload["degraded"] = true;
+            if (signal.DegradedReason != null)
+            {
+                payload["hotspot_family_degraded_reason"] = signal.DegradedReason;
+                payload["hotspotFamilyDegradedReason"] = signal.DegradedReason;
+            }
+        }
+    }
+
     private JsonNode ExecuteStatus(JsonNode? id)
     {
         return WithDbReader(id, reader =>
@@ -1146,6 +1195,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var items = results.Select(r => new
             {
                 name = r.Symbol.Name,
@@ -1161,9 +1211,15 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
             };
+            AddHotspotFamilySignal(payload, hotspotSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} symbol hotspot(s)."
                 : "No symbol hotspots found.";
+            if (!hotspotSignal.Ready)
+            {
+                payload["note"] = "cross-file hotspot family grouping is degraded; conservative same-file fallback may hide or undercount hotspot families until the next successful reindex.";
+                summary += " Warning: cross-file hotspot family grouping is degraded, so results may be conservative until the next successful reindex.";
+            }
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
@@ -1292,6 +1348,8 @@ public partial class McpServer
         using var db = new DbContext(_dbPath);
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
+        var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
@@ -1303,6 +1361,7 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
+            new DbWriter(db.Connection).ClearHotspotFamilyReady();
             db.DropAll();
         }
 
@@ -1310,6 +1369,7 @@ public partial class McpServer
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
+        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var normalizedProjectPath = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -1339,6 +1399,7 @@ public partial class McpServer
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
+        writer.ClearHotspotFamilyReady();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
@@ -1370,6 +1431,7 @@ public partial class McpServer
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
@@ -1399,6 +1461,12 @@ public partial class McpServer
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            RestampHotspotFamilyTrust(
+                writer,
+                skipped == 0,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
             // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers

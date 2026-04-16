@@ -40,6 +40,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx find <query> --path <pattern>", output);
         Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
         Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
+        Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references/callers/callees: reference kind (call/instantiate/subscribe); validate: issue kind", output);
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
@@ -60,7 +61,10 @@ public class ConsoleUiTests
         Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
         Assert.Contains("Prefer --exact-substring for search, keep --exact for find", output);
         Assert.Contains("impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints", output);
+        Assert.Contains("hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively", output);
         Assert.Contains("cdidx find guard --path src/Auth.cs --after 2", output);
+        Assert.Contains("cdidx references DbContext --kind instantiate Filter constructor sites by reference kind", output);
+        Assert.Contains("cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
