@@ -44,11 +44,25 @@ public static class ReferenceExtractor
         {
             "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
         },
+        // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
+        ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "import", "super", "yield",
+        },
+        ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "import", "super", "yield",
+        },
         // F# contextual keywords / F# 文脈キーワード
         ["fsharp"] = new HashSet<string>(StringComparer.Ordinal)
         {
             "match", "with", "member", "override", "abstract", "mutable", "rec", "fun", "open",
             "module", "type", "of", "then", "elif", "done", "begin", "end",
+        },
+        // PHP include/require constructs / PHP の include/require 構文
+        ["php"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "require", "require_once", "include", "include_once",
         },
         // SQL keywords (uppercase only to avoid collisions with other languages)
         // SQL キーワード（他言語との衝突を避けるため大文字のみ）
