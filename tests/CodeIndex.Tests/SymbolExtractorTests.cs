@@ -3412,6 +3412,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsEnumMembersWhenAttributeSharesDeclarationLine()
+    {
+        var content = "[Flags] public enum Mode\n{\n    A,\n    B = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
     public void Extract_CSharp_EnumMemberDoesNotMatchObjectInitializer()
     {
         // Object initializer lines should not be extracted as enum members

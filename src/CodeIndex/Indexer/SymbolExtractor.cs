@@ -638,6 +638,9 @@ public static class SymbolExtractor
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
+        var csharpMatchLines = lang == "csharp"
+            ? BuildCSharpMatchLines(structuralLines)
+            : null;
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
             : null;
@@ -645,7 +648,7 @@ public static class SymbolExtractor
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
         var csharpEnumBodyLines = lang == "csharp"
-            ? FindCSharpEnumBodyLines(structuralLines)
+            ? FindCSharpEnumBodyLines(csharpMatchLines!)
             : null;
         var cssQualifiedRuleAncestors = lang == "css"
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
@@ -654,7 +657,6 @@ public static class SymbolExtractor
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
-        var csharpLexState = new CSharpLexState();
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -673,9 +675,7 @@ public static class SymbolExtractor
             }
             else if (lang == "csharp")
             {
-                var lexedLine = LexCSharpLine(structuralLine, csharpLexState);
-                csharpLexState = lexedLine.EndState;
-                matchLine = StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine);
+                matchLine = csharpMatchLines![i];
             }
 
             var stopAfterFirstPatternMatch = false;
@@ -5200,20 +5200,34 @@ public static class SymbolExtractor
         && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex)
         && (csharpEnumBodyLines == null || !csharpEnumBodyLines[lineIndex]);
 
-    private static bool[] FindCSharpEnumBodyLines(string[] structuralLines)
+    private static string[] BuildCSharpMatchLines(string[] structuralLines)
     {
-        var enumBodyLines = new bool[structuralLines.Length];
+        var matchLines = new string[structuralLines.Length];
+        var csharpLexState = new CSharpLexState();
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
-            var match = CSharpEnumDeclarationRegex.Match(structuralLines[lineIndex]);
+            var lexedLine = LexCSharpLine(structuralLines[lineIndex], csharpLexState);
+            csharpLexState = lexedLine.EndState;
+            matchLines[lineIndex] = StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine);
+        }
+
+        return matchLines;
+    }
+
+    private static bool[] FindCSharpEnumBodyLines(string[] csharpMatchLines)
+    {
+        var enumBodyLines = new bool[csharpMatchLines.Length];
+        for (int lineIndex = 0; lineIndex < csharpMatchLines.Length; lineIndex++)
+        {
+            var match = CSharpEnumDeclarationRegex.Match(csharpMatchLines[lineIndex]);
             if (!match.Success)
                 continue;
 
-            var (_, bodyStartLine, bodyEndLine) = ResolveRange(structuralLines, lineIndex, BodyStyle.Brace, "csharp", match.Index);
+            var (_, bodyStartLine, bodyEndLine) = ResolveRange(csharpMatchLines, lineIndex, BodyStyle.Brace, "csharp", match.Index);
             if (bodyStartLine == null || bodyEndLine == null)
                 continue;
 
-            for (int bodyLine = bodyStartLine.Value; bodyLine <= bodyEndLine.Value && bodyLine <= structuralLines.Length; bodyLine++)
+            for (int bodyLine = bodyStartLine.Value; bodyLine <= bodyEndLine.Value && bodyLine <= csharpMatchLines.Length; bodyLine++)
                 enumBodyLines[bodyLine - 1] = true;
         }
 
