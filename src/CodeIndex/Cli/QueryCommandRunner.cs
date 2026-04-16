@@ -1091,11 +1091,27 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(content))
             return false;
 
+        var inBlockComment = false;
         foreach (var rawLine in content.Split('\n'))
         {
             var line = rawLine.Trim();
             if (line.Length == 0)
                 continue;
+
+            if (inBlockComment)
+            {
+                if (line.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = false;
+                continue;
+            }
+
+            if (line.StartsWith("/*", StringComparison.Ordinal))
+            {
+                if (!line.Contains("*/", StringComparison.Ordinal))
+                    inBlockComment = true;
+                continue;
+            }
+
             if (line.StartsWith("using ", StringComparison.Ordinal))
             {
                 if (line.StartsWith("using var ", StringComparison.Ordinal))
@@ -1111,8 +1127,6 @@ public static class QueryCommandRunner
             if (line.StartsWith("[module:", StringComparison.Ordinal))
                 continue;
             if (line.StartsWith("//", StringComparison.Ordinal))
-                continue;
-            if (line.StartsWith("/*", StringComparison.Ordinal))
                 continue;
             if (line.StartsWith("*", StringComparison.Ordinal))
                 continue;
