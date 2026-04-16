@@ -669,7 +669,7 @@ public partial class DbReader
         var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
         var sql = $@"
             WITH hotspot_sites AS (
-                SELECT s.name, COUNT(DISTINCT sr.id) AS ref_count,
+                SELECT s.id AS symbol_id, s.name, COUNT(DISTINCT sr.id) AS ref_count,
                        s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
                        {GetSymbolColumnSql("container_name")} AS container_name
@@ -687,7 +687,7 @@ public partial class DbReader
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $@"
-                GROUP BY s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path
+                GROUP BY s.id, s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path, f.lang, s.line, {GetSymbolColumnSql("visibility")}
             ),
             ranked_sites AS (
                 SELECT hs.*,

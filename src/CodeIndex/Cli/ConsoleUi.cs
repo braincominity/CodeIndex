@@ -528,8 +528,10 @@ public static class ConsoleUi
         *)
             if [ ""$cmd"" = ""find"" ]; then
                 COMPREPLY=($(compgen -W ""--db --json --no-json --limit --top --lang --path --exclude-path --exclude-tests --before --after --exact --count --query --help --"" -- ""$cur""))
+            elif [ ""$cmd"" = ""hotspots"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --group-by-name --help"" -- ""$cur""))
             else
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --group-by-name --exact --exact-substring --exact-name --help"" -- ""$cur""))
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
             fi
             ;;
     esac
@@ -573,6 +575,19 @@ _cdidx() {{
                     '--count[Count only]' \
                     '--query[Literal query]' \
                     '*:query'
+            elif [[ $subcmd == hotspots ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--count[Count only]' \
+                    '--group-by-name[Hotspots: collapse same-name rows across files]' \
+                    '*:query'
             else
                 _arguments \
                     '--db[Database path]:file:_files' \
@@ -587,7 +602,6 @@ _cdidx() {{
                     '--count[Count only]' \
                     '--fts[Raw FTS5 syntax]' \
                     '--snippet-lines[Snippet length]:number' \
-                    '--group-by-name[Hotspots: collapse same-name rows across files]' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-substring[Search-only exact substring match]' \
                     '--exact-name[Exact symbol-name equality]' \

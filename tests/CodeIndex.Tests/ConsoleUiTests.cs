@@ -129,6 +129,36 @@ public class ConsoleUiTests
         }
     }
 
+    [Theory]
+    [InlineData("bash", "if [ \"$cmd\" = \"hotspots\" ]", "--group-by-name", "--exact-name")]
+    [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows across files]", "--exact-name[Exact symbol-name equality]")]
+    public void PrintCompletions_BashAndZshScopeGroupByNameToHotspots(string shell, string hotspotsBranchMarker, string groupedFlagToken, string genericExactNameToken)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions(shell));
+                var output = writer.ToString();
+                Assert.Contains(hotspotsBranchMarker, output);
+                Assert.Contains(groupedFlagToken, output);
+
+                var hotspotsIndex = output.IndexOf(hotspotsBranchMarker, StringComparison.Ordinal);
+                var genericIndex = output.LastIndexOf(genericExactNameToken, StringComparison.Ordinal);
+                Assert.True(hotspotsIndex >= 0);
+                Assert.True(genericIndex > hotspotsIndex);
+                Assert.DoesNotContain("--group-by-name --exact-name", output, StringComparison.Ordinal);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
     [Fact]
     public void PrintCompletions_FishIncludesFindOptions()
     {
