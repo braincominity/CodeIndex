@@ -3082,6 +3082,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsLongAndCommentedRecordPrimaryComponentsAsProperties()
+    {
+        var componentLines = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"    int P{i},"));
+        var content = $$"""
+            namespace App;
+
+            public record Big(
+            {{componentLines}}
+                int Tail);
+
+            public record Point(
+                int X /* separator, comment */,
+                // the next component must still parse
+                int Y);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P30" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Tail" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsCompoundVisibility()
     {
         // protected internal and private protected / 複合アクセス修飾子
@@ -3634,6 +3660,34 @@ public class SymbolExtractorTests
         Assert.Equal("int", rangeHigh.ReturnType);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "span");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsLongAndCommentedRecordPrimaryComponentsAsProperties()
+    {
+        var componentLines = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"    int p{i},"));
+        var content = $$"""
+            package com.example;
+
+            public record Big(
+            {{componentLines}}
+                int tail
+            ) {}
+
+            public record Point(
+                int x /* separator, comment */,
+                // the next component must still parse
+                int y
+            ) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p1" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p30" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
     }
 
     [Fact]

@@ -5143,7 +5143,7 @@ public static class SymbolExtractor
         if (lang is not "csharp" and not "java")
             return false;
 
-        var declaration = CollectRecordDeclarationText(lines, declarationLineIndex);
+        var declaration = CollectRecordDeclarationText(lang, lines, declarationLineIndex, recordName);
         if (string.IsNullOrWhiteSpace(declaration))
             return false;
 
@@ -5162,7 +5162,7 @@ public static class SymbolExtractor
         if (parameterCloseIndex <= parameterOpenIndex)
             return false;
 
-        var rawParameterList = declaration[(parameterOpenIndex + 1)..parameterCloseIndex];
+        var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
         foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList))
         {
             if (TryParseRecordPrimaryComponent(lang, rawComponent, out var component))
@@ -5172,16 +5172,34 @@ public static class SymbolExtractor
         return components.Count > 0;
     }
 
-    private static string CollectRecordDeclarationText(string[] lines, int declarationLineIndex)
+    private static string CollectRecordDeclarationText(string lang, string[] lines, int declarationLineIndex, string recordName)
     {
         var builder = new System.Text.StringBuilder();
-        var maxLineIndex = Math.Min(lines.Length, declarationLineIndex + 24);
-        for (int i = declarationLineIndex; i < maxLineIndex; i++)
+        var recordRegex = lang == "csharp"
+            ? new Regex(@"\brecord(?:\s+class|\s+struct)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
+            : new Regex(@"\brecord\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        var parameterOpenIndex = -1;
+        for (int i = declarationLineIndex; i < lines.Length; i++)
         {
             if (builder.Length > 0)
                 builder.Append('\n');
 
             builder.Append(lines[i]);
+
+            var declaration = builder.ToString();
+            if (parameterOpenIndex < 0)
+            {
+                var recordMatch = recordRegex.Match(declaration);
+                if (!recordMatch.Success)
+                    continue;
+
+                parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, recordMatch.Index + recordMatch.Length);
+                if (parameterOpenIndex < 0)
+                    continue;
+            }
+
+            if (FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex) > parameterOpenIndex)
+                return declaration;
         }
 
         return builder.ToString();
@@ -5219,6 +5237,8 @@ public static class SymbolExtractor
         var angleDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
         var inSingleQuote = false;
         var inDoubleQuote = false;
         var escapeNext = false;
@@ -5226,6 +5246,25 @@ public static class SymbolExtractor
         for (int i = openIndex; i < declaration.Length; i++)
         {
             var ch = declaration[i];
+            var next = i + 1 < declaration.Length ? declaration[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
 
             if (escapeNext)
             {
@@ -5258,6 +5297,14 @@ public static class SymbolExtractor
                     continue;
                 case '"':
                     inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
                     continue;
                 case '(':
                     parenDepth++;
@@ -5398,6 +5445,108 @@ public static class SymbolExtractor
             components.Add(trailingComponent);
 
         return components;
+    }
+
+    private static string StripRecordComponentComments(string text)
+    {
+        var builder = new System.Text.StringBuilder(text.Length);
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                {
+                    inLineComment = false;
+                    builder.Append(ch);
+                }
+
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                    builder.Append(' ');
+                }
+                else if (ch == '\n')
+                {
+                    builder.Append(ch);
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                builder.Append(ch);
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            if (ch == '\'' )
+            {
+                inSingleQuote = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     private static bool TryParseRecordPrimaryComponent(string lang, string rawComponent, out RecordPrimaryComponent component)
