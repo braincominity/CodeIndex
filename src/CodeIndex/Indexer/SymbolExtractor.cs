@@ -27,6 +27,12 @@ public static class SymbolExtractor
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null);
 
+    private enum CssContextKind
+    {
+        GroupingAtRule,
+        QualifiedRule,
+    }
+
     private enum JavaScriptLexMode
     {
         Code,
@@ -567,12 +573,24 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@mixin\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @keyframes / キーフレーム
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // @font-face / フォントフェイス
+            new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // :root selector / :root セレクタ
+            new("class",    new Regex(@"^\s*(?<name>:root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // Standalone attribute selector / 単独属性セレクタ
+            new("class",    new Regex(@"^\s*(?<name>\[[^\]]+\](?:(?:::?[\w-]+)|(?:\[[^\]]+\]))*)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
+            new("class",    new Regex(@"^\s*(?<name>(?:[#.]?[\w-]+|\*)(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
-            new("class",    new Regex(@"^\.(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>\.[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS ID selector at top level / トップレベルのIDセレクタ
-            new("function", new Regex(@"^#(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // CSS custom property declaration / CSS カスタムプロパティ宣言
+            new("property", new Regex(@"^\s*(?<name>--[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             // SCSS $variable declaration / SCSS 変数宣言
             new("property", new Regex(@"^\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
+            // SCSS placeholder selector / SCSS プレースホルダーセレクタ
+            new("class",    new Regex(@"^\s*(?<name>%[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
         ["powershell"] =
         [
@@ -617,6 +635,8 @@ public static class SymbolExtractor
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -633,22 +653,44 @@ public static class SymbolExtractor
 
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var cssScannerLines = lang == "css"
+            ? MaskCssScannerLines(lines)
+            : null;
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
             : null;
         var csharpSwitchExpressionLines = lang == "csharp"
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
+        var cssQualifiedRuleAncestors = lang == "css"
+            ? FindCssQualifiedRuleAncestors(cssScannerLines!)
+            : null;
         var symbols = new List<SymbolRecord>();
+<<<<<<< HEAD
         var pendingRecordPrimaryComponents = new List<PendingRecordPrimaryComponents>();
+=======
+        var cssSeenSymbols = lang == "css"
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
+>>>>>>> origin/main
         var csharpLexState = new CSharpLexState();
 
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
             var structuralLine = structuralLines[i];
+            var cssScannerLine = cssScannerLines?[i];
             var matchLine = structuralLine;
-            if (lang == "csharp")
+            if (lang == "css" && cssScannerLine != null)
+            {
+                // Use raw CSS text for symbol-name matching so quoted selector payloads and
+                // @import values stay queryable, while brace/depth scans still rely on the
+                // separately masked scanner lines.
+                // CSS のシンボル名マッチは raw line を使い、引用付きセレクタや @import 値を
+                // 保持する。brace/depth 判定だけ別の scanner line を使う。
+                matchLine = line;
+            }
+            else if (lang == "csharp")
             {
                 var lexedLine = LexCSharpLine(structuralLine, csharpLexState);
                 csharpLexState = lexedLine.EndState;
@@ -676,6 +718,9 @@ public static class SymbolExtractor
                     }
 
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
+                        break;
+
+                    if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssQualifiedRuleAncestors, i))
                         break;
 
                     var absoluteStartColumn = lineOffset + match.Index;
@@ -720,7 +765,10 @@ public static class SymbolExtractor
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
 
-                    var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(structuralLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                    var rangeLines = lang == "css" && cssScannerLines != null
+                        ? cssScannerLines
+                        : structuralLines;
+                    var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     var startLine = i + 1;
 
                     // Python @property decorator: reclassify the def as property
@@ -729,28 +777,47 @@ public static class SymbolExtractor
                     if (kind == "function" && lang == "python" && i > 0 && lines[i - 1].TrimStart().StartsWith("@property"))
                         kind = "property";
 
+                    if (lang == "css")
+                        name = ResolveCssSymbolName(matchLine, name, lines, i, endLine);
+
+                    if (lang == "css" && string.IsNullOrWhiteSpace(name))
+                    {
+                        if (lang is "javascript" or "typescript")
+                        {
+                            lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+                            continue;
+                        }
+
+                        stopAfterFirstPatternMatch = true;
+                        break;
+                    }
+
                     var sameLineEndColumn = lang is "javascript" or "typescript"
                         && pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
                         ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
                         : -1;
 
-                    symbols.Add(new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = kind,
-                        Name = name,
-                        Line = startLine,
-                        StartLine = startLine,
-                        EndLine = Math.Max(startLine, endLine),
-                        BodyStartLine = bodyStartLine,
-                        BodyEndLine = bodyEndLine,
-                        Signature = sameLineEndColumn >= absoluteStartColumn
-                            ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
-                            : line[absoluteStartColumn..].Trim(),
-                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                        ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
-                    });
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols,
+                        startLine,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = kind,
+                            Name = name,
+                            Line = startLine,
+                            StartLine = startLine,
+                            EndLine = Math.Max(startLine, endLine),
+                            BodyStartLine = bodyStartLine,
+                            BodyEndLine = bodyEndLine,
+                            Signature = sameLineEndColumn >= absoluteStartColumn
+                                ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
+                                : line[absoluteStartColumn..].Trim(),
+                            Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                            ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
+                        });
 
                     CollectRecordPrimaryComponentSymbols(
                         fileId,
@@ -780,6 +847,41 @@ public static class SymbolExtractor
 
                 if (stopAfterFirstPatternMatch)
                     break;
+            }
+
+            if (lang == "css" && cssScannerLine != null)
+            {
+                foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
+                {
+                    var propertyName = match.Groups["name"].Value.Trim();
+                    if (propertyName.Length == 0)
+                        continue;
+
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols,
+                        i + 1,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = propertyName,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            EndLine = i + 1,
+                            Signature = line.Trim(),
+                        });
+                }
+
+                ExtractCssInlineGroupingSelectors(
+                    fileId,
+                    line,
+                    cssScannerLine,
+                    cssScannerLines!,
+                    i,
+                    patterns,
+                    symbols,
+                    cssSeenSymbols);
             }
         }
 
@@ -3166,6 +3268,127 @@ public static class SymbolExtractor
         }
     }
 
+    private static void AddSymbolRecord(
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols,
+        int lineNumber,
+        SymbolRecord symbol)
+    {
+        if (cssSeenSymbols != null)
+        {
+            var key = $"{lineNumber}:{symbol.Kind}:{symbol.Name}";
+            if (!cssSeenSymbols.Add(key))
+                return;
+        }
+
+        symbols.Add(symbol);
+    }
+
+    private static void ExtractCssInlineGroupingSelectors(
+        long fileId,
+        string rawLine,
+        string maskedLine,
+        string[] cssScannerLines,
+        int lineIndex,
+        IReadOnlyList<SymbolPattern> patterns,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        var groupingDepth = 0;
+        var qualifiedDepth = 0;
+        var segmentStart = 0;
+
+        for (int i = 0; i < maskedLine.Length; i++)
+        {
+            var ch = maskedLine[i];
+            if (ch == ';')
+            {
+                segmentStart = i + 1;
+                continue;
+            }
+
+            if (ch == '{')
+            {
+                var maskedSegment = maskedLine[segmentStart..i].Trim();
+                var rawSegment = rawLine[segmentStart..i].Trim();
+                var isGroupingAtRule = maskedSegment.StartsWith('@');
+
+                if (groupingDepth > 0 && qualifiedDepth == 0 && !isGroupingAtRule)
+                    TryAddCssInlineSelectorSegment(fileId, rawSegment, maskedSegment, cssScannerLines, lineIndex, i, patterns, symbols, cssSeenSymbols);
+
+                if (isGroupingAtRule)
+                    groupingDepth++;
+                else
+                    qualifiedDepth++;
+
+                segmentStart = i + 1;
+                continue;
+            }
+
+            if (ch == '}')
+            {
+                if (qualifiedDepth > 0)
+                    qualifiedDepth--;
+                else if (groupingDepth > 0)
+                    groupingDepth--;
+
+                segmentStart = i + 1;
+            }
+        }
+    }
+
+    private static void TryAddCssInlineSelectorSegment(
+        long fileId,
+        string rawSegment,
+        string maskedSegment,
+        string[] cssScannerLines,
+        int lineIndex,
+        int openingBraceIndex,
+        IReadOnlyList<SymbolPattern> patterns,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        if (string.IsNullOrWhiteSpace(maskedSegment))
+            return;
+
+        var matchLine = $"{rawSegment} {{";
+        foreach (var pattern in patterns)
+        {
+            if (pattern.BodyStyle != BodyStyle.Brace)
+                continue;
+
+            var match = pattern.Regex.Match(matchLine);
+            if (!match.Success)
+                continue;
+
+            var name = match.Groups["name"].Success
+                ? match.Groups["name"].Value.Trim()
+                : match.Value.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                return;
+
+            var (endLine, bodyStartLine, bodyEndLine) = FindBraceRange(cssScannerLines, lineIndex, openingBraceIndex);
+            var startLine = lineIndex + 1;
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols,
+                startLine,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = pattern.Kind,
+                    Name = name,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = Math.Max(startLine, endLine),
+                    BodyStartLine = bodyStartLine,
+                    BodyEndLine = bodyEndLine,
+                    Signature = rawSegment.Length > 0 ? $"{rawSegment} {{" : "{",
+                });
+            return;
+        }
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle) =>
         ResolveRange(lines, startIndex, bodyStyle, null, 0);
 
@@ -5084,6 +5307,238 @@ public static class SymbolExtractor
         }
 
         return switchExpressionLines;
+    }
+
+    private static string ResolveCssSymbolName(string matchLine, string name, string[] lines, int startIndex, int endLine)
+    {
+        if (!matchLine.TrimStart().StartsWith("@font-face", StringComparison.OrdinalIgnoreCase))
+            return name;
+
+        return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)
+            ? fontFamily
+            : string.Empty;
+    }
+
+    private static bool TryGetCssFontFaceFamilyName(string[] lines, int startIndex, int endLine, out string fontFamily)
+    {
+        fontFamily = string.Empty;
+        var blockLines = lines.Skip(startIndex).Take(Math.Max(1, endLine - startIndex)).ToArray();
+        var maskedBlockText = string.Join('\n', MaskCssScannerLines(blockLines));
+        var match = CssFontFaceDeclarationRegex.Match(maskedBlockText);
+        if (!match.Success)
+            return false;
+
+        var valueStart = match.Index + match.Length;
+        var valueEnd = valueStart;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        while (valueEnd < maskedBlockText.Length)
+        {
+            var ch = maskedBlockText[valueEnd];
+            if (ch == '\'' && !inDoubleQuote)
+                inSingleQuote = !inSingleQuote;
+            else if (ch == '"' && !inSingleQuote)
+                inDoubleQuote = !inDoubleQuote;
+            else if (!inSingleQuote && !inDoubleQuote && ch is ';' or '}')
+                break;
+
+            valueEnd++;
+        }
+
+        if (valueEnd == valueStart)
+            return false;
+
+        var rawBlockText = string.Join('\n', blockLines);
+        var rawName = valueEnd <= rawBlockText.Length
+            ? rawBlockText[valueStart..valueEnd]
+            : rawBlockText[valueStart..];
+        rawName = RemoveCssBlockComments(rawName).Trim();
+        if (rawName.Length == 0)
+            return false;
+
+        if ((rawName[0] == '"' && rawName[^1] == '"') || (rawName[0] == '\'' && rawName[^1] == '\''))
+            rawName = rawName[1..^1].Trim();
+
+        if (rawName.Length == 0)
+            return false;
+
+        fontFamily = rawName;
+        return true;
+    }
+
+    private static string RemoveCssBlockComments(string value)
+    {
+        if (value.Length == 0)
+            return value;
+
+        var builder = new System.Text.StringBuilder(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (i + 1 < value.Length && value[i] == '/' && value[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < value.Length && !(value[i] == '*' && value[i + 1] == '/'))
+                    i++;
+
+                if (i + 1 < value.Length)
+                    i++;
+
+                continue;
+            }
+
+            builder.Append(value[i]);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool ShouldSkipCssNestedSelectorCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        string matchLine,
+        bool[]? cssQualifiedRuleAncestors,
+        int lineIndex) =>
+        lang == "css"
+        && cssQualifiedRuleAncestors != null
+        && cssQualifiedRuleAncestors[lineIndex]
+        && pattern.Kind == "class"
+        && !matchLine.TrimStart().StartsWith('@');
+
+    private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
+    {
+        var ancestors = new bool[lines.Length];
+        var contexts = new Stack<CssContextKind>();
+
+        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            ancestors[lineIndex] = contexts.Contains(CssContextKind.QualifiedRule);
+            var line = lines[lineIndex];
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                var ch = line[cursor];
+                if (ch == '{')
+                {
+                    var segment = line[..cursor].Trim();
+                    var contextKind = segment.StartsWith("@", StringComparison.Ordinal)
+                        ? CssContextKind.GroupingAtRule
+                        : CssContextKind.QualifiedRule;
+                    contexts.Push(contextKind);
+                }
+                else if (ch == '}' && contexts.Count > 0)
+                {
+                    contexts.Pop();
+                }
+            }
+        }
+
+        return ancestors;
+    }
+
+    private static string[] MaskCssScannerLines(string[] originalLines)
+    {
+        var maskedLines = new string[originalLines.Length];
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var inUrlToken = false;
+        var urlParenDepth = 0;
+
+        for (int lineIndex = 0; lineIndex < originalLines.Length; lineIndex++)
+        {
+            var line = originalLines[lineIndex];
+            var chars = line.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (inBlockComment)
+                {
+                    chars[i] = ' ';
+                    if (i + 1 < chars.Length && line[i] == '*' && line[i + 1] == '/')
+                    {
+                        chars[i + 1] = ' ';
+                        inBlockComment = false;
+                        i++;
+                    }
+
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '*')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                }
+
+                if (!inSingleQuote
+                    && !inDoubleQuote
+                    && !inUrlToken
+                    && i + 3 < chars.Length
+                    && (line[i] == 'u' || line[i] == 'U')
+                    && (line[i + 1] == 'r' || line[i + 1] == 'R')
+                    && (line[i + 2] == 'l' || line[i + 2] == 'L')
+                    && line[i + 3] == '(')
+                {
+                    inUrlToken = true;
+                    urlParenDepth = 1;
+                    i += 3;
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && !inUrlToken && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
+                {
+                    for (int j = i; j < chars.Length; j++)
+                        chars[j] = ' ';
+
+                    break;
+                }
+
+                if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (line[i] == '"' && !inSingleQuote)
+                {
+                    chars[i] = ' ';
+                    inDoubleQuote = !inDoubleQuote;
+                    continue;
+                }
+
+                if (line[i] == '\'' && !inDoubleQuote)
+                {
+                    chars[i] = ' ';
+                    inSingleQuote = !inSingleQuote;
+                    continue;
+                }
+
+                if (inUrlToken && !inSingleQuote && !inDoubleQuote)
+                {
+                    if (line[i] == '(')
+                        urlParenDepth++;
+                    else if (line[i] == ')')
+                    {
+                        urlParenDepth--;
+                        if (urlParenDepth <= 0)
+                        {
+                            inUrlToken = false;
+                            urlParenDepth = 0;
+                        }
+                    }
+                }
+
+                if (inSingleQuote || inDoubleQuote)
+                    chars[i] = ' ';
+            }
+
+            maskedLines[lineIndex] = new string(chars);
+        }
+
+        return maskedLines;
     }
 
     private static bool IsCSharpKeywordAt(string line, int index, string keyword)
