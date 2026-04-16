@@ -755,12 +755,12 @@ sequenceDiagram
     S->>FS: inspect existing cdidx --version
     alt no explicit version and cdidx already installed healthy
         S-->>U: exit 0 with explicit-version guidance
-    else explicit version or clean install
-        alt no explicit version
-            S->>API: GET /releases/latest
-            API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
-        end
-        S->>FS: if requested version already matches and install is healthy → exit 0
+    else no explicit version and clean install
+        S->>API: GET /releases/latest
+        API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
+    else explicit version requested
+        S->>S: normalize explicit version
+        S->>FS: same version still proceeds into reinstall
     end
     S->>TMP: mkdir, trap cleanup
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
@@ -1712,12 +1712,12 @@ sequenceDiagram
     S->>FS: 既存 cdidx --version を確認
     alt 引数なし かつ cdidx 既存あり かつ健全
         S-->>U: 明示バージョン指定を案内して exit 0
-    else 明示バージョンあり または新規 install
-        alt 引数なし
-            S->>API: GET /releases/latest
-            API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
-        end
-        S->>FS: 要求バージョンと一致し かつ install が健全なら exit 0
+    else 引数なし かつ新規 install
+        S->>API: GET /releases/latest
+        API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
+    else 明示バージョン指定あり
+        S->>S: 明示バージョンを正規化
+        S->>FS: 同版でも再インストールへ進む
     end
     S->>TMP: mkdir、trap でクリーンアップ
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz

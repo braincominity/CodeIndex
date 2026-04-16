@@ -21,16 +21,18 @@ public sealed class InstallScriptTests : IDisposable
         TestProjectHelper.DeleteDirectory(_tempRoot);
     }
 
-    [Fact]
-    public void Main_WithoutExplicitVersion_SkipsLatestLookupWhenCdidxAlreadyInstalled()
+    [Theory]
+    [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
+    [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
+    public void Main_WithoutExplicitVersion_SkipsLatestLookupWhenCdidxAlreadyInstalled(string osName, string archName, string rid, string nativeAssetName)
     {
         if (OperatingSystem.IsWindows())
             return;
 
-        var installDir = Path.Combine(_tempRoot, "bin");
+        var installDir = Path.Combine(_tempRoot, $"bin_{osName}");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
-            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            detect_platform() { OS_NAME="{{osName}}"; ARCH_NAME="{{archName}}"; RID="{{rid}}"; }
             download_and_install() { echo "DOWNLOAD_SHOULD_NOT_RUN"; }
             check_path() { :; }
             curl() { echo "CURL_SHOULD_NOT_RUN"; return 99; }
@@ -42,7 +44,7 @@ public sealed class InstallScriptTests : IDisposable
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
             printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
-            : > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+            : > "{{Path.Combine(installDir, nativeAssetName)}}"
 
             main
             """,
@@ -196,16 +198,18 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("CURL_SHOULD_NOT_RUN", stdout);
     }
 
-    [Fact]
-    public void Main_WithoutExplicitVersion_LatestMatchingBrokenInstall_ReinstallsInsteadOfSkipping()
+    [Theory]
+    [InlineData("linux", "x64", "linux-x64")]
+    [InlineData("osx", "arm64", "osx-arm64")]
+    public void Main_WithoutExplicitVersion_LatestMatchingBrokenInstall_ReinstallsInsteadOfSkipping(string osName, string archName, string rid)
     {
         if (OperatingSystem.IsWindows())
             return;
 
-        var installDir = Path.Combine(_tempRoot, "latest_matching_broken_bin");
+        var installDir = Path.Combine(_tempRoot, $"latest_matching_broken_bin_{osName}");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
-            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            detect_platform() { OS_NAME="{{osName}}"; ARCH_NAME="{{archName}}"; RID="{{rid}}"; }
             download_and_install() { echo "DOWNLOAD_RAN"; }
             check_path() { :; }
             curl() {
