@@ -20,15 +20,6 @@ public static class SymbolExtractor
         VisualBasicEnd,
     }
 
-    private enum BraceScanMode
-    {
-        Standard,
-        JavaScriptLike,
-        CSharp,
-        Rust,
-        Legacy,
-    }
-
     private sealed record SymbolPattern(
         string Kind,
         Regex Regex,
@@ -41,6 +32,160 @@ public static class SymbolExtractor
         GroupingAtRule,
         QualifiedRule,
     }
+
+    private enum JavaScriptLexMode
+    {
+        Code,
+        SingleQuote,
+        DoubleQuote,
+        TemplateString,
+        BlockComment,
+    }
+
+    private enum JavaScriptPrevTokenKind
+    {
+        None,
+        Identifier,
+        Number,
+        CloseParen,
+        CloseBracket,
+        CloseBrace,
+        Other,
+    }
+
+    private enum CSharpLexMode
+    {
+        Code,
+        String,
+        Char,
+        VerbatimString,
+        RawString,
+        BlockComment,
+    }
+
+    private enum JavaScriptScopeKind
+    {
+        Other,
+        Block,
+        Function,
+        StaticBlock,
+        Class,
+        Namespace,
+        Object,
+    }
+
+    [Flags]
+    private enum JavaScriptScopePrivacyFlags
+    {
+        None = 0,
+        FunctionLike = 1,
+        Block = 2,
+        Namespace = 4,
+    }
+
+    private readonly record struct JavaScriptLexState(
+        JavaScriptLexMode Mode = JavaScriptLexMode.Code,
+        bool EscapeNext = false,
+        JavaScriptPrevTokenKind PreviousTokenKind = JavaScriptPrevTokenKind.None,
+        string? PreviousIdentifier = null,
+        bool ExpectingControlFlowOpenParen = false,
+        int ControlFlowParenDepth = 0,
+        bool RegexAllowedAfterControlFlowParen = false);
+
+    private readonly record struct JavaScriptLexedLine(
+        string SanitizedLine,
+        JavaScriptLexState EndState);
+
+    private readonly record struct CSharpLexState(
+        CSharpLexMode Mode = CSharpLexMode.Code,
+        bool EscapeNext = false,
+        int RawDelimiterLength = 0);
+
+    private readonly record struct CSharpLexedLine(
+        string SanitizedLine,
+        CSharpLexState EndState);
+
+    private readonly record struct JavaScriptClassScanTarget(
+        int StartIndex,
+        int StartColumn,
+        int ScanStartIndex,
+        int ScanEndExclusive,
+        int FirstLineScanOffset,
+        string ContainerKind,
+        string ContainerName);
+
+    private static readonly HashSet<string> TypeScriptBareMethodModifiers =
+    [
+        "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
+    ];
+
+    private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
+    [
+        "if", "for", "while", "switch", "catch", "with"
+    ];
+
+    private readonly record struct JavaScriptTypeScriptMethodHeaderInfo(
+        string Name,
+        int BodyStartColumn,
+        string? Visibility = null,
+        int? GenericStartColumn = null,
+        int? GenericEndColumn = null,
+        int? ReturnTypeStartColumn = null,
+        int? ReturnTypeEndColumn = null,
+        int? HeaderEndColumn = null,
+        bool HasBody = true);
+
+    private readonly record struct JavaScriptTypeScriptMethodHeaderCapture(
+        string SourceHeader,
+        JavaScriptTypeScriptMethodHeaderInfo HeaderInfo,
+        int HeaderEndLineIndex,
+        int HeaderEndColumn,
+        int BodyStartLineIndex,
+        int BodyStartColumn);
+
+    private struct JavaScriptTypeScriptFunctionHeaderState
+    {
+        public bool Active;
+        public bool SawParameterList;
+        public bool InReturnType;
+        public int ParenDepth;
+        public int BracketDepth;
+        public int BraceDepth;
+        public int ReturnParenDepth;
+        public int ReturnBracketDepth;
+        public int ReturnAngleDepth;
+        public int ReturnBraceDepth;
+        public bool ReturnSawToken;
+        public string? PreviousReturnToken;
+    }
+
+    private enum JavaScriptTypeScriptMethodHeaderParseStatus
+    {
+        IncompleteOrInvalid = 0,
+        Parsed = 1,
+        DeclarationOnly = 2,
+    }
+
+    private enum JavaScriptTypeScriptFunctionHeaderConsumeResult
+    {
+        NotActive = 0,
+        Consumed = 1,
+        BodyStart = 2,
+    }
+
+    private const string JavaScriptTypeScriptIdentifierPattern = @"[$\p{L}_][$\p{L}\p{Nd}_]*";
+
+    private static readonly Regex JavaScriptTypeScriptAnonymousDefaultExportRegex = new(
+        @"^\s*(?<visibility>export)\s+default\b",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptClassExpressionBindingRegex = new(
+        $@"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>{JavaScriptTypeScriptIdentifierPattern})|exports\.(?<exportsAlias>{JavaScriptTypeScriptIdentifierPattern})|module\.exports\.(?<moduleExportsAlias>{JavaScriptTypeScriptIdentifierPattern})|(?<moduleExports>module\.exports))\s*=",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TypeScriptExportEqualsRegex = new(
+        @"^\s*export\s*=",
+        RegexOptions.Compiled);
 
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
     private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
@@ -60,8 +205,7 @@ public static class SymbolExtractor
         [
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected|static)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["typescript"] =
@@ -69,7 +213,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
             // 名前空間・モジュール — 識別子形式と引用符付きアンビエント形式の両方に対応
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -77,7 +221,6 @@ public static class SymbolExtractor
             new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected|static|readonly|abstract|override)\s+)*(?:async\s+)?(?<name>\w+)\s*\([^;=]*\)\s*(?::\s*(?<returnType>[^={]+))?\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["csharp"] =
@@ -492,6 +635,9 @@ public static class SymbolExtractor
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
+        var privateScopeColumns = lang is "javascript" or "typescript"
+            ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
+            : null;
         var csharpSwitchExpressionLines = lang == "csharp"
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
@@ -502,78 +648,160 @@ public static class SymbolExtractor
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
+        var csharpLexState = new CSharpLexState();
 
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
-            var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(structuralLine) : structuralLine;
+            var matchLine = structuralLine;
+            if (lang == "css" && cssScannerLine != null)
+            {
+                matchLine = cssScannerLine;
+            }
+            else if (lang == "csharp")
+            {
+                var lexedLine = LexCSharpLine(structuralLine, csharpLexState);
+                csharpLexState = lexedLine.EndState;
+                matchLine = StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine);
+            }
+
+            var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
             {
-                var match = pattern.Regex.Match(matchLine);
-                if (!match.Success)
-                    continue;
-
-                if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
-                    continue;
-
-                if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssQualifiedRuleAncestors, i))
-                    continue;
-
-                var name = match.Groups["name"].Success
-                    ? match.Groups["name"].Value.Trim()
-                    : match.Value.Trim();
-
-                var rangeLines = lang == "css" && cssScannerLines != null
-                    ? cssScannerLines
-                    : structuralLines;
-                var braceScanMode = lang switch
+                var lineOffset = lang is "javascript" or "typescript"
+                    ? FindNextJavaScriptTypeScriptStatementStart(matchLine, 0)
+                    : 0;
+                while (lineOffset >= 0 && lineOffset < matchLine.Length)
                 {
-                    "css" => BraceScanMode.Legacy,
-                    "javascript" or "typescript" => BraceScanMode.JavaScriptLike,
-                    "csharp" => BraceScanMode.CSharp,
-                    "rust" => BraceScanMode.Rust,
-                    _ => BraceScanMode.Standard,
-                };
-                var rangeRawLines = lang == "csharp" ? lines : null;
-                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, braceScanMode, rangeRawLines);
-                var startLine = i + 1;
-
-                // Python @property decorator: reclassify the def as property
-                // Python @property デコレータ: def を property に再分類
-                var kind = pattern.Kind;
-                if (kind == "function" && lang == "python" && i > 0 && lines[i - 1].TrimStart().StartsWith("@property"))
-                    kind = "property";
-
-                if (lang == "css")
-                    name = ResolveCssSymbolName(matchLine, name, lines, i, endLine);
-
-                if (lang == "css" && string.IsNullOrWhiteSpace(name))
-                    continue;
-
-                AddSymbolRecord(
-                    symbols,
-                    cssSeenSymbols,
-                    startLine,
-                    new SymbolRecord
+                    var match = pattern.Regex.Match(matchLine[lineOffset..]);
+                    if (!match.Success)
                     {
-                        FileId = fileId,
-                        Kind = kind,
-                        Name = name,
-                        Line = startLine,
-                        StartLine = startLine,
-                        EndLine = Math.Max(startLine, endLine),
-                        BodyStartLine = bodyStartLine,
-                        BodyEndLine = bodyEndLine,
-                        Signature = line.Trim(),
-                        Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                        ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
-                    });
-                // Stop after first match per line to avoid duplicate symbols
-                // (e.g. C# method pattern + constructor pattern both matching)
-                // 1行につき最初のマッチのみ採用し重複を防ぐ
-                break;
+                        if (lang is "javascript" or "typescript")
+                        {
+                            lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, lineOffset + 1);
+                            continue;
+                        }
+
+                        break;
+                    }
+
+                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
+                        break;
+
+                    if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssQualifiedRuleAncestors, i))
+                        break;
+
+                    var absoluteStartColumn = lineOffset + match.Index;
+                    if (privateScopeColumns != null
+                        && pattern.Kind == "class"
+                        && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine, includeBlockScope: true))
+                    {
+                        if (lang is "javascript" or "typescript")
+                        {
+                            var skippedEndColumn = pattern.BodyStyle == BodyStyle.Brace
+                                ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
+                                : -1;
+                            lineOffset = skippedEndColumn >= absoluteStartColumn
+                                ? FindNextJavaScriptTypeScriptStatementStart(matchLine, skippedEndColumn + 1)
+                                : FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+                            continue;
+                        }
+
+                        break;
+                    }
+
+                    if (privateScopeColumns != null
+                        && pattern.Kind == "class"
+                        && TryGetGroup(match, pattern.VisibilityGroup) != "export"
+                        && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, absoluteStartColumn, matchLine))
+                    {
+                        if (lang is "javascript" or "typescript")
+                        {
+                            var skippedEndColumn = pattern.BodyStyle == BodyStyle.Brace
+                                ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
+                                : -1;
+                            lineOffset = skippedEndColumn >= absoluteStartColumn
+                                ? FindNextJavaScriptTypeScriptStatementStart(matchLine, skippedEndColumn + 1)
+                                : FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+                            continue;
+                        }
+
+                        break;
+                    }
+
+                    var name = match.Groups["name"].Success
+                        ? match.Groups["name"].Value.Trim()
+                        : match.Value.Trim();
+
+                    var rangeLines = lang == "css" && cssScannerLines != null
+                        ? cssScannerLines
+                        : structuralLines;
+                    var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                    var startLine = i + 1;
+
+                    // Python @property decorator: reclassify the def as property
+                    // Python @property デコレータ: def を property に再分類
+                    var kind = pattern.Kind;
+                    if (kind == "function" && lang == "python" && i > 0 && lines[i - 1].TrimStart().StartsWith("@property"))
+                        kind = "property";
+
+                    if (lang == "css")
+                        name = ResolveCssSymbolName(matchLine, name, lines, i, endLine);
+
+                    if (lang == "css" && string.IsNullOrWhiteSpace(name))
+                    {
+                        if (lang is "javascript" or "typescript")
+                            lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+
+                        continue;
+                    }
+
+                    var sameLineEndColumn = lang is "javascript" or "typescript"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && bodyEndLine == startLine
+                        ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
+                        : -1;
+
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols,
+                        startLine,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = kind,
+                            Name = name,
+                            Line = startLine,
+                            StartLine = startLine,
+                            EndLine = Math.Max(startLine, endLine),
+                            BodyStartLine = bodyStartLine,
+                            BodyEndLine = bodyEndLine,
+                            Signature = sameLineEndColumn >= absoluteStartColumn
+                                ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
+                                : line[absoluteStartColumn..].Trim(),
+                            Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                            ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
+                        });
+
+                    if (lang is not "javascript" and not "typescript"
+                        || pattern.BodyStyle != BodyStyle.Brace
+                        || bodyEndLine != startLine
+                        || sameLineEndColumn < absoluteStartColumn)
+                    {
+                        // Stop after first match per line to avoid duplicate symbols
+                        // (e.g. C# method pattern + constructor pattern both matching)
+                        // 1行につき最初のマッチのみ採用し重複を防ぐ
+                        stopAfterFirstPatternMatch = true;
+                        break;
+                    }
+
+                    lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, sameLineEndColumn + 1);
+                }
+
+                if (stopAfterFirstPatternMatch)
+                    break;
             }
 
             if (lang == "css" && cssScannerLine != null)
@@ -612,8 +840,2374 @@ public static class SymbolExtractor
             }
         }
 
+        if (lang is "javascript" or "typescript")
+            ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
+
         AssignContainers(symbols);
         return symbols;
+    }
+
+    private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        var existingClassTargets = GetJavaScriptTypeScriptExistingClassScanTargets(lang, lines, symbols);
+        ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, existingClassTargets);
+
+        var syntheticClassTargets = CollectJavaScriptTypeScriptSyntheticClassScanTargets(fileId, lang, lines, symbols, privateScopeColumns);
+        ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets);
+    }
+
+    private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
+    {
+        return symbols
+            .Where(s => s.Kind is "class" or "interface" && s.BodyStartLine != null && s.BodyEndLine != null)
+            .OrderBy(s => s.StartLine)
+            .ThenByDescending(s => s.EndLine)
+            .Select(s => CreateJavaScriptClassScanTarget(
+                lines,
+                lang,
+                s.StartLine - 1,
+                FindJavaScriptTypeScriptSymbolStartColumn(lines[s.StartLine - 1], s.Signature),
+                s.BodyStartLine,
+                s.BodyEndLine,
+                s.Kind,
+                s.Name))
+            .ToList();
+    }
+
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        var targets = new List<JavaScriptClassScanTarget>();
+        var lexState = new JavaScriptLexState();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (lineOffset >= 0 && lineOffset < sanitizedLine.Length)
+            {
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, i, lineOffset, sanitizedLine, privateScopeColumns);
+                lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, lineOffset + 1);
+            }
+        }
+
+        return targets
+            .OrderBy(t => t.StartIndex)
+            .ThenByDescending(t => t.ScanEndExclusive)
+            .ToList();
+    }
+
+    private static bool IsInsideJavaScriptTypeScriptPrivateScope(Stack<JavaScriptScopeKind> scopeStack)
+    {
+        return scopeStack.Any(scopeKind => scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock);
+    }
+
+    private static JavaScriptScopePrivacyFlags GetJavaScriptTypeScriptPrivacyFlags(Stack<JavaScriptScopeKind> scopeStack, bool arrowExpressionActive)
+    {
+        var flags = JavaScriptScopePrivacyFlags.None;
+        if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
+            flags |= JavaScriptScopePrivacyFlags.FunctionLike;
+        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Block))
+            flags |= JavaScriptScopePrivacyFlags.Block;
+        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Namespace))
+            flags |= JavaScriptScopePrivacyFlags.Namespace;
+
+        return flags;
+    }
+
+    private static bool IsInsideJavaScriptTypeScriptMethodContainer(Stack<JavaScriptScopeKind> scopeStack)
+    {
+        return scopeStack.Count > 0 && scopeStack.Peek() is JavaScriptScopeKind.Class or JavaScriptScopeKind.Object;
+    }
+
+    private static void BeginJavaScriptTypeScriptFunctionHeader(ref JavaScriptTypeScriptFunctionHeaderState state)
+    {
+        state = new JavaScriptTypeScriptFunctionHeaderState
+        {
+            Active = true,
+        };
+    }
+
+    private static JavaScriptTypeScriptFunctionHeaderConsumeResult ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+        ref JavaScriptTypeScriptFunctionHeaderState state,
+        string sanitizedLine,
+        int column,
+        string lang,
+        out int advanceColumns)
+    {
+        advanceColumns = 0;
+        if (!state.Active)
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.NotActive;
+
+        var ch = sanitizedLine[column];
+        if (char.IsWhiteSpace(ch))
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+
+        if (state.InReturnType)
+        {
+            if (ch == ';'
+                && state.ReturnParenDepth == 0
+                && state.ReturnBracketDepth == 0
+                && state.ReturnAngleDepth == 0
+                && state.ReturnBraceDepth == 0)
+            {
+                state = default;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '(')
+            {
+                state.ReturnParenDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "(";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == ')' && state.ReturnParenDepth > 0)
+            {
+                state.ReturnParenDepth--;
+                state.PreviousReturnToken = ")";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '[')
+            {
+                state.ReturnBracketDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "[";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == ']' && state.ReturnBracketDepth > 0)
+            {
+                state.ReturnBracketDepth--;
+                state.PreviousReturnToken = "]";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '<')
+            {
+                state.ReturnAngleDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "<";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '>' && state.ReturnAngleDepth > 0)
+            {
+                state.ReturnAngleDepth--;
+                state.PreviousReturnToken = ">";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '{')
+            {
+                if (state.ReturnParenDepth == 0
+                    && state.ReturnBracketDepth == 0
+                    && state.ReturnAngleDepth == 0
+                    && state.ReturnBraceDepth == 0)
+                {
+                    if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(state.PreviousReturnToken))
+                    {
+                        state.ReturnBraceDepth++;
+                        state.ReturnSawToken = true;
+                        state.PreviousReturnToken = "{";
+                        return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+                    }
+
+                    if (state.ReturnSawToken)
+                    {
+                        state = default;
+                        return JavaScriptTypeScriptFunctionHeaderConsumeResult.BodyStart;
+                    }
+                }
+
+                state.ReturnBraceDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "{";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '}' && state.ReturnBraceDepth > 0)
+            {
+                state.ReturnBraceDepth--;
+                state.PreviousReturnToken = "}";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch is '?' or ':' or '|' or '&' or ',')
+            {
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = ch.ToString();
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+            {
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "=>";
+                advanceColumns = 1;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            var returnTypeIndex = column;
+            if (TrySkipTypeScriptTypeToken(sanitizedLine, ref returnTypeIndex, out var returnTypeToken))
+            {
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = returnTypeToken;
+                advanceColumns = returnTypeIndex - column - 1;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            state.ReturnSawToken = true;
+            state.PreviousReturnToken = ch.ToString();
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (lang == "typescript" && state.SawParameterList && ch == ':')
+        {
+            state.InReturnType = true;
+            state.ReturnParenDepth = 0;
+            state.ReturnBracketDepth = 0;
+            state.ReturnAngleDepth = 0;
+            state.ReturnBraceDepth = 0;
+            state.ReturnSawToken = false;
+            state.PreviousReturnToken = ":";
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '(')
+        {
+            state.ParenDepth++;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == ')' && state.ParenDepth > 0)
+        {
+            state.ParenDepth--;
+            if (state.ParenDepth == 0 && state.BracketDepth == 0 && state.BraceDepth == 0)
+                state.SawParameterList = true;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '[' && (state.ParenDepth > 0 || state.BracketDepth > 0 || state.BraceDepth > 0 || !state.SawParameterList))
+        {
+            state.BracketDepth++;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == ']' && state.BracketDepth > 0)
+        {
+            state.BracketDepth--;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '{')
+        {
+            if (state.SawParameterList && state.ParenDepth == 0 && state.BracketDepth == 0 && state.BraceDepth == 0)
+            {
+                state = default;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.BodyStart;
+            }
+
+            state.BraceDepth++;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '}' && state.BraceDepth > 0)
+        {
+            state.BraceDepth--;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == ';')
+        {
+            state = default;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        var tokenIndex = column;
+        if (TrySkipTypeScriptTypeToken(sanitizedLine, ref tokenIndex, out _))
+        {
+            advanceColumns = tokenIndex - column - 1;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+    }
+
+    private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
+    {
+        var privateColumns = new JavaScriptScopePrivacyFlags[lines.Length][];
+        var lexState = new JavaScriptLexState();
+        var scopeStack = new Stack<JavaScriptScopeKind>();
+        var pendingFunctionScope = false;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
+        var pendingStaticBlockScope = false;
+        var pendingClassScope = false;
+        var pendingNamespaceScope = false;
+        var pendingConciseMethodScope = false;
+        var pendingConciseMethodReturnType = false;
+        var conciseMethodReturnParenDepth = 0;
+        var conciseMethodReturnBracketDepth = 0;
+        var conciseMethodReturnAngleDepth = 0;
+        var conciseMethodReturnBraceDepth = 0;
+        var conciseMethodReturnSawToken = false;
+        string? previousConciseMethodReturnToken = null;
+        var pendingArrowBody = false;
+        var arrowExpressionActive = false;
+        var arrowExpressionParenDepth = 0;
+        var arrowExpressionBracketDepth = 0;
+        var arrowExpressionBraceDepth = 0;
+        var previousTokenKind = JavaScriptPrevTokenKind.None;
+        string? previousIdentifier = null;
+        char previousSignificantChar = '\0';
+
+        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var linePrivateColumns = new JavaScriptScopePrivacyFlags[sanitizedLine.Length];
+
+            if (arrowExpressionActive
+                && arrowExpressionBraceDepth == 0
+                && arrowExpressionParenDepth == 0
+                && arrowExpressionBracketDepth == 0
+                && !StartsJavaScriptTypeScriptExpressionContinuation(sanitizedLine))
+            {
+                arrowExpressionActive = false;
+            }
+
+            for (int column = 0; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+
+                if (char.IsWhiteSpace(ch))
+                    continue;
+
+                if (pendingArrowBody)
+                {
+                    if (ch == '{')
+                    {
+                        scopeStack.Push(JavaScriptScopeKind.Function);
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                        pendingArrowBody = false;
+                        continue;
+                    }
+
+                    arrowExpressionActive = true;
+                    linePrivateColumns[column] = JavaScriptScopePrivacyFlags.FunctionLike;
+                    pendingArrowBody = false;
+                }
+
+                if (pendingConciseMethodReturnType)
+                {
+                    if (ch == '(')
+                    {
+                        conciseMethodReturnParenDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "(";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == ')' && conciseMethodReturnParenDepth > 0)
+                    {
+                        conciseMethodReturnParenDepth--;
+                        previousConciseMethodReturnToken = ")";
+                        previousTokenKind = JavaScriptPrevTokenKind.CloseParen;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        conciseMethodReturnBracketDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "[";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == ']' && conciseMethodReturnBracketDepth > 0)
+                    {
+                        conciseMethodReturnBracketDepth--;
+                        previousConciseMethodReturnToken = "]";
+                        previousTokenKind = JavaScriptPrevTokenKind.CloseBracket;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '<')
+                    {
+                        conciseMethodReturnAngleDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "<";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '>' && conciseMethodReturnAngleDepth > 0)
+                    {
+                        conciseMethodReturnAngleDepth--;
+                        previousConciseMethodReturnToken = ">";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '{')
+                    {
+                        if (conciseMethodReturnParenDepth == 0
+                            && conciseMethodReturnBracketDepth == 0
+                            && conciseMethodReturnAngleDepth == 0
+                            && conciseMethodReturnBraceDepth == 0)
+                        {
+                            if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(previousConciseMethodReturnToken))
+                            {
+                                conciseMethodReturnBraceDepth++;
+                                conciseMethodReturnSawToken = true;
+                                previousConciseMethodReturnToken = "{";
+                                previousTokenKind = JavaScriptPrevTokenKind.Other;
+                                previousIdentifier = null;
+                                previousSignificantChar = ch;
+                                continue;
+                            }
+
+                            if (conciseMethodReturnSawToken)
+                            {
+                                linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                                scopeStack.Push(JavaScriptScopeKind.Function);
+                                pendingConciseMethodScope = false;
+                                pendingConciseMethodReturnType = false;
+                                conciseMethodReturnParenDepth = 0;
+                                conciseMethodReturnBracketDepth = 0;
+                                conciseMethodReturnAngleDepth = 0;
+                                conciseMethodReturnBraceDepth = 0;
+                                conciseMethodReturnSawToken = false;
+                                previousConciseMethodReturnToken = null;
+                                previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                                previousIdentifier = null;
+                                previousSignificantChar = ch;
+                                continue;
+                            }
+                        }
+
+                        conciseMethodReturnBraceDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "{";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '}' && conciseMethodReturnBraceDepth > 0)
+                    {
+                        conciseMethodReturnBraceDepth--;
+                        previousConciseMethodReturnToken = "}";
+                        previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '?' || ch == ':' || ch == '|' || ch == '&' || ch == ',')
+                    {
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = ch.ToString();
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+                    {
+                        linePrivateColumns[column + 1] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "=>";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = '>';
+                        column++;
+                        continue;
+                    }
+
+                    if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                    {
+                        var returnTokenStart = column;
+                        column++;
+                        while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                        {
+                            linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                            column++;
+                        }
+
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = sanitizedLine[returnTokenStart..column];
+                        previousTokenKind = JavaScriptPrevTokenKind.Identifier;
+                        previousIdentifier = previousConciseMethodReturnToken;
+                        previousSignificantChar = sanitizedLine[column - 1];
+                        column--;
+                        continue;
+                    }
+
+                    conciseMethodReturnSawToken = true;
+                    previousConciseMethodReturnToken = ch.ToString();
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (pendingFunctionScope)
+                {
+                    var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                        ref functionHeaderState,
+                        sanitizedLine,
+                        column,
+                        lang,
+                        out var functionHeaderAdvanceColumns);
+                    if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+                    {
+                        previousTokenKind = ch switch
+                        {
+                            ')' => JavaScriptPrevTokenKind.CloseParen,
+                            ']' => JavaScriptPrevTokenKind.CloseBracket,
+                            _ => JavaScriptPrevTokenKind.Other,
+                        };
+                        previousIdentifier = null;
+                        previousSignificantChar = sanitizedLine[Math.Min(column + functionHeaderAdvanceColumns, sanitizedLine.Length - 1)];
+                        column += functionHeaderAdvanceColumns;
+                        continue;
+                    }
+                }
+
+                if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    column++;
+                    while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                    {
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+
+                        column++;
+                    }
+
+                    var token = sanitizedLine[tokenStart..column];
+                    if (token == "function")
+                    {
+                        pendingFunctionScope = true;
+                        BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                        pendingStaticBlockScope = false;
+                        pendingConciseMethodScope = false;
+                        pendingConciseMethodReturnType = false;
+                    }
+                    else if (token == "static")
+                    {
+                        pendingStaticBlockScope = IsInsideJavaScriptTypeScriptMethodContainer(scopeStack);
+                    }
+                    else if (token == "class")
+                    {
+                        pendingClassScope = true;
+                        pendingStaticBlockScope = false;
+                        pendingConciseMethodScope = false;
+                        pendingConciseMethodReturnType = false;
+                    }
+                    else if (lang == "typescript" && token is "namespace" or "module")
+                    {
+                        pendingNamespaceScope = true;
+                        pendingStaticBlockScope = false;
+                    }
+                    else
+                    {
+                        pendingStaticBlockScope = false;
+                    }
+
+                    previousTokenKind = JavaScriptPrevTokenKind.Identifier;
+                    previousIdentifier = token;
+                    previousSignificantChar = sanitizedLine[column - 1];
+                    column--;
+                    continue;
+                }
+
+                if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+                {
+                    linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                    linePrivateColumns[column + 1] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                    pendingArrowBody = true;
+                    pendingFunctionScope = false;
+                    functionHeaderState = default;
+                    pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingNamespaceScope = false;
+                    pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = '>';
+                    column++;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    if (arrowExpressionActive)
+                        arrowExpressionParenDepth++;
+
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == ')')
+                {
+                    if (arrowExpressionActive && arrowExpressionParenDepth > 0)
+                        arrowExpressionParenDepth--;
+
+                    if (IsInsideJavaScriptTypeScriptMethodContainer(scopeStack))
+                    {
+                        pendingConciseMethodScope = true;
+                        pendingConciseMethodReturnType = false;
+                        conciseMethodReturnParenDepth = 0;
+                        conciseMethodReturnBracketDepth = 0;
+                        conciseMethodReturnAngleDepth = 0;
+                        conciseMethodReturnBraceDepth = 0;
+                        conciseMethodReturnSawToken = false;
+                        previousConciseMethodReturnToken = null;
+                    }
+
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseParen;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    if (arrowExpressionActive)
+                        arrowExpressionBracketDepth++;
+
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == ']')
+                {
+                    if (arrowExpressionActive && arrowExpressionBracketDepth > 0)
+                        arrowExpressionBracketDepth--;
+
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseBracket;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == '{')
+                {
+                    var scopeKind = JavaScriptScopeKind.Other;
+                    if (pendingFunctionScope)
+                        scopeKind = JavaScriptScopeKind.Function;
+                    else if (pendingConciseMethodScope)
+                        scopeKind = JavaScriptScopeKind.Function;
+                    else if (pendingStaticBlockScope)
+                        scopeKind = JavaScriptScopeKind.StaticBlock;
+                    else if (pendingClassScope)
+                        scopeKind = JavaScriptScopeKind.Class;
+                    else if (pendingNamespaceScope)
+                        scopeKind = JavaScriptScopeKind.Namespace;
+                    else if (CanStartJavaScriptTypeScriptObjectLiteral(previousTokenKind, previousIdentifier, previousSignificantChar))
+                        scopeKind = JavaScriptScopeKind.Object;
+                    else
+                        scopeKind = JavaScriptScopeKind.Block;
+
+                    linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+
+                    scopeStack.Push(scopeKind);
+                    if (arrowExpressionActive)
+                        arrowExpressionBraceDepth++;
+
+                    pendingFunctionScope = false;
+                    functionHeaderState = default;
+                    pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingNamespaceScope = false;
+                    pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == '}')
+                {
+                    if (arrowExpressionActive)
+                    {
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                        if (arrowExpressionBraceDepth > 0)
+                            arrowExpressionBraceDepth--;
+                    }
+
+                    if (scopeStack.Count > 0)
+                        scopeStack.Pop();
+
+                    pendingFunctionScope = false;
+                    functionHeaderState = default;
+                    pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingNamespaceScope = false;
+                    pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
+                    previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch is ';' or ',')
+                {
+                    if (arrowExpressionActive
+                        && arrowExpressionBraceDepth == 0
+                        && arrowExpressionParenDepth == 0
+                        && arrowExpressionBracketDepth == 0)
+                    {
+                        linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                        arrowExpressionActive = false;
+                    }
+
+                    pendingFunctionScope = false;
+                    functionHeaderState = default;
+                    pendingStaticBlockScope = false;
+                    pendingClassScope = false;
+                    pendingNamespaceScope = false;
+                    pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (ch == ':')
+                {
+                    if (pendingConciseMethodScope && lang == "typescript")
+                    {
+                        pendingConciseMethodReturnType = true;
+                        conciseMethodReturnParenDepth = 0;
+                        conciseMethodReturnBracketDepth = 0;
+                        conciseMethodReturnAngleDepth = 0;
+                        conciseMethodReturnBraceDepth = 0;
+                        conciseMethodReturnSawToken = false;
+                        previousConciseMethodReturnToken = ":";
+                    }
+
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
+                if (pendingStaticBlockScope && ch != '{')
+                    pendingStaticBlockScope = false;
+                if (pendingNamespaceScope && ch is not '{' and not '.')
+                    pendingNamespaceScope = false;
+
+                previousTokenKind = JavaScriptPrevTokenKind.Other;
+                previousIdentifier = null;
+                previousSignificantChar = ch;
+            }
+
+            privateColumns[lineIndex] = linePrivateColumns;
+        }
+
+        return privateColumns;
+    }
+
+    private static bool CanStartJavaScriptTypeScriptObjectLiteral(
+        JavaScriptPrevTokenKind previousTokenKind,
+        string? previousIdentifier,
+        char previousSignificantChar)
+    {
+        if (previousSignificantChar is '=' or '(' or '[' or ',' or ':' or '?' or '!')
+            return true;
+
+        if (previousIdentifier is "return" or "throw" or "case" or "else")
+            return true;
+
+        return previousTokenKind == JavaScriptPrevTokenKind.None;
+    }
+
+    private static bool StartsJavaScriptTypeScriptExpressionContinuation(string sanitizedLine)
+    {
+        var index = 0;
+        while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+            index++;
+
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        var remaining = sanitizedLine[index..];
+        if (remaining.StartsWith(".", StringComparison.Ordinal)
+            || remaining.StartsWith("?.", StringComparison.Ordinal)
+            || remaining.StartsWith("[", StringComparison.Ordinal)
+            || remaining.StartsWith("(", StringComparison.Ordinal)
+            || remaining.StartsWith("`", StringComparison.Ordinal)
+            || remaining.StartsWith("?.[", StringComparison.Ordinal))
+            return true;
+
+        if (Regex.IsMatch(remaining, @"^(?:\+\+|--|\+|-|\*|/|%|\*\*|&&|\|\||\?\?|\?|:|==|===|!=|!==|<=|>=|<|>|=>|&|\||\^|<<|>>|>>>|,)\b?"))
+            return true;
+
+        if (Regex.IsMatch(remaining, @"^(?:instanceof|in|as|satisfies)\b"))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsAnonymousJavaScriptTypeScriptDefaultClassDeclaration(string[] lines, int startIndex, int startColumn)
+    {
+        if (!TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(lines, startIndex, startColumn, "javascript", out var tokenLineIndex, out var tokenStartColumn))
+            return false;
+
+        startIndex = tokenLineIndex;
+        startColumn = tokenStartColumn + "class".Length;
+        if (!TryAdvanceJavaScriptTypeScriptClassHeaderContinuation(lines, startIndex, startColumn, "javascript", out startIndex, out startColumn))
+            return false;
+
+        var lexState = new JavaScriptLexState();
+        for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == startIndex ? startColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    column++;
+                    while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                        column++;
+
+                    var nextToken = sanitizedLine[tokenStart..column];
+                    return nextToken is "extends" or "implements";
+                }
+
+                return ch == '{';
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        string lang,
+        out int classLineIndex,
+        out int classStartColumn)
+    {
+        classLineIndex = -1;
+        classStartColumn = -1;
+
+        if (!TryGetJavaScriptTypeScriptNextToken(lines, startIndex, startColumn, skipWrappingParens: true, out classLineIndex, out classStartColumn, out var token))
+            return false;
+
+        if (lang == "typescript" && token == "abstract")
+        {
+            if (!TryGetJavaScriptTypeScriptNextToken(lines, classLineIndex, classStartColumn + token.Length, skipWrappingParens: false, out classLineIndex, out classStartColumn, out token))
+                return false;
+        }
+
+        if (token != "class")
+            return false;
+
+        var inspectLineIndex = classLineIndex;
+        var inspectStartColumn = classStartColumn + token.Length;
+        if (!TryAdvanceJavaScriptTypeScriptClassHeaderContinuation(lines, inspectLineIndex, inspectStartColumn, lang, out inspectLineIndex, out inspectStartColumn))
+            return false;
+
+        var lexState = new JavaScriptLexState();
+        for (int lineIndex = inspectLineIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == inspectLineIndex ? inspectStartColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    column++;
+                    while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                        column++;
+
+                    var nextToken = sanitizedLine[tokenStart..column];
+                    return nextToken is "extends" or "implements";
+                }
+
+                return ch == '{';
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryAdvanceJavaScriptTypeScriptClassHeaderContinuation(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        string lang,
+        out int nextLineIndex,
+        out int nextColumn)
+    {
+        nextLineIndex = startIndex;
+        nextColumn = startColumn;
+        if (lang != "typescript")
+            return true;
+
+        var lexState = new JavaScriptLexState();
+        var sawTypeParameterList = false;
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == startIndex ? startColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (!sawTypeParameterList)
+                {
+                    if (ch != '<')
+                    {
+                        nextLineIndex = lineIndex;
+                        nextColumn = column;
+                        return true;
+                    }
+
+                    sawTypeParameterList = true;
+                    angleDepth = 1;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '{')
+                {
+                    braceDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '<')
+                {
+                    angleDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+                {
+                    column += 2;
+                    continue;
+                }
+
+                if (ch == '>' && angleDepth > 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                {
+                    angleDepth--;
+                    column++;
+                    if (angleDepth == 0)
+                    {
+                        while (column < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[column]))
+                            column++;
+
+                        nextLineIndex = lineIndex;
+                        nextColumn = column;
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                column++;
+            }
+        }
+
+        return !sawTypeParameterList;
+    }
+
+    private static bool IsJavaScriptTypeScriptMatchInPrivateScope(
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns,
+        int lineIndex,
+        int startColumn,
+        string matchLine,
+        bool includeBlockScope)
+    {
+        if (lineIndex < 0 || lineIndex >= privateScopeColumns.Length)
+            return false;
+
+        var linePrivateColumns = privateScopeColumns[lineIndex];
+        if (linePrivateColumns.Length == 0)
+            return false;
+
+        var column = Math.Max(0, startColumn);
+        while (column < matchLine.Length && char.IsWhiteSpace(matchLine[column]))
+            column++;
+
+        if (column >= linePrivateColumns.Length)
+            return false;
+
+        var flags = linePrivateColumns[column];
+        if ((flags & JavaScriptScopePrivacyFlags.FunctionLike) != 0)
+            return true;
+
+        return includeBlockScope && (flags & JavaScriptScopePrivacyFlags.Block) != 0;
+    }
+
+    private static bool IsJavaScriptTypeScriptMatchInNamespaceScope(
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns,
+        int lineIndex,
+        int startColumn,
+        string matchLine)
+    {
+        if (lineIndex < 0 || lineIndex >= privateScopeColumns.Length)
+            return false;
+
+        var linePrivateColumns = privateScopeColumns[lineIndex];
+        if (linePrivateColumns.Length == 0)
+            return false;
+
+        var column = Math.Max(0, startColumn);
+        while (column < matchLine.Length && char.IsWhiteSpace(matchLine[column]))
+            column++;
+
+        if (column >= linePrivateColumns.Length)
+            return false;
+
+        return (linePrivateColumns[column] & JavaScriptScopePrivacyFlags.Namespace) != 0;
+    }
+
+    private static bool IsJavaScriptTypeScriptControlFlowHeader(string sanitizedLine, int startColumn)
+    {
+        var index = Math.Max(0, startColumn);
+        if (index >= sanitizedLine.Length || !IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+            return false;
+
+        var tokenStart = index;
+        index++;
+        while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
+            index++;
+
+        var token = sanitizedLine[tokenStart..index];
+        if (!JavaScriptTypeScriptControlFlowHeaderKeywords.Contains(token))
+            return false;
+
+        if (index >= sanitizedLine.Length || !char.IsWhiteSpace(sanitizedLine[index]))
+            return false;
+
+        while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+            index++;
+
+        return index < sanitizedLine.Length && sanitizedLine[index] == '(';
+    }
+
+    private static void ExtractJavaScriptTypeScriptBareMethodsInTargets(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        List<JavaScriptClassScanTarget> classScanTargets)
+    {
+        foreach (var classScanTarget in classScanTargets)
+            ExtractJavaScriptTypeScriptBareMethodsInClass(fileId, lang, lines, symbols, classScanTarget);
+    }
+
+    private static void TryAddJavaScriptTypeScriptSyntheticClassTarget(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        List<JavaScriptClassScanTarget> targets,
+        int startIndex,
+        int startColumn,
+        string sanitizedLine,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        var lineRemainder = sanitizedLine[startColumn..];
+        var anonymousDefaultMatch = JavaScriptTypeScriptAnonymousDefaultExportRegex.Match(lineRemainder);
+        if (anonymousDefaultMatch.Success)
+        {
+            if (!TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(
+                lines,
+                startIndex,
+                startColumn + anonymousDefaultMatch.Index + anonymousDefaultMatch.Length,
+                lang,
+                out var classTokenLineIndex,
+                out var classTokenStartColumn))
+                return;
+
+            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + anonymousDefaultMatch.Index, sanitizedLine, includeBlockScope: false))
+                return;
+
+            if (TryGetGroup(anonymousDefaultMatch, "visibility") != "export"
+                && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + anonymousDefaultMatch.Index, sanitizedLine))
+            {
+                return;
+            }
+
+        AddJavaScriptTypeScriptSyntheticClassTarget(
+            fileId,
+            lang,
+            lines,
+            symbols,
+            targets,
+            startIndex,
+            startColumn + anonymousDefaultMatch.Index,
+            classTokenLineIndex,
+            classTokenStartColumn,
+            containerName: "default",
+            visibility: TryGetGroup(anonymousDefaultMatch, "visibility"));
+            return;
+        }
+
+        if (lang == "typescript")
+        {
+            var exportEqualsMatch = TypeScriptExportEqualsRegex.Match(lineRemainder);
+            if (exportEqualsMatch.Success)
+            {
+                if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, startColumn + exportEqualsMatch.Index + exportEqualsMatch.Length))
+                    return;
+
+                if (!TryGetJavaScriptTypeScriptNextToken(
+                    lines,
+                    startIndex,
+                    startColumn + exportEqualsMatch.Index + exportEqualsMatch.Length,
+                    skipWrappingParens: true,
+                    out var exportEqualsClassTokenLineIndex,
+                    out var exportEqualsClassTokenStartColumn,
+                    out _))
+                {
+                    return;
+                }
+
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + exportEqualsMatch.Index, sanitizedLine, includeBlockScope: false))
+                    return;
+
+                if (IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + exportEqualsMatch.Index, sanitizedLine))
+                    return;
+
+                AddJavaScriptTypeScriptSyntheticClassTarget(
+                    fileId,
+                    lang,
+                    lines,
+                    symbols,
+                    targets,
+                    startIndex,
+                    startColumn + exportEqualsMatch.Index,
+                    exportEqualsClassTokenLineIndex,
+                    exportEqualsClassTokenStartColumn,
+                    containerName: "default",
+                    visibility: "export");
+                return;
+            }
+        }
+
+        var classExpressionBindingMatch = JavaScriptTypeScriptClassExpressionBindingRegex.Match(lineRemainder);
+        if (!classExpressionBindingMatch.Success)
+            return;
+
+        if (!IsJavaScriptTypeScriptClassExpressionDeclaration(lines, startIndex, startColumn + classExpressionBindingMatch.Index + classExpressionBindingMatch.Length))
+            return;
+
+        if (!TryGetJavaScriptTypeScriptNextToken(
+            lines,
+            startIndex,
+            startColumn + classExpressionBindingMatch.Index + classExpressionBindingMatch.Length,
+            skipWrappingParens: true,
+            out var classExpressionTokenLineIndex,
+            out var classExpressionTokenStartColumn,
+            out _))
+        {
+            return;
+        }
+
+        var includeBlockScope = classExpressionBindingMatch.Groups["bindingKind"].Success
+            && classExpressionBindingMatch.Groups["bindingKind"].Value is "const" or "let";
+        if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, startIndex, startColumn + classExpressionBindingMatch.Index, sanitizedLine, includeBlockScope))
+            return;
+
+        if (TryGetGroup(classExpressionBindingMatch, "visibility") != "export"
+            && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + classExpressionBindingMatch.Index, sanitizedLine))
+        {
+            return;
+        }
+
+        var containerName = TryGetGroup(classExpressionBindingMatch, "alias")
+            ?? TryGetGroup(classExpressionBindingMatch, "exportsAlias")
+            ?? TryGetGroup(classExpressionBindingMatch, "moduleExportsAlias")
+            ?? (classExpressionBindingMatch.Groups["moduleExports"].Success ? "default" : null)
+            ?? "class";
+        AddJavaScriptTypeScriptSyntheticClassTarget(
+            fileId,
+            lang,
+            lines,
+            symbols,
+            targets,
+            startIndex,
+            startColumn + classExpressionBindingMatch.Index,
+            classExpressionTokenLineIndex,
+            classExpressionTokenStartColumn,
+            containerName,
+            TryGetGroup(classExpressionBindingMatch, "visibility"));
+    }
+
+    private static bool IsJavaScriptTypeScriptClassExpressionDeclaration(string[] lines, int startIndex, int startColumn)
+    {
+        return TryGetJavaScriptTypeScriptNextToken(lines, startIndex, startColumn, skipWrappingParens: true, out _, out _, out var token)
+            && token == "class";
+    }
+
+    private static void AddJavaScriptTypeScriptSyntheticClassTarget(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        List<JavaScriptClassScanTarget> targets,
+        int declarationStartIndex,
+        int declarationStartColumn,
+        int classTokenLineIndex,
+        int classTokenStartColumn,
+        string containerName,
+        string? visibility)
+    {
+        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, classTokenLineIndex, BodyStyle.Brace, lang, classTokenStartColumn);
+        if (bodyStartLine == null || bodyEndLine == null)
+            return;
+
+        var existingClass = symbols.FirstOrDefault(s => s.Kind == "class" && s.Line == declarationStartIndex + 1 && s.Name == containerName);
+        if (existingClass == null)
+        {
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = containerName,
+                Line = declarationStartIndex + 1,
+                StartLine = declarationStartIndex + 1,
+                EndLine = Math.Max(declarationStartIndex + 1, endLine),
+                BodyStartLine = bodyStartLine,
+                BodyEndLine = bodyEndLine,
+                Signature = BuildJavaScriptTypeScriptSyntheticClassSignature(lines, declarationStartIndex, declarationStartColumn, classTokenLineIndex, classTokenStartColumn, bodyStartLine, bodyEndLine, lang),
+                Visibility = visibility,
+            });
+        }
+
+        var candidate = CreateJavaScriptClassScanTarget(lines, lang, classTokenLineIndex, classTokenStartColumn, bodyStartLine, bodyEndLine, "class", containerName);
+        if (!targets.Any(t => t.StartIndex == candidate.StartIndex
+            && t.StartColumn == candidate.StartColumn
+            && t.ScanStartIndex == candidate.ScanStartIndex
+            && t.ScanEndExclusive == candidate.ScanEndExclusive
+            && t.FirstLineScanOffset == candidate.FirstLineScanOffset
+            && t.ContainerKind == candidate.ContainerKind
+            && t.ContainerName == candidate.ContainerName))
+        {
+            targets.Add(candidate);
+        }
+    }
+
+    private static string BuildJavaScriptTypeScriptSyntheticClassSignature(
+        string[] lines,
+        int declarationStartIndex,
+        int declarationStartColumn,
+        int classTokenLineIndex,
+        int classTokenStartColumn,
+        int? bodyStartLine,
+        int? bodyEndLine,
+        string lang)
+    {
+        var line = lines[declarationStartIndex];
+        if (declarationStartColumn >= line.Length)
+            return string.Empty;
+
+        if (bodyEndLine == declarationStartIndex + 1)
+        {
+            var sameLineEndColumn = FindJavaScriptTypeScriptSameLineBraceEndColumn(line, classTokenStartColumn, lang);
+            if (sameLineEndColumn >= declarationStartColumn)
+                return line[declarationStartColumn..(sameLineEndColumn + 1)].Trim();
+        }
+
+        if (bodyStartLine == null)
+            return line[declarationStartColumn..].Trim();
+
+        var bodyStartIndex = bodyStartLine.Value - 1;
+        var bodyOpenBraceColumn = FindJavaScriptBodyOpenBraceIndex(lines, classTokenLineIndex, bodyStartIndex, lang, classTokenStartColumn);
+        if (bodyOpenBraceColumn < 0)
+            return line[declarationStartColumn..].Trim();
+
+        var signatureBuilder = new System.Text.StringBuilder();
+        for (int lineIndex = declarationStartIndex; lineIndex <= bodyStartIndex; lineIndex++)
+        {
+            var sourceLine = lines[lineIndex];
+            var startColumn = lineIndex == declarationStartIndex
+                ? Math.Min(declarationStartColumn, sourceLine.Length)
+                : 0;
+            var endExclusive = lineIndex == bodyStartIndex
+                ? Math.Min(bodyOpenBraceColumn + 1, sourceLine.Length)
+                : sourceLine.Length;
+            if (startColumn >= endExclusive)
+                continue;
+
+            var segment = sourceLine[startColumn..endExclusive].Trim();
+            if (segment.Length == 0)
+                continue;
+
+            if (signatureBuilder.Length > 0)
+                signatureBuilder.Append(' ');
+
+            signatureBuilder.Append(segment);
+        }
+
+        return signatureBuilder.Length > 0
+            ? signatureBuilder.ToString()
+            : line[declarationStartColumn..].Trim();
+    }
+
+    private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerKind, string containerName)
+    {
+        var scanStartIndex = bodyStartLine!.Value - 1;
+        var scanEndExclusive = bodyEndLine!.Value;
+        var firstLineScanOffset = FindJavaScriptBodyOpenBraceIndex(lines, startIndex, scanStartIndex, lang, startColumn);
+        if (firstLineScanOffset >= 0)
+            firstLineScanOffset++;
+        else
+            firstLineScanOffset = 0;
+
+        return new JavaScriptClassScanTarget(
+            startIndex,
+            startColumn,
+            scanStartIndex,
+            scanEndExclusive,
+            firstLineScanOffset,
+            containerKind,
+            containerName);
+    }
+
+    private static void ExtractJavaScriptTypeScriptBareMethodsInClass(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        JavaScriptClassScanTarget classScanTarget)
+    {
+        if (classScanTarget.ScanStartIndex >= classScanTarget.ScanEndExclusive)
+            return;
+
+        var scanStartIndex = classScanTarget.ScanStartIndex;
+        var scanEndExclusive = classScanTarget.ScanEndExclusive;
+        var nestedBraceDepth = 0;
+        var inFieldInitializer = false;
+        var initializerParenDepth = 0;
+        var initializerBracketDepth = 0;
+        var initializerBraceDepth = 0;
+        var lexState = new JavaScriptLexState();
+        var seenMethodStarts = new HashSet<(int Line, int Column)>();
+        var pendingHeaderEndLineIndex = -1;
+        var pendingHeaderEndColumn = -1;
+        var pendingBodyStartLineIndex = -1;
+        var pendingBodyStartColumn = -1;
+
+        for (int i = scanStartIndex; i < scanEndExclusive; i++)
+        {
+            var line = lines[i];
+            var lexedLine = LexJavaScriptLine(line, lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+
+            if (pendingHeaderEndLineIndex >= 0)
+            {
+                if (i < pendingHeaderEndLineIndex)
+                    continue;
+            }
+
+            if (pendingBodyStartLineIndex >= 0)
+            {
+                if (i < pendingBodyStartLineIndex)
+                    continue;
+
+                if (i == pendingBodyStartLineIndex)
+                {
+                    if (pendingBodyStartColumn >= 0 && pendingBodyStartColumn < sanitizedLine.Length)
+                    {
+                        nestedBraceDepth += CountBraces(sanitizedLine[pendingBodyStartColumn..]);
+                        if (nestedBraceDepth < 0)
+                            nestedBraceDepth = 0;
+                    }
+
+                    pendingBodyStartLineIndex = -1;
+                    pendingBodyStartColumn = -1;
+                    continue;
+                }
+            }
+
+            var scanStartColumn = i == scanStartIndex
+                ? Math.Min(classScanTarget.FirstLineScanOffset, sanitizedLine.Length)
+                : 0;
+            if (pendingHeaderEndLineIndex == i)
+            {
+                scanStartColumn = Math.Max(scanStartColumn, Math.Min(pendingHeaderEndColumn + 1, sanitizedLine.Length));
+                pendingHeaderEndLineIndex = -1;
+                pendingHeaderEndColumn = -1;
+            }
+
+            if (inFieldInitializer
+                && initializerParenDepth == 0
+                && initializerBracketDepth == 0
+                && initializerBraceDepth == 0)
+            {
+                var continuationInput = scanStartColumn >= sanitizedLine.Length
+                    ? string.Empty
+                    : sanitizedLine[scanStartColumn..];
+                if (continuationInput.Any(ch => !char.IsWhiteSpace(ch))
+                    && !StartsJavaScriptTypeScriptFieldInitializerContinuation(continuationInput, lang))
+                {
+                    inFieldInitializer = false;
+                }
+            }
+
+            var column = scanStartColumn;
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (inFieldInitializer)
+                {
+                    AdvanceJavaScriptTypeScriptFieldInitializerState(
+                        ref inFieldInitializer,
+                        ref initializerParenDepth,
+                        ref initializerBracketDepth,
+                        ref initializerBraceDepth,
+                        ch);
+                    column++;
+                    continue;
+                }
+
+                if (nestedBraceDepth == 0
+                    && IsJavaScriptTypeScriptMethodCandidateStart(sanitizedLine, column)
+                    && !IsJavaScriptTypeScriptControlFlowHeader(sanitizedLine, column))
+                {
+                    if (TryCaptureJavaScriptTypeScriptMethodHeader(
+                        lines,
+                        i,
+                        column,
+                        scanEndExclusive,
+                        sanitizedLine,
+                        lexState,
+                        lang,
+                        out var methodCapture))
+                    {
+                        var methodHeader = methodCapture.HeaderInfo;
+                        var startLine = i + 1;
+                        if (seenMethodStarts.Add((startLine, column)))
+                        {
+                            var (endLine, bodyStartLine, bodyEndLine) = methodHeader.HasBody
+                                ? ResolveRange(lines, i, BodyStyle.Brace, lang, column)
+                                : (methodCapture.HeaderEndLineIndex + 1, null, null);
+                            var sameLineMethodEndColumn = methodHeader.HasBody && bodyEndLine == startLine
+                                ? FindJavaScriptSameLineBodyEndColumn(line, column, lang)
+                                : methodCapture.HeaderEndLineIndex == i
+                                    ? methodCapture.HeaderEndColumn
+                                    : -1;
+                            symbols.Add(new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "function",
+                                Name = GetJavaScriptTypeScriptMethodNameFromSource(methodCapture.SourceHeader, 0) ?? methodHeader.Name,
+                                Line = startLine,
+                                StartLine = startLine,
+                                EndLine = Math.Max(startLine, endLine),
+                                BodyStartLine = bodyStartLine,
+                                BodyEndLine = bodyEndLine,
+                                Signature = BuildJavaScriptTypeScriptBareMethodSignature(
+                                    lines,
+                                    i,
+                                    column,
+                                    bodyEndLine,
+                                    sameLineMethodEndColumn,
+                                    methodCapture,
+                                    lang),
+                                ContainerKind = classScanTarget.ContainerKind,
+                                ContainerName = classScanTarget.ContainerName,
+                                Visibility = methodHeader.Visibility,
+                                ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(methodCapture.SourceHeader, methodHeader, lang),
+                            });
+
+                            if (sameLineMethodEndColumn >= column)
+                            {
+                                column = sameLineMethodEndColumn + 1;
+                                continue;
+                            }
+
+                            if (methodHeader.HasBody && methodCapture.BodyStartLineIndex > i)
+                            {
+                                pendingBodyStartLineIndex = methodCapture.BodyStartLineIndex;
+                                pendingBodyStartColumn = methodCapture.BodyStartColumn;
+                                break;
+                            }
+
+                            if (methodCapture.HeaderEndLineIndex > i)
+                            {
+                                pendingHeaderEndLineIndex = methodCapture.HeaderEndLineIndex;
+                                pendingHeaderEndColumn = methodCapture.HeaderEndColumn;
+                                break;
+                            }
+                        }
+
+                        if (methodHeader.HasBody
+                            && methodCapture.BodyStartLineIndex == i
+                            && methodCapture.BodyStartColumn >= 0
+                            && methodCapture.BodyStartColumn < sanitizedLine.Length)
+                        {
+                            nestedBraceDepth += CountBraces(sanitizedLine[methodCapture.BodyStartColumn..]);
+                            if (nestedBraceDepth < 0)
+                                nestedBraceDepth = 0;
+                            break;
+                        }
+
+                        column++;
+                        continue;
+                    }
+                }
+
+                if (nestedBraceDepth == 0 && CanStartJavaScriptTypeScriptClassFieldInitializer(sanitizedLine, column))
+                {
+                    inFieldInitializer = true;
+                    initializerParenDepth = 0;
+                    initializerBracketDepth = 0;
+                    initializerBraceDepth = 0;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '{')
+                {
+                    nestedBraceDepth++;
+                }
+                else if (ch == '}' && nestedBraceDepth > 0)
+                {
+                    nestedBraceDepth--;
+                }
+
+                column++;
+            }
+        }
+    }
+
+    private static void AdvanceJavaScriptTypeScriptFieldInitializerState(
+        ref bool inFieldInitializer,
+        ref int initializerParenDepth,
+        ref int initializerBracketDepth,
+        ref int initializerBraceDepth,
+        char ch)
+    {
+        if (ch == '(')
+        {
+            initializerParenDepth++;
+            return;
+        }
+
+        if (ch == ')' && initializerParenDepth > 0)
+        {
+            initializerParenDepth--;
+            return;
+        }
+
+        if (ch == '[')
+        {
+            initializerBracketDepth++;
+            return;
+        }
+
+        if (ch == ']' && initializerBracketDepth > 0)
+        {
+            initializerBracketDepth--;
+            return;
+        }
+
+        if (ch == '{')
+        {
+            initializerBraceDepth++;
+            return;
+        }
+
+        if (ch == '}' && initializerBraceDepth > 0)
+        {
+            initializerBraceDepth--;
+            return;
+        }
+
+        if (ch == ';'
+            && initializerParenDepth == 0
+            && initializerBracketDepth == 0
+            && initializerBraceDepth == 0)
+        {
+            inFieldInitializer = false;
+        }
+    }
+
+    private static bool StartsJavaScriptTypeScriptFieldInitializerContinuation(string continuationInput, string? lang)
+    {
+        var firstNonWhitespace = 0;
+        while (firstNonWhitespace < continuationInput.Length && char.IsWhiteSpace(continuationInput[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        if (firstNonWhitespace >= continuationInput.Length)
+            return false;
+
+        if (IsJavaScriptTypeScriptMethodCandidateStart(continuationInput, firstNonWhitespace))
+        {
+            var matchCandidate = lang == "typescript"
+                ? NormalizeTypeScriptBareMethodMatchInput(continuationInput[firstNonWhitespace..])
+                : continuationInput[firstNonWhitespace..];
+            if (TryParseJavaScriptTypeScriptMethodHeader(matchCandidate, 0, lang, out _))
+                return false;
+        }
+
+        return StartsJavaScriptTypeScriptExpressionContinuation(continuationInput);
+    }
+
+    private static bool CanStartJavaScriptTypeScriptClassFieldInitializer(string sanitizedLine, int index)
+    {
+        if (index < 0 || index >= sanitizedLine.Length || sanitizedLine[index] != '=')
+            return false;
+
+        return index + 1 >= sanitizedLine.Length || sanitizedLine[index + 1] != '>';
+    }
+
+    private static bool IsJavaScriptTypeScriptMethodCandidateStart(string sanitizedLine, int index)
+    {
+        if (index < 0 || index >= sanitizedLine.Length)
+            return false;
+
+        var ch = sanitizedLine[index];
+        if (ch != '#'
+            && ch != '*'
+            && ch != '['
+            && ch != '\''
+            && ch != '"'
+            && !char.IsDigit(ch)
+            && !IsJavaScriptTypeScriptIdentifierStart(ch))
+            return false;
+
+        return index == 0 || !IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index - 1]);
+    }
+
+    private static JavaScriptLexedLine LexJavaScriptLine(string line, JavaScriptLexState state)
+    {
+        var sanitized = new char[line.Length];
+        var i = 0;
+
+        while (i < line.Length)
+        {
+            var ch = line[i];
+            var next = i + 1 < line.Length ? line[i + 1] : '\0';
+
+            if (state.Mode == JavaScriptLexMode.BlockComment)
+            {
+                sanitized[i] = ' ';
+                if (ch == '*' && next == '/')
+                {
+                    sanitized[i + 1] = ' ';
+                    state = state with { Mode = JavaScriptLexMode.Code };
+                    i++;
+                }
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == JavaScriptLexMode.SingleQuote)
+            {
+                sanitized[i] = ch is '\'' or '\\' ? ch : ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    state = state with { Mode = JavaScriptLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == JavaScriptLexMode.DoubleQuote)
+            {
+                sanitized[i] = ch is '"' or '\\' ? ch : ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"')
+                    state = state with { Mode = JavaScriptLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == JavaScriptLexMode.TemplateString)
+            {
+                sanitized[i] = ch is '`' or '\\' ? ch : ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '`')
+                    state = state with { Mode = JavaScriptLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                while (i < line.Length)
+                {
+                    sanitized[i] = ' ';
+                    i++;
+                }
+
+                break;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                state = state with { Mode = JavaScriptLexMode.BlockComment };
+                i++;
+                i++;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                sanitized[i] = ch;
+                i++;
+                continue;
+            }
+
+            if (state.ExpectingControlFlowOpenParen && ch != '(')
+                state = state with { ExpectingControlFlowOpenParen = false };
+
+            if (state.RegexAllowedAfterControlFlowParen && ch != '/')
+            {
+                state = state with
+                {
+                    RegexAllowedAfterControlFlowParen = false
+                };
+            }
+
+            if (ch == '\'')
+            {
+                sanitized[i] = ch;
+                state = state with { Mode = JavaScriptLexMode.SingleQuote, EscapeNext = false };
+                i++;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                sanitized[i] = ch;
+                state = state with { Mode = JavaScriptLexMode.DoubleQuote, EscapeNext = false };
+                i++;
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                sanitized[i] = ch;
+                state = state with { Mode = JavaScriptLexMode.TemplateString, EscapeNext = false };
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && CanStartJavaScriptRegexLiteral(state))
+            {
+                sanitized[i] = ' ';
+                i = SkipJavaScriptRegexLiteral(line, sanitized, i);
+                state = state with
+                {
+                    PreviousTokenKind = JavaScriptPrevTokenKind.Other,
+                    PreviousIdentifier = null
+                };
+                i++;
+                continue;
+            }
+
+            if (char.IsLetter(ch) || ch == '_' || ch == '$')
+            {
+                var tokenStart = i;
+                while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '$'))
+                {
+                    sanitized[i] = line[i];
+                    i++;
+                }
+
+                state = state with
+                {
+                    PreviousTokenKind = JavaScriptPrevTokenKind.Identifier,
+                    PreviousIdentifier = line[tokenStart..i],
+                    ExpectingControlFlowOpenParen = IsJavaScriptControlFlowKeyword(line[tokenStart..i])
+                };
+                continue;
+            }
+
+            if (char.IsDigit(ch))
+            {
+                sanitized[i] = ch;
+                i++;
+                while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '.'))
+                {
+                    sanitized[i] = line[i];
+                    i++;
+                }
+
+                state = state with
+                {
+                    PreviousTokenKind = JavaScriptPrevTokenKind.Number,
+                    PreviousIdentifier = null,
+                    ExpectingControlFlowOpenParen = false
+                };
+                continue;
+            }
+
+            sanitized[i] = ch;
+            if (!char.IsWhiteSpace(ch))
+            {
+                var controlFlowParenDepth = state.ControlFlowParenDepth;
+                var regexAllowedAfterControlFlowParen = state.RegexAllowedAfterControlFlowParen;
+
+                if (ch == '(')
+                {
+                    if (state.ExpectingControlFlowOpenParen)
+                    {
+                        controlFlowParenDepth = 1;
+                        regexAllowedAfterControlFlowParen = false;
+                    }
+                    else if (controlFlowParenDepth > 0)
+                    {
+                        controlFlowParenDepth++;
+                    }
+                }
+                else if (ch == ')' && controlFlowParenDepth > 0)
+                {
+                    controlFlowParenDepth--;
+                    if (controlFlowParenDepth == 0)
+                        regexAllowedAfterControlFlowParen = true;
+                }
+
+                state = state with
+                {
+                    PreviousTokenKind = ch switch
+                    {
+                        ')' => JavaScriptPrevTokenKind.CloseParen,
+                        ']' => JavaScriptPrevTokenKind.CloseBracket,
+                        '}' => JavaScriptPrevTokenKind.CloseBrace,
+                        _ => JavaScriptPrevTokenKind.Other
+                    },
+                    PreviousIdentifier = null,
+                    ExpectingControlFlowOpenParen = false,
+                    ControlFlowParenDepth = controlFlowParenDepth,
+                    RegexAllowedAfterControlFlowParen = regexAllowedAfterControlFlowParen
+                };
+            }
+
+            i++;
+        }
+
+        return new JavaScriptLexedLine(new string(sanitized), state);
+    }
+
+    private static CSharpLexedLine LexCSharpLine(string line, CSharpLexState state)
+    {
+        var sanitized = new char[line.Length];
+        var i = 0;
+
+        while (i < line.Length)
+        {
+            var ch = line[i];
+            var next = i + 1 < line.Length ? line[i + 1] : '\0';
+
+            if (state.Mode == CSharpLexMode.BlockComment)
+            {
+                sanitized[i] = ' ';
+                if (ch == '*' && next == '/')
+                {
+                    sanitized[i + 1] = ' ';
+                    state = state with { Mode = CSharpLexMode.Code };
+                    i += 2;
+                    continue;
+                }
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.String)
+            {
+                sanitized[i] = ch is '"' or '\\' ? ch : ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.Char)
+            {
+                sanitized[i] = ch is '\'' or '\\' ? ch : ' ';
+
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.VerbatimString)
+            {
+                sanitized[i] = ch == '"' ? '"' : ' ';
+                if (ch == '"' && next == '"')
+                {
+                    sanitized[i + 1] = '"';
+                    i += 2;
+                    continue;
+                }
+
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.RawString)
+            {
+                sanitized[i] = ' ';
+                if (ch == '"' && HasCSharpQuoteRun(line, i, state.RawDelimiterLength))
+                {
+                    var quoteRunLength = GetCSharpQuoteRunLength(line, i);
+                    for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
+                        sanitized[i + j] = ' ';
+
+                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
+                    i += quoteRunLength;
+                    continue;
+                }
+
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                while (i < line.Length)
+                {
+                    sanitized[i] = ' ';
+                    i++;
+                }
+
+                break;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                state = state with { Mode = CSharpLexMode.BlockComment };
+                i += 2;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                sanitized[i] = ch;
+                i++;
+                continue;
+            }
+
+            if (TryReadCSharpRawStringStart(line, i, out var rawPrefixLength, out var rawDelimiterLength))
+            {
+                for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < line.Length; j++)
+                    sanitized[i + j] = ' ';
+
+                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
+                i += rawPrefixLength + rawDelimiterLength;
+                continue;
+            }
+
+            if (ch == '@' && next == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 2;
+                continue;
+            }
+
+            if (ch == '$' && next == '@' && i + 2 < line.Length && line[i + 2] == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                sanitized[i + 2] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                continue;
+            }
+
+            if (ch == '@' && next == '$' && i + 2 < line.Length && line[i + 2] == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = ' ';
+                sanitized[i + 2] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                continue;
+            }
+
+            if (ch == '$' && next == '"')
+            {
+                sanitized[i] = ' ';
+                sanitized[i + 1] = '"';
+                state = state with { Mode = CSharpLexMode.String };
+                i += 2;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                sanitized[i] = '"';
+                state = state with { Mode = CSharpLexMode.String };
+                i++;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                sanitized[i] = '\'';
+                state = state with { Mode = CSharpLexMode.Char };
+                i++;
+                continue;
+            }
+
+            sanitized[i] = ch;
+            i++;
+        }
+
+        return new CSharpLexedLine(new string(sanitized), state);
+    }
+
+    private static bool TryReadCSharpRawStringStart(string line, int index, out int prefixLength, out int delimiterLength)
+    {
+        prefixLength = 0;
+        delimiterLength = 0;
+        var probe = index;
+
+        while (probe < line.Length && line[probe] == '$')
+        {
+            prefixLength++;
+            probe++;
+        }
+
+        delimiterLength = GetCSharpQuoteRunLength(line, probe);
+        return delimiterLength >= 3;
+    }
+
+    private static int GetCSharpQuoteRunLength(string line, int index)
+    {
+        var length = 0;
+        while (index + length < line.Length && line[index + length] == '"')
+            length++;
+
+        return length;
+    }
+
+    private static bool HasCSharpQuoteRun(string line, int index, int requiredLength)
+    {
+        if (requiredLength <= 0)
+            return false;
+
+        return GetCSharpQuoteRunLength(line, index) >= requiredLength;
+    }
+
+    private static bool CanStartJavaScriptRegexLiteral(JavaScriptLexState state)
+    {
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.None)
+            return true;
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Other)
+            return true;
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.Identifier)
+        {
+            return IsJavaScriptRegexPrefixKeyword(state.PreviousIdentifier);
+        }
+
+        if (state.PreviousTokenKind == JavaScriptPrevTokenKind.CloseParen)
+            return state.RegexAllowedAfterControlFlowParen;
+
+        return false;
+    }
+
+    private static bool IsJavaScriptControlFlowKeyword(string identifier)
+    {
+        return identifier is "if" or "for" or "while" or "switch" or "catch" or "with";
+    }
+
+    private static bool IsJavaScriptRegexPrefixKeyword(string? identifier)
+    {
+        return identifier is
+            "return" or "throw" or "case" or "delete" or "typeof" or "void" or "new" or
+            "in" or "of" or "instanceof" or "yield" or "await" or "else" or "do" or "finally";
+    }
+
+    private static int SkipJavaScriptRegexLiteral(string line, char[] sanitized, int slashIndex)
+    {
+        var i = slashIndex + 1;
+        var inCharacterClass = false;
+
+        while (i < line.Length)
+        {
+            sanitized[i] = ' ';
+            var ch = line[i];
+            if (ch == '\\')
+            {
+                if (i + 1 < line.Length)
+                {
+                    sanitized[i + 1] = ' ';
+                    i += 2;
+                    continue;
+                }
+
+                return i;
+            }
+
+            if (ch == '[')
+            {
+                inCharacterClass = true;
+                i++;
+                continue;
+            }
+
+            if (ch == ']' && inCharacterClass)
+            {
+                inCharacterClass = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && !inCharacterClass)
+            {
+                i++;
+                while (i < line.Length && char.IsLetter(line[i]))
+                {
+                    sanitized[i] = ' ';
+                    i++;
+                }
+
+                return i - 1;
+            }
+
+            i++;
+        }
+
+        return line.Length - 1;
+    }
+
+    private static int CountBraces(string sanitizedLine)
+    {
+        var delta = 0;
+        foreach (var ch in sanitizedLine)
+        {
+            if (ch == '{')
+                delta++;
+            else if (ch == '}')
+                delta--;
+        }
+
+        return delta;
     }
 
     public static void ApplyFamilyScope(IEnumerable<SymbolRecord> symbols, string scopeKey)
@@ -726,7 +3320,7 @@ public static class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 return;
 
-            var (endLine, bodyStartLine, bodyEndLine) = FindBraceRange(cssScannerLines, lineIndex, openingBraceIndex, BraceScanMode.Legacy);
+            var (endLine, bodyStartLine, bodyEndLine) = FindBraceRange(cssScannerLines, lineIndex, openingBraceIndex);
             var startLine = lineIndex + 1;
             AddSymbolRecord(
                 symbols,
@@ -748,11 +3342,16 @@ public static class SymbolExtractor
         }
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, BraceScanMode braceScanMode = BraceScanMode.Standard, string[]? rawLines = null)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle) =>
+        ResolveRange(lines, startIndex, bodyStyle, null, 0);
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string? lang = null, int startColumn = 0)
     {
         return bodyStyle switch
         {
-            BodyStyle.Brace => FindBraceRange(lines, startIndex, 0, braceScanMode, rawLines),
+            BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
+            BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
+            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
@@ -760,113 +3359,252 @@ public static class SymbolExtractor
         };
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int openingBraceOffset = 0, BraceScanMode braceScanMode = BraceScanMode.Standard, string[]? rawLines = null)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaScriptBraceRange(string[] lines, int startIndex, string? lang, int startColumn = 0)
     {
-        if (braceScanMode == BraceScanMode.Legacy)
-            return FindBraceRangeLegacy(lines, startIndex, openingBraceOffset);
-
-        int depth = 0;
-        bool opened = false;
+        var depth = 0;
+        var opened = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
+        var pendingArrowBody = false;
+        var arrowExpressionActive = false;
+        var arrowExpressionParenDepth = 0;
+        var arrowExpressionBracketDepth = 0;
+        var arrowExpressionBraceDepth = 0;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
         int? bodyStartLine = null;
-        var insideBlockComment = false;
-        var tracksSingleQuotes = braceScanMode != BraceScanMode.Rust;
-        var usesRawCSharpLines = braceScanMode == BraceScanMode.CSharp && rawLines != null;
-        var tracksJavaScriptTemplates = braceScanMode == BraceScanMode.JavaScriptLike;
-        List<int>? templateInterpolationDepths = tracksJavaScriptTemplates ? new List<int>() : null;
+        var lexState = new JavaScriptLexState();
 
         for (int i = startIndex; i < lines.Length; i++)
         {
-            var line = lines[i];
-            var rawLine = usesRawCSharpLines && i < rawLines!.Length ? rawLines[i] : line;
-            var charStart = i == startIndex
-                ? Math.Clamp(openingBraceOffset, 0, Math.Max(0, line.Length - 1))
-                : 0;
-            var inSingleQuote = false;
-            var inDoubleQuote = false;
-
-            for (int charIndex = charStart; charIndex < line.Length; charIndex++)
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var effectiveStartColumn = startColumn;
+            if (i == startIndex
+                && startColumn > 0
+                && TryParseJavaScriptTypeScriptMethodHeader(lexedLine.SanitizedLine, startColumn, lang, out var methodHeader))
             {
-                var c = line[charIndex];
+                effectiveStartColumn = methodHeader.BodyStartColumn;
+            }
 
-                if (tracksJavaScriptTemplates && templateInterpolationDepths!.Count > 0 && templateInterpolationDepths[^1] == 0)
+            var scanLine = i == startIndex && effectiveStartColumn > 0 && effectiveStartColumn < lexedLine.SanitizedLine.Length
+                ? lexedLine.SanitizedLine[effectiveStartColumn..]
+                : i == startIndex && effectiveStartColumn >= lexedLine.SanitizedLine.Length
+                    ? string.Empty
+                    : lexedLine.SanitizedLine;
+
+            if (arrowExpressionActive
+                && arrowExpressionBraceDepth == 0
+                && arrowExpressionParenDepth == 0
+                && arrowExpressionBracketDepth == 0
+                && !StartsJavaScriptTypeScriptExpressionContinuation(scanLine))
+            {
+                return (i, bodyStartLine ?? startIndex + 1, i);
+            }
+
+            for (int column = 0; column < scanLine.Length; column++)
+            {
+                var ch = scanLine[column];
+                if (!opened
+                    && !arrowExpressionActive
+                    && !functionHeaderState.Active
+                    && IsJavaScriptTypeScriptIdentifierStart(ch))
                 {
-                    if (c == '\\' && charIndex + 1 < line.Length)
+                    var tokenStart = column;
+                    var tokenEnd = column + 1;
+                    while (tokenEnd < scanLine.Length && IsJavaScriptTypeScriptIdentifierPart(scanLine[tokenEnd]))
+                        tokenEnd++;
+
+                    if (scanLine[tokenStart..tokenEnd] == "function")
                     {
-                        charIndex++;
+                        BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                        column = tokenEnd - 1;
+                        continue;
+                    }
+                }
+
+                if (!opened && !arrowExpressionActive)
+                {
+                    var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                        ref functionHeaderState,
+                        scanLine,
+                        column,
+                        lang ?? "javascript",
+                        out var functionHeaderAdvanceColumns);
+                    if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+                    {
+                        column += functionHeaderAdvanceColumns;
+                        continue;
+                    }
+                }
+
+                if (!opened && !arrowExpressionActive && i == startIndex && ch == '=' && column + 1 < scanLine.Length && scanLine[column + 1] == '>')
+                {
+                    pendingArrowBody = true;
+                    column++;
+                    continue;
+                }
+
+                if (pendingArrowBody)
+                {
+                    if (char.IsWhiteSpace(ch))
+                        continue;
+
+                    bodyStartLine ??= i + 1;
+                    if (ch == '{')
+                        pendingArrowBody = false;
+                    else
+                    {
+                        arrowExpressionActive = true;
+                        pendingArrowBody = false;
+                    }
+                }
+
+                if (arrowExpressionActive)
+                {
+                    if (ch == '(')
+                    {
+                        arrowExpressionParenDepth++;
                         continue;
                     }
 
-                    if (c == '`')
+                    if (ch == ')' && arrowExpressionParenDepth > 0)
                     {
-                        templateInterpolationDepths.RemoveAt(templateInterpolationDepths.Count - 1);
+                        arrowExpressionParenDepth--;
                         continue;
                     }
 
-                    if (c == '$' && charIndex + 1 < line.Length && line[charIndex + 1] == '{')
+                    if (ch == '[')
                     {
-                        templateInterpolationDepths[^1] = 1;
-                        charIndex++;
+                        arrowExpressionBracketDepth++;
+                        continue;
+                    }
+
+                    if (ch == ']' && arrowExpressionBracketDepth > 0)
+                    {
+                        arrowExpressionBracketDepth--;
+                        continue;
+                    }
+
+                    if (ch == '{')
+                    {
+                        arrowExpressionBraceDepth++;
+                        continue;
+                    }
+
+                    if (ch == '}' && arrowExpressionBraceDepth > 0)
+                    {
+                        arrowExpressionBraceDepth--;
+                        continue;
+                    }
+
+                    if (ch == ';'
+                        && arrowExpressionParenDepth == 0
+                        && arrowExpressionBracketDepth == 0
+                        && arrowExpressionBraceDepth == 0)
+                    {
+                        return (i + 1, bodyStartLine ?? startIndex + 1, i + 1);
                     }
 
                     continue;
                 }
 
-                if (insideBlockComment)
+                if (!opened)
                 {
-                    if (charIndex + 1 < line.Length && c == '*' && line[charIndex + 1] == '/')
+                    if (ch == '(')
                     {
-                        insideBlockComment = false;
-                        charIndex++;
+                        parenDepth++;
+                        continue;
                     }
 
-                    continue;
+                    if (ch == ')' && parenDepth > 0)
+                    {
+                        parenDepth--;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        bracketDepth++;
+                        continue;
+                    }
+
+                    if (ch == ']' && bracketDepth > 0)
+                    {
+                        bracketDepth--;
+                        continue;
+                    }
+
+                    if (ch == '<')
+                    {
+                        if (lang == "typescript" && parenDepth == 0 && bracketDepth == 0)
+                            angleDepth++;
+                        continue;
+                    }
+
+                    if (ch == '>' && angleDepth > 0)
+                    {
+                        angleDepth--;
+                        continue;
+                    }
                 }
 
-                if (!inSingleQuote && !inDoubleQuote && charIndex + 1 < line.Length && c == '/' && line[charIndex + 1] == '*')
+                if (ch == '{')
                 {
-                    insideBlockComment = true;
-                    charIndex++;
-                    continue;
+                    if (!opened && (parenDepth > 0 || bracketDepth > 0 || angleDepth > 0))
+                        continue;
+
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLine = i + 1;
+                    }
                 }
-
-                if (!inSingleQuote && !inDoubleQuote && charIndex + 1 < line.Length && c == '/' && line[charIndex + 1] == '/')
-                    break;
-
-                if ((inSingleQuote || inDoubleQuote) && c == '\\' && charIndex + 1 < line.Length)
+                else if (ch == '}' && opened)
                 {
-                    charIndex++;
-                    continue;
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
                 }
+            }
 
-                if (c == '"' && !inSingleQuote)
-                {
-                    inDoubleQuote = !inDoubleQuote;
-                    continue;
-                }
+            if (!opened
+                && !arrowExpressionActive
+                && !functionHeaderState.Active
+                && parenDepth == 0
+                && bracketDepth == 0
+                && angleDepth == 0
+                && scanLine.TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
 
-                if (tracksSingleQuotes && c == '\'' && !inDoubleQuote)
-                {
-                    inSingleQuote = !inSingleQuote;
-                    continue;
-                }
+        if (arrowExpressionActive)
+            return (lines.Length, bodyStartLine ?? startIndex + 1, lines.Length);
 
-                if (inSingleQuote || inDoubleQuote)
-                    continue;
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
+    }
 
-                if (tracksJavaScriptTemplates && c == '`')
-                {
-                    templateInterpolationDepths!.Add(0);
-                    continue;
-                }
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    {
+        int depth = 0;
+        bool opened = false;
+        int? bodyStartLine = null;
 
-                if (braceScanMode == BraceScanMode.CSharp && (c == '{' || c == '}') && IsSingleCharLiteralBrace(rawLine, charIndex, c))
-                    continue;
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var scanLine = i == startIndex && startColumn > 0 && startColumn < lines[i].Length
+                ? lines[i][startColumn..]
+                : i == startIndex && startColumn >= lines[i].Length
+                    ? string.Empty
+                    : lines[i];
 
+            foreach (var c in scanLine)
+            {
                 if (c == '{')
                 {
-                    if (tracksJavaScriptTemplates && templateInterpolationDepths!.Count > 0 && templateInterpolationDepths[^1] > 0)
-                        templateInterpolationDepths[^1]++;
-
                     depth++;
                     if (!opened)
                     {
@@ -876,82 +3614,1386 @@ public static class SymbolExtractor
                 }
                 else if (c == '}' && opened)
                 {
-                    if (tracksJavaScriptTemplates && templateInterpolationDepths!.Count > 0 && templateInterpolationDepths[^1] > 0)
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                }
+            }
+
+            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
+
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
+    }
+
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCSharpBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    {
+        int depth = 0;
+        bool opened = false;
+        int? bodyStartLine = null;
+        var lexState = new CSharpLexState();
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var scanLine = i == startIndex && startColumn > 0 && startColumn < sanitizedLine.Length
+                ? sanitizedLine[startColumn..]
+                : i == startIndex && startColumn >= sanitizedLine.Length
+                    ? string.Empty
+                    : sanitizedLine;
+
+            foreach (var c in scanLine)
+            {
+                if (c == '{')
+                {
+                    depth++;
+                    if (!opened)
                     {
-                        if (templateInterpolationDepths[^1] == 1)
+                        opened = true;
+                        bodyStartLine = i + 1;
+                    }
+                }
+                else if (c == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                }
+            }
+
+            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
+
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
+    }
+
+    private static int FindJavaScriptBodyOpenBraceIndex(string[] lines, int startIndex, int bodyStartIndex, string? lang, int startColumn = 0)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
+        var lexState = new JavaScriptLexState();
+
+        for (int i = startIndex; i <= bodyStartIndex; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+
+            var initialColumn = i == startIndex ? Math.Max(0, startColumn) : 0;
+            for (int column = initialColumn; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                if (!functionHeaderState.Active && IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    var tokenEnd = column + 1;
+                    while (tokenEnd < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[tokenEnd]))
+                        tokenEnd++;
+
+                    if (sanitizedLine[tokenStart..tokenEnd] == "function")
+                    {
+                        BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                        column = tokenEnd - 1;
+                        continue;
+                    }
+                }
+
+                var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                    ref functionHeaderState,
+                    sanitizedLine,
+                    column,
+                    lang ?? "javascript",
+                    out var functionHeaderAdvanceColumns);
+                if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+                {
+                    column += functionHeaderAdvanceColumns;
+                    continue;
+                }
+
+                if (!char.IsWhiteSpace(ch))
+                {
+                    if (ch == '(')
+                    {
+                        parenDepth++;
+                        continue;
+                    }
+
+                    if (ch == ')' && parenDepth > 0)
+                    {
+                        parenDepth--;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        bracketDepth++;
+                        continue;
+                    }
+
+                    if (ch == ']' && bracketDepth > 0)
+                    {
+                        bracketDepth--;
+                        continue;
+                    }
+
+                    if (ch == '<')
+                    {
+                        if (lang == "typescript" && parenDepth == 0 && bracketDepth == 0)
+                            angleDepth++;
+                        continue;
+                    }
+
+                    if (ch == '>' && angleDepth > 0)
+                    {
+                        angleDepth--;
+                        continue;
+                    }
+                }
+
+                if (ch != '{')
+                    continue;
+
+                if (parenDepth > 0 || bracketDepth > 0 || angleDepth > 0)
+                    continue;
+
+                return column;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindJavaScriptSameLineBodyEndColumn(string line, int startColumn, string? lang)
+    {
+        var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
+        if (!TryParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out var methodHeader))
+            return -1;
+
+        var depth = 0;
+        var opened = false;
+
+        for (int column = Math.Max(0, methodHeader.BodyStartColumn); column < sanitizedLine.Length; column++)
+        {
+            var ch = sanitizedLine[column];
+            if (ch == '{')
+            {
+                depth++;
+                opened = true;
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return column;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindJavaScriptTypeScriptSymbolStartColumn(string line, string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return 0;
+
+        var startColumn = line.IndexOf(signature, StringComparison.Ordinal);
+        return startColumn >= 0 ? startColumn : 0;
+    }
+
+    private static int FindJavaScriptTypeScriptSameLineBraceEndColumn(string line, int startColumn, string? lang)
+    {
+        var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
+        var bodyStartColumn = FindJavaScriptTypeScriptBodyOpenBraceColumn(sanitizedLine, startColumn, lang);
+        if (bodyStartColumn < 0)
+            return -1;
+
+        var depth = 0;
+        var opened = false;
+
+        for (int column = bodyStartColumn; column < sanitizedLine.Length; column++)
+        {
+            var ch = sanitizedLine[column];
+            if (ch == '{')
+            {
+                depth++;
+                opened = true;
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return column;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindJavaScriptTypeScriptBodyOpenBraceColumn(string sanitizedLine, int startColumn, string? lang)
+    {
+        if (TryParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out var methodHeader))
+            return methodHeader.BodyStartColumn;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
+        for (int column = Math.Max(0, startColumn); column < sanitizedLine.Length; column++)
+        {
+            var ch = sanitizedLine[column];
+            if (!functionHeaderState.Active && IsJavaScriptTypeScriptIdentifierStart(ch))
+            {
+                var tokenStart = column;
+                var tokenEnd = column + 1;
+                while (tokenEnd < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[tokenEnd]))
+                    tokenEnd++;
+
+                if (sanitizedLine[tokenStart..tokenEnd] == "function")
+                {
+                    BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                    column = tokenEnd - 1;
+                    continue;
+                }
+            }
+
+            var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                ref functionHeaderState,
+                sanitizedLine,
+                column,
+                lang ?? "javascript",
+                out var functionHeaderAdvanceColumns);
+            if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+            {
+                column += functionHeaderAdvanceColumns;
+                continue;
+            }
+
+            if (!char.IsWhiteSpace(ch))
+            {
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                    continue;
+                }
+
+                if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    continue;
+                }
+
+                if (ch == '<')
+                {
+                    if (lang == "typescript" && parenDepth == 0 && bracketDepth == 0)
+                        angleDepth++;
+                    continue;
+                }
+
+                if (ch == '>' && angleDepth > 0)
+                {
+                    angleDepth--;
+                    continue;
+                }
+            }
+
+            if (ch != '{')
+                continue;
+
+            if (parenDepth > 0 || bracketDepth > 0 || angleDepth > 0)
+                continue;
+
+            return column;
+        }
+
+        return -1;
+    }
+
+    private static string NormalizeTypeScriptBareMethodMatchInput(string input)
+    {
+        if (!input.Contains('<', StringComparison.Ordinal) && !input.Contains('{', StringComparison.Ordinal))
+            return input;
+
+        if (!TryParseJavaScriptTypeScriptMethodHeader(input, 0, "typescript", out var methodHeader))
+            return input;
+
+        var chars = input.ToCharArray();
+        if (methodHeader.GenericStartColumn != null && methodHeader.GenericEndColumn != null)
+        {
+            for (int replaceIndex = methodHeader.GenericStartColumn.Value; replaceIndex <= methodHeader.GenericEndColumn.Value; replaceIndex++)
+                chars[replaceIndex] = ' ';
+        }
+
+        if (methodHeader.ReturnTypeStartColumn != null && methodHeader.ReturnTypeEndColumn != null)
+        {
+            for (int replaceIndex = methodHeader.ReturnTypeStartColumn.Value; replaceIndex <= methodHeader.ReturnTypeEndColumn.Value; replaceIndex++)
+            {
+                if (chars[replaceIndex] == '{')
+                    chars[replaceIndex] = '(';
+                else if (chars[replaceIndex] == '}')
+                    chars[replaceIndex] = ')';
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static bool TryParseJavaScriptTypeScriptMethodHeader(string sanitizedLine, int startColumn, string? lang, out JavaScriptTypeScriptMethodHeaderInfo methodHeader)
+    {
+        return ParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out methodHeader)
+            == JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
+    }
+
+    private static JavaScriptTypeScriptMethodHeaderParseStatus ParseJavaScriptTypeScriptMethodHeader(string sanitizedLine, int startColumn, string? lang, out JavaScriptTypeScriptMethodHeaderInfo methodHeader)
+    {
+        methodHeader = default;
+        var index = Math.Max(0, startColumn);
+        string? visibility = null;
+
+        while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+            index++;
+
+        while (index < sanitizedLine.Length)
+        {
+            while (true)
+            {
+                if (!TryReadJavaScriptTypeScriptMethodToken(sanitizedLine, ref index, out var token))
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
+
+                while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                    index++;
+
+                if (TypeScriptBareMethodModifiers.Contains(token)
+                    && CanTreatJavaScriptTypeScriptMethodTokenAsModifier(sanitizedLine, index))
+                {
+                    if (token is "public" or "private" or "protected")
+                        visibility = token;
+                    continue;
+                }
+
+                var isGenerator = token == "*";
+                if (!isGenerator && index < sanitizedLine.Length && sanitizedLine[index] == '*')
+                {
+                    isGenerator = true;
+                    index++;
+                    while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                        index++;
+                }
+
+                if (isGenerator)
+                {
+                    if (!TryReadJavaScriptTypeScriptMethodName(sanitizedLine, ref index, out var generatorName))
+                        return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
+
+                    token = generatorName;
+                }
+
+                var name = token;
+
+                int? genericStartColumn = null;
+                int? genericEndColumn = null;
+                if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == '<')
+                {
+                    genericStartColumn = index;
+                    var angleDepth = 0;
+                    while (index < sanitizedLine.Length)
+                    {
+                        if (sanitizedLine[index] == '<')
                         {
-                            templateInterpolationDepths[^1] = 0;
+                            angleDepth++;
+                        }
+                        else if (sanitizedLine[index] == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
+                        {
+                            index += 2;
+                            continue;
+                        }
+                        else if (sanitizedLine[index] == '>')
+                        {
+                            angleDepth--;
+                            if (angleDepth == 0)
+                            {
+                                genericEndColumn = index;
+                                index++;
+                                break;
+                            }
+                        }
+
+                        index++;
+                    }
+
+                    if (genericEndColumn == null)
+                        return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
+
+                    while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                        index++;
+                }
+
+                if (index >= sanitizedLine.Length || sanitizedLine[index] != '(')
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
+
+                var parenDepth = 0;
+                while (index < sanitizedLine.Length)
+                {
+                    if (sanitizedLine[index] == '(')
+                    {
+                        parenDepth++;
+                    }
+                    else if (sanitizedLine[index] == ')')
+                    {
+                        parenDepth--;
+                        if (parenDepth == 0)
+                        {
+                            index++;
+                            break;
+                        }
+                    }
+
+                    index++;
+                }
+
+                if (parenDepth != 0)
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
+
+                while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
+                    index++;
+
+                int? returnTypeStartColumn = null;
+                int? returnTypeEndColumn = null;
+                if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == ':')
+                {
+                    returnTypeStartColumn = index;
+                    index++;
+                    var returnParenDepth = 0;
+                    var returnBracketDepth = 0;
+                    var returnAngleDepth = 0;
+                    var returnBraceDepth = 0;
+                    var sawReturnTypeToken = false;
+                    string? previousReturnToken = ":";
+
+                    while (index < sanitizedLine.Length)
+                    {
+                        var ch = sanitizedLine[index];
+                        if (char.IsWhiteSpace(ch))
+                        {
+                            index++;
                             continue;
                         }
 
-                        templateInterpolationDepths[^1]--;
+                        if (ch == ';'
+                            && returnParenDepth == 0
+                            && returnBracketDepth == 0
+                            && returnAngleDepth == 0
+                            && returnBraceDepth == 0)
+                        {
+                            returnTypeEndColumn ??= index - 1;
+                            methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, -1, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, false);
+                            return JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly;
+                        }
+
+                        if (ch == '(')
+                        {
+                            returnParenDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "(";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == ')' && returnParenDepth > 0)
+                        {
+                            returnParenDepth--;
+                            previousReturnToken = ")";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '[')
+                        {
+                            returnBracketDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "[";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == ']' && returnBracketDepth > 0)
+                        {
+                            returnBracketDepth--;
+                            previousReturnToken = "]";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '<')
+                        {
+                            returnAngleDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "<";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '>' && returnAngleDepth > 0)
+                        {
+                            returnAngleDepth--;
+                            previousReturnToken = ">";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '{')
+                        {
+                            if (returnParenDepth == 0 && returnBracketDepth == 0 && returnAngleDepth == 0 && returnBraceDepth == 0)
+                            {
+                                if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(previousReturnToken))
+                                {
+                                    returnBraceDepth++;
+                                    sawReturnTypeToken = true;
+                                    previousReturnToken = "{";
+                                    index++;
+                                    continue;
+                                }
+
+                                if (sawReturnTypeToken)
+                                {
+                                    returnTypeEndColumn = index - 1;
+                                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index);
+                                    return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
+                                }
+                            }
+
+                            returnBraceDepth++;
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "{";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '}' && returnBraceDepth > 0)
+                        {
+                            returnBraceDepth--;
+                            previousReturnToken = "}";
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '?' || ch == ':' || ch == '|' || ch == '&' || ch == ',')
+                        {
+                            sawReturnTypeToken = true;
+                            previousReturnToken = ch.ToString();
+                            index++;
+                            continue;
+                        }
+
+                        if (ch == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
+                        {
+                            sawReturnTypeToken = true;
+                            previousReturnToken = "=>";
+                            index += 2;
+                            continue;
+                        }
+
+                        if (TrySkipTypeScriptTypeToken(sanitizedLine, ref index, out var typeToken))
+                        {
+                            sawReturnTypeToken = true;
+                            previousReturnToken = typeToken;
+                            continue;
+                        }
+
+                        sawReturnTypeToken = true;
+                        previousReturnToken = ch.ToString();
+                        index++;
                     }
 
-                    depth--;
-                    if (depth == 0)
-                        return (i + 1, bodyStartLine, i + 1);
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
                 }
-            }
 
-            if (!opened && lines[i].TrimEnd().EndsWith(';'))
-                return (startIndex + 1, null, null);
+                if (lang == "typescript" && index < sanitizedLine.Length && sanitizedLine[index] == ';')
+                {
+                    methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, -1, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index, false);
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.DeclarationOnly;
+                }
+
+                if (index >= sanitizedLine.Length || sanitizedLine[index] != '{')
+                    return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
+
+                methodHeader = new JavaScriptTypeScriptMethodHeaderInfo(name, index, visibility, genericStartColumn, genericEndColumn, returnTypeStartColumn, returnTypeEndColumn, index);
+                return JavaScriptTypeScriptMethodHeaderParseStatus.Parsed;
+            }
         }
 
-        return opened
-            ? (lines.Length, bodyStartLine, lines.Length)
-            : (startIndex + 1, null, null);
+        return JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid;
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRangeLegacy(string[] lines, int startIndex, int openingBraceOffset)
+    private static bool TryCaptureJavaScriptTypeScriptMethodHeader(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        int scanEndExclusive,
+        string firstSanitizedLine,
+        JavaScriptLexState nextLineLexState,
+        string? lang,
+        out JavaScriptTypeScriptMethodHeaderCapture methodCapture)
     {
-        int depth = 0;
-        bool opened = false;
-        int? bodyStartLine = null;
+        methodCapture = default;
+        var sourceBuilder = new System.Text.StringBuilder();
+        var sanitizedBuilder = new System.Text.StringBuilder();
 
-        for (int i = startIndex; i < lines.Length; i++)
+        var firstSourceSegment = startColumn < lines[startIndex].Length
+            ? lines[startIndex][startColumn..]
+            : string.Empty;
+        var firstSanitizedSegment = startColumn < firstSanitizedLine.Length
+            ? firstSanitizedLine[startColumn..]
+            : string.Empty;
+        sourceBuilder.Append(firstSourceSegment);
+        sanitizedBuilder.Append(lang == "typescript"
+            ? NormalizeTypeScriptBareMethodMatchInput(firstSanitizedSegment)
+            : firstSanitizedSegment);
+
+        if (TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
+            sourceBuilder.ToString(),
+            sanitizedBuilder.ToString(),
+            startIndex,
+            startColumn,
+            lang,
+            out methodCapture))
         {
-            var line = lines[i];
-            var charStart = i == startIndex
-                ? Math.Clamp(openingBraceOffset, 0, Math.Max(0, line.Length - 1))
-                : 0;
-
-            for (int charIndex = charStart; charIndex < line.Length; charIndex++)
-            {
-                var c = line[charIndex];
-                if (c == '{')
-                {
-                    depth++;
-                    if (!opened)
-                    {
-                        opened = true;
-                        bodyStartLine = i + 1;
-                    }
-                }
-                else if (c == '}' && opened)
-                {
-                    depth--;
-                    if (depth == 0)
-                        return (i + 1, bodyStartLine, i + 1);
-                }
-            }
-
-            if (!opened && lines[i].TrimEnd().EndsWith(';'))
-                return (startIndex + 1, null, null);
+            return true;
         }
 
-        return opened
-            ? (lines.Length, bodyStartLine, lines.Length)
-            : (startIndex + 1, null, null);
+        var lexState = nextLineLexState;
+        for (int lineIndex = startIndex + 1; lineIndex < scanEndExclusive; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+
+            sourceBuilder.Append('\n');
+            sourceBuilder.Append(lines[lineIndex]);
+            sanitizedBuilder.Append('\n');
+            sanitizedBuilder.Append(lang == "typescript"
+                ? NormalizeTypeScriptBareMethodMatchInput(lexedLine.SanitizedLine)
+                : lexedLine.SanitizedLine);
+
+            if (TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
+                sourceBuilder.ToString(),
+                sanitizedBuilder.ToString(),
+                startIndex,
+                startColumn,
+                lang,
+                out methodCapture))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    private static bool IsSingleCharLiteralBrace(string rawLine, int charIndex, char brace)
+    private static bool TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
+        string sourceHeader,
+        string sanitizedHeader,
+        int startIndex,
+        int startColumn,
+        string? lang,
+        out JavaScriptTypeScriptMethodHeaderCapture methodCapture)
     {
-        if (charIndex <= 0 || charIndex + 1 >= rawLine.Length)
+        methodCapture = default;
+        var parseStatus = ParseJavaScriptTypeScriptMethodHeader(sanitizedHeader, 0, lang, out var methodHeader);
+        if (parseStatus == JavaScriptTypeScriptMethodHeaderParseStatus.IncompleteOrInvalid)
             return false;
 
-        return rawLine[charIndex] == brace
-            && rawLine[charIndex - 1] == '\''
-            && rawLine[charIndex + 1] == '\'';
+        var headerEndLocationColumn = methodHeader.HasBody
+            ? methodHeader.BodyStartColumn
+            : methodHeader.HeaderEndColumn ?? -1;
+        if (!TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+            sourceHeader,
+            startIndex,
+            startColumn,
+            headerEndLocationColumn,
+            out var headerEndLineIndex,
+            out var headerEndColumn))
+        {
+            return false;
+        }
+
+        var bodyStartLineIndex = -1;
+        var bodyStartColumn = -1;
+        if (methodHeader.HasBody && !TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+            sourceHeader,
+            startIndex,
+            startColumn,
+            methodHeader.BodyStartColumn,
+            out bodyStartLineIndex,
+            out bodyStartColumn))
+        {
+            return false;
+        }
+
+        methodCapture = new JavaScriptTypeScriptMethodHeaderCapture(
+            sourceHeader,
+            methodHeader,
+            headerEndLineIndex,
+            headerEndColumn,
+            bodyStartLineIndex,
+            bodyStartColumn);
+        return true;
+    }
+
+    private static bool TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+        string sourceHeader,
+        int startIndex,
+        int startColumn,
+        int headerColumn,
+        out int lineIndex,
+        out int column)
+    {
+        lineIndex = startIndex;
+        column = startColumn;
+        if (headerColumn < 0 || headerColumn >= sourceHeader.Length)
+            return false;
+
+        for (int i = 0; i < headerColumn; i++)
+        {
+            if (sourceHeader[i] == '\n')
+            {
+                lineIndex++;
+                column = 0;
+            }
+            else
+            {
+                column++;
+            }
+        }
+
+        return true;
+    }
+
+    private static string BuildJavaScriptTypeScriptBareMethodSignature(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        int? bodyEndLine,
+        int sameLineMethodEndColumn,
+        JavaScriptTypeScriptMethodHeaderCapture methodCapture,
+        string? lang)
+    {
+        if (!methodCapture.HeaderInfo.HasBody)
+        {
+            if (methodCapture.HeaderEndLineIndex == startIndex && methodCapture.HeaderEndColumn >= startColumn)
+                return lines[startIndex][startColumn..(methodCapture.HeaderEndColumn + 1)].Trim();
+
+            if (methodCapture.HeaderInfo.HeaderEndColumn != null
+                && methodCapture.HeaderInfo.HeaderEndColumn.Value >= 0
+                && methodCapture.HeaderInfo.HeaderEndColumn.Value < methodCapture.SourceHeader.Length)
+            {
+                return methodCapture.SourceHeader[..(methodCapture.HeaderInfo.HeaderEndColumn.Value + 1)].Trim();
+            }
+
+            return methodCapture.SourceHeader.Trim();
+        }
+
+        if (bodyEndLine == startIndex + 1 && sameLineMethodEndColumn >= startColumn)
+            return lines[startIndex][startColumn..(sameLineMethodEndColumn + 1)].Trim();
+
+        if (methodCapture.HeaderInfo.BodyStartColumn < 0
+            || methodCapture.HeaderInfo.BodyStartColumn >= methodCapture.SourceHeader.Length)
+        {
+            return methodCapture.SourceHeader.Trim();
+        }
+
+        return methodCapture.SourceHeader[..(methodCapture.HeaderInfo.BodyStartColumn + 1)].Trim();
+    }
+
+    private static string? GetJavaScriptTypeScriptBareMethodReturnType(string sourceHeader, JavaScriptTypeScriptMethodHeaderInfo methodHeader, string? lang)
+    {
+        if (lang != "typescript"
+            || methodHeader.ReturnTypeStartColumn == null
+            || methodHeader.ReturnTypeEndColumn == null)
+            return null;
+
+        var returnTypeStartColumn = methodHeader.ReturnTypeStartColumn.Value + 1;
+        var returnTypeEndColumn = methodHeader.ReturnTypeEndColumn.Value;
+        if (returnTypeEndColumn < returnTypeStartColumn || returnTypeEndColumn >= sourceHeader.Length)
+            return null;
+
+        return NormalizeMetadata(sourceHeader[returnTypeStartColumn..(returnTypeEndColumn + 1)]);
+    }
+
+    private static bool TryGetJavaScriptTypeScriptNextToken(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        bool skipWrappingParens,
+        out int tokenLineIndex,
+        out int tokenStartColumn,
+        out string? token)
+    {
+        tokenLineIndex = -1;
+        tokenStartColumn = -1;
+        token = null;
+
+        var lexState = new JavaScriptLexState();
+        for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var column = lineIndex == startIndex ? startColumn : 0;
+
+            while (column < sanitizedLine.Length)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                {
+                    column++;
+                    continue;
+                }
+
+                if (skipWrappingParens && ch == '(')
+                {
+                    column++;
+                    continue;
+                }
+
+                if (!IsJavaScriptTypeScriptIdentifierStart(ch))
+                    return false;
+
+                var tokenStart = column;
+                column++;
+                while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                    column++;
+
+                tokenLineIndex = lineIndex;
+                tokenStartColumn = tokenStart;
+                token = sanitizedLine[tokenStart..column];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsJavaScriptTypeScriptIdentifierStart(char ch) =>
+        char.IsLetter(ch) || ch == '_' || ch == '$';
+
+    private static bool IsJavaScriptTypeScriptIdentifierPart(char ch) =>
+        char.IsLetterOrDigit(ch) || ch == '_' || ch == '$';
+
+    private static bool TrySkipTypeScriptTypeToken(string sanitizedLine, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        return TryReadJavaScriptTypeScriptQuotedLiteralToken(sanitizedLine, ref index, out token)
+            || TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref index, out token)
+            || TryReadJavaScriptTypeScriptIdentifierToken(sanitizedLine, ref index, out token);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptIdentifierToken(string input, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= input.Length || !IsJavaScriptTypeScriptIdentifierStart(input[index]))
+            return false;
+
+        var tokenStart = index;
+        index++;
+        while (index < input.Length && IsJavaScriptTypeScriptIdentifierPart(input[index]))
+            index++;
+
+        token = input[tokenStart..index];
+        return true;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptQuotedLiteralToken(string input, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= input.Length || input[index] is not ('\'' or '"' or '`'))
+            return false;
+
+        var probe = index;
+        var delimiter = input[probe];
+        var tokenStart = probe;
+        var escapeNext = false;
+        probe++;
+        while (probe < input.Length)
+        {
+            var ch = input[probe];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                probe++;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escapeNext = true;
+                probe++;
+                continue;
+            }
+
+            if (ch == delimiter)
+            {
+                probe++;
+                index = probe;
+                token = input[tokenStart..index];
+                return true;
+            }
+
+            probe++;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptNumericLiteralToken(string input, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= input.Length || !char.IsDigit(input[index]))
+            return false;
+
+        var tokenStart = index;
+        if (input[index] == '0' && index + 1 < input.Length && input[index + 1] is 'x' or 'X' or 'o' or 'O' or 'b' or 'B')
+        {
+            index += 2;
+            while (index < input.Length && IsJavaScriptTypeScriptNumericLiteralPart(input[index], allowDecimalPoint: false))
+                index++;
+        }
+        else
+        {
+            while (index < input.Length && IsJavaScriptTypeScriptNumericLiteralPart(input[index], allowDecimalPoint: true))
+                index++;
+        }
+
+        token = input[tokenStart..index];
+        return true;
+    }
+
+    private static bool IsJavaScriptTypeScriptNumericLiteralPart(char ch, bool allowDecimalPoint)
+    {
+        if (char.IsLetterOrDigit(ch) || ch == '_')
+            return true;
+
+        return allowDecimalPoint && ch == '.';
+    }
+
+    private static bool TryReadJavaScriptTypeScriptMethodToken(string sanitizedLine, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        if (sanitizedLine[index] == '*')
+        {
+            token = "*";
+            index++;
+            return true;
+        }
+
+        return TryReadJavaScriptTypeScriptMethodName(sanitizedLine, ref index, out token);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptMethodName(string sanitizedLine, ref int index, out string name)
+    {
+        name = string.Empty;
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        var tokenStart = index;
+        if (TryReadJavaScriptTypeScriptQuotedLiteralToken(sanitizedLine, ref index, out name)
+            || TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref index, out name))
+        {
+            return true;
+        }
+
+        if (sanitizedLine[index] == '[')
+        {
+            var bracketDepth = 0;
+            while (index < sanitizedLine.Length)
+            {
+                if (sanitizedLine[index] == '[')
+                    bracketDepth++;
+                else if (sanitizedLine[index] == ']')
+                {
+                    bracketDepth--;
+                    if (bracketDepth == 0)
+                    {
+                        index++;
+                        name = sanitizedLine[tokenStart..index];
+                        return true;
+                    }
+                }
+
+                index++;
+            }
+
+            return false;
+        }
+
+        if (sanitizedLine[index] == '#')
+        {
+            index++;
+            if (index >= sanitizedLine.Length || !IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+                return false;
+        }
+        else if (!IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+        {
+            return false;
+        }
+
+        index++;
+        while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
+            index++;
+
+        name = sanitizedLine[tokenStart..index];
+        return true;
+    }
+
+    private static string? GetJavaScriptTypeScriptMethodNameFromSource(string line, int startColumn)
+    {
+        var index = Math.Max(0, startColumn);
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        while (index < line.Length)
+        {
+            if (!TryReadJavaScriptTypeScriptSourceMethodToken(line, ref index, out var token))
+                return null;
+
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (TypeScriptBareMethodModifiers.Contains(token)
+                && CanTreatJavaScriptTypeScriptMethodTokenAsModifier(line, index))
+            {
+                continue;
+            }
+
+            var isGenerator = token == "*";
+            if (!isGenerator && index < line.Length && line[index] == '*')
+            {
+                isGenerator = true;
+                index++;
+                while (index < line.Length && char.IsWhiteSpace(line[index]))
+                    index++;
+            }
+
+            if (isGenerator)
+                return TryReadJavaScriptTypeScriptSourceMethodName(line, ref index, out var generatorName) ? generatorName : null;
+
+            return token;
+        }
+
+        return null;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptSourceMethodToken(string line, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= line.Length)
+            return false;
+
+        if (line[index] == '*')
+        {
+            token = "*";
+            index++;
+            return true;
+        }
+
+        return TryReadJavaScriptTypeScriptSourceMethodName(line, ref index, out token);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptSourceQuotedLiteralToken(string line, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= line.Length || line[index] is not ('\'' or '"' or '`'))
+            return false;
+
+        var delimiter = line[index];
+        var tokenStart = index;
+        var escapeNext = false;
+        index++;
+        while (index < line.Length)
+        {
+            var ch = line[index];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                index++;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escapeNext = true;
+                index++;
+                continue;
+            }
+
+            if (ch == delimiter)
+            {
+                index++;
+                token = line[tokenStart..index];
+                return true;
+            }
+
+            index++;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptSourceMethodName(string line, ref int index, out string name)
+    {
+        name = string.Empty;
+        if (index >= line.Length)
+            return false;
+
+        var tokenStart = index;
+        if (TryReadJavaScriptTypeScriptSourceQuotedLiteralToken(line, ref index, out name)
+            || TryReadJavaScriptTypeScriptNumericLiteralToken(line, ref index, out name))
+        {
+            return true;
+        }
+
+        if (line[index] == '[')
+        {
+            var bracketDepth = 0;
+            var inSingleQuote = false;
+            var inDoubleQuote = false;
+            var inTemplateString = false;
+            var escapeNext = false;
+            while (index < line.Length)
+            {
+                var ch = line[index];
+                if (escapeNext)
+                {
+                    escapeNext = false;
+                    index++;
+                    continue;
+                }
+
+                if (inSingleQuote)
+                {
+                    if (ch == '\\')
+                        escapeNext = true;
+                    else if (ch == '\'')
+                        inSingleQuote = false;
+                    index++;
+                    continue;
+                }
+
+                if (inDoubleQuote)
+                {
+                    if (ch == '\\')
+                        escapeNext = true;
+                    else if (ch == '"')
+                        inDoubleQuote = false;
+                    index++;
+                    continue;
+                }
+
+                if (inTemplateString)
+                {
+                    if (ch == '\\')
+                        escapeNext = true;
+                    else if (ch == '`')
+                        inTemplateString = false;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inSingleQuote = true;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    inDoubleQuote = true;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '`')
+                {
+                    inTemplateString = true;
+                    index++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']')
+                {
+                    bracketDepth--;
+                    if (bracketDepth == 0)
+                    {
+                        index++;
+                        name = line[tokenStart..index];
+                        return true;
+                    }
+                }
+
+                index++;
+            }
+
+            return false;
+        }
+
+        if (line[index] == '#')
+        {
+            index++;
+            if (index >= line.Length || !IsJavaScriptTypeScriptIdentifierStart(line[index]))
+                return false;
+        }
+        else if (!IsJavaScriptTypeScriptIdentifierStart(line[index]))
+        {
+            return false;
+        }
+
+        index++;
+        while (index < line.Length && IsJavaScriptTypeScriptIdentifierPart(line[index]))
+            index++;
+
+        name = line[tokenStart..index];
+        return true;
+    }
+
+    private static int FindNextJavaScriptTypeScriptTokenStart(string sanitizedLine, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < sanitizedLine.Length)
+        {
+            if (!IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
+            {
+                index++;
+                continue;
+            }
+
+            if (index > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index - 1]))
+            {
+                index++;
+                continue;
+            }
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int FindNextJavaScriptTypeScriptMethodCandidateStart(string sanitizedLine, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < sanitizedLine.Length)
+        {
+            var ch = sanitizedLine[index];
+            if (ch != '#'
+                && ch != '*'
+                && ch != '['
+                && ch != '\''
+                && ch != '"'
+                && !char.IsDigit(ch)
+                && !IsJavaScriptTypeScriptIdentifierStart(ch))
+            {
+                index++;
+                continue;
+            }
+
+            if (index > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index - 1]))
+            {
+                index++;
+                continue;
+            }
+
+            return index;
+        }
+
+        return -1;
+    }
+
+    private static int FindNextJavaScriptTypeScriptStatementStart(string sanitizedLine, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < sanitizedLine.Length)
+        {
+            index = FindNextJavaScriptTypeScriptTokenStart(sanitizedLine, index);
+            if (index < 0)
+                return -1;
+
+            var previous = index - 1;
+            while (previous >= 0 && char.IsWhiteSpace(sanitizedLine[previous]))
+                previous--;
+
+            if (previous < 0 || sanitizedLine[previous] is ';' or '{' or '}')
+                return index;
+
+            index++;
+        }
+
+        return -1;
+    }
+
+    private static bool CanTreatJavaScriptTypeScriptMethodTokenAsModifier(string sanitizedLine, int index)
+    {
+        var lookahead = index;
+        while (lookahead < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[lookahead]))
+            lookahead++;
+
+        if (lookahead >= sanitizedLine.Length)
+            return false;
+
+        var ch = sanitizedLine[lookahead];
+        if (ch is '(' or '<')
+            return false;
+
+        if (ch == '*')
+        {
+            lookahead++;
+            while (lookahead < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[lookahead]))
+                lookahead++;
+
+            if (lookahead >= sanitizedLine.Length)
+                return false;
+
+            return sanitizedLine[lookahead] is '[' or '#'
+                || IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[lookahead]);
+        }
+
+        return ch is '[' or '#'
+            || IsJavaScriptTypeScriptIdentifierStart(ch);
+    }
+
+    private static bool CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(string? previousReturnToken)
+    {
+        return previousReturnToken is ":" or "?" or "|" or "&" or "," or "(" or "[" or "=>" or "extends";
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindIndentRange(string[] lines, int startIndex)
@@ -1119,242 +5161,6 @@ public static class SymbolExtractor
         return cursor < line.Length ? line[cursor..] : line;
     }
 
-    private static string ResolveCssSymbolName(string matchLine, string name, string[] lines, int startIndex, int endLine)
-    {
-        if (!matchLine.TrimStart().StartsWith("@font-face", StringComparison.OrdinalIgnoreCase))
-            return name;
-
-        return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)
-            ? fontFamily
-            : string.Empty;
-    }
-
-    private static bool TryGetCssFontFaceFamilyName(string[] lines, int startIndex, int endLine, out string fontFamily)
-    {
-        fontFamily = string.Empty;
-        var lastLineIndex = Math.Min(lines.Length, Math.Max(startIndex + 1, endLine)) - 1;
-        var blockLines = lines[startIndex..(lastLineIndex + 1)];
-        var rawBlockText = string.Join('\n', blockLines);
-        var maskedBlockText = string.Join('\n', MaskCssScannerLines(blockLines));
-        var match = CssFontFaceDeclarationRegex.Match(maskedBlockText);
-        if (!match.Success)
-            return false;
-
-        var valueStart = match.Index + match.Length;
-        while (valueStart < rawBlockText.Length && char.IsWhiteSpace(rawBlockText[valueStart]))
-            valueStart++;
-
-        var valueEnd = valueStart;
-        while (valueEnd < maskedBlockText.Length && maskedBlockText[valueEnd] is not ';' and not '}')
-            valueEnd++;
-
-        if (valueEnd <= valueStart || valueEnd > rawBlockText.Length)
-            return false;
-
-        var rawName = rawBlockText[valueStart..valueEnd].Trim();
-        if (rawName.Length == 0)
-            return false;
-
-        rawName = RemoveCssBlockComments(rawName).Trim();
-        if (rawName.Length == 0)
-            return false;
-
-        if ((rawName.StartsWith('\'') && rawName.EndsWith('\'')) || (rawName.StartsWith('"') && rawName.EndsWith('"')))
-            rawName = rawName[1..^1].Trim();
-
-        if (rawName.Length == 0)
-            return false;
-
-        fontFamily = rawName;
-        return true;
-    }
-
-    private static string RemoveCssBlockComments(string value)
-    {
-        if (!value.Contains("/*", StringComparison.Ordinal))
-            return value;
-
-        var result = new System.Text.StringBuilder(value.Length);
-        var inSingleQuote = false;
-        var inDoubleQuote = false;
-
-        for (int i = 0; i < value.Length; i++)
-        {
-            var ch = value[i];
-            if (!inSingleQuote && !inDoubleQuote && i + 1 < value.Length && ch == '/' && value[i + 1] == '*')
-            {
-                i += 2;
-                while (i + 1 < value.Length && !(value[i] == '*' && value[i + 1] == '/'))
-                    i++;
-
-                if (i + 1 < value.Length)
-                    i++;
-
-                continue;
-            }
-
-            result.Append(ch);
-            if (ch == '"' && !inSingleQuote)
-                inDoubleQuote = !inDoubleQuote;
-            else if (ch == '\'' && !inDoubleQuote)
-                inSingleQuote = !inSingleQuote;
-        }
-
-        return result.ToString();
-    }
-
-    private static bool ShouldSkipCssNestedSelectorCandidate(
-        string? lang,
-        SymbolPattern pattern,
-        string matchLine,
-        bool[]? cssQualifiedRuleAncestors,
-        int lineIndex)
-    {
-        if (lang != "css" || cssQualifiedRuleAncestors == null || !cssQualifiedRuleAncestors[lineIndex])
-            return false;
-
-        var trimmed = matchLine.TrimStart();
-        return pattern.Kind == "class"
-            || (pattern.Kind == "function" && trimmed.StartsWith('#'));
-    }
-
-    private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
-    {
-        var qualifiedRuleAncestors = new bool[lines.Length];
-        var contexts = new Stack<CssContextKind>();
-        var qualifiedRuleDepth = 0;
-
-        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
-        {
-            qualifiedRuleAncestors[lineIndex] = qualifiedRuleDepth > 0;
-            var line = lines[lineIndex];
-            var segmentStart = 0;
-
-            for (int i = 0; i < line.Length; i++)
-            {
-                var ch = line[i];
-
-                if (ch == '{')
-                {
-                    var segment = line[segmentStart..i].Trim();
-                    var contextKind = segment.StartsWith('@')
-                        ? CssContextKind.GroupingAtRule
-                        : CssContextKind.QualifiedRule;
-                    contexts.Push(contextKind);
-                    if (contextKind == CssContextKind.QualifiedRule)
-                        qualifiedRuleDepth++;
-
-                    segmentStart = i + 1;
-                }
-                else if (ch == '}' && contexts.Count > 0)
-                {
-                    if (contexts.Pop() == CssContextKind.QualifiedRule)
-                        qualifiedRuleDepth--;
-
-                    segmentStart = i + 1;
-                }
-                else if (ch == ';')
-                    segmentStart = i + 1;
-            }
-        }
-
-        return qualifiedRuleAncestors;
-    }
-
-    private static string[] MaskCssScannerLines(string[] originalLines)
-    {
-        var maskedLines = (string[])originalLines.Clone();
-        var insideBlockComment = false;
-        var inSingleQuote = false;
-        var inDoubleQuote = false;
-        var parenthesisDepth = 0;
-
-        for (int lineIndex = 0; lineIndex < maskedLines.Length; lineIndex++)
-        {
-            var line = maskedLines[lineIndex];
-            if (line.Length == 0)
-                continue;
-
-            var masked = line.ToCharArray();
-
-            for (int i = 0; i < line.Length; i++)
-            {
-                var ch = line[i];
-
-                if (insideBlockComment)
-                {
-                    masked[i] = ' ';
-                    if (i + 1 < line.Length && ch == '*' && line[i + 1] == '/')
-                    {
-                        masked[i + 1] = ' ';
-                        insideBlockComment = false;
-                        i++;
-                    }
-
-                    continue;
-                }
-
-                if (inSingleQuote || inDoubleQuote)
-                {
-                    masked[i] = ' ';
-                    if (ch == '\\' && i + 1 < line.Length)
-                    {
-                        masked[i + 1] = ' ';
-                        i++;
-                        continue;
-                    }
-
-                    if (ch == '"' && inDoubleQuote)
-                        inDoubleQuote = false;
-                    else if (ch == '\'' && inSingleQuote)
-                        inSingleQuote = false;
-
-                    continue;
-                }
-
-                if (i + 1 < line.Length && ch == '/' && line[i + 1] == '*')
-                {
-                    masked[i] = ' ';
-                    masked[i + 1] = ' ';
-                    insideBlockComment = true;
-                    i++;
-                    continue;
-                }
-
-                if (parenthesisDepth == 0 && i + 1 < line.Length && ch == '/' && line[i + 1] == '/')
-                {
-                    for (int j = i; j < line.Length; j++)
-                        masked[j] = ' ';
-
-                    break;
-                }
-
-                if (ch == '"')
-                {
-                    masked[i] = ' ';
-                    inDoubleQuote = true;
-                    continue;
-                }
-
-                if (ch == '\'')
-                {
-                    masked[i] = ' ';
-                    inSingleQuote = true;
-                    continue;
-                }
-
-                if (ch == '(')
-                    parenthesisDepth++;
-                else if (ch == ')' && parenthesisDepth > 0)
-                    parenthesisDepth--;
-            }
-
-            maskedLines[lineIndex] = new string(masked);
-        }
-
-        return maskedLines;
-    }
-
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
         string? lang,
         SymbolPattern pattern,
@@ -1456,6 +5262,206 @@ public static class SymbolExtractor
         return switchExpressionLines;
     }
 
+    private static string ResolveCssSymbolName(string matchLine, string name, string[] lines, int startIndex, int endLine)
+    {
+        if (!matchLine.TrimStart().StartsWith("@font-face", StringComparison.OrdinalIgnoreCase))
+            return name;
+
+        return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)
+            ? fontFamily
+            : string.Empty;
+    }
+
+    private static bool TryGetCssFontFaceFamilyName(string[] lines, int startIndex, int endLine, out string fontFamily)
+    {
+        fontFamily = string.Empty;
+        var blockLines = lines.Skip(startIndex).Take(Math.Max(1, endLine - startIndex)).ToArray();
+        var maskedBlockText = string.Join('\n', MaskCssScannerLines(blockLines));
+        var match = CssFontFaceDeclarationRegex.Match(maskedBlockText);
+        if (!match.Success)
+            return false;
+
+        var valueStart = match.Index + match.Length;
+        var valueEnd = valueStart;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        while (valueEnd < maskedBlockText.Length)
+        {
+            var ch = maskedBlockText[valueEnd];
+            if (ch == '\'' && !inDoubleQuote)
+                inSingleQuote = !inSingleQuote;
+            else if (ch == '"' && !inSingleQuote)
+                inDoubleQuote = !inDoubleQuote;
+            else if (!inSingleQuote && !inDoubleQuote && ch is ';' or '}')
+                break;
+
+            valueEnd++;
+        }
+
+        if (valueEnd == valueStart)
+            return false;
+
+        var rawBlockText = string.Join('\n', blockLines);
+        var rawName = valueEnd <= rawBlockText.Length
+            ? rawBlockText[valueStart..valueEnd]
+            : rawBlockText[valueStart..];
+        rawName = RemoveCssBlockComments(rawName).Trim();
+        if (rawName.Length == 0)
+            return false;
+
+        if ((rawName[0] == '"' && rawName[^1] == '"') || (rawName[0] == '\'' && rawName[^1] == '\''))
+            rawName = rawName[1..^1].Trim();
+
+        if (rawName.Length == 0)
+            return false;
+
+        fontFamily = rawName;
+        return true;
+    }
+
+    private static string RemoveCssBlockComments(string value)
+    {
+        if (value.Length == 0)
+            return value;
+
+        var builder = new System.Text.StringBuilder(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (i + 1 < value.Length && value[i] == '/' && value[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < value.Length && !(value[i] == '*' && value[i + 1] == '/'))
+                    i++;
+
+                if (i + 1 < value.Length)
+                    i++;
+
+                continue;
+            }
+
+            builder.Append(value[i]);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool ShouldSkipCssNestedSelectorCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        string matchLine,
+        bool[]? cssQualifiedRuleAncestors,
+        int lineIndex) =>
+        lang == "css"
+        && cssQualifiedRuleAncestors != null
+        && cssQualifiedRuleAncestors[lineIndex]
+        && pattern.Kind == "class"
+        && !matchLine.TrimStart().StartsWith('@');
+
+    private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
+    {
+        var ancestors = new bool[lines.Length];
+        var contexts = new Stack<CssContextKind>();
+
+        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            ancestors[lineIndex] = contexts.Contains(CssContextKind.QualifiedRule);
+            var line = lines[lineIndex];
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                var ch = line[cursor];
+                if (ch == '{')
+                {
+                    var segment = line[..cursor].Trim();
+                    var contextKind = segment.StartsWith("@", StringComparison.Ordinal)
+                        ? CssContextKind.GroupingAtRule
+                        : CssContextKind.QualifiedRule;
+                    contexts.Push(contextKind);
+                }
+                else if (ch == '}' && contexts.Count > 0)
+                {
+                    contexts.Pop();
+                }
+            }
+        }
+
+        return ancestors;
+    }
+
+    private static string[] MaskCssScannerLines(string[] originalLines)
+    {
+        var maskedLines = new string[originalLines.Length];
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+
+        for (int lineIndex = 0; lineIndex < originalLines.Length; lineIndex++)
+        {
+            var line = originalLines[lineIndex];
+            var chars = line.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (inBlockComment)
+                {
+                    chars[i] = ' ';
+                    if (i + 1 < chars.Length && line[i] == '*' && line[i + 1] == '/')
+                    {
+                        chars[i + 1] = ' ';
+                        inBlockComment = false;
+                        i++;
+                    }
+
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '*')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
+                {
+                    for (int j = i; j < chars.Length; j++)
+                        chars[j] = ' ';
+
+                    break;
+                }
+
+                if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (line[i] == '"' && !inSingleQuote)
+                {
+                    chars[i] = ' ';
+                    inDoubleQuote = !inDoubleQuote;
+                    continue;
+                }
+
+                if (line[i] == '\'' && !inDoubleQuote)
+                {
+                    chars[i] = ' ';
+                    inSingleQuote = !inSingleQuote;
+                    continue;
+                }
+
+                if (inSingleQuote || inDoubleQuote)
+                    chars[i] = ' ';
+            }
+
+            maskedLines[lineIndex] = new string(chars);
+        }
+
+        return maskedLines;
+    }
+
     private static bool IsCSharpKeywordAt(string line, int index, string keyword)
     {
         if (index < 0 || index + keyword.Length > line.Length)
@@ -1495,8 +5501,8 @@ public static class SymbolExtractor
             if (stack.Count > 0)
             {
                 var container = stack.Peek();
-                symbol.ContainerKind = container.Kind;
-                symbol.ContainerName = container.Name;
+                symbol.ContainerKind ??= container.Kind;
+                symbol.ContainerName ??= container.Name;
                 var qualifiedContainerName = BuildQualifiedContainerName(stack);
                 symbol.ContainerQualifiedName = qualifiedContainerName;
                 symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
@@ -1567,6 +5573,15 @@ public static class SymbolExtractor
 
         if (container.BodyStartLine == null || container.BodyEndLine == null)
             return false;
+
+        if (candidate.StartLine == container.StartLine)
+        {
+            return container.Kind == "class"
+                && candidate.Kind == "function"
+                && container.Signature != null
+                && candidate.Signature != null
+                && container.Signature.Contains(candidate.Signature, StringComparison.Ordinal);
+        }
 
         return candidate.StartLine >= container.BodyStartLine
             && candidate.StartLine <= container.BodyEndLine

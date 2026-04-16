@@ -1017,6 +1017,676 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Human_CSharpTopLevelStatementsFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_toplevel_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+                using System.Linq;
+
+                var values = new[] { 1, 2, 3 };
+                foreach (var value in values)
+                {
+                    Console.WriteLine(value);
+                }
+
+                Console.WriteLine(Sum(values));
+
+                static int Sum(int[] values)
+                {
+                    var total = 0;
+                    foreach (var value in values)
+                    {
+                        total += value;
+                    }
+
+                    return total;
+                }
+
+                Console.WriteLine("done");
+                Console.WriteLine(values.Length);
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_CSharpTopLevelStatementsFile_LeavesJsonContractUnchanged()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_toplevel_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+
+                Console.WriteLine("boot");
+                Console.WriteLine("run");
+                Console.WriteLine("more");
+                Console.WriteLine("lines");
+                Console.WriteLine("to");
+                Console.WriteLine("cross");
+                Console.WriteLine("the");
+                Console.WriteLine("top-level");
+                Console.WriteLine("statement");
+                Console.WriteLine("threshold");
+                Console.WriteLine("without");
+                Console.WriteLine("declaring");
+                Console.WriteLine("types");
+                Console.WriteLine("or");
+                Console.WriteLine("namespaces");
+                Console.WriteLine("in");
+                Console.WriteLine("this");
+                Console.WriteLine("file");
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/program.cs", json.GetProperty("path").GetString());
+            Assert.Equal("csharp", json.GetProperty("lang").GetString());
+            Assert.True(json.TryGetProperty("symbols", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_CSharpStatementOnlyTopLevelFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_statement_only_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+
+                Console.WriteLine("boot");
+                Console.WriteLine("run");
+                Console.WriteLine("more");
+                Console.WriteLine("lines");
+                Console.WriteLine("to");
+                Console.WriteLine("cross");
+                Console.WriteLine("the");
+                Console.WriteLine("top-level");
+                Console.WriteLine("statement");
+                Console.WriteLine("threshold");
+                Console.WriteLine("without");
+                Console.WriteLine("declaring");
+                Console.WriteLine("types");
+                Console.WriteLine("or");
+                Console.WriteLine("namespaces");
+                Console.WriteLine("in");
+                Console.WriteLine("this");
+                Console.WriteLine("file");
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_CSharpUsingVarTopLevelFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_using_var_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+                using System.IO;
+
+                using var stream01 = new MemoryStream();
+                using var stream02 = new MemoryStream();
+                using var stream03 = new MemoryStream();
+                using var stream04 = new MemoryStream();
+                using var stream05 = new MemoryStream();
+                using var stream06 = new MemoryStream();
+                using var stream07 = new MemoryStream();
+                using var stream08 = new MemoryStream();
+                using var stream09 = new MemoryStream();
+                using var stream10 = new MemoryStream();
+                using var stream11 = new MemoryStream();
+                using var stream12 = new MemoryStream();
+                using var stream13 = new MemoryStream();
+                using var stream14 = new MemoryStream();
+                using var stream15 = new MemoryStream();
+                using var stream16 = new MemoryStream();
+                using var stream17 = new MemoryStream();
+                using var stream18 = new MemoryStream();
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_CSharpUsingStatementTopLevelFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_using_statement_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+                using System.IO;
+
+                using (var stream01 = new MemoryStream())
+                {
+                    Console.WriteLine(stream01.Length);
+                }
+                using (var stream02 = new MemoryStream())
+                {
+                    Console.WriteLine(stream02.Length);
+                }
+                using (var stream03 = new MemoryStream())
+                {
+                    Console.WriteLine(stream03.Length);
+                }
+                using (var stream04 = new MemoryStream())
+                {
+                    Console.WriteLine(stream04.Length);
+                }
+                using (var stream05 = new MemoryStream())
+                {
+                    Console.WriteLine(stream05.Length);
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_CSharpLocalFunctionsOnlyFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_local_functions_only_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+
+                static int Sum(int left, int right)
+                {
+                    return left + right;
+                }
+
+                static int Diff(int left, int right)
+                {
+                    return left - right;
+                }
+
+                static int Mul(int left, int right)
+                {
+                    return left * right;
+                }
+
+                static int Div(int left, int right)
+                {
+                    return left / right;
+                }
+
+                static void Print(int value)
+                {
+                    Console.WriteLine(value);
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_GlobalUsingsFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_global_usings_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GlobalUsings.cs",
+                "csharp",
+                """
+                global using System;
+                global using System.IO;
+                global using System.Linq;
+                global using System.Text;
+                global using System.Text.Json;
+                global using System.Text.Json.Serialization;
+                global using System.Collections.Generic;
+                global using System.Collections.Immutable;
+                global using System.Diagnostics;
+                global using System.Globalization;
+                global using System.Net.Http;
+                global using System.Net.Http.Json;
+                global using System.Threading;
+                global using System.Threading.Tasks;
+                global using Microsoft.Extensions.Logging;
+                global using Microsoft.Extensions.Options;
+                global using Microsoft.Data.Sqlite;
+                global using CodeIndex.Models;
+                global using CodeIndex.Database;
+                global using CodeIndex.Indexer;
+                global using CodeIndex.Cli;
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/GlobalUsings.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/GlobalUsings.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_AssemblyInfoFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_assembly_info_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Properties/AssemblyInfo.cs",
+                "csharp",
+                """
+                using System.Reflection;
+
+                [assembly: AssemblyTitle("CodeIndex")]
+                [assembly: AssemblyDescription("Tests top-level hint suppression")]
+                [assembly: AssemblyConfiguration("Debug")]
+                [assembly: AssemblyCompany("Widthdom")]
+                [assembly: AssemblyProduct("CodeIndex")]
+                [assembly: AssemblyCopyright("Copyright Widthdom")]
+                [assembly: AssemblyTrademark("")]
+                [assembly: AssemblyCulture("")]
+                [assembly: AssemblyVersion("1.0.0.0")]
+                [assembly: AssemblyFileVersion("1.0.0.0")]
+                [assembly: AssemblyMetadata("Build", "Local")]
+                [assembly: AssemblyMetadata("Environment", "Test")]
+                [assembly: AssemblyMetadata("Flavor", "Debug")]
+                [assembly: AssemblyMetadata("Feature", "OutlineHint")]
+                [assembly: AssemblyMetadata("Branch", "pr-149")]
+                [assembly: AssemblyMetadata("Commit", "local")]
+                [assembly: AssemblyMetadata("Purpose", "Negative coverage")]
+                [assembly: AssemblyMetadata("Owner", "CodeIndex Tests")]
+                [assembly: AssemblyMetadata("Language", "csharp")]
+                [assembly: AssemblyMetadata("FileKind", "AssemblyInfo")]
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Properties/AssemblyInfo.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/Properties/AssemblyInfo.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_GeneratedGlobalUsingsFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_generated_global_usings_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GlobalUsings.g.cs",
+                "csharp",
+                """
+                // <auto-generated/>
+                #pragma warning disable 1591
+                global using System;
+                global using System.IO;
+                global using System.Linq;
+                global using System.Text;
+                global using System.Text.Json;
+                global using System.Text.Json.Serialization;
+                global using System.Collections.Generic;
+                global using System.Collections.Immutable;
+                global using System.Diagnostics;
+                global using System.Globalization;
+                global using System.Net.Http;
+                global using System.Net.Http.Json;
+                global using System.Threading;
+                global using System.Threading.Tasks;
+                global using Microsoft.Extensions.Logging;
+                global using Microsoft.Extensions.Options;
+                global using Microsoft.Data.Sqlite;
+                global using CodeIndex.Models;
+                global using CodeIndex.Database;
+                global using CodeIndex.Indexer;
+                global using CodeIndex.Cli;
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/GlobalUsings.g.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/GlobalUsings.g.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_GeneratedAssemblyInfoFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_generated_assembly_info_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Properties/AssemblyInfo.cs",
+                "csharp",
+                """
+                // <auto-generated/>
+                #pragma warning disable 1591
+                using System.Reflection;
+
+                [assembly: AssemblyTitle("CodeIndex")]
+                [assembly: AssemblyDescription("Tests top-level hint suppression")]
+                [assembly: AssemblyConfiguration("Debug")]
+                [assembly: AssemblyCompany("Widthdom")]
+                [assembly: AssemblyProduct("CodeIndex")]
+                [assembly: AssemblyCopyright("Copyright Widthdom")]
+                [assembly: AssemblyTrademark("")]
+                [assembly: AssemblyCulture("")]
+                [assembly: AssemblyVersion("1.0.0.0")]
+                [assembly: AssemblyFileVersion("1.0.0.0")]
+                [assembly: AssemblyMetadata("Build", "Local")]
+                [assembly: AssemblyMetadata("Environment", "Test")]
+                [assembly: AssemblyMetadata("Flavor", "Debug")]
+                [assembly: AssemblyMetadata("Feature", "OutlineHint")]
+                [assembly: AssemblyMetadata("Branch", "pr-149")]
+                [assembly: AssemblyMetadata("Commit", "local")]
+                [assembly: AssemblyMetadata("Purpose", "Negative coverage")]
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Properties/AssemblyInfo.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/Properties/AssemblyInfo.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_BlockCommentGlobalUsingsFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_block_comment_global_usings_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GlobalUsings.cs",
+                "csharp",
+                """
+                /*
+                 * <auto-generated/>
+                 * This file is generated during build.
+                 */
+                #pragma warning disable 1591
+                global using System;
+                global using System.IO;
+                global using System.Linq;
+                global using System.Text;
+                global using System.Text.Json;
+                global using System.Text.Json.Serialization;
+                global using System.Collections.Generic;
+                global using System.Collections.Immutable;
+                global using System.Diagnostics;
+                global using System.Globalization;
+                global using System.Net.Http;
+                global using System.Net.Http.Json;
+                global using System.Threading;
+                global using System.Threading.Tasks;
+                global using Microsoft.Extensions.Logging;
+                global using Microsoft.Extensions.Options;
+                global using Microsoft.Data.Sqlite;
+                global using CodeIndex.Models;
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/GlobalUsings.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/GlobalUsings.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_BlockCommentAssemblyInfoFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_block_comment_assembly_info_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Properties/AssemblyInfo.cs",
+                "csharp",
+                """
+                /*
+                 * <auto-generated/>
+                 * This file is generated during build.
+                 */
+                #pragma warning disable 1591
+                using System.Reflection;
+
+                [assembly: AssemblyTitle("CodeIndex")]
+                [assembly: AssemblyDescription("Tests top-level hint suppression")]
+                [assembly: AssemblyConfiguration("Debug")]
+                [assembly: AssemblyCompany("Widthdom")]
+                [assembly: AssemblyProduct("CodeIndex")]
+                [assembly: AssemblyCopyright("Copyright Widthdom")]
+                [assembly: AssemblyTrademark("")]
+                [assembly: AssemblyCulture("")]
+                [assembly: AssemblyVersion("1.0.0.0")]
+                [assembly: AssemblyFileVersion("1.0.0.0")]
+                [assembly: AssemblyMetadata("Build", "Local")]
+                [assembly: AssemblyMetadata("Environment", "Test")]
+                [assembly: AssemblyMetadata("Flavor", "Debug")]
+                [assembly: AssemblyMetadata("Feature", "OutlineHint")]
+                [assembly: AssemblyMetadata("Branch", "pr-149")]
+                [assembly: AssemblyMetadata("Commit", "local")]
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Properties/AssemblyInfo.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/Properties/AssemblyInfo.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_ExternAliasOnlyFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_extern_alias_only_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Aliases.cs",
+                "csharp",
+                """
+                extern alias Foo01;
+                extern alias Foo02;
+                extern alias Foo03;
+                extern alias Foo04;
+                extern alias Foo05;
+                extern alias Foo06;
+                extern alias Foo07;
+                extern alias Foo08;
+                extern alias Foo09;
+                extern alias Foo10;
+                extern alias Foo11;
+                extern alias Foo12;
+                extern alias Foo13;
+                extern alias Foo14;
+                extern alias Foo15;
+                extern alias Foo16;
+                extern alias Foo17;
+                extern alias Foo18;
+                extern alias Foo19;
+                extern alias Foo20;
+                extern alias Foo21;
+                extern alias Foo22;
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Aliases.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/Aliases.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_zero_json_missing_graph");
@@ -3017,6 +3687,64 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("search", false)]
+    [InlineData("search", true)]
+    [InlineData("symbols", false)]
+    [InlineData("symbols", true)]
+    [InlineData("definition", false)]
+    [InlineData("definition", true)]
+    [InlineData("references", false)]
+    [InlineData("references", true)]
+    [InlineData("callers", false)]
+    [InlineData("callers", true)]
+    [InlineData("callees", false)]
+    [InlineData("callees", true)]
+    [InlineData("files", false)]
+    [InlineData("files", true)]
+    [InlineData("find", false)]
+    [InlineData("find", true)]
+    public void CountOnlyJson_IgnoresLimitAndReturnsTrueTotal(string command, bool useExplicitLimit)
+    {
+        var (projectRoot, dbPath) = CreateCountOnlyTotalFixtureDb();
+        try
+        {
+            var args = BuildTrueCountArgs(command, dbPath, useExplicitLimit);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunCountCommand(command, args));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(25, json.GetProperty("count").GetInt32());
+
+            switch (command)
+            {
+                case "search":
+                case "symbols":
+                case "definition":
+                case "references":
+                case "callers":
+                case "callees":
+                    Assert.Equal(25, json.GetProperty("files").GetInt32());
+                    break;
+                case "find":
+                    Assert.Equal(1, json.GetProperty("files").GetInt32());
+                    Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+                    break;
+                case "files":
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(command), command, null);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunReferences_UnsupportedLanguageWithoutMatches_PrintsGraphSupportHint()
     {
@@ -4343,6 +5071,415 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_GroupByNameJson_CollapsesDuplicateDefinitionSites()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FirstHelper.cs", "csharp",
+                """
+                public class FirstHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/SecondHelper.cs", "csharp",
+                """
+                public class SecondHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
+            Assert.Equal("SharedHelper", hotspot.GetProperty("name").GetString());
+            Assert.Equal("function", hotspot.GetProperty("kind").GetString());
+            Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(2, hotspot.GetProperty("paths").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupByName_IsRejectedOutsideHotspots()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_name_reject");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Run() { } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Run", "--db", dbPath, "--group-by-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--group-by-name is only supported by 'hotspots'", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByNameHumanOutput_ShowsCollapsedSiteCount()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FirstHelper.cs", "csharp",
+                """
+                public class FirstHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/SecondHelper.cs", "csharp",
+                """
+                public class SecondHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("SharedHelper", stdout);
+            Assert.Contains("(×2 sites)", stdout);
+            Assert.DoesNotContain("(×1 sites)", stdout);
+            Assert.Contains("(1 unique name/kind groups, 2 definition sites)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByName_CountJson_UsesGroupedSemantics()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FirstHelper.cs", "csharp",
+                """
+                public class FirstHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/SecondHelper.cs", "csharp",
+                """
+                public class SecondHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--group-by-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal(2, json.GetProperty("files").GetInt32());
+            Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByName_ZeroJson_PreservesGroupedShape()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Helper.cs", "csharp",
+                """
+                public class Helper
+                {
+                    private void SharedHelper()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--group-by-name", "--path", "DOES_NOT_EXIST"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
+            Assert.Equal(0, json.GetProperty("hotspots").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByName_CountZeroJson_PreservesGroupedShape()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_count_zero_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Helper.cs", "csharp",
+                """
+                public class Helper
+                {
+                    private void SharedHelper()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--group-by-name", "--count", "--path", "DOES_NOT_EXIST"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("files").GetInt32());
+            Assert.Equal(0, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByName_AppliesLimitAfterGrouping()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 4; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/DupHelper{i}.cs", "csharp",
+                    $$"""
+                    public class DupHelper{{i}}
+                    {
+                        private void SharedHelper()
+                        {
+                            SharedHelper();
+                            SharedHelper();
+                        }
+                    }
+                    """);
+            }
+
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/UniqueHelper.cs", "csharp",
+                """
+                public class UniqueHelper
+                {
+                    private void UniqueHotspot()
+                    {
+                        UniqueHotspot();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--path", "Helper", "--group-by-name", "--limit", "2"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspots = json.GetProperty("hotspots").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.Equal(5, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Contains(hotspots, h => h.GetProperty("name").GetString() == "SharedHelper");
+            Assert.Contains(hotspots, h => h.GetProperty("name").GetString() == "UniqueHotspot");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByName_CountsSameFileOverloadsAsSeparateDefinitionSites()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_overloads");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Overloads.cs", "csharp",
+                """
+                public class Overloads
+                {
+                    private void SharedHelper()
+                    {
+                        SharedHelper();
+                        SharedHelper(1);
+                    }
+
+                    private void SharedHelper(int value)
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by-name", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal(3, hotspot.GetProperty("reference_count").GetInt32());
+            Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(1, hotspot.GetProperty("paths").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByName_UsesDeterministicRepresentativeSite()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_rep");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/z_last.cs", "csharp",
+                """
+                public class LastHelper
+                {
+                    private void SharedHelper()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/a_first.cs", "csharp",
+                """
+                public class FirstHelper
+                {
+                    private void SharedHelper()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by-name", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/a_first.cs", hotspot.GetProperty("path").GetString());
+            Assert.Equal(3, hotspot.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void BuildExactZeroHint_NoRelaxedMatch_DoesNotRunSampleQuery()
     {
         var sampleInvoked = false;
@@ -4712,6 +5849,40 @@ public class QueryCommandRunnerTests
             Assert.Equal("Run", json.GetProperty("name").GetString());
             Assert.False(json.GetProperty("exact_index_available").GetBoolean());
             Assert.Contains("idx_symbols_name_nocase", json.GetProperty("degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_CountOnlyOnReadOnlyDbMissingChunks_FailsLikeDefinition()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_count_missing_chunks");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/session.py", "python", "def Run(user):\n    return user\n");
+            DropChunksTables(dbPath);
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", readOnlyUri, "--json", "--count"],
+                _jsonOptions));
+
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Run", "--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, countExitCode);
+            Assert.Equal(string.Empty, countStdout);
+            Assert.Contains("no such table: chunks", countStderr);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStdout);
+            Assert.Contains("no such table: chunks", definitionStderr);
         }
         finally
         {
@@ -7363,6 +8534,94 @@ public class QueryCommandRunnerTests
         writer.MarkFoldReady();
     }
 
+    private static (string ProjectRoot, string DbPath) CreateCountOnlyTotalFixtureDb()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_true_count");
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+        for (int i = 1; i <= 25; i++)
+        {
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/search/Search{i:D2}.txt",
+                "text",
+                $"needletoken hit {i}\n");
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/symbols/CountTarget{i:D2}.cs",
+                "csharp",
+                $$"""
+                public class CountTarget{{i:D2}}
+                {
+                    public void Value{{i:D2}}() { }
+                }
+                """);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/graph/CountCaller{i:D2}.cs",
+                "csharp",
+                $$"""
+                public class CountCaller{{i:D2}}
+                {
+                    public void Invoke()
+                    {
+                        CountRun();
+                    }
+                }
+                """);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                $"src/files/CountFile{i:D2}.txt",
+                "text",
+                $"file fixture {i}\n");
+        }
+
+        var findContent = string.Join('\n', Enumerable.Range(1, 25).Select(i => $"guard {i:D2}")) + "\n";
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/find/Sample.cs", "csharp", findContent);
+        MarkGraphAndFoldReady(dbPath);
+        return (projectRoot, dbPath);
+    }
+
+    private string[] BuildTrueCountArgs(string command, string dbPath, bool useExplicitLimit)
+    {
+        var args = command switch
+        {
+            "search" => new List<string> { "needletoken", "--db", dbPath, "--json", "--count" },
+            "symbols" => new List<string> { "CountTarget", "--db", dbPath, "--json", "--count" },
+            "definition" => new List<string> { "CountTarget", "--db", dbPath, "--json", "--count" },
+            "references" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact" },
+            "callers" => new List<string> { "CountRun", "--db", dbPath, "--json", "--count", "--exact" },
+            "callees" => new List<string> { "Invoke", "--db", dbPath, "--json", "--count", "--exact" },
+            "files" => new List<string> { "CountFile", "--db", dbPath, "--json", "--count" },
+            "find" => new List<string> { "guard", "--db", dbPath, "--json", "--count", "--path", "src/find/Sample.cs" },
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        if (useExplicitLimit)
+            args.AddRange(["--limit", "5"]);
+
+        return [.. args];
+    }
+
+    private int RunCountCommand(string command, string[] args)
+    {
+        return command switch
+        {
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "definition" => QueryCommandRunner.RunDefinition(args, _jsonOptions),
+            "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(args, _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(args, _jsonOptions),
+            "files" => QueryCommandRunner.RunFiles(args, _jsonOptions),
+            "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+    }
+
     private static string CreateIndexedDbWithSingleFile(string projectRoot, bool markGraphReady = false)
     {
         var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -7566,10 +8825,23 @@ public class QueryCommandRunnerTests
         using var db = new DbContext(dbPath);
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
-            DROP TABLE IF EXISTS symbol_references;
+                DROP TABLE IF EXISTS symbol_references;
+                PRAGMA wal_checkpoint(TRUNCATE);
+                """;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DropChunksTables(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            DROP TABLE IF EXISTS fts_chunks;
+            DROP TABLE IF EXISTS chunks;
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
     }
 
     private void RunImpactPartialClassZeroResultIteration(int iteration)

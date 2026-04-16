@@ -16,6 +16,8 @@ public class SearchResult
     public double Score { get; set; }
 }
 
+public readonly record struct QueryCountResult(int Count, int FileCount);
+
 public class SymbolResult
 {
     public string Path { get; set; } = string.Empty;
@@ -39,6 +41,14 @@ public class UnusedSymbolResult : SymbolResult
     public string UnusedBucket { get; set; } = string.Empty;
     public string UnusedConfidence { get; set; } = string.Empty;
     public string UnusedReason { get; set; } = string.Empty;
+}
+
+public class GroupedHotspotResult
+{
+    public SymbolResult Symbol { get; set; } = new();
+    public int ReferenceCount { get; set; }
+    public int DefinitionSites { get; set; }
+    public List<string> Paths { get; set; } = [];
 }
 
 public class FileResult

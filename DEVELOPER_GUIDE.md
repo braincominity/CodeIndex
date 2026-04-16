@@ -35,7 +35,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — Directory scan, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
-    SymbolExtractor.cs        — Regex-based symbol extraction (32 languages)
+    SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods, scope filtering, and range resolution
     ReferenceExtractor.cs     — Regex-based call/reference extraction (31 languages with graph queries)
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
@@ -366,15 +366,15 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 
 ## Symbol extraction
 
-Symbols are extracted with **compiled regex patterns**, matching one line at a time. Each language has patterns for functions, classes, and sometimes imports. Named capture group `(?<name>\w+)` extracts the identifier.
+Most languages still use **compiled regex patterns**, matched one line at a time for functions, classes, and sometimes imports. JavaScript and TypeScript now add a lightweight lexer/state machine on top of the regex pass for cases that line-oriented regex cannot handle reliably, such as class-body bare methods, computed and modifier-prefixed methods, scope-aware synthetic class expressions, and JS/TS-specific range resolution. Named capture groups still extract identifiers for the regex-driven paths.
 
 Supported symbol kinds by language (32 languages with symbol extraction):
 
 | Language | function | class | struct | interface | enum | property | event/delegate | import | Graph |
 |---|---|---|---|---|---|---|---|---|:---:|
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
-| JavaScript | function, arrow, methods | class | -- | -- | -- | -- | -- | import...from | yes |
-| TypeScript | function, arrow, methods | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
+| JavaScript | function, arrow, methods (including same-line keyword/modifier-named methods, default arguments, computed names, `#private`, generator, `async *`) | class, export default class, same-line sibling/statement-prefixed public classes, class expressions, multiline/parenthesized/CommonJS class exports | -- | -- | -- | -- | -- | import...from | yes |
+| TypeScript | function, arrow, methods (including generic and same-line object/conditional/function-return methods, default arguments, computed names, `#private`, generator, `async *`) | class, export default class, anonymous default `abstract class`, `export = class`, same-line sibling/statement-prefixed public classes, class expressions, multiline/parenthesized class expressions, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
 | C# | methods, ctors, explicit-interface impls (guards named-argument labels only before qualified call expressions; allows `global::` / alias-qualified return types), operators, indexers, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
 | Go | func, methods | type alias | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
@@ -566,7 +566,7 @@ See [Exit codes](README.md#exit-codes) in README.
 - **Bundled symbol analysis** — `inspect` and MCP `analyze_symbol` return definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph-support metadata in one request so AI clients can answer common symbol questions with fewer round-trips.
 - **Language-aware reference extraction** — `references`, `callers`, `callees`, and `impact` are backed by an indexed reference table built only for languages where regex-based call/reference extraction is meaningful (30 of 46 languages). Unsupported languages intentionally fall back to text search instead of returning low-confidence pseudo-graph data. When a language is removed from graph support, `PurgeUnsupportedReferences` deletes its stale `symbol_references` rows on the next indexing run, and graph read paths additionally filter by supported languages to prevent stale edges from surviving between index runs. Shell is intentionally excluded because its command-style invocations (`foo arg1 arg2`) cannot be detected by the parenthesized-call regex.
 - **Transitive impact analysis** — `impact` and MCP `impact_analysis` compute the transitive caller chain of a symbol using BFS. Design constraints refined through adversarial review: caller matching uses case-insensitive exact match (`lower() = lower()`) to avoid both substring expansion and case-sensitivity brittleness; symbol names are pre-resolved through definitions with exact-case preference; the read path filters to graph-supported languages to prevent stale edges from removed languages; the definition set used for heuristic fallback must also respect active `--lang` / `--path` / `--exclude-path` / `--exclude-tests` filters and graph-supported languages so out-of-scope or unsupported duplicates do not suppress in-scope hints; fallback eligibility is keyed off class-like definitions only, so same-name namespace/import siblings do not block a single resolved class / struct / interface target, while pure non-callable `namespace` / `import` queries surface `non_callable_symbol_kind` guidance; heuristic file-level hints still return a successful result and encode their non-authoritative status via `impact_mode`, `heuristic`, `hint_count`, and `truncated`; `count` / `file_count` now describe the visible returned set while `confirmed_count` / `confirmed_file_count` preserve symbol-level caller totals for heuristic-success payloads, and `impact --json --count` uses the same `*_count` field names as the full payload; to reduce general-name collisions, a file only qualifies for type fallback if it both references one of the candidate member names and also exposes same-file structured type evidence through indexed symbol metadata such as signatures or return types, rather than raw comment/string text matches; that signature evidence path is Unicode-aware so fullwidth/accented identifiers are tokenized consistently with exact-name resolution; hint `reference_count` reflects the real number of matching reference rows while the symbol list stays deduplicated; only multiple class-like definitions are treated as fallback ambiguity, even when they share one file; and `PurgeUnsupportedReferences` runs in all three indexing paths (CLI full scan, CLI update mode, MCP index).
-- **Regex symbol extraction** — No AST parsers, no language-specific dependencies. Trades accuracy for speed and portability, but stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, qualified container paths, authoritative family keys, visibility, and return types when the language patterns can infer them. Visual Basic patterns now treat `Namespace ... End Namespace` as a real container and allow implicit-visibility declarations plus leading modifiers (`Shared`, `Overrides`, `Partial`, etc.), so VB projects expose the same top-level orientation and member coverage that other class-based languages already get. Visual Basic container patterns use case-insensitive `VisualBasicEnd` range tracking so cross-file partial families still get stable body ranges and can participate in hotspot-family grouping. **Pattern externalization**: Language patterns are currently defined inline in `SymbolExtractor.cs` using compiled `Regex` objects. This keeps the extraction pipeline self-contained and allows compile-time validation, but means adding a new language requires a code change and rebuild. A future iteration could externalize patterns to JSON/TOML files (loaded at startup), which would lower the barrier for community contributions and enable hot-reload during development. The trade-off is losing compile-time safety and slightly increasing startup cost. If externalized, patterns should include: language name, kind (function/class/import/namespace), regex string, body style (brace/indent/ruby-end/none), and optional capture group names for visibility and return type.
+- **Hybrid symbol extraction** — No AST parsers and no heavyweight language-specific dependencies. Most languages still use compiled regex patterns, while JavaScript/TypeScript add a lightweight lexer/state machine for class-body method extraction, private-scope filtering, synthetic class-expression binding detection, and JS/TS-specific range resolution that regex alone could not handle reliably. The trade-off still favors speed and portability over full parser accuracy, but the index stores richer symbol metadata such as definition ranges, optional body ranges, signatures, enclosing symbols, qualified container paths, authoritative family keys, visibility, and return types when the language patterns or JS/TS state machine can infer them. Visual Basic patterns also treat `Namespace ... End Namespace` as a real container and allow implicit-visibility declarations plus leading modifiers (`Shared`, `Overrides`, `Partial`, etc.), so VB projects expose the same top-level orientation and member coverage that other class-based languages already get. Visual Basic container patterns use case-insensitive `VisualBasicEnd` range tracking so cross-file partial families still get stable body ranges and can participate in hotspot-family grouping. **Pattern externalization**: Language patterns are currently defined inline in `SymbolExtractor.cs` using compiled `Regex` objects. This keeps the extraction pipeline self-contained and allows compile-time validation, but means adding a new language requires a code change and rebuild. A future iteration could externalize patterns to JSON/TOML files (loaded at startup), which would lower the barrier for community contributions and enable hot-reload during development. The trade-off is losing compile-time safety and slightly increasing startup cost. If externalized, patterns should include: language name, kind (function/class/import/namespace), regex string, body style (brace/indent/ruby-end/none), and optional capture group names for visibility and return type.
 - **Authoritative hotspot-family trust** — `hotspots` only promotes duplicate-name families back to codebase-wide counts when the persisted `symbols.container_qualified_name` / `symbols.family_key` were produced under the current per-language `hotspot_family_version_*` contract. These readiness stamps and marker fingerprints live in `codeindex_meta`, so legacy, mixed, or partially refreshed DBs degrade explicitly instead of silently reusing stale cross-file family identities.
 - **Human-readable default** — All commands default to human-readable output. `--json` for AI/machine consumption.
 - **Structured MCP responses** — MCP tool calls return typed JSON in `structuredContent` and keep `content` concise for compatibility.
@@ -686,33 +686,55 @@ What `install.sh` does, in order (see `install.sh`):
    front with an actionable error because the self-contained binary
    links against glibc. `osx-x64` is rejected because the release matrix
    does not ship that RID.
-2. **Resolve version.** With no argument, it hits the GitHub API
-   (`/repos/Widthdom/CodeIndex/releases/latest`) and greps `tag_name`.
-   With an argument it accepts either the `v`-prefixed or bare form
-   (e.g. `v1.8.0` or `1.8.0` — the version string itself is not
-   hard-coded in `install.sh`; `version.json` at the repo root and the
-   GitHub Releases tag are the sources of truth). Failure produces a
-   single actionable error, not a stack trace.
-3. **Short-circuit if already installed.** If `INSTALL_DIR/cdidx --version`
-   already reports the target version, exit 0. This relies on
-   `version.json` being present — previously-broken installs return
-   `v0.0.0` and are treated as upgrades, which is the desired behaviour.
-4. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
+2. **Detect existing install first.** If `INSTALL_DIR/cdidx` already
+   exists, the installer caches its parsed `--version` output before any
+   network work so later version-selection and repair decisions can
+   distinguish a healthy match from an older or incomplete install.
+3. **Resolve version.** With an explicit argument, the installer accepts
+   either the `v`-prefixed or bare form (`v1.8.0` or `1.8.0`). With no
+   argument, it calls the GitHub API
+   (`/repos/Widthdom/CodeIndex/releases/latest`), prefers `jq` when
+   available for `tag_name` parsing, and falls back to the existing
+   `grep` + `sed` extraction for portability. The installer then compares
+   that latest release tag to any healthy existing install and skips the
+   download only when the installed version already matches the latest
+   tag. Broken `v0.0.0` installs or installs missing required adjacent
+   assets are treated as reinstall targets instead of idempotent
+   successes. HTTP
+   failures are classified explicitly (`403` rate limit vs `404` vs
+   `5xx` vs real curl network errors) instead of collapsing everything
+   into a generic “check your network connection” message.
+4. **Reinstall or switch when an explicit version is requested.** A
+   no-argument rerun still targets the latest release, but an explicit
+   target version always proceeds into reinstall/switch logic.
+   Same-version explicit requests force a reinstall, while broken
+   `v0.0.0` installs or same-version installs missing required assets
+   are also treated as replacements, which is the desired behaviour.
+5. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
    into a `mktemp -d` directory trap-cleaned on exit.
-5. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
+6. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
    (whichever is present) and compares against the signed checksum file.
    A mismatch aborts before any file is placed into `INSTALL_DIR`.
-6. **Extract into a dedicated subdirectory.** `tar xzf … -C
+7. **Extract into a dedicated subdirectory.** `tar xzf … -C
    ${tmpdir}/extract` so the unpacked payload does not mix with the
    downloaded archive or checksum file.
-7. **Install binary.** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` +
-   `chmod +x`.
-8. **Install adjacent runtime assets.** Loops over `version.json`,
-   `libe_sqlite3.so`, `libe_sqlite3.dylib` and copies whichever of them
-   exist in the extract directory into `INSTALL_DIR`. This covers both
-   Linux (`.so`) and macOS (`.dylib`) with one code path and silently
-   skips assets that this RID's tarball does not ship.
-9. **PATH guidance.** If `INSTALL_DIR` is not on `PATH`, emit the
+8. **Validate the full extracted payload before copying anything.**
+   Requires `cdidx`, `version.json`, and the platform-specific native
+   SQLite library (`libe_sqlite3.so` on Linux, `libe_sqlite3.dylib` on
+   macOS) to all be present in the extracted tarball. Missing files
+   abort before touching `INSTALL_DIR`, so a healthy install is not
+   replaced by a partial payload.
+9. **Stage and swap binary/runtime assets together.** After the
+   validation above succeeds, the installer copies `cdidx` plus the
+   required adjacent runtime assets into a staging directory under
+   `INSTALL_DIR`, marks the staged binary executable, then renames the
+   existing files into a backup directory and promotes the staged assets
+   into place with runtime assets first and the binary last. If any
+   promotion step fails, the installer rolls back from the backup so a
+   healthy install is not left half-updated. This prevents a
+   “successful” install that would later crash with `v0.0.0` or
+   `DllNotFoundException`.
+10. **PATH guidance.** If `INSTALL_DIR` is not on `PATH`, emit the
    shell-specific snippet (`bashrc` / `zshrc` / `fish_add_path`).
 
 After a successful run, `ls $HOME/.local/bin/` shows `cdidx`,
@@ -731,19 +753,42 @@ sequenceDiagram
     U->>S: curl | bash
     S->>S: detect_platform (uname)
     Note over S: reject musl / osx-x64 early
-    S->>API: GET /releases/latest
-    API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
-    S->>FS: if existing cdidx --version matches → exit 0
+    S->>FS: inspect existing cdidx --version
+    alt no explicit version
+        S->>API: GET /releases/latest
+        API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
+        alt healthy existing install already matches latest
+            S-->>U: exit 0 after latest-version comparison
+        else upgrade or repair needed
+            S->>FS: switch/reinstall to resolved latest version
+        end
+    else explicit version requested
+        S->>S: normalize explicit version
+        S->>FS: same version still proceeds into reinstall
+    end
     S->>TMP: mkdir, trap cleanup
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
     S->>GH: GET sha256sums.txt
     S->>S: sha256sum / shasum / openssl verify
     S->>TMP: tar xzf -C extract/
-    S->>FS: cp extract/cdidx + chmod +x
-    loop version.json, libe_sqlite3.so, libe_sqlite3.dylib
-        S->>FS: cp if file exists
+    S->>S: validate cdidx + required assets in extract/
+    S->>FS: copy required files into .cdidx-stage.*
+    S->>FS: chmod +x staged cdidx
+    S->>FS: mv existing files into .cdidx-backup.*
+    alt backup move fails
+        S->>FS: restore already-backed-up files
+        S-->>U: abort before replacing current install
+    else backup complete
+        S->>FS: mv staged runtime assets into place
+        S->>FS: mv staged cdidx last
+        alt promotion move fails
+            S->>FS: remove newly promoted files
+            S->>FS: restore backed-up files
+            S-->>U: rollback and abort
+        else success
+            S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
+        end
     end
-    S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
 ```
 
 ### Phase 2 — First invocation: `cdidx --version`
@@ -1006,7 +1051,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — 正規表現によるシンボル抽出（32言語対応）
+    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method・scope filtering・range 解決向けの軽量 lexer / state machine を追加）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -1337,15 +1382,15 @@ LIMIT 20;
 
 ## シンボル抽出
 
-シンボルは**コンパイル済み正規表現パターン**で1行ずつマッチングして抽出されます。各言語に関数、クラス、場合によってはインポート用のパターンがあります。名前付きキャプチャグループ `(?<name>\w+)` で識別子を取得します。
+大半の言語では、今も **コンパイル済み正規表現パターン**を1行ずつ適用して関数、クラス、場合によってはインポートを抽出します。一方で JavaScript / TypeScript には、行単位の正規表現だけでは安定して扱えない class body の bare method、computed / modifier 付き method、scope-aware な synthetic class expression、JS/TS 専用の range 解決を補うため、軽量な lexer / state machine を追加しています。正規表現ベースの経路では引き続き名前付きキャプチャグループで識別子を取得します。
 
 言語別対応シンボル種別（シンボル抽出対応32言語）:
 
 | 言語 | function | class | struct | interface | enum | property | event/delegate | import | Graph |
 |---|---|---|---|---|---|---|---|---|:---:|
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
-| JavaScript | function, アロー, メソッド | class | -- | -- | -- | -- | -- | import...from | yes |
-| TypeScript | function, アロー, メソッド | class, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
+| JavaScript | function, アロー, メソッド（同一行の keyword / modifier 名、default 引数、computed、`#private`、generator、`async *` を含む） | class, export default class, 同一行 sibling / statement-prefixed public class, クラス式, 複数行 / parenthesized / CommonJS クラス export | -- | -- | -- | -- | -- | import...from | yes |
+| TypeScript | function, アロー, メソッド（generic / 同一行 object-return / conditional / function-return、default 引数、computed、`#private`、generator、`async *` を含む） | class, export default class, 匿名 default `abstract class`, `export = class`, 同一行 sibling / statement-prefixed public class, 複数行 / parenthesized クラス式, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
 | C# | メソッド, コンストラクタ, explicit-interface 実装（qualified call expression の直前にある named-argument label だけを除外し、`global::` / alias-qualified な戻り値型は許可）, 演算子, インデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
 | Go | func, メソッド | 型エイリアス | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
@@ -1539,7 +1584,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **MCPツールアノテーション** — 全ツールが MCP 仕様に沿った `annotations`（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`）を返し、AIクライアントが安全な読み取り専用クエリを自動承認できるようにする。
 - **MCPサーバー instructions** — `initialize` レスポンスにツール選択ガイダンスの `instructions` 文字列を含め、AIクライアントが初回接続時に適切なツールを選べるようにする。
 - **トリガー付きコンテンツ外部参照FTS5** — `chunks`テーブルを参照しコピーを保存しないことでストレージ倍増を回避。データベーストリガーでFTSインデックスを自動同期。
-- **正規表現シンボル抽出** — ASTパーサーも言語固有の依存関係も不要。精度より速度とポータビリティを優先しつつ、言語パターンから推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、修飾付きコンテナ経路、正式なグループキー、可視性、戻り値型も保存する。Visual Basic では `Namespace ... End Namespace` も実コンテナとして扱い、implicit visibility の宣言や `Shared` / `Overrides` / `Partial` など visibility 以外の先行修飾子も受理するようにしたため、他のクラス系言語と同じようにトップレベル構造とメンバーを取りこぼしにくくなった。Visual Basic のコンテナパターンは `VisualBasicEnd` ベースの範囲追跡を大文字小文字非依存で扱うため、partial 型ファミリーでも安定した本体範囲と `hotspots` 集計用メタデータを維持できる。**パターン外部化**: 言語パターンは現在 `SymbolExtractor.cs` 内にコンパイル済み `Regex` として定義。抽出パイプラインが自己完結し、コンパイル時検証が効くが、言語追加にはコード変更と再ビルドが必要。将来的にはJSON/TOMLファイルに外部化し（起動時読み込み）、コミュニティ貢献の敷居を下げ、開発時のホットリロードも可能にできる。トレードオフはコンパイル時安全性の喪失と起動コストの微増。外部化時のスキーマ: 言語名、種別（function/class/import/namespace）、正規表現文字列、本体スタイル（brace/indent/ruby-end/none）、可視性・戻り値型のキャプチャグループ名。
+- **ハイブリッドなシンボル抽出** — ASTパーサーも重量級の言語固有依存も追加しない方針。大半の言語はコンパイル済み正規表現で処理し、JavaScript / TypeScript だけは class body の method 抽出、private-scope filtering、synthetic class expression の binding 判定、JS/TS 固有の range 解決など、正規表現だけでは壊れやすい箇所を軽量 lexer / state machine で補う。引き続き精度より速度とポータビリティを優先しつつ、言語パターンや JS/TS state machine から推論できる範囲で定義範囲、本体範囲、シグネチャ、親シンボル、修飾付きコンテナ経路、正式なグループキー、可視性、戻り値型も保存する。Visual Basic では `Namespace ... End Namespace` も実コンテナとして扱い、implicit visibility の宣言や `Shared` / `Overrides` / `Partial` など visibility 以外の先行修飾子も受理するようにしたため、他のクラス系言語と同じようにトップレベル構造とメンバーを取りこぼしにくくなった。Visual Basic のコンテナパターンは `VisualBasicEnd` ベースの範囲追跡を大文字小文字非依存で扱うため、partial 型ファミリーでも安定した本体範囲と `hotspots` 集計用メタデータを維持できる。**パターン外部化**: 言語パターンは現在 `SymbolExtractor.cs` 内にコンパイル済み `Regex` として定義。抽出パイプラインが自己完結し、コンパイル時検証が効くが、言語追加にはコード変更と再ビルドが必要。将来的にはJSON/TOMLファイルに外部化し（起動時読み込み）、コミュニティ貢献の敷居を下げ、開発時のホットリロードも可能にできる。トレードオフはコンパイル時安全性の喪失と起動コストの微増。外部化時のスキーマ: 言語名、種別（function/class/import/namespace）、正規表現文字列、本体スタイル（brace/indent/ruby-end/none）、可視性・戻り値型のキャプチャグループ名。
 - **`hotspots` の正式な family trust** — `hotspots` が重名グループをコードベース全体の件数へ昇格させるのは、永続化済み `symbols.container_qualified_name` / `symbols.family_key` が現行の言語別 `hotspot_family_version_*` 契約で生成されたときだけ。readiness stamp と marker fingerprint は `codeindex_meta` に置き、旧形式・混在・部分更新直後の DB は古いファイル横断グループ識別子を黙って再利用せず、明示的に縮退する。
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI/機械向け出力。
 - **手動引数解析** — `System.CommandLine`は依存削減のため削除。シンプルなswitch文での解析。
@@ -1644,14 +1689,15 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
 1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
-2. **バージョン解決。** 引数なしなら GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて `tag_name` を grep する。引数ありなら `v` プレフィックス付き・無しの両方を受け付ける（例: `v1.8.0` と `1.8.0` のどちらでも可。バージョン番号自体は `install.sh` にハードコードされておらず、リポジトリ直下の `version.json` と GitHub Releases のタグが真実の源）。失敗時はスタックトレースではなく実行可能なエラーを1行で出す。
-3. **既にインストール済みなら短絡終了。** `INSTALL_DIR/cdidx --version` が目的のバージョンを返すなら 0 終了。これは `version.json` の存在に依存する。過去の壊れたインストールは `v0.0.0` を返すためアップグレード扱いになる — これは意図した挙動。
-4. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
-5. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
-6. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
-7. **バイナリ配置。** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` + `chmod +x`。
-8. **隣接ランタイム資産の配置。** `version.json`、`libe_sqlite3.so`、`libe_sqlite3.dylib` をループし、extract ディレクトリに存在するものだけを `INSTALL_DIR` にコピー。これで Linux（`.so`）と macOS（`.dylib`）を1つのコードパスで扱いつつ、この RID の tarball に含まれない資産は静かにスキップする。
-9. **PATH ガイダンス。** `INSTALL_DIR` が `PATH` に無ければ、シェル別のスニペット（`bashrc` / `zshrc` / `fish_add_path`）を表示する。
+2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、後続のバージョン選択や repair 判定で「健全な一致」なのか「古い/不完全な install」なのかを区別できる。
+3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで健全な既存 install がその latest tag と一致している場合だけ download を skip する。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
+4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なし再実行も latest release を対象にするが、明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。
+5. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
+6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
+7. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
+8. **コピー前に展開済み payload 全体を検証。** `cdidx`、`version.json`、OS ごとに必須の native SQLite ライブラリ（Linux は `libe_sqlite3.so`、macOS は `libe_sqlite3.dylib`）がすべて揃っていることを確認する。不足があれば `INSTALL_DIR` に触る前に中断するため、健全な install を部分 payload で壊さない。
+9. **staging と swap でバイナリ/隣接資産をまとめて配置。** 上記検証が通ってから、installer は `INSTALL_DIR` 配下の staging ディレクトリへ `cdidx` と必須隣接資産をコピーし、staged binary に `chmod +x` をかける。その後、既存ファイルを backup ディレクトリへ退避し、runtime asset を先に、binary を最後に rename で昇格させる。途中で失敗した場合は backup から rollback するため、健全な install を半更新状態にしない。これにより、見かけ上は成功しても後で `v0.0.0` や `DllNotFoundException` で落ちる半壊れ install を防ぐ。
+10. **PATH ガイダンス。** `INSTALL_DIR` が `PATH` に無ければ、シェル別のスニペット（`bashrc` / `zshrc` / `fish_add_path`）を表示する。
 
 成功後は `ls $HOME/.local/bin/` に `cdidx`、`libe_sqlite3.so`（Linux の場合）、`version.json` が並んで見える。それ以外のレイアウトはバグである。
 
@@ -1667,19 +1713,42 @@ sequenceDiagram
     U->>S: curl | bash
     S->>S: detect_platform (uname)
     Note over S: musl / osx-x64 は早期に拒否
-    S->>API: GET /releases/latest
-    API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
-    S->>FS: 既存 cdidx --version と一致 → exit 0
+    S->>FS: 既存 cdidx --version を確認
+    alt 引数なし
+        S->>API: GET /releases/latest
+        API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
+        alt 健全な既存 install が latest と一致
+            S-->>U: latest 比較後に exit 0
+        else upgrade または repair が必要
+            S->>FS: 解決した latest 版へ切り替え/再インストール
+        end
+    else 明示バージョン指定あり
+        S->>S: 明示バージョンを正規化
+        S->>FS: 同版でも再インストールへ進む
+    end
     S->>TMP: mkdir、trap でクリーンアップ
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
     S->>GH: GET sha256sums.txt
     S->>S: sha256sum / shasum / openssl で検証
     S->>TMP: tar xzf -C extract/
-    S->>FS: cp extract/cdidx + chmod +x
-    loop version.json, libe_sqlite3.so, libe_sqlite3.dylib
-        S->>FS: ファイルがあればコピー
+    S->>S: extract/ 内の cdidx と必須資産を検証
+    S->>FS: 必須ファイルを .cdidx-stage.* へコピー
+    S->>FS: staged cdidx に chmod +x
+    S->>FS: 既存ファイルを .cdidx-backup.* へ mv
+    alt backup 退避で失敗
+        S->>FS: 退避済みファイルだけ元へ戻す
+        S-->>U: 既存 install を置き換える前に中断
+    else backup 完了
+        S->>FS: staged runtime asset を先に昇格
+        S->>FS: staged cdidx を最後に昇格
+        alt promotion で失敗
+            S->>FS: 新しく昇格したファイルだけ削除
+            S->>FS: backup から旧ファイルを復元
+            S-->>U: rollback して中断
+        else success
+            S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
+        end
     end
-    S-->>U: "Installed cdidx to ~/.local/bin/cdidx"
 ```
 
 ### フェーズ2 — 初回起動: `cdidx --version`

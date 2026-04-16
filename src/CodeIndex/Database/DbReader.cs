@@ -458,6 +458,14 @@ public partial class DbReader
         return $"{fileAlias}.lang IN ({string.Join(", ", parameterNames)})";
     }
 
+    private static QueryCountResult ExecuteCountSummary(SqliteCommand cmd)
+    {
+        using var reader = cmd.ExecuteTrackedReader();
+        return reader.TrackedRead()
+            ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
+            : new QueryCountResult(0, 0);
+    }
+
     /// <summary>
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
@@ -513,6 +521,38 @@ public partial class DbReader
             });
         }
         return results;
+    }
+
+    public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT COUNT(*), COUNT(DISTINCT path)
+            FROM (
+                SELECT f.path AS path
+                FROM files f
+                WHERE 1=1";
+
+        if (query != null)
+            sql += " AND f.path LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += ")";
+
+        cmd.CommandText = sql;
+        if (query != null)
+            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
     }
 
     /// <summary>
@@ -679,6 +719,59 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
+    public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable)
+            return new QueryCountResult(0, 0);
+
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT path
+            FROM (
+                SELECT f.path AS path, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE 1=1";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (query != null)
+        {
+            if (exact && _foldReady)
+                innerSql += " AND r.symbol_name_folded = @query";
+            else if (exact)
+                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            else
+                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        }
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            innerSql += $" GROUP BY f.path, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        innerSql += ")";
+
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({innerSql})";
+        if (query != null)
+        {
+            var value = !exact
+                ? $"%{EscapeLikeQuery(query)}%"
+                : _foldReady
+                    ? NameFold.Fold(query) ?? query
+                    : query;
+            cmd.Parameters.AddWithValue("@query", value);
+        }
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
+    }
+
     /// <summary>
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
@@ -814,6 +907,53 @@ public partial class DbReader
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
+    }
+
+    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable)
+            return new QueryCountResult(0, 0);
+
+        using var cmd = _conn.CreateCommand();
+        var groupedSql = @"
+            SELECT path
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            groupedSql += " AND r.reference_kind = @referenceKind";
+        if (exact && _foldReady)
+            groupedSql += " AND r.symbol_name_folded = @query";
+        else if (exact)
+            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
+        else
+            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
+
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
     }
 
     /// <summary>
@@ -957,6 +1097,56 @@ public partial class DbReader
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
+    }
+
+    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable)
+            return new QueryCountResult(0, 0);
+
+        using var cmd = _conn.CreateCommand();
+        var groupedSql = @"
+            SELECT path
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name,
+                       " + (referenceKind == null
+                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           : "r.reference_kind") + @" AS reference_kind
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            groupedSql += " AND r.reference_kind = @referenceKind";
+        if (exact && _foldReady)
+            groupedSql += " AND r.container_name_folded = @query";
+        else if (exact)
+            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
+        else
+            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
+
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
     }
 
     /// <summary>
@@ -1608,6 +1798,60 @@ public partial class DbReader
         return results;
     }
 
+    public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (string.IsNullOrWhiteSpace(query) || pathPatterns == null || pathPatterns.Count == 0)
+            return new QueryCountResult(0, 0);
+
+        var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        using var fileCmd = _conn.CreateCommand();
+        var sql = "SELECT f.path, f.lines FROM files f WHERE 1=1";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {PathBucketOrder}, f.path";
+        fileCmd.CommandText = sql;
+        if (lang != null)
+            fileCmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+
+        var count = 0;
+        var fileCount = 0;
+        using var fileReader = fileCmd.ExecuteTrackedReader();
+        while (fileReader.TrackedRead())
+        {
+            var path = fileReader.GetString(0);
+            var totalLines = fileReader.GetInt32(1);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
+                continue;
+
+            var fileMatches = 0;
+            for (int lineNumber = 1; lineNumber <= totalLines; lineNumber++)
+            {
+                if (!lineMap.TryGetValue(lineNumber, out var lineText))
+                    continue;
+
+                for (int searchStart = 0; searchStart < lineText.Length;)
+                {
+                    var matchColumn = lineText.IndexOf(query, searchStart, comparison);
+                    if (matchColumn < 0)
+                        break;
+
+                    fileMatches++;
+                    searchStart = matchColumn + 1;
+                }
+            }
+
+            if (fileMatches > 0)
+            {
+                count += fileMatches;
+                fileCount++;
+            }
+        }
+
+        return new QueryCountResult(count, fileCount);
+    }
+
     /// <summary>
     /// Reconstruct one indexed file into an ordered line map.
     /// 1つのインデックス済みファイルを順序付き行マップへ再構成する。
@@ -1945,47 +2189,100 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return new List<FileDependencyResult>();
         using var cmd = _conn.CreateCommand();
-        // Use a subquery to find distinct (reference_file, definition_file, symbol) triples,
-        // avoiding inflated counts from same-name symbols across multiple files.
-        // サブクエリで (参照ファイル, 定義ファイル, シンボル) の重複を排除し、
-        // 同名シンボルによるカウント膨張を防ぐ。
-        var filterAlias = reverse ? "dst" : "src";
-        var innerSql = @"
-                SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
-                       r.symbol_name AS symbol_name,
+        // Aggregate logical reference sites per source-file/name first, then join that bounded
+        // set to distinct target files. This avoids the per-reference × per-symbol explosion that
+        // could exhaust SQLite temp-store on large indexes with many same-named symbols.
+        // まず source-file/name 単位に logical reference site 数を集約し、その後で distinct な
+        // target file と結合することで、大規模 index で SQLite temp-store を枯渇させる
+        // per-reference × per-symbol の膨張を防ぐ。
+        var sourceFilterAlias = "src";
+        var targetFilterAlias = "dst";
+        var sql = @"
+            WITH logical_references AS (
+                SELECT src.id AS source_file_id,
+                       src.path AS source_path,
+                       src.lang AS source_lang,
+                       r.symbol_name,
                        r.line,
                        r.column_number,
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
-                JOIN files dst ON s.file_id = dst.id
-                WHERE src.path != dst.path";
-        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
+                WHERE 1 = 1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
-            innerSql += " AND src.lang = @lang";
-        if (pathPatterns is { Count: > 0 })
+            sql += " AND src.lang = @lang";
+        if (!reverse && pathPatterns is { Count: > 0 })
         {
-            // OR together multiple --path values / 複数の --path 値を OR で結合
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"{filterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
-            innerSql += " AND (" + string.Join(" OR ", ors) + ")";
+                ors.Add($"{sourceFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
-        if (excludePathPatterns is { Count: > 0 })
+        if (!reverse && excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                innerSql += $" AND {filterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+                sql += $" AND {sourceFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
         }
-        if (excludeTests)
-            innerSql += $" AND NOT {TestPathCondition.Replace("f.path", $"{filterAlias}.path")}";
-
-        var sql = $@"
-            SELECT source_path, target_path,
-                   COUNT(*) AS reference_count,
+        if (!reverse && excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
+        sql += @"
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
+            ),
+            source_name_counts AS (
+                SELECT source_file_id,
+                       source_path,
+                       source_lang,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                GROUP BY source_file_id, source_path, source_lang, symbol_name
+            ),
+            target_files AS (
+                SELECT DISTINCT dst.path AS target_path,
+                       dst.lang AS target_lang,
+                       s.name AS symbol_name
+                FROM symbols s
+                JOIN files dst ON s.file_id = dst.id
+                WHERE 1 = 1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "dst", "depsTargetLang")}";
+        if (lang != null)
+            sql += " AND dst.lang = @lang";
+        if (reverse && pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{targetFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (reverse && excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND {targetFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
+        if (reverse && excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
+        sql += @"
+            ),
+            edges AS (
+                SELECT snc.source_path,
+                       tf.target_path,
+                       snc.symbol_name,
+                       snc.ref_count
+                FROM source_name_counts snc
+                JOIN target_files tf
+                  ON tf.symbol_name = snc.symbol_name
+                 AND tf.target_lang = snc.source_lang
+                WHERE snc.source_path != tf.target_path
+            )
+            SELECT source_path,
+                   target_path,
+                   SUM(ref_count) AS reference_count,
                    GROUP_CONCAT(symbol_name) AS symbols
-            FROM ({innerSql}) edges
-            GROUP BY source_path, target_path ORDER BY reference_count DESC LIMIT @limit";
+            FROM edges
+            GROUP BY source_path, target_path
+            ORDER BY reference_count DESC, source_path, target_path
+            LIMIT @limit";
 
         cmd.CommandText = sql;
         if (lang != null)
