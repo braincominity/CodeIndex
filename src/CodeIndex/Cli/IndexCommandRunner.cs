@@ -86,6 +86,21 @@ public static class IndexCommandRunner
             var dryIndexer = new FileIndexer(options.ProjectPath);
             IReadOnlyList<string> dryCandidates;
             var errorList = new List<object>();
+            var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
+
+            void RecordDryRunScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
+            {
+                foreach (var scanError in scanErrors)
+                {
+                    var key = $"{scanError.Path}\n{scanError.Message}";
+                    if (!dryScanErrorKeys.Add(key))
+                        continue;
+
+                    errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                    if (!options.Json)
+                        ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
+                }
+            }
 
             if (options.UpdateFiles.Count > 0)
             {
@@ -98,34 +113,48 @@ public static class IndexCommandRunner
             else if (options.Commits.Count > 0)
             {
                 // --commits: files changed in the specified commits / --commits: 指定コミットの変更ファイル
-                var changedFiles = new List<string>();
+                var changedFiles = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var commit in options.Commits)
                 {
                     try
                     {
                         var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
-                        changedFiles.AddRange(changed.Select(f => Path.Combine(options.ProjectPath, f)).Where(File.Exists));
+                        foreach (var path in changed)
+                            changedFiles.Add(path);
                     }
                     catch { /* ignore git errors in dry-run */ }
                 }
-                dryCandidates = changedFiles.Distinct().ToList();
+
+                if (ContainsIgnoreFilePath(changedFiles))
+                {
+                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    dryCandidates = scanResult.Files;
+                    RecordDryRunScanErrors(scanResult.Errors);
+                }
+                else
+                {
+                    dryCandidates = changedFiles
+                        .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
+                        .Where(File.Exists)
+                        .ToList();
+                }
             }
             else
             {
                 var scanResult = dryIndexer.ScanFilesDetailed();
                 dryCandidates = scanResult.Files;
-                errorList.AddRange(scanResult.Errors.Select(error => (object)new { file = error.Path, message = error.Message }));
-                if (!options.Json)
-                {
-                    foreach (var error in scanResult.Errors)
-                        ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
-                }
+                RecordDryRunScanErrors(scanResult.Errors);
             }
 
             var dryFiles = new List<string>();
             var langCounts = new Dictionary<string, int>();
             foreach (var f in dryCandidates)
             {
+                var pathFilter = dryIndexer.EvaluatePathFilter(f);
+                RecordDryRunScanErrors(pathFilter.Errors);
+                if (pathFilter.ShouldSkip)
+                    continue;
+
                 if (!TryProbeDryRunFile(dryIndexer, f, out var lang, out var message))
                 {
                     if (message != null)
@@ -506,10 +535,36 @@ public static class IndexCommandRunner
                 targetPaths.Add(relPath);
         }
 
+        if (options.Commits.Count > 0 && ContainsIgnoreFilePath(targetPaths))
+        {
+            if (!options.Json)
+            {
+                Console.WriteLine("  Detected ignore-file changes; falling back to a full scan to keep the index aligned.");
+                Console.WriteLine();
+            }
+
+            return RunFullScan(
+                writer,
+                indexer,
+                projectRoot,
+                resolvedDbPath,
+                options,
+                stopwatch,
+                spinnerFrames,
+                jsonOptions,
+                priorFoldVersion,
+                priorFoldFingerprint,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints,
+                priorIndexedProjectRoot);
+        }
+
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
+        var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var readinessDemoted = false;
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
@@ -546,6 +601,22 @@ public static class IndexCommandRunner
 
             writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
             projectRootWritten = true;
+        }
+
+        void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
+        {
+            foreach (var scanError in scanErrors)
+            {
+                var key = $"{scanError.Path}\n{scanError.Message}";
+                if (!scanErrorKeys.Add(key))
+                    continue;
+
+                DemoteReadinessOnce();
+                errors++;
+                errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                if (!options.Json)
+                    ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
+            }
         }
 
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
@@ -589,6 +660,38 @@ public static class IndexCommandRunner
                         skipped++;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                    }
+                    continue;
+                }
+
+                var pathFilter = indexer.EvaluatePathFilter(absPath);
+                RecordScanErrors(pathFilter.Errors);
+                if (pathFilter.ShouldSkip)
+                {
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
+                    if (writer.DeleteFileByPath(relPath))
+                    {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
+                        removed++;
+                        ftsMutated = true;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                    }
+                    else
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
                     }
                     continue;
                 }
@@ -870,6 +973,18 @@ public static class IndexCommandRunner
 
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
+
+    private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
+        => paths.Any(FileIndexer.IsIgnoreFilePath);
+
+    private static string DescribePathFilter(FileIndexer.PathFilterKind filterKind)
+        => filterKind switch
+        {
+            FileIndexer.PathFilterKind.IgnoredByRules => "ignored by .gitignore/.cdidxignore",
+            FileIndexer.PathFilterKind.ExcludedByDefaultDirectory => "excluded by default directory rules",
+            FileIndexer.PathFilterKind.ExcludedByDefaultFile => "excluded by default file rules",
+            _ => "filtered",
+        };
 
     private static IReadOnlyList<string> NormalizeUpdateFileTargets(string projectRoot, IEnumerable<string> updateFiles, bool json)
     {

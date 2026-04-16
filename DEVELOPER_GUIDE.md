@@ -22,7 +22,7 @@ src/CodeIndex/
     ConsoleUi.cs              — Spinner, progress bar, banner, easter egg, version, usage text
     DbPathResolver.cs         — Resolve default index DB paths and query-time project roots for explicit `--db` values
     GitHelper.cs              — Git helpers: diff-tree for --commits, worktree-aware common dir resolution
-    IndexCommandRunner.cs     — Index command execution, update/full-scan flows, backfill-fold upgrade path
+    IndexCommandRunner.cs     — Index command execution, ignore-aware update/full-scan flows, backfill-fold upgrade path
     QueryCommandRunner.cs     — Search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status execution and query arg parsing
     SearchSnippetFormatter.cs — Match-centered search snippet formatting for human/JSON output
     WorkspaceMetadataEnricher.cs — Enrich status/map/inspect with project root, git HEAD, dirty flag
@@ -33,7 +33,7 @@ src/CodeIndex/
     LineWidthFormatter.cs     — Shared single-line payload clamp helper used by find/references/excerpt/inspect and MCP counterparts to keep focused tokens visible while shrinking long lines
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
-    FileIndexer.cs            — Directory scan, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
+    FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
     SymbolExtractor.cs        — Regex-based symbol extraction (32 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction (31 languages with graph queries)
@@ -66,7 +66,7 @@ tests/CodeIndex.Tests/
 ### Indexing pipeline
 
 ```
-Directory scan (built-in skip lists + `.gitignore` / `.cdidxignore`) → Language detection → File read (UTF-8)
+Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore`) → Language detection → File read (UTF-8)
   → UPSERT file record
   → Split into chunks (80 lines, 10-line overlap)
   → Extract symbols via regex
@@ -74,6 +74,8 @@ Directory scan (built-in skip lists + `.gitignore` / `.cdidxignore`) → Languag
   → Batch insert chunks + symbols + references (500 per transaction)
   → Populate FTS5 index
 ```
+
+Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run.
 
 ## Database schema
 
@@ -994,7 +996,7 @@ src/CodeIndex/
     ConsoleUi.cs              — スピナー、プログレスバー、バナー、イースターエッグ、バージョン、使い方
     DbPathResolver.cs         — index時の既定DBパスと、explicit `--db` の query 時プロジェクトルート解決
     GitHelper.cs              — --commitsオプション用のgit diff-treeヘルパー
-    IndexCommandRunner.cs     — indexコマンド実行、更新/フルスキャンフロー、backfill-fold アップグレード経路
+    IndexCommandRunner.cs     — indexコマンド実行、ignore-aware な更新/フルスキャンフロー、backfill-fold アップグレード経路
     QueryCommandRunner.cs     — search/definition/references/callers/callees/symbols/files/find/excerpt/map/inspect/outline/status実行とクエリ引数解析
     SearchSnippetFormatter.cs — 人間向け/JSON向けの一致中心検索スニペット整形
     WorkspaceMetadataEnricher.cs — status/map/inspectにプロジェクトルート・git HEAD・dirty flagを付加
@@ -1005,7 +1007,7 @@ src/CodeIndex/
     LineWidthFormatter.cs     — find/references/excerpt/inspect と MCP 側の長い単一行クランプを共有し、注目トークンを残したまま行幅を縮めるヘルパー
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
-    FileIndexer.cs            — ディレクトリ走査、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
+    FileIndexer.cs            — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
     SymbolExtractor.cs        — 正規表現によるシンボル抽出（32言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
@@ -1038,7 +1040,7 @@ tests/CodeIndex.Tests/
 ### インデックスパイプライン
 
 ```
-ディレクトリ走査（組み込みスキップ + `.gitignore` / `.cdidxignore`）→ 言語検出 → ファイル読み込み（UTF-8）
+ディレクトリ走査 / 共有パスフィルタ（組み込みスキップ + `.gitignore` / `.cdidxignore`）→ 言語検出 → ファイル読み込み（UTF-8）
   → ファイルレコードUPSERT
   → チャンク分割（80行、10行重複）
   → 正規表現でシンボル抽出
@@ -1046,6 +1048,8 @@ tests/CodeIndex.Tests/
   → チャンク＋シンボル＋参照をバッチ挿入（1トランザクション500件）
   → FTS5インデックス反映
 ```
+
+`--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。
 
 ## データベーススキーマ
 

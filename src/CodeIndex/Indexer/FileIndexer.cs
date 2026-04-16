@@ -33,6 +33,21 @@ public class FileIndexer
         public bool HadErrors => Errors.Count > 0;
     }
 
+    internal enum PathFilterKind
+    {
+        None,
+        IgnoredByRules,
+        ExcludedByDefaultDirectory,
+        ExcludedByDefaultFile,
+    }
+
+    internal readonly record struct PathFilterResult(
+        PathFilterKind FilterKind,
+        IReadOnlyList<ScanError> Errors)
+    {
+        public bool ShouldSkip => FilterKind != PathFilterKind.None;
+    }
+
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp"];
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     // Extension-to-language mapping / 拡張子→言語名マッピング
@@ -215,9 +230,10 @@ public class FileIndexer
 
         internal bool Negated { get; }
 
-        internal static bool TryParse(string sourceDirectory, string rawLine, out IgnoreRule? rule)
+        internal static bool TryParse(string sourceDirectory, string rawLine, out IgnoreRule? rule, out string? errorMessage)
         {
             rule = null;
+            errorMessage = null;
             if (!TryTokenize(rawLine, out var tokens))
                 return false;
 
@@ -249,9 +265,17 @@ public class FileIndexer
                 return false;
 
             var matchBasenameOnly = !anchoredToSourceDirectory && !tokens.Any(token => token is { Value: '/', Escaped: false });
-            var matcher = BuildMatcher(tokens);
-            rule = new IgnoreRule(sourceDirectory, matcher, negated, directoryOnly, matchBasenameOnly);
-            return true;
+            try
+            {
+                var matcher = BuildMatcher(tokens);
+                rule = new IgnoreRule(sourceDirectory, matcher, negated, directoryOnly, matchBasenameOnly);
+                return true;
+            }
+            catch (ArgumentException ex)
+            {
+                errorMessage = $"Invalid ignore rule skipped: {ex.Message}";
+                return false;
+            }
         }
 
         internal bool IsMatch(string absolutePath, bool isDirectory)
@@ -463,6 +487,9 @@ public class FileIndexer
     public static string? DetectLanguage(string filePath)
         => TryDetectLanguage(filePath).Language;
 
+    internal static bool IsIgnoreFilePath(string path)
+        => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+
     internal static LanguageDetectionResult TryDetectLanguage(string filePath)
     {
         var ext = Path.GetExtension(filePath);
@@ -631,6 +658,53 @@ public class FileIndexer
     public IReadOnlyList<string> ScanFiles()
         => ScanFilesDetailed().Files;
 
+    internal PathFilterResult EvaluatePathFilter(string absolutePath, bool isDirectory = false)
+    {
+        var errors = new List<ScanError>();
+        var fullPath = Path.GetFullPath(absolutePath);
+        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, fullPath));
+        if (relativePath.Length == 0 ||
+            relativePath == "." ||
+            relativePath.StartsWith("../", StringComparison.Ordinal))
+        {
+            return new PathFilterResult(PathFilterKind.None, errors);
+        }
+
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var activeIgnoreRules = IgnoreRuleSet.Empty;
+        var currentDirectory = _projectRoot;
+        var fullyScanned = true;
+        activeIgnoreRules = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+
+        var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
+        for (var i = 0; i < directorySegmentCount; i++)
+        {
+            var directoryName = segments[i];
+            var childDirectory = Path.Combine(currentDirectory, directoryName);
+
+            if (SkipDirs.Contains(directoryName))
+                return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+
+            if (activeIgnoreRules.IsIgnored(childDirectory, isDirectory: true))
+                return new PathFilterResult(PathFilterKind.IgnoredByRules, errors);
+
+            currentDirectory = childDirectory;
+            fullyScanned = true;
+            activeIgnoreRules = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+        }
+
+        if (isDirectory)
+            return new PathFilterResult(PathFilterKind.None, errors);
+
+        var fileName = Path.GetFileName(fullPath);
+        if (SkipFiles.Contains(fileName))
+            return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
+
+        return activeIgnoreRules.IsIgnored(fullPath, isDirectory: false)
+            ? new PathFilterResult(PathFilterKind.IgnoredByRules, errors)
+            : new PathFilterResult(PathFilterKind.None, errors);
+    }
+
     internal ScanFilesResult ScanFilesDetailed()
     {
         var files = new List<string>();
@@ -779,10 +853,14 @@ public class FileIndexer
 
             try
             {
+                var lineNumber = 0;
                 foreach (var line in File.ReadLines(ignorePath))
                 {
-                    if (IgnoreRule.TryParse(dir, line, out var rule) && rule != null)
+                    lineNumber++;
+                    if (IgnoreRule.TryParse(dir, line, out var rule, out var errorMessage) && rule != null)
                         rules.Add(rule);
+                    else if (errorMessage != null)
+                        errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage));
                 }
             }
             catch (UnauthorizedAccessException)
