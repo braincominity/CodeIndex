@@ -13,6 +13,7 @@ REPO="Widthdom/CodeIndex"
 INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
 TMPDIR_CLEANUP=""
+STAGE_DIR_CLEANUP=""
 EXISTING_BIN=""
 EXISTING_VERSION=""
 RESOLVE_VERSION_SKIP=0
@@ -27,6 +28,9 @@ report_error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; }
 cleanup() {
     if [ -n "$TMPDIR_CLEANUP" ]; then
         rm -rf "$TMPDIR_CLEANUP"
+    fi
+    if [ -n "$STAGE_DIR_CLEANUP" ]; then
+        rm -rf "$STAGE_DIR_CLEANUP"
     fi
 }
 trap cleanup EXIT
@@ -150,6 +154,71 @@ existing_install_is_reusable() {
             ;;
     esac
 
+    return 0
+}
+
+restore_install_from_backup() {
+    local backup_dir="$1"
+    local install_dir="$2"
+    local required_files="$3"
+    local asset
+
+    for asset in $required_files; do
+        if [ -e "${backup_dir}/${asset}" ]; then
+            if ! mv "${backup_dir}/${asset}" "${install_dir}/${asset}"; then
+                report_error "Failed to restore previous install file ${asset} from backup at ${backup_dir}. Manual recovery may be required."
+                return 1
+            fi
+        elif [ -e "${install_dir}/${asset}" ]; then
+            if ! rm -f "${install_dir}/${asset}"; then
+                report_error "Failed to remove partially installed file ${install_dir}/${asset} during rollback. Manual recovery may be required."
+                return 1
+            fi
+        fi
+    done
+
+    return 0
+}
+
+promote_staged_install() {
+    local stage_dir="$1"
+    local backup_dir="$2"
+    local install_dir="$3"
+    local required_files="$4"
+    local required_assets="$5"
+    local asset
+
+    for asset in $required_files; do
+        if [ -e "${install_dir}/${asset}" ]; then
+            if ! mv "${install_dir}/${asset}" "${backup_dir}/${asset}"; then
+                report_error "Failed to stage existing ${asset} into backup at ${backup_dir}. Install aborted before replacing the current install."
+                if restore_install_from_backup "$backup_dir" "$install_dir" "$required_files"; then
+                    rm -rf "$backup_dir"
+                fi
+                return 1
+            fi
+        fi
+    done
+
+    for asset in $required_assets; do
+        if ! mv "${stage_dir}/${asset}" "${install_dir}/${asset}"; then
+            report_error "Failed to install ${asset} into ${install_dir}. Restoring previous install."
+            if restore_install_from_backup "$backup_dir" "$install_dir" "$required_files"; then
+                rm -rf "$backup_dir"
+            fi
+            return 1
+        fi
+    done
+
+    if ! mv "${stage_dir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"; then
+        report_error "Failed to install ${BINARY_NAME} into ${install_dir}. Restoring previous install."
+        if restore_install_from_backup "$backup_dir" "$install_dir" "$required_files"; then
+            rm -rf "$backup_dir"
+        fi
+        return 1
+    fi
+
+    rm -rf "$backup_dir"
     return 0
 }
 
@@ -390,10 +459,24 @@ download_and_install() {
 
     mkdir -p "$INSTALL_DIR"
 
+    local stage_dir
+    stage_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-stage.XXXXXX")"
+    STAGE_DIR_CLEANUP="$stage_dir"
+
     for asset in $required_files; do
-        cp "${extract_dir}/${asset}" "${INSTALL_DIR}/${asset}"
+        cp "${extract_dir}/${asset}" "${stage_dir}/${asset}"
     done
-    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+    chmod +x "${stage_dir}/${BINARY_NAME}"
+
+    local backup_dir
+    backup_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-backup.XXXXXX")"
+
+    if ! promote_staged_install "$stage_dir" "$backup_dir" "$INSTALL_DIR" "$required_files" "$required_assets"; then
+        return 1
+    fi
+
+    rm -rf "$stage_dir"
+    STAGE_DIR_CLEANUP=""
 
     info "Installed cdidx to ${INSTALL_DIR}/${BINARY_NAME}"
 }

@@ -723,11 +723,16 @@ What `install.sh` does, in order (see `install.sh`):
    macOS) to all be present in the extracted tarball. Missing files
    abort before touching `INSTALL_DIR`, so a healthy install is not
    replaced by a partial payload.
-9. **Install binary and adjacent runtime assets together.** After the
-   validation above succeeds, copy `cdidx` plus the required adjacent
-   runtime assets into `INSTALL_DIR` and `chmod +x` the binary. This
-   prevents a “successful” install that would later crash with `v0.0.0`
-   or `DllNotFoundException`.
+9. **Stage and swap binary/runtime assets together.** After the
+   validation above succeeds, the installer copies `cdidx` plus the
+   required adjacent runtime assets into a staging directory under
+   `INSTALL_DIR`, marks the staged binary executable, then renames the
+   existing files into a backup directory and promotes the staged assets
+   into place with runtime assets first and the binary last. If any
+   promotion step fails, the installer rolls back from the backup so a
+   healthy install is not left half-updated. This prevents a
+   “successful” install that would later crash with `v0.0.0` or
+   `DllNotFoundException`.
 10. **PATH guidance.** If `INSTALL_DIR` is not on `PATH`, emit the
    shell-specific snippet (`bashrc` / `zshrc` / `fish_add_path`).
 
@@ -1674,7 +1679,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
 7. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
 8. **コピー前に展開済み payload 全体を検証。** `cdidx`、`version.json`、OS ごとに必須の native SQLite ライブラリ（Linux は `libe_sqlite3.so`、macOS は `libe_sqlite3.dylib`）がすべて揃っていることを確認する。不足があれば `INSTALL_DIR` に触る前に中断するため、健全な install を部分 payload で壊さない。
-9. **バイナリと隣接ランタイム資産をまとめて配置。** 上記検証が通ってから `INSTALL_DIR` に `cdidx` と必須隣接資産をコピーし、`chmod +x` を行う。これにより、見かけ上は成功しても後で `v0.0.0` や `DllNotFoundException` で落ちる半壊れ install を防ぐ。
+9. **staging と swap でバイナリ/隣接資産をまとめて配置。** 上記検証が通ってから、installer は `INSTALL_DIR` 配下の staging ディレクトリへ `cdidx` と必須隣接資産をコピーし、staged binary に `chmod +x` をかける。その後、既存ファイルを backup ディレクトリへ退避し、runtime asset を先に、binary を最後に rename で昇格させる。途中で失敗した場合は backup から rollback するため、健全な install を半更新状態にしない。これにより、見かけ上は成功しても後で `v0.0.0` や `DllNotFoundException` で落ちる半壊れ install を防ぐ。
 10. **PATH ガイダンス。** `INSTALL_DIR` が `PATH` に無ければ、シェル別のスニペット（`bashrc` / `zshrc` / `fish_add_path`）を表示する。
 
 成功後は `ls $HOME/.local/bin/` に `cdidx`、`libe_sqlite3.so`（Linux の場合）、`version.json` が並んで見える。それ以外のレイアウトはバグである。
