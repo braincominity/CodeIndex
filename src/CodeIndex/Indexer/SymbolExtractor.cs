@@ -658,7 +658,12 @@ public static class SymbolExtractor
             var matchLine = structuralLine;
             if (lang == "css" && cssScannerLine != null)
             {
-                matchLine = cssScannerLine;
+                // Use raw CSS text for symbol-name matching so quoted selector payloads and
+                // @import values stay queryable, while brace/depth scans still rely on the
+                // separately masked scanner lines.
+                // CSS のシンボル名マッチは raw line を使い、引用付きセレクタや @import 値を
+                // 保持する。brace/depth 判定だけ別の scanner line を使う。
+                matchLine = line;
             }
             else if (lang == "csharp")
             {
@@ -753,9 +758,13 @@ public static class SymbolExtractor
                     if (lang == "css" && string.IsNullOrWhiteSpace(name))
                     {
                         if (lang is "javascript" or "typescript")
+                        {
                             lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+                            continue;
+                        }
 
-                        continue;
+                        stopAfterFirstPatternMatch = true;
+                        break;
                     }
 
                     var sameLineEndColumn = lang is "javascript" or "typescript"
@@ -3304,7 +3313,7 @@ public static class SymbolExtractor
         if (string.IsNullOrWhiteSpace(maskedSegment))
             return;
 
-        var matchLine = $"{maskedSegment} {{";
+        var matchLine = $"{rawSegment} {{";
         foreach (var pattern in patterns)
         {
             if (pattern.BodyStyle != BodyStyle.Brace)
@@ -5393,6 +5402,8 @@ public static class SymbolExtractor
         var inBlockComment = false;
         var inSingleQuote = false;
         var inDoubleQuote = false;
+        var inUrlToken = false;
+        var urlParenDepth = 0;
 
         for (int lineIndex = 0; lineIndex < originalLines.Length; lineIndex++)
         {
@@ -5422,7 +5433,22 @@ public static class SymbolExtractor
                     continue;
                 }
 
-                if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
+                if (!inSingleQuote
+                    && !inDoubleQuote
+                    && !inUrlToken
+                    && i + 3 < chars.Length
+                    && (line[i] == 'u' || line[i] == 'U')
+                    && (line[i + 1] == 'r' || line[i + 1] == 'R')
+                    && (line[i + 2] == 'l' || line[i + 2] == 'L')
+                    && line[i + 3] == '(')
+                {
+                    inUrlToken = true;
+                    urlParenDepth = 1;
+                    i += 3;
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && !inUrlToken && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
                 {
                     for (int j = i; j < chars.Length; j++)
                         chars[j] = ' ';
@@ -5450,6 +5476,21 @@ public static class SymbolExtractor
                     chars[i] = ' ';
                     inSingleQuote = !inSingleQuote;
                     continue;
+                }
+
+                if (inUrlToken && !inSingleQuote && !inDoubleQuote)
+                {
+                    if (line[i] == '(')
+                        urlParenDepth++;
+                    else if (line[i] == ')')
+                    {
+                        urlParenDepth--;
+                        if (urlParenDepth <= 0)
+                        {
+                            inUrlToken = false;
+                            urlParenDepth = 0;
+                        }
+                    }
                 }
 
                 if (inSingleQuote || inDoubleQuote)
