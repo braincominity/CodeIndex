@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Database;
@@ -191,6 +192,18 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Check whether a file row already exists for the given relative path.
+    /// 指定した相対パスの file 行が既に存在するか確認する。
+    /// </summary>
+    public bool HasFileAtPath(string relativePath)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path LIMIT 1";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    /// <summary>
     /// Upsert a file record and return its ID.
     /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids
     /// unnecessary AUTOINCREMENT growth from INSERT OR REPLACE's delete+insert).
@@ -324,13 +337,15 @@ public class DbWriter
                 INSERT INTO symbols (
                     file_id, kind, name, line, start_line, end_line,
                     body_start_line, body_end_line, signature,
-                    container_kind, container_name, visibility, return_type,
+                    container_kind, container_name, container_qualified_name, family_key,
+                    visibility, return_type,
                     name_folded
                 )
                 VALUES (
                     @fid, @kind, @name, @line, @startLine, @endLine,
                     @bodyStartLine, @bodyEndLine, @signature,
-                    @containerKind, @containerName, @visibility, @returnType,
+                    @containerKind, @containerName, @containerQualifiedName, @familyKey,
+                    @visibility, @returnType,
                     @nameFolded
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
@@ -344,6 +359,8 @@ public class DbWriter
             var pSignature = cmd.Parameters.Add("@signature", SqliteType.Text);
             var pContainerKind = cmd.Parameters.Add("@containerKind", SqliteType.Text);
             var pContainerName = cmd.Parameters.Add("@containerName", SqliteType.Text);
+            var pContainerQualifiedName = cmd.Parameters.Add("@containerQualifiedName", SqliteType.Text);
+            var pFamilyKey = cmd.Parameters.Add("@familyKey", SqliteType.Text);
             var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
             var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
             var pNameFolded = cmd.Parameters.Add("@nameFolded", SqliteType.Text);
@@ -365,6 +382,8 @@ public class DbWriter
                 pSignature.Value = (object?)symbol.Signature ?? DBNull.Value;
                 pContainerKind.Value = (object?)symbol.ContainerKind ?? DBNull.Value;
                 pContainerName.Value = (object?)symbol.ContainerName ?? DBNull.Value;
+                pContainerQualifiedName.Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
+                pFamilyKey.Value = (object?)symbol.FamilyKey ?? DBNull.Value;
                 pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
                 pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
                 pNameFolded.Value = (object?)NameFold.Fold(symbol.Name) ?? DBNull.Value;
@@ -528,6 +547,132 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Remove files from DB that are not part of the current authoritative full-scan set.
+    /// This covers both deleted files and files that still exist on disk but are no longer indexable.
+    /// 現在の authoritative な full-scan 結果に含まれないファイルをDBから削除する。
+    /// ディスク上から消えたファイルだけでなく、存在はするがインデックス対象外になったファイルも含む。
+    /// </summary>
+    public int PurgeFilesOutsideRetainedSet(IReadOnlySet<string> retainedRelativePaths)
+    {
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var path = reader.GetString(1);
+                if (!retainedRelativePaths.Contains(path))
+                    staleIds.Add(id);
+            }
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = BeginTransaction();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn.Commit();
+
+        return staleIds.Count;
+    }
+
+    /// <summary>
+    /// Remove files from DB that are outside the retained set, but only when their immediate
+    /// parent directory completed its own file listing authoritatively. Used by partial full
+    /// scans so unreadable descendants do not block stale-file cleanup for already-listed
+    /// siblings, while still protecting unreadable subtrees from speculative deletes.
+    /// retained set の外にある DB ファイルを削除するが、即時親ディレクトリ自身の file listing が
+    /// authoritative に完了した場合に限定する。partial full scan で、unreadable descendant の
+    /// せいで既に列挙済み sibling の stale cleanup が止まらないようにしつつ、unreadable subtree
+    /// 自体は推測ベースで削除しない。
+    /// </summary>
+    public int PurgeFilesOutsideRetainedSetWithinListedDirectories(IReadOnlySet<string> retainedRelativePaths, IReadOnlySet<string> listedDirectories)
+    {
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var path = reader.GetString(1);
+                if (retainedRelativePaths.Contains(path))
+                    continue;
+
+                if (HasListedParentDirectory(path, listedDirectories))
+                    staleIds.Add(id);
+            }
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = BeginTransaction();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn.Commit();
+
+        return staleIds.Count;
+    }
+
+    private static bool HasListedParentDirectory(string path, IReadOnlySet<string> listedDirectories)
+    {
+        var directory = GetDirectoryPath(path);
+        return listedDirectories.Contains(directory);
+    }
+
+    private static string GetDirectoryPath(string path)
+    {
+        var separatorIndex = path.LastIndexOf('/');
+        return separatorIndex >= 0 ? path[..separatorIndex] : string.Empty;
+    }
+
+    /// <summary>
+    /// Count symbol_references for files whose language is no longer graph-supported.
+    /// Used by update mode to demote readiness before the first real mutation commits.
+    /// グラフ非対応になった言語の symbol_references 件数を数える。
+    /// update mode が最初の実 mutation 前に readiness を落とす判断に使う。
+    /// </summary>
+    /// <param name="supportedLanguages">Currently supported languages / 現在対応している言語</param>
+    /// <returns>Number of stale reference rows present / 存在している古い参照行数</returns>
+    public int CountUnsupportedReferences(IReadOnlyCollection<string> supportedLanguages)
+    {
+        if (supportedLanguages.Count == 0)
+            return 0;
+
+        using var cmd = _conn.CreateCommand();
+        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
+        cmd.CommandText = $@"
+            SELECT COUNT(*)
+            FROM symbol_references
+            WHERE file_id IN (
+                SELECT f.id FROM files f
+                WHERE f.lang IS NOT NULL
+                  AND f.lang NOT IN ({string.Join(", ", inParams)})
+            )";
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? (int)l : (raw is int i ? i : 0);
+    }
+
+    /// <summary>
     /// Delete symbol_references for files whose language is no longer graph-supported.
     /// Prevents stale call edges from surviving after a language is removed from graph support.
     /// グラフ非対応になった言語のファイルから symbol_references を削除する。
@@ -541,14 +686,7 @@ public class DbWriter
             return 0;
 
         using var cmd = _conn.CreateCommand();
-        // Build an IN clause for supported languages / 対応言語の IN 句を構築
-        var inParams = new List<string>();
-        for (int i = 0; i < supportedLanguages.Count; i++)
-        {
-            var paramName = $"@lang{i}";
-            inParams.Add(paramName);
-            cmd.Parameters.AddWithValue(paramName, supportedLanguages.ElementAt(i));
-        }
+        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
 
         cmd.CommandText = $@"
             DELETE FROM symbol_references
@@ -613,6 +751,44 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Stamp the current authoritative version for hotspot family grouping semantics.
+    /// Only fully authoritative DB states should call this; mixed legacy/current DBs must
+    /// stay unstamped so readers degrade to conservative same-file counting.
+    /// hotspots family grouping の current authoritative version を stamp する。
+    /// </summary>
+    public void MarkHotspotFamilyReady(string lang, string? markerFingerprint = null)
+    {
+        SetMeta(
+            DbContext.GetHotspotFamilyVersionMetaKey(lang),
+            DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), markerFingerprint);
+        // Clear the superseded global keys so mixed-version DBs don't leave confusing stale metadata behind.
+        // 廃止した global key を掃除し、混在 DB に紛らわしい古い metadata を残さない。
+        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+    }
+
+    /// <summary>
+    /// Demote hotspot-family trust. Called at the start of any indexing run that may leave
+    /// a mixed legacy/current symbol set so readers fall back conservatively unless the run
+    /// completes and restamps the current version.
+    /// hotspot-family trust を縮退させる。index 開始時に呼び、成功時だけ再 stamp する。
+    /// </summary>
+    public void ClearHotspotFamilyReady()
+    {
+        if (!TableExists("codeindex_meta"))
+            return;
+
+        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
+        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            SetMeta(DbContext.GetHotspotFamilyVersionMetaKey(lang), null);
+            SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), null);
+        }
+    }
+
+    /// <summary>
     /// Upsert a metadata key/value into `codeindex_meta`.
     /// codeindex_meta への key/value の upsert。
     /// </summary>
@@ -626,6 +802,14 @@ public class DbWriter
         cmd.ExecuteNonQuery();
     }
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
+
+    private bool TableExists(string name)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
+        cmd.Parameters.AddWithValue("@name", name);
+        return cmd.ExecuteScalar() != null;
+    }
 
     /// <summary>
     /// True only when every existing row in symbols / symbol_references has a populated folded
@@ -755,6 +939,19 @@ public class DbWriter
         var raw = cmd.ExecuteScalar();
         int current = raw is long l ? (int)l : (raw is int i ? i : 0);
         Execute($"PRAGMA user_version = {current | flag}");
+    }
+
+    private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
+    {
+        var inParams = new List<string>(supportedLanguages.Count);
+        for (int i = 0; i < supportedLanguages.Count; i++)
+        {
+            var paramName = $"@lang{i}";
+            inParams.Add(paramName);
+            cmd.Parameters.AddWithValue(paramName, supportedLanguages.ElementAt(i));
+        }
+
+        return inParams;
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;

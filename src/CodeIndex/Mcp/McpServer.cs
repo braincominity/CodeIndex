@@ -15,6 +15,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer
 {
     private readonly string _dbPath;
+    private readonly bool _dbPathExplicit;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
     private bool _running = true;
@@ -24,9 +25,10 @@ public partial class McpServer
     private const int MaxQueryLength = 1000;
     private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
 
-    public McpServer(string dbPath, string version)
+    public McpServer(string dbPath, string version, bool dbPathExplicit = false)
     {
         _dbPath = dbPath;
+        _dbPathExplicit = dbPathExplicit;
         _version = version;
         _jsonOptions = new JsonSerializerOptions
         {

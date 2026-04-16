@@ -90,6 +90,19 @@ public partial class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
+    private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
+    {
+        var maxLineWidthValue = args?[propertyName]?.GetValue<int>();
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value <= 0)
+        {
+            maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
+        }
+
+        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth);
+        return null;
+    }
+
     private static List<string> ReadStringList(JsonNode? args, string propertyName)
     {
         return args?[propertyName] is JsonArray array
@@ -273,6 +286,8 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -421,6 +436,8 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>();
         var lang = args?["lang"]?.GetValue<string>();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -429,7 +446,7 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
             var exactSignal = reader.GetReferencesExactQuerySignal();
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
@@ -443,6 +460,7 @@ public partial class McpServer
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
+                ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["graphLanguage"] = lang,
@@ -634,7 +652,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
-            WorkspaceMetadataEnricher.Enrich(map, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
             structured["limit"] = limit;
             structured["lang"] = lang;
@@ -661,6 +679,8 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var lang = args?["lang"]?.GetValue<string>();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -669,12 +689,13 @@ public partial class McpServer
 
         return WithDbReader(id, reader =>
         {
-            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact);
-            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath);
+            var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             AddExactSignalAliases(structured);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
+            structured["maxLineWidth"] = maxLineWidth;
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
             structured["excludeTests"] = excludeTests;
@@ -711,12 +732,61 @@ public partial class McpServer
             payload["degraded_reason"] = camelReason.DeepClone();
     }
 
+    private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = db.GetMetaString(keyFactory(lang));
+        return values;
+    }
+
+    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = indexer.GetProjectMarkerFingerprint(lang);
+        return values;
+    }
+
+    private static void RestampHotspotFamilyTrust(
+        DbWriter writer,
+        bool allFilesRewritten,
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            priorVersions.TryGetValue(lang, out var priorVersion);
+            priorFingerprints.TryGetValue(lang, out var priorFingerprint);
+            if (allFilesRewritten || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+        }
+    }
+
+    private static void AddHotspotFamilySignal(JsonObject payload, HotspotFamilySignal signal)
+    {
+        payload["hotspot_family_ready"] = signal.Ready;
+        payload["hotspotFamilyReady"] = signal.Ready;
+        if (!signal.Ready)
+        {
+            payload["degraded"] = true;
+            if (signal.DegradedReason != null)
+            {
+                payload["hotspot_family_degraded_reason"] = signal.DegradedReason;
+                payload["hotspotFamilyDegradedReason"] = signal.DegradedReason;
+            }
+        }
+    }
+
     private JsonNode ExecuteStatus(JsonNode? id)
     {
         return WithDbReader(id, reader =>
         {
             var status = reader.GetStatus();
-            WorkspaceMetadataEnricher.Enrich(status, _dbPath);
+            WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
@@ -763,12 +833,60 @@ public partial class McpServer
         if (endLine < startLine.Value)
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
-        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
-        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var beforeValue = args?["before"]?.GetValue<int>();
+        if (beforeValue.HasValue && beforeValue.Value < 0)
+            return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
+        var before = beforeValue ?? 0;
+
+        var afterValue = args?["after"]?.GetValue<int>();
+        if (afterValue.HasValue && afterValue.Value < 0)
+            return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
+        var after = afterValue ?? 0;
+
+        var focusLine = args?["focusLine"]?.GetValue<int>();
+        var focusColumn = args?["focusColumn"]?.GetValue<int>();
+        var focusLengthValue = args?["focusLength"]?.GetValue<int>();
+        if (focusLengthValue.HasValue && focusLengthValue.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLength must be greater than or equal to 1");
+        var focusLength = focusLengthValue ?? 1;
+        var explicitFocusLength = args?["focusLength"] != null;
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
+
+        if (focusLine.HasValue && focusLine.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
+        if (focusColumn.HasValue && focusColumn.Value <= 0)
+            return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
+        if (!focusColumn.HasValue && (focusLine.HasValue || explicitFocusLength))
+            return CreateToolErrorResponse(id, "focusLine and focusLength require focusColumn");
 
         return WithDbReader(id, reader =>
         {
-            var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after);
+            if (focusLine.HasValue)
+            {
+                var file = reader.GetFileByPath(path);
+                if (file != null)
+                {
+                    var requestedStart = Math.Max(1, startLine.Value - before);
+                    var requestedEnd = Math.Min(file.Lines, endLine + after);
+                    if (focusLine.Value < requestedStart || focusLine.Value > requestedEnd)
+                        return CreateToolErrorResponse(id, $"focusLine ({focusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd})");
+                }
+            }
+            if (focusColumn.HasValue)
+            {
+                var focusLineLength = reader.GetExcerptFocusLineLength(
+                    path,
+                    startLine.Value,
+                    endLine,
+                    before,
+                    after,
+                    focusLine ?? startLine.Value);
+                if (focusLineLength.HasValue && focusColumn.Value > focusLineLength.Value)
+                    return CreateToolErrorResponse(id, $"focusColumn ({focusColumn.Value}) must be within the focused line length ({focusLineLength.Value})");
+            }
+
+            var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after, maxLineWidth, focusLine ?? startLine.Value, focusColumn, focusLength);
             if (excerpt == null)
             {
                 var emptyPayload = new JsonObject
@@ -781,6 +899,12 @@ public partial class McpServer
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            payload["maxLineWidth"] = maxLineWidth;
+            if (focusLine.HasValue)
+                payload["focusLine"] = focusLine.Value;
+            if (focusColumn.HasValue)
+                payload["focusColumn"] = focusColumn.Value;
+            payload["focusLength"] = focusLength;
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
@@ -801,13 +925,22 @@ public partial class McpServer
         var lang = args?["lang"]?.GetValue<string>();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var before = Math.Max(0, args?["before"]?.GetValue<int>() ?? 0);
-        var after = Math.Max(0, args?["after"]?.GetValue<int>() ?? 0);
+        var beforeValue = args?["before"]?.GetValue<int>();
+        if (beforeValue.HasValue && beforeValue.Value < 0)
+            return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
+        var before = beforeValue ?? 0;
+
+        var afterValue = args?["after"]?.GetValue<int>();
+        if (afterValue.HasValue && afterValue.Value < 0)
+            return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
+        var after = afterValue ?? 0;
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, reader =>
         {
-            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact);
+            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth);
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -815,6 +948,7 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["before"] = before,
                 ["after"] = after,
+                ["maxLineWidth"] = maxLineWidth,
                 ["exact"] = exact,
                 ["count"] = results.Count,
                 ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
@@ -1061,6 +1195,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var items = results.Select(r => new
             {
                 name = r.Symbol.Name,
@@ -1076,9 +1211,15 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
             };
+            AddHotspotFamilySignal(payload, hotspotSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} symbol hotspot(s)."
                 : "No symbol hotspots found.";
+            if (!hotspotSignal.Ready)
+            {
+                payload["note"] = "cross-file hotspot family grouping is degraded; conservative same-file fallback may hide or undercount hotspot families until the next successful reindex.";
+                summary += " Warning: cross-file hotspot family grouping is degraded, so results may be conservative until the next successful reindex.";
+            }
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
@@ -1207,6 +1348,9 @@ public partial class McpServer
         using var db = new DbContext(_dbPath);
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
+        var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
+        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // On --rebuild, clear readiness before DropAll so a crash during the window
         // (empty tables recreated, MarkReady not yet run) cannot leave old trust bits
@@ -1217,6 +1361,7 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
+            new DbWriter(db.Connection).ClearHotspotFamilyReady();
             db.DropAll();
         }
 
@@ -1224,13 +1369,42 @@ public partial class McpServer
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
+        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
+        var normalizedProjectPath = Path.GetFullPath(projectPath);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectPath);
+
+        static bool PathsEqual(string? left, string? right)
+        {
+            if (left == null || right == null)
+                return false;
+
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(left, right, comparison);
+        }
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
+            projectRootWritten = true;
+        }
 
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
+        writer.ClearHotspotFamilyReady();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
+        if (purged > 0)
+            WriteProjectRootOnce();
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -1257,6 +1431,7 @@ public partial class McpServer
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
@@ -1264,6 +1439,7 @@ public partial class McpServer
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                WriteProjectRootOnce();
                 txn.Commit();
             }
             catch
@@ -1285,6 +1461,12 @@ public partial class McpServer
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            RestampHotspotFamilyTrust(
+                writer,
+                skipped == 0,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
             // FoldReady must reflect reality (#86). Like CLI full-scan, MCP index_project skips
             // unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows keep NULL
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
@@ -1313,6 +1495,11 @@ public partial class McpServer
             {
                 foldReadyReason = "stale_fold_key_fingerprint";
             }
+
+            // Successful no-op MCP full scans should repair explicit-DB roots only after
+            // readiness is stamped, preserving the failure-path safety contract.
+            // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
+            WriteProjectRootOnce();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 

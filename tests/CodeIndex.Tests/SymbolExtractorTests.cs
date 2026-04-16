@@ -2814,6 +2814,107 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RawStringFixturesDoNotLeakPhantomSymbols()
+    {
+        var content = """""
+            public class FixtureHost
+            {
+                public void UsesRawFixture()
+                {
+                    const string fixture = """
+                        public class App
+                        {
+                            public void Run()
+                            {
+                            }
+                        }
+
+                        function main()
+                        end
+                        """;
+
+                    const string wider = """"
+                        public class Wider
+                        """";
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "UsesRawFixture"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "FixtureHost");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "App");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Wider");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "main");
+        Assert.Equal(20, method.EndLine);
+        Assert.Equal(20, method.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_NestedRawStringInsideInterpolation_DoesNotLeakPhantomSymbols()
+    {
+        var content = """""
+            public class FixtureHost
+            {
+                public int Run() => 1;
+                public string Id(string value) => value;
+
+                public int UsesRawFixture()
+                {
+                    return $"""
+                        value = {Id("""
+                            public class Phantom
+                            {
+                                public void Go() { }
+                            }
+                            """) + Run()}
+                        """.Length;
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "FixtureHost");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "UsesRawFixture");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Run");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Id");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Phantom");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Go");
+    }
+
+    [Fact]
+    public void Extract_CSharp_InterpolatedVerbatimStringWithEscapedBraces_DoesNotLeakPhantomSymbols()
+    {
+        var content = """
+            public class FixtureHost
+            {
+                public string Render()
+                {
+                    return $@"{{
+                        public class Phantom
+                    }}";
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "FixtureHost");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Render");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Phantom");
+    }
+
+    [Fact]
+    public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
+    {
+        var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "FixtureHost");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedNamespaceAndRecordStruct()
     {
         // C# 10+: file-scoped namespace, global using, record struct
@@ -2992,6 +3093,43 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Pi" && s.ReturnType == "double");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SwitchExpressionArms_DoNotProducePhantomProperties()
+    {
+        var content = """
+            public class Matcher
+            {
+                public string Describe(object x) => x switch
+                {
+                    int n when n > 0 => "pos",
+                    int neg => "non-pos",
+                    string text => text,
+                    double d => "double",
+                    List<string> list => "list",
+                    _ => "other",
+                };
+
+                public int Count(int y) => y switch
+                {
+                    > 0 => 1,
+                    0 => 0,
+                    _ => -1,
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Matcher");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Describe");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Count");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.DoesNotContain(symbols, s => s.Name == "neg");
+        Assert.DoesNotContain(symbols, s => s.Name == "text");
+        Assert.DoesNotContain(symbols, s => s.Name == "d");
+        Assert.DoesNotContain(symbols, s => s.Name == "list");
+        Assert.DoesNotContain(symbols, s => s.Name == "0");
     }
 
     [Fact]
@@ -3258,12 +3396,31 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_SQL_DetectsCreateStatements()
     {
-        var content = "CREATE TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE VIEW active_users AS SELECT * FROM users;\n\nALTER TABLE users ADD COLUMN email TEXT;";
+        var content = "CREATE TEMP TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE MATERIALIZED VIEW active_users AS SELECT * FROM users;\n\nCREATE TYPE color AS ENUM ('red', 'green');\nCREATE TYPE inventory_item AS (name text);\nCREATE SCHEMA analytics;\nCREATE SCHEMA AUTHORIZATION analytics_owner;\nCREATE SEQUENCE order_seq;\nCREATE EXTENSION IF NOT EXISTS pgcrypto;\nCREATE DOMAIN positive_int AS integer CHECK (VALUE > 0);\nCREATE UNIQUE INDEX users_email_idx ON users (id);\n\nALTER TABLE users ADD COLUMN email TEXT;";
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "get_user");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "active_users");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "color");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "inventory_item");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "analytics");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "analytics_owner");
+        Assert.DoesNotContain(symbols, s => s.Kind == "namespace" && s.Name == "AUTHORIZATION");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "order_seq");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "pgcrypto");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "positive_int");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users_email_idx");
+    }
+
+    [Fact]
+    public void Extract_SQL_DoesNotCaptureOnAsAnonymousIndexName()
+    {
+        var content = "CREATE INDEX ON users (email);\nCREATE INDEX IF NOT EXISTS users_name_idx ON users (name);";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "ON");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users_name_idx");
     }
 
     [Fact]
@@ -3637,6 +3794,85 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_VB_DetectsNamespaceAndImplicitVisibilityDeclarations()
+    {
+        var content = """
+            Imports System
+
+            Namespace MyApp
+                Public Class Foo
+                    Sub Bar()
+                    End Sub
+
+                    Function Quux() As Integer
+                        Return 1
+                    End Function
+                End Class
+
+                Class Helper
+                End Class
+
+                Public Module Utils
+                    Sub Log()
+                    End Sub
+                End Module
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "MyApp"));
+        Assert.Equal(3, ns.StartLine);
+        Assert.Equal(20, ns.EndLine);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("namespace", foo.ContainerKind);
+        Assert.Equal("MyApp", foo.ContainerName);
+
+        var helper = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Helper"));
+        Assert.Equal("namespace", helper.ContainerKind);
+        Assert.Equal("MyApp", helper.ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Quux");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Log");
+    }
+
+    [Fact]
+    public void Extract_VB_DetectsLeadingModifiersAndMemberKindsWithoutVisibility()
+    {
+        var content = """
+            Namespace MyApp
+                Partial Class Form1
+                End Class
+
+                Public Class Widget
+                    Partial Private Sub OnReady()
+                    End Sub
+
+                    Shared Sub Log()
+                    End Sub
+
+                    Overrides Function ToString() As String
+                        Return ""
+                    End Function
+
+                    Property Count As Integer
+
+                    Event Changed As EventHandler
+                End Class
+            End Namespace
+            """;
+        var symbols = SymbolExtractor.Extract(1, "vb", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Form1");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "OnReady");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Log");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ToString");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Count");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Changed");
+    }
+
+    [Fact]
     public void Extract_Haskell_DetectsIndentedAndLiterateSignatures()
     {
         // Indented where-clause signature and literate Haskell '>' prefix
@@ -3880,6 +4116,39 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Name" && s.ReturnType == "global::System.String");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Create" && s.ReturnType == "Alias::Type");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotMatchTernaryContinuationCallsAsDefinitions()
+    {
+        var content = """
+            public class Dispatcher
+            {
+                private string Select(bool isUpdate)
+                    => isUpdate
+                        ? RunUpdateMode()
+                        : RunFullScan();
+
+                private string RunUpdateMode() => "update";
+                private string RunFullScan() => "full";
+
+                public int? NullableCount() => null;
+
+                public Dispatcher(bool isUpdate)
+                    : base()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Select");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RunUpdateMode" && s.Line == 8);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RunFullScan" && s.Line == 9);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NullableCount" && s.ReturnType == "int?");
+        Assert.DoesNotContain(symbols, s => s.Name == "RunUpdateMode" && s.Line == 5);
+        Assert.DoesNotContain(symbols, s => s.Name == "RunFullScan" && s.Line == 6);
+        Assert.DoesNotContain(symbols, s => s.Name == "base");
     }
 
     [Fact]

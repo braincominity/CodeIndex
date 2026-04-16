@@ -10,6 +10,11 @@ public readonly record struct ExactQuerySignal(
     bool HasMissingTable,
     string? DegradedReason);
 
+public readonly record struct HotspotFamilySignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -23,6 +28,7 @@ public partial class DbReader
     private readonly HashSet<string> _symbolColumns;
     private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
+    private readonly HashSet<string> _indexedHotspotFamilyLanguages;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasChunksTable;
@@ -31,6 +37,11 @@ public partial class DbReader
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
+    // Tracks which languages have authoritative cross-file hotspot family semantics.
+    // Mixed legacy/update states can therefore degrade only the affected language instead of
+    // globally disabling families for unrelated marker types.
+    // authoritative な hotspot family semantics を保持する言語集合。
+    internal readonly HashSet<string> _hotspotFamilyReadyLanguages;
     internal const string TestPathCondition = @"
         (
             lower(f.path) LIKE 'tests/%' OR
@@ -50,6 +61,7 @@ public partial class DbReader
                 THEN 2
             ELSE 0
         END";
+    private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
 
     /// <summary>
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
@@ -99,6 +111,15 @@ public partial class DbReader
             WHEN instr(lower(c.content), lower(@rankingQuery)) > 0 THEN 0
             ELSE 1
         END";
+    private static string GetLogicalReferenceKindSql(string referenceKindSql)
+        => $"CASE WHEN {referenceKindSql} IN {InvokeReferenceKindsSql} THEN 'invoke' ELSE {referenceKindSql} END";
+
+    private static string GetPreferredReferenceKindSql(string referenceKindSql)
+        => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' ELSE MIN({referenceKindSql}) END";
+
+    private static string GetPathBucketOrderSql(string pathSql)
+        => PathBucketOrder.Replace("f.path", pathSql, StringComparison.Ordinal);
+
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
@@ -117,6 +138,7 @@ public partial class DbReader
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
         _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
         _referenceIndexes = LoadIndexes("symbol_references");
+        _indexedHotspotFamilyLanguages = LoadIndexedHotspotFamilyLanguages();
         // #86/#97: require the FoldReady bit plus matching fold metadata before trusting
         // folded columns. version guards intentional NameFold changes; fingerprint guards
         // runtime ICU / invariant-casing drift across .NET upgrades. Missing metadata on
@@ -130,12 +152,47 @@ public partial class DbReader
         _foldReady = foldBitSet
             && storedFoldVersion == NameFold.Version
             && string.Equals(storedFoldFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal);
+        _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
         // repo is untouched, which would flip trust on prematurely. Only an explicit
         // end-of-run readiness bit counts. Pre-upgrade DBs need a `cdidx index` re-run to
         // get stamped — degradation is safer than silent false-clean zeroes.
         // 行存在のフォールバックは意図的に採用しない。途中までのデータでも trusted に見えてしまうため。
+    }
+
+    internal HotspotFamilySignal GetHotspotFamilySignal(string? lang)
+    {
+        if (lang != null)
+        {
+            if (!FileIndexer.SupportsHotspotFamilyMarkerLanguage(lang) || !_indexedHotspotFamilyLanguages.Contains(lang))
+                return new HotspotFamilySignal(Ready: true, Relevant: false, DegradedReason: null);
+
+            var ready = _hotspotFamilyReadyLanguages.Contains(lang);
+            return new HotspotFamilySignal(
+                Ready: ready,
+                Relevant: true,
+                DegradedReason: ready
+                    ? null
+                    : $"cross-file hotspot family grouping for '{lang}' is degraded; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
+        }
+
+        var relevantLanguages = _indexedHotspotFamilyLanguages
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+        if (relevantLanguages.Count == 0)
+            return new HotspotFamilySignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        var unreadyLanguages = relevantLanguages
+            .Where(language => !_hotspotFamilyReadyLanguages.Contains(language))
+            .ToList();
+        if (unreadyLanguages.Count == 0)
+            return new HotspotFamilySignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new HotspotFamilySignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: $"cross-file hotspot family grouping is degraded for: {string.Join(", ", unreadyLanguages)}; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
     }
 
     private HashSet<string> LoadIndexes(string tableName)
@@ -166,6 +223,48 @@ public partial class DbReader
     private static string? ParseFoldFingerprint(SqliteConnection conn)
     {
         return TryGetMetaString(conn, "fold_key_fingerprint");
+    }
+
+    private HashSet<string> LoadIndexedHotspotFamilyLanguages()
+    {
+        var langs = new HashSet<string>(StringComparer.Ordinal);
+        var hotspotFamilyLangs = FileIndexer.GetHotspotFamilyMarkerLanguages();
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT DISTINCT lang
+            FROM files
+            WHERE lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hfl{i}"))})";
+        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
+            cmd.Parameters.AddWithValue($"@hfl{i}", hotspotFamilyLangs[i]);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (!reader.IsDBNull(0))
+                langs.Add(reader.GetString(0));
+        }
+        return langs;
+    }
+
+    private HashSet<string> LoadHotspotFamilyReadyLanguages(SqliteConnection conn)
+    {
+        var readyLangs = new HashSet<string>(StringComparer.Ordinal);
+        if (!_symbolColumns.Contains("family_key") || !_symbolColumns.Contains("container_qualified_name"))
+            return readyLangs;
+
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            var raw = TryGetMetaString(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
+            var fingerprint = TryGetMetaString(conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
+            if (raw is string s
+                && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
+                && version == DbContext.HotspotFamilyVersion
+                && !string.IsNullOrWhiteSpace(fingerprint))
+            {
+                readyLangs.Add(lang);
+            }
+        }
+
+        return readyLangs;
     }
 
     private static string? TryGetMetaString(SqliteConnection conn, string key)
@@ -359,6 +458,14 @@ public partial class DbReader
         return $"{fileAlias}.lang IN ({string.Join(", ", parameterNames)})";
     }
 
+    private static QueryCountResult ExecuteCountSummary(SqliteCommand cmd)
+    {
+        using var reader = cmd.ExecuteTrackedReader();
+        return reader.TrackedRead()
+            ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
+            : new QueryCountResult(0, 0);
+    }
+
     /// <summary>
     /// List indexed files, optionally filtered by name pattern and language.
     /// インデックス済みファイルを一覧（名前パターン・言語でフィルタ可能）。
@@ -416,22 +523,69 @@ public partial class DbReader
         return results;
     }
 
+    public QueryCountResult CountListFiles(string? query = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null)
+    {
+        using var cmd = _conn.CreateCommand();
+
+        var sql = @"
+            SELECT COUNT(*), COUNT(DISTINCT path)
+            FROM (
+                SELECT f.path AS path
+                FROM files f
+                WHERE 1=1";
+
+        if (query != null)
+            sql += " AND f.path LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += ")";
+
+        cmd.CommandText = sql;
+        if (query != null)
+            cmd.Parameters.AddWithValue("@query", $"%{EscapeLikeQuery(query)}%");
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
+    }
+
     /// <summary>
     /// Search indexed references such as call sites.
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
-    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         if (!_hasReferencesTable) return new List<ReferenceResult>();
+        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         using var cmd = _conn.CreateCommand();
-
-        var sql = @"
+        var sql = referenceKind == null
+            ? $@"
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.symbol_name,
+                       {GetPreferredReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       r.line, r.column_number,
+                       MIN(r.context) AS context,
+                       CASE WHEN COUNT(DISTINCT COALESCE(r.container_kind, '')) = 1 THEN MIN(r.container_kind) ELSE NULL END AS container_kind,
+                       CASE WHEN COUNT(DISTINCT COALESCE(r.container_name, '')) = 1 THEN MIN(r.container_name) ELSE NULL END AS container_name
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE 1=1
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
+            : @"
             SELECT f.path, f.lang, r.symbol_name, r.reference_kind, r.line, r.column_number,
                    r.context, r.container_kind, r.container_name
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE 1=1";
-        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (query != null)
         {
@@ -451,7 +605,16 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, f.path, r.line LIMIT @limit";
+        if (referenceKind == null)
+        {
+            sql += @"
+                GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @"
+            )
+            SELECT path, lang, symbol_name, reference_kind, line, column_number,
+                   context, container_kind, container_name
+            FROM logical_references r";
+        }
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line LIMIT @limit";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -485,6 +648,9 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var column = reader.GetInt32(5);
+            var context = reader.GetString(6);
+            var clampedContext = LineWidthFormatter.ClampLine(context, maxLineWidth, column, query?.Length ?? 1);
             results.Add(new ReferenceResult
             {
                 Path = reader.GetString(0),
@@ -492,8 +658,9 @@ public partial class DbReader
                 SymbolName = reader.GetString(2),
                 ReferenceKind = reader.GetString(3),
                 Line = reader.GetInt32(4),
-                Column = reader.GetInt32(5),
-                Context = reader.GetString(6),
+                Column = column,
+                Context = clampedContext.Text,
+                ContextTruncated = clampedContext.Truncated,
                 ContainerKind = GetNullableString(reader, 7),
                 ContainerName = GetNullableString(reader, 8),
             });
@@ -527,6 +694,8 @@ public partial class DbReader
         if (lang != null)
             innerSql += " AND f.lang = @lang";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            innerSql += $" GROUP BY r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         innerSql += " LIMIT @limit";
 
         cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
@@ -550,6 +719,59 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
+    public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable)
+            return new QueryCountResult(0, 0);
+
+        using var cmd = _conn.CreateCommand();
+
+        var innerSql = @"
+            SELECT path
+            FROM (
+                SELECT f.path AS path, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE 1=1";
+        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (query != null)
+        {
+            if (exact && _foldReady)
+                innerSql += " AND r.symbol_name_folded = @query";
+            else if (exact)
+                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            else
+                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        }
+        if (referenceKind != null)
+            innerSql += " AND r.reference_kind = @referenceKind";
+        if (lang != null)
+            innerSql += " AND f.lang = @lang";
+        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            innerSql += $" GROUP BY f.path, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        innerSql += ")";
+
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({innerSql})";
+        if (query != null)
+        {
+            var value = !exact
+                ? $"%{EscapeLikeQuery(query)}%"
+                : _foldReady
+                    ? NameFold.Fold(query) ?? query
+                    : query;
+            cmd.Parameters.AddWithValue("@query", value);
+        }
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
+    }
+
     /// <summary>
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
@@ -559,18 +781,25 @@ public partial class DbReader
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
-        var sql = @"
+        var sql = referenceKind == null
+            ? $@"
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
+            : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    MIN(r.line) AS first_line, COUNT(*) AS reference_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (referenceKind != null)
+            sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
-        else
-            sql += " AND r.reference_kind IN ('call', 'instantiate')";
         if (exact && _foldReady)
             sql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -580,7 +809,21 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        if (referenceKind == null)
+        {
+            sql += @"
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            )
+            SELECT path, lang, container_kind, container_name, symbol_name,
+                   MIN(line) AS first_line, COUNT(*) AS reference_count
+            FROM logical_references r
+            GROUP BY path, lang, container_kind, container_name, symbol_name";
+        }
+        else
+        {
+            sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name";
+        }
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -623,30 +866,32 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
-
-        var innerSql = @"
-            SELECT 1
+        var groupedSql = @"
+            SELECT path, lang, container_kind, container_name, symbol_name
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
-            innerSql += " AND r.reference_kind = @referenceKind";
-        else
-            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+            groupedSql += " AND r.reference_kind = @referenceKind";
         if (exact && _foldReady)
-            innerSql += " AND r.symbol_name_folded = @query";
+            groupedSql += " AND r.symbol_name_folded = @query";
         else if (exact)
-            innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
         if (lang != null)
-            innerSql += " AND f.lang = @lang";
-        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
-        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name LIMIT @limit";
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name LIMIT @limit";
 
-        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -664,6 +909,53 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
+    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable)
+            return new QueryCountResult(0, 0);
+
+        using var cmd = _conn.CreateCommand();
+        var groupedSql = @"
+            SELECT path
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            groupedSql += " AND r.reference_kind = @referenceKind";
+        if (exact && _foldReady)
+            groupedSql += " AND r.symbol_name_folded = @query";
+        else if (exact)
+            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
+        else
+            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
+
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
+    }
+
     /// <summary>
     /// Find callees used by a caller/container symbol.
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
@@ -673,18 +965,27 @@ public partial class DbReader
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
-        var sql = @"
+        var sql = referenceKind == null
+            ? $@"
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                       {GetPreferredReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       r.line
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL
+                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
+            : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (referenceKind != null)
+            sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
-        else
-            sql += " AND r.reference_kind IN ('call', 'instantiate')";
         if (exact && _foldReady)
             sql += " AND r.container_name_folded = @query";
         else if (exact)
@@ -694,7 +995,21 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {PathBucketOrder}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, f.path, first_line LIMIT @limit";
+        if (referenceKind == null)
+        {
+            sql += @"
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            )
+            SELECT path, lang, container_kind, container_name, symbol_name,
+                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count
+            FROM logical_references r
+            GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
+        }
+        else
+        {
+            sql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind";
+        }
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, reference_count DESC, {(referenceKind == null ? "r.path" : "f.path")}, first_line LIMIT @limit";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -738,30 +1053,35 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
-
-        var innerSql = @"
-            SELECT 1
+        var groupedSql = @"
+            SELECT path, lang, container_kind, container_name, symbol_name, reference_kind
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name,
+                       " + (referenceKind == null
+                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           : "r.reference_kind") + @" AS reference_kind
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
-        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
-            innerSql += " AND r.reference_kind = @referenceKind";
-        else
-            innerSql += " AND r.reference_kind IN ('call', 'instantiate')";
+            groupedSql += " AND r.reference_kind = @referenceKind";
         if (exact && _foldReady)
-            innerSql += " AND r.container_name_folded = @query";
+            groupedSql += " AND r.container_name_folded = @query";
         else if (exact)
-            innerSql += " AND r.container_name = @query COLLATE NOCASE";
+            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
         else
-            innerSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
         if (lang != null)
-            innerSql += " AND f.lang = @lang";
-        AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
-        innerSql += " GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit";
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind LIMIT @limit";
 
-        cmd.CommandText = $"SELECT COUNT(*) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -777,6 +1097,56 @@ public partial class DbReader
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
+    }
+
+    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (!_hasReferencesTable)
+            return new QueryCountResult(0, 0);
+
+        using var cmd = _conn.CreateCommand();
+        var groupedSql = @"
+            SELECT path
+            FROM (
+                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
+                       r.container_name AS container_name, r.symbol_name AS symbol_name,
+                       " + (referenceKind == null
+                           ? GetPreferredReferenceKindSql("r.reference_kind")
+                           : "r.reference_kind") + @" AS reference_kind
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL";
+        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+
+        if (referenceKind != null)
+            groupedSql += " AND r.reference_kind = @referenceKind";
+        if (exact && _foldReady)
+            groupedSql += " AND r.container_name_folded = @query";
+        else if (exact)
+            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
+        else
+            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+        if (lang != null)
+            groupedSql += " AND f.lang = @lang";
+        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
+        if (referenceKind == null)
+            groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
+
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        var value = !exact
+            ? $"%{EscapeLikeQuery(query)}%"
+            : _foldReady
+                ? NameFold.Fold(query) ?? query
+                : query;
+        cmd.Parameters.AddWithValue("@query", value);
+        if (referenceKind != null)
+            cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        return ExecuteCountSummary(cmd);
     }
 
     /// <summary>
@@ -837,18 +1207,25 @@ public partial class DbReader
               AND r.symbol_name = @symbolName COLLATE NOCASE";
 
         var sql = $@"
-            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   MIN(r.line) AS first_line, COUNT(*) AS reference_count
-            FROM symbol_references r
-            JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL
-              AND r.reference_kind IN ('call', 'instantiate')
-              AND {supportedLangFilter}
-              {nameCondition}";
+            WITH logical_references AS (
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE r.container_name IS NOT NULL
+                  AND r.reference_kind IN {InvokeReferenceKindsSql}
+                  AND {supportedLangFilter}
+                  {nameCondition}";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name ORDER BY {PathBucketOrder}, reference_count DESC, f.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
+        sql += @"
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+            )
+            SELECT path, lang, container_kind, container_name, symbol_name,
+                   MIN(line) AS first_line, COUNT(*) AS reference_count
+            FROM logical_references r
+            GROUP BY path, lang, container_kind, container_name, symbol_name";
+        sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
@@ -1177,7 +1554,10 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         var innerSql = @"
                 SELECT src.id AS source_file_id, src.path AS source_path, @impactTargetPath AS target_path,
-                       r.symbol_name AS symbol_name
+                       r.symbol_name AS symbol_name,
+                       r.line,
+                       r.column_number,
+                       " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
                 WHERE src.path != @impactTargetPath";
@@ -1203,6 +1583,7 @@ public partial class DbReader
         }
         if (excludeTests)
             innerSql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
+        innerSql = "SELECT DISTINCT * FROM (" + innerSql + ")";
 
         cmd.CommandText = $@"
             SELECT source_file_id, source_path, target_path,
@@ -1336,13 +1717,14 @@ public partial class DbReader
     /// Find literal substring matches inside path-scoped indexed files.
     /// path で絞ったインデックス済みファイル内でリテラル部分文字列一致を探す。
     /// </summary>
-    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false)
+    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
             return [];
 
         before = Math.Max(0, before);
         after = Math.Max(0, after);
+        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         using var fileCmd = _conn.CreateCommand();
@@ -1388,6 +1770,14 @@ public partial class DbReader
                     if (matchColumn < 0)
                         break;
 
+                    var snippetLines = snippetLineNumbers.Select(line => lineMap[line]).ToList();
+                    var clampedSnippet = LineWidthFormatter.ClampLines(
+                        snippetLines,
+                        maxLineWidth,
+                        focusLineIndex: snippetLineNumbers.IndexOf(lineNumber),
+                        focusColumn: matchColumn + 1,
+                        focusLength: query.Length);
+
                     results.Add(new FileFindResult
                     {
                         Path = path,
@@ -1396,7 +1786,8 @@ public partial class DbReader
                         Column = matchColumn + 1,
                         StartLine = snippetLineNumbers[0],
                         EndLine = snippetLineNumbers[^1],
-                        Snippet = string.Join("\n", snippetLineNumbers.Select(line => lineMap[line])),
+                        Snippet = clampedSnippet.Text,
+                        SnippetTruncated = clampedSnippet.Truncated,
                     });
 
                     searchStart = matchColumn + 1;
@@ -1405,6 +1796,60 @@ public partial class DbReader
         }
 
         return results;
+    }
+
+    public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    {
+        if (string.IsNullOrWhiteSpace(query) || pathPatterns == null || pathPatterns.Count == 0)
+            return new QueryCountResult(0, 0);
+
+        var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        using var fileCmd = _conn.CreateCommand();
+        var sql = "SELECT f.path, f.lines FROM files f WHERE 1=1";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $" ORDER BY {PathBucketOrder}, f.path";
+        fileCmd.CommandText = sql;
+        if (lang != null)
+            fileCmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+
+        var count = 0;
+        var fileCount = 0;
+        using var fileReader = fileCmd.ExecuteTrackedReader();
+        while (fileReader.TrackedRead())
+        {
+            var path = fileReader.GetString(0);
+            var totalLines = fileReader.GetInt32(1);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
+                continue;
+
+            var fileMatches = 0;
+            for (int lineNumber = 1; lineNumber <= totalLines; lineNumber++)
+            {
+                if (!lineMap.TryGetValue(lineNumber, out var lineText))
+                    continue;
+
+                for (int searchStart = 0; searchStart < lineText.Length;)
+                {
+                    var matchColumn = lineText.IndexOf(query, searchStart, comparison);
+                    if (matchColumn < 0)
+                        break;
+
+                    fileMatches++;
+                    searchStart = matchColumn + 1;
+                }
+            }
+
+            if (fileMatches > 0)
+            {
+                count += fileMatches;
+                fileCount++;
+            }
+        }
+
+        return new QueryCountResult(count, fileCount);
     }
 
     /// <summary>
@@ -1471,7 +1916,16 @@ public partial class DbReader
     /// Reconstruct a file excerpt from indexed chunks.
     /// インデックス済みチャンクからファイル抜粋を再構成する。
     /// </summary>
-    public FileExcerptResult? GetExcerpt(string path, int startLine, int endLine, int before = 0, int after = 0)
+    public FileExcerptResult? GetExcerpt(
+        string path,
+        int startLine,
+        int endLine,
+        int before = 0,
+        int after = 0,
+        int? maxLineWidth = null,
+        int? focusLine = null,
+        int? focusColumn = null,
+        int focusLength = 1)
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
@@ -1496,14 +1950,63 @@ public partial class DbReader
         if (selectedLines.Count == 0)
             return null;
 
+        var contentLines = selectedLines.Select(line => lineMap[line]).ToList();
+        var focusLineIndex = focusLine.HasValue ? selectedLines.IndexOf(focusLine.Value) : -1;
+        if (focusLineIndex >= 0 && focusColumn.HasValue && focusColumn.Value > contentLines[focusLineIndex].Length)
+            return null;
+        var clampedContent = maxLineWidth.HasValue
+            ? LineWidthFormatter.ClampLines(
+                contentLines,
+                maxLineWidth.Value,
+                focusLineIndex >= 0 ? focusLineIndex : null,
+                focusLineIndex >= 0 ? focusColumn : null,
+                focusLength)
+            : new ClampedTextResult(string.Join("\n", contentLines), false);
+
         return new FileExcerptResult
         {
             Path = path,
             Lang = lang,
             StartLine = selectedLines[0],
             EndLine = selectedLines[^1],
-            Content = string.Join("\n", selectedLines.Select(line => lineMap[line])),
+            Content = clampedContent.Text,
+            ContentTruncated = clampedContent.Truncated,
         };
+    }
+
+    /// <summary>
+    /// Return the length of the focused excerpt line when it is part of the reconstructed range.
+    /// 抜粋として再構成される範囲内に focus line が含まれる場合、その行長を返す。
+    /// </summary>
+    public int? GetExcerptFocusLineLength(
+        string path,
+        int startLine,
+        int endLine,
+        int before = 0,
+        int after = 0,
+        int? focusLine = null)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !focusLine.HasValue)
+            return null;
+
+        if (startLine <= 0)
+            startLine = 1;
+        if (endLine < startLine)
+            endLine = startLine;
+        if (before < 0)
+            before = 0;
+        if (after < 0)
+            after = 0;
+
+        var requestedStart = Math.Max(1, startLine - before);
+        if (!TryLoadIndexedFileLines(path, out _, out var totalLines, out var lineMap, requestedStart, endLine + after))
+            return null;
+        var requestedEnd = Math.Min(totalLines, endLine + after);
+
+        if (focusLine.Value < requestedStart || focusLine.Value > requestedEnd)
+            return null;
+
+        return lineMap.TryGetValue(focusLine.Value, out var line) ? line.Length : null;
     }
 
     /// <summary>
@@ -1686,44 +2189,100 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return new List<FileDependencyResult>();
         using var cmd = _conn.CreateCommand();
-        // Use a subquery to find distinct (reference_file, definition_file, symbol) triples,
-        // avoiding inflated counts from same-name symbols across multiple files.
-        // サブクエリで (参照ファイル, 定義ファイル, シンボル) の重複を排除し、
-        // 同名シンボルによるカウント膨張を防ぐ。
-        var filterAlias = reverse ? "dst" : "src";
-        var innerSql = @"
-                SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
-                       r.symbol_name AS symbol_name
+        // Aggregate logical reference sites per source-file/name first, then join that bounded
+        // set to distinct target files. This avoids the per-reference × per-symbol explosion that
+        // could exhaust SQLite temp-store on large indexes with many same-named symbols.
+        // まず source-file/name 単位に logical reference site 数を集約し、その後で distinct な
+        // target file と結合することで、大規模 index で SQLite temp-store を枯渇させる
+        // per-reference × per-symbol の膨張を防ぐ。
+        var sourceFilterAlias = "src";
+        var targetFilterAlias = "dst";
+        var sql = @"
+            WITH logical_references AS (
+                SELECT src.id AS source_file_id,
+                       src.path AS source_path,
+                       src.lang AS source_lang,
+                       r.symbol_name,
+                       r.line,
+                       r.column_number,
+                       " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
-                JOIN files dst ON s.file_id = dst.id
-                WHERE src.path != dst.path";
-        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
+                WHERE 1 = 1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
-            innerSql += " AND src.lang = @lang";
-        if (pathPatterns is { Count: > 0 })
+            sql += " AND src.lang = @lang";
+        if (!reverse && pathPatterns is { Count: > 0 })
         {
-            // OR together multiple --path values / 複数の --path 値を OR で結合
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"{filterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
-            innerSql += " AND (" + string.Join(" OR ", ors) + ")";
+                ors.Add($"{sourceFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
-        if (excludePathPatterns is { Count: > 0 })
+        if (!reverse && excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                innerSql += $" AND {filterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+                sql += $" AND {sourceFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
         }
-        if (excludeTests)
-            innerSql += $" AND NOT {TestPathCondition.Replace("f.path", $"{filterAlias}.path")}";
-
-        var sql = $@"
-            SELECT source_path, target_path,
-                   COUNT(*) AS reference_count,
+        if (!reverse && excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
+        sql += @"
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
+            ),
+            source_name_counts AS (
+                SELECT source_file_id,
+                       source_path,
+                       source_lang,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                GROUP BY source_file_id, source_path, source_lang, symbol_name
+            ),
+            target_files AS (
+                SELECT DISTINCT dst.path AS target_path,
+                       dst.lang AS target_lang,
+                       s.name AS symbol_name
+                FROM symbols s
+                JOIN files dst ON s.file_id = dst.id
+                WHERE 1 = 1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "dst", "depsTargetLang")}";
+        if (lang != null)
+            sql += " AND dst.lang = @lang";
+        if (reverse && pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{targetFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (reverse && excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND {targetFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
+        if (reverse && excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
+        sql += @"
+            ),
+            edges AS (
+                SELECT snc.source_path,
+                       tf.target_path,
+                       snc.symbol_name,
+                       snc.ref_count
+                FROM source_name_counts snc
+                JOIN target_files tf
+                  ON tf.symbol_name = snc.symbol_name
+                 AND tf.target_lang = snc.source_lang
+                WHERE snc.source_path != tf.target_path
+            )
+            SELECT source_path,
+                   target_path,
+                   SUM(ref_count) AS reference_count,
                    GROUP_CONCAT(symbol_name) AS symbols
-            FROM ({innerSql}) edges
-            GROUP BY source_path, target_path ORDER BY reference_count DESC LIMIT @limit";
+            FROM edges
+            GROUP BY source_path, target_path
+            ORDER BY reference_count DESC, source_path, target_path
+            LIMIT @limit";
 
         cmd.CommandText = sql;
         if (lang != null)
