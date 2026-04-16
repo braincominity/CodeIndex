@@ -248,13 +248,14 @@ public class FileIndexer
             if (pattern.Length == 0)
                 return false;
 
-            if (pattern.StartsWith("/", StringComparison.Ordinal))
+            var anchoredToSourceDirectory = pattern.StartsWith("/", StringComparison.Ordinal);
+            if (anchoredToSourceDirectory)
                 pattern = pattern[1..];
 
             pattern = pattern.Replace(@"\#", "#", StringComparison.Ordinal)
                 .Replace(@"\!", "!", StringComparison.Ordinal);
 
-            var matchBasenameOnly = !pattern.Contains('/', StringComparison.Ordinal);
+            var matchBasenameOnly = !anchoredToSourceDirectory && !pattern.Contains('/', StringComparison.Ordinal);
             var matcher = BuildMatcher(pattern);
             rule = new IgnoreRule(sourceDirectory, matcher, negated, directoryOnly, matchBasenameOnly);
             return true;
@@ -277,7 +278,10 @@ public class FileIndexer
                 ? Path.GetFileName(relativePath)
                 : relativePath;
 
-            return !string.IsNullOrEmpty(candidate) && _matcher.IsMatch(candidate);
+            if (string.IsNullOrEmpty(candidate))
+                return false;
+
+            return _matcher.IsMatch(candidate);
         }
 
         private static Regex BuildMatcher(string pattern)
@@ -291,7 +295,23 @@ public class FileIndexer
                 if (ch == '*')
                 {
                     var isDoubleStar = i + 1 < pattern.Length && pattern[i + 1] == '*';
-                    builder.Append(isDoubleStar ? ".*" : "[^/]*");
+                    if (isDoubleStar)
+                    {
+                        var nextChar = i + 2 < pattern.Length ? pattern[i + 2] : '\0';
+                        if (nextChar == '/')
+                        {
+                            builder.Append("(?:[^/]+/)*");
+                            i += 2;
+                            continue;
+                        }
+
+                        builder.Append(".*");
+                    }
+                    else
+                    {
+                        builder.Append("[^/]*");
+                    }
+
                     if (isDoubleStar)
                         i++;
                     continue;

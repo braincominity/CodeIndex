@@ -299,6 +299,92 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_RespectsRootAnchoredGitignorePatterns()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "root_only_dir"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "src", "root_only_dir"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "/root_only_dir/\n/secret.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "root_only_dir", "root.py"), "print('ignored root dir')");
+            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('ignored root file')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept root file')");
+            File.WriteAllText(Path.Combine(tempDir, "src", "root_only_dir", "nested.py"), "print('kept nested dir')");
+            File.WriteAllText(Path.Combine(tempDir, "src", "secret.py"), "print('kept nested file')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py", "src/root_only_dir/nested.py", "src/secret.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGlobstarPrefixPatternAtProjectRoot()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "**/*.min.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "app.min.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "nested", "lib.min.js"), "export const nestedIgnored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const kept = true;");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "app.js"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGlobstarMiddlePatternWithZeroOrMoreDirectories()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo", "deep"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**/bar.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "bar.py"), "print('ignored shallow')");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "deep", "bar.py"), "print('ignored deep')");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "foo/keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_IncludesModernNodeModuleExtensions()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
