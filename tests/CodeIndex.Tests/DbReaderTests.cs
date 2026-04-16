@@ -2165,6 +2165,91 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
+    {
+        InsertIndexedFile("src/Foo.cs", "csharp",
+            """
+            public class Foo
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Foo foo)
+                {
+                    foo.Run();
+                }
+            }
+            """);
+        InsertIndexedFile("src/foo.py", "python",
+            """
+            def Run():
+                return True
+            """);
+
+        var dependencies = _reader.GetFileDependencies(
+            limit: 10,
+            lang: "csharp",
+            pathPatterns: ["src/Caller.cs"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("src/Caller.cs", dependency.SourcePath);
+        Assert.Equal("src/Foo.cs", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.DoesNotContain("foo.py", dependency.TargetPath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetGroupedSymbolHotspots_CollapsesDuplicateNamesWithoutBareJoinInflation()
+    {
+        InsertIndexedFile("src/Alpha.cs", "csharp",
+            """
+            public class Alpha
+            {
+                private void SharedHelper() { }
+
+                public void Use()
+                {
+                    SharedHelper();
+                    SharedHelper();
+                }
+            }
+            """);
+        InsertIndexedFile("src/Beta.cs", "csharp",
+            """
+            public class Beta
+            {
+                private void SharedHelper() { }
+
+                public void Use()
+                {
+                    SharedHelper();
+                }
+            }
+            """);
+
+        var grouped = _reader.GetGroupedSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "csharp",
+            pathPatterns: ["src/"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var shared = Assert.Single(grouped.Where(result => result.Symbol.Name == "SharedHelper"));
+        Assert.Equal(3, shared.ReferenceCount);
+        Assert.Equal(2, shared.DefinitionSites);
+        Assert.Equal(2, shared.Paths.Count);
+        Assert.Contains("src/Alpha.cs", shared.Paths);
+        Assert.Contains("src/Beta.cs", shared.Paths);
+    }
+
+    [Fact]
     public void GraphQueries_ExplicitReferenceKindsKeepSeparateConstructorRows()
     {
         InsertIndexedFile("src/constructor_kind_target.cs", "csharp",

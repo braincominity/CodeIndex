@@ -1945,47 +1945,100 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return new List<FileDependencyResult>();
         using var cmd = _conn.CreateCommand();
-        // Use a subquery to find distinct (reference_file, definition_file, symbol) triples,
-        // avoiding inflated counts from same-name symbols across multiple files.
-        // サブクエリで (参照ファイル, 定義ファイル, シンボル) の重複を排除し、
-        // 同名シンボルによるカウント膨張を防ぐ。
-        var filterAlias = reverse ? "dst" : "src";
-        var innerSql = @"
-                SELECT DISTINCT src.path AS source_path, dst.path AS target_path,
-                       r.symbol_name AS symbol_name,
+        // Aggregate logical reference sites per source-file/name first, then join that bounded
+        // set to distinct target files. This avoids the per-reference × per-symbol explosion that
+        // could exhaust SQLite temp-store on large indexes with many same-named symbols.
+        // まず source-file/name 単位に logical reference site 数を集約し、その後で distinct な
+        // target file と結合することで、大規模 index で SQLite temp-store を枯渇させる
+        // per-reference × per-symbol の膨張を防ぐ。
+        var sourceFilterAlias = "src";
+        var targetFilterAlias = "dst";
+        var sql = @"
+            WITH logical_references AS (
+                SELECT src.id AS source_file_id,
+                       src.path AS source_path,
+                       src.lang AS source_lang,
+                       r.symbol_name,
                        r.line,
                        r.column_number,
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                JOIN symbols s ON r.symbol_name = s.name AND s.file_id != r.file_id
-                JOIN files dst ON s.file_id = dst.id
-                WHERE src.path != dst.path";
-        innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
+                WHERE 1 = 1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
-            innerSql += " AND src.lang = @lang";
-        if (pathPatterns is { Count: > 0 })
+            sql += " AND src.lang = @lang";
+        if (!reverse && pathPatterns is { Count: > 0 })
         {
-            // OR together multiple --path values / 複数の --path 値を OR で結合
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"{filterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
-            innerSql += " AND (" + string.Join(" OR ", ors) + ")";
+                ors.Add($"{sourceFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
-        if (excludePathPatterns is { Count: > 0 })
+        if (!reverse && excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                innerSql += $" AND {filterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+                sql += $" AND {sourceFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
         }
-        if (excludeTests)
-            innerSql += $" AND NOT {TestPathCondition.Replace("f.path", $"{filterAlias}.path")}";
-
-        var sql = $@"
-            SELECT source_path, target_path,
-                   COUNT(*) AS reference_count,
+        if (!reverse && excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
+        sql += @"
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
+            ),
+            source_name_counts AS (
+                SELECT source_file_id,
+                       source_path,
+                       source_lang,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                GROUP BY source_file_id, source_path, source_lang, symbol_name
+            ),
+            target_files AS (
+                SELECT DISTINCT dst.path AS target_path,
+                       dst.lang AS target_lang,
+                       s.name AS symbol_name
+                FROM symbols s
+                JOIN files dst ON s.file_id = dst.id
+                WHERE 1 = 1";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "dst", "depsTargetLang")}";
+        if (lang != null)
+            sql += " AND dst.lang = @lang";
+        if (reverse && pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{targetFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (reverse && excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND {targetFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
+        if (reverse && excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
+        sql += @"
+            ),
+            edges AS (
+                SELECT snc.source_path,
+                       tf.target_path,
+                       snc.symbol_name,
+                       snc.ref_count
+                FROM source_name_counts snc
+                JOIN target_files tf
+                  ON tf.symbol_name = snc.symbol_name
+                 AND tf.target_lang = snc.source_lang
+                WHERE snc.source_path != tf.target_path
+            )
+            SELECT source_path,
+                   target_path,
+                   SUM(ref_count) AS reference_count,
                    GROUP_CONCAT(symbol_name) AS symbols
-            FROM ({innerSql}) edges
-            GROUP BY source_path, target_path ORDER BY reference_count DESC LIMIT @limit";
+            FROM edges
+            GROUP BY source_path, target_path
+            ORDER BY reference_count DESC, source_path, target_path
+            LIMIT @limit";
 
         cmd.CommandText = sql;
         if (lang != null)
