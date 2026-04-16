@@ -48,7 +48,8 @@ public class LegacySchemaMigrationTests : IDisposable
     {
         // Build a DB that matches the pre-column layout: no start_line / end_line /
         // body_start_line / body_end_line / signature / visibility / return_type /
-        // container_kind / container_name on symbols, no symbol_references, no file_issues,
+        // container_kind / container_name / container_qualified_name / family_key on symbols,
+        // no symbol_references, no file_issues,
         // no checksum / indexed_at on files. This mirrors what older cdidx binaries produced.
         // 旧 cdidx が生成していたスキーマ。追加カラム・テーブルをすべて欠落させる。
         var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
@@ -201,10 +202,10 @@ public class LegacySchemaMigrationTests : IDisposable
         // マイグレーションが実際に走ったことを確認。
         using (var check = db.Connection.CreateCommand())
         {
-            check.CommandText = "SELECT start_line, end_line, body_start_line, body_end_line, signature, visibility, return_type, container_kind, container_name FROM symbols WHERE name = 'Alpha'";
+            check.CommandText = "SELECT start_line, end_line, body_start_line, body_end_line, signature, visibility, return_type, container_kind, container_name, container_qualified_name, family_key FROM symbols WHERE name = 'Alpha'";
             using var r = check.ExecuteReader();
             Assert.True(r.Read());
-            for (int i = 0; i < 9; i++) Assert.True(r.IsDBNull(i));
+            for (int i = 0; i < 11; i++) Assert.True(r.IsDBNull(i));
         }
 
         var reader = new DbReader(db.Connection);
@@ -810,8 +811,10 @@ public class LegacySchemaMigrationTests : IDisposable
             var uri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
             var plainRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath);
             var uriRoot = DbPathResolver.ResolveProjectRootForQuery(uri);
+            Assert.NotNull(plainRoot);
+            Assert.NotNull(uriRoot);
             Assert.Equal(plainRoot, uriRoot);
-            Assert.Equal(Path.GetFullPath(dir), Path.GetFullPath(uriRoot));
+            Assert.Equal(Path.GetFullPath(dir), Path.GetFullPath(uriRoot!));
         }
         finally
         {

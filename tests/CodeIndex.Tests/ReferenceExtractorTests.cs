@@ -44,6 +44,159 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpRawStringFixture_DoesNotBecomeReference()
+    {
+        const string content = """"
+            public class FixtureHost
+            {
+                public void UsesRawFixture()
+                {
+                    const string fixture = """
+                        Execute();
+                        new Widget();
+                        main();
+                        """;
+
+                    Run();
+                }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("Run", reference.SymbolName);
+        Assert.Equal("call", reference.ReferenceKind);
+        Assert.Equal("UsesRawFixture", reference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpInterpolatedRawString_KeepsInterpolationCallReferences()
+    {
+        const string content = """"
+            public class FixtureHost
+            {
+                public string Run() => "ok";
+
+                public string UsesRawFixture()
+                {
+                    return $"""
+                        value = {Run()}
+                        literal = function main()
+                        """;
+                }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("Run", reference.SymbolName);
+        Assert.Equal("call", reference.ReferenceKind);
+        Assert.Equal("UsesRawFixture", reference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpInterpolatedRawString_WithNestedInterpolatedString_KeepsInterpolationCallReferences()
+    {
+        const string content = """"
+            public class FixtureHost
+            {
+                public string Run() => "ok";
+
+                public string UsesRawFixture()
+                {
+                    return $"""
+                        value = {$"{Run()}"}
+                        literal = function main()
+                        """;
+                }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runReference = Assert.Single(references.Where(reference => reference.SymbolName == "Run"));
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("UsesRawFixture", runReference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpInterpolatedRawString_WithNestedRawString_DoesNotLeakPhantomReferences()
+    {
+        const string content = """"
+            public class FixtureHost
+            {
+                public int Run() => 1;
+                public string Id(string value) => value;
+
+                public int UsesRawFixture()
+                {
+                    return $"""
+                        value = {Id("""
+                            Execute();
+                            public class Phantom
+                            {
+                                public void Go() { }
+                            }
+                            """) + Run()}
+                        """.Length;
+                }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Id" && reference.ContainerName == "UsesRawFixture");
+        Assert.Contains(references, reference => reference.SymbolName == "Run" && reference.ContainerName == "UsesRawFixture");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Execute");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Go");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Phantom");
+    }
+
+    [Fact]
+    public void Extract_CsharpInterpolatedString_WithEscapedBraces_DoesNotLeakPhantomReference()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public string Render()
+                {
+                    return $"{{Run()}}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpInterpolatedVerbatimString_WithEscapedBraces_DoesNotLeakPhantomReference()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public string Render()
+                {
+                    return $@"{{Run()}}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored

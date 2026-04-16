@@ -84,13 +84,14 @@ public static class IndexCommandRunner
         if (options.DryRun)
         {
             var dryIndexer = new FileIndexer(options.ProjectPath);
-            IReadOnlyList<string> dryFiles;
+            IReadOnlyList<string> dryCandidates;
+            var errorList = new List<object>();
 
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
-                dryFiles = options.UpdateFiles
-                    .Select(f => Path.IsPathRooted(f) ? f : Path.Combine(options.ProjectPath, f))
+                dryCandidates = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json)
+                    .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
                     .Where(File.Exists)
                     .ToList();
             }
@@ -107,22 +108,48 @@ public static class IndexCommandRunner
                     }
                     catch { /* ignore git errors in dry-run */ }
                 }
-                dryFiles = changedFiles.Distinct().ToList();
+                dryCandidates = changedFiles.Distinct().ToList();
             }
             else
             {
-                dryFiles = dryIndexer.ScanFiles();
+                var scanResult = dryIndexer.ScanFilesDetailed();
+                dryCandidates = scanResult.Files;
+                errorList.AddRange(scanResult.Errors.Select(error => (object)new { file = error.Path, message = error.Message }));
+                if (!options.Json)
+                {
+                    foreach (var error in scanResult.Errors)
+                        ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
+                }
             }
 
+            var dryFiles = new List<string>();
             var langCounts = new Dictionary<string, int>();
-            foreach (var f in dryFiles)
+            foreach (var f in dryCandidates)
             {
-                var lang = FileIndexer.DetectLanguage(f) ?? "unknown";
+                if (!TryProbeDryRunFile(dryIndexer, f, out var lang, out var message))
+                {
+                    if (message != null)
+                    {
+                        var displayPath = Path.GetRelativePath(options.ProjectPath, f).Replace('\\', '/');
+                        errorList.Add(new { file = displayPath, message });
+                        if (!options.Json)
+                            ConsoleUi.PrintWarning($"{displayPath}: {message}");
+                    }
+                    continue;
+                }
+
+                dryFiles.Add(f);
                 langCounts[lang] = langCounts.GetValueOrDefault(lang) + 1;
             }
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { status = "dry_run", files_total = dryFiles.Count, languages = langCounts }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    status = "dry_run",
+                    files_total = dryFiles.Count,
+                    languages = langCounts,
+                    errors = errorList.Count > 0 ? errorList : null,
+                }, jsonOptions));
             }
             else
             {
@@ -161,6 +188,9 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
+        var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
+        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
 
         // Don't demote readiness yet. A transient usage error in update-mode preflight
         // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
@@ -172,6 +202,7 @@ public static class IndexCommandRunner
         if (options.Rebuild)
         {
             db.ClearReadyFlags();
+            new DbWriter(db.Connection).ClearHotspotFamilyReady();
             db.DropAll();
         }
 
@@ -180,11 +211,12 @@ public static class IndexCommandRunner
 
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(options.ProjectPath);
+        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -274,6 +306,9 @@ public static class IndexCommandRunner
         }
         catch (Exception ex)
         {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
@@ -423,7 +458,11 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
+        IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
+        string? priorIndexedProjectRoot)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -463,36 +502,61 @@ public static class IndexCommandRunner
 
         if (options.UpdateFiles.Count > 0)
         {
-            foreach (var f in options.UpdateFiles)
-            {
-                var absPath = Path.IsPathRooted(f) ? f : Path.GetFullPath(Path.Combine(projectRoot, f));
-                var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
-                if (IsOutsideProjectRoot(relPath))
-                {
-                    if (!options.Json)
-                        Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
-                    continue;
-                }
+            foreach (var relPath in NormalizeUpdateFileTargets(projectRoot, options.UpdateFiles, options.Json))
                 targetPaths.Add(relPath);
-            }
         }
-
-        // Now that preflight (commit / file resolution) has succeeded and we're committed to
-        // mutating the DB, demote readiness. Doing this earlier — before commit resolution —
-        // would turn a transient git failure or a typo in --commits into a permanent
-        // downgrade of a previously-healthy index.
-        // preflight 成功後、実書き込み直前で readiness をクリア。途中で失敗した場合は healthy index を壊さない。
-        writer.ClearReadyFlags();
-
-        // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
-        var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
-        if (purgedRefs > 0 && !options.Json)
-            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         int updated = 0, removed = 0, skipped = 0, errors = 0;
         var errorList = new List<object>();
+        var readinessDemoted = false;
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        var ftsMutated = false;
+        var purgedRefs = 0;
+        var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
+        var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var currentFoldFingerprint = NameFold.Fingerprint();
+
+        void DemoteReadinessOnce()
+        {
+            if (readinessDemoted)
+                return;
+
+            // Demote readiness in its own committed step once we know a real mutation is
+            // about to happen. If the following file update rolls back, readers must still
+            // see the DB as degraded rather than trusting stale ready bits. No-op updates
+            // never call this path, so shared explicit DB metadata stays stable.
+            // 実 mutation が必要と確定した時点で readiness を別コミットで下げる。直後の
+            // file update が rollback しても reader は stale ready bit を信じない。
+            // no-op update では呼ばないので、shared explicit DB の metadata も安定する。
+            writer.ClearReadyFlags();
+            writer.ClearHotspotFamilyReady();
+            readinessDemoted = true;
+        }
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+            projectRootWritten = true;
+        }
+
+        if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
+        {
+            DemoteReadinessOnce();
+
+            using var purgeTxn = writer.BeginTransaction();
+            purgedRefs = writer.PurgeUnsupportedReferences(supportedGraphLanguages);
+            if (purgedRefs > 0)
+                purgeTxn.Commit();
+        }
 
         foreach (var relPath in targetPaths)
         {
@@ -501,9 +565,22 @@ public static class IndexCommandRunner
             {
                 if (!File.Exists(absPath))
                 {
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
                     if (writer.DeleteFileByPath(relPath))
                     {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
                         removed++;
+                        ftsMutated = true;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [DEL ] {relPath}");
                     }
@@ -516,11 +593,51 @@ public static class IndexCommandRunner
                     continue;
                 }
 
-                if (FileIndexer.DetectLanguage(absPath) == null)
+                var indexability = FileIndexer.GetFileIndexability(absPath);
+                var detection = FileIndexer.TryDetectLanguage(absPath);
+                if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
                 {
-                    skipped++;
-                    if (options.Verbose && !options.Json)
-                        Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                    DemoteReadinessOnce();
+
+                    errors++;
+                    errorList.Add(new { file = relPath, message = "Could not probe file for indexability/language." });
+                    if (!options.Json)
+                    {
+                        if (options.Verbose)
+                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                        else
+                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                    }
+                    continue;
+                }
+
+                if (indexability != FileIndexer.FileProbeStatus.Supported || detection.Status != FileIndexer.FileProbeStatus.Supported)
+                {
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
+                    if (writer.DeleteFileByPath(relPath))
+                    {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
+                        removed++;
+                        ftsMutated = true;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
+                    }
+                    else
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                    }
                     continue;
                 }
 
@@ -538,11 +655,14 @@ public static class IndexCommandRunner
                     continue;
                 }
 
+                DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
+                WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
@@ -552,11 +672,14 @@ public static class IndexCommandRunner
                 txn.Commit();
 
                 updated++;
+                ftsMutated = true;
                 if (options.Verbose && !options.Json)
                     Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
             }
             catch (Exception ex)
             {
+                DemoteReadinessOnce();
+
                 errors++;
                 errorList.Add(new { file = relPath, message = ex.Message });
                 if (!options.Json)
@@ -569,16 +692,27 @@ public static class IndexCommandRunner
             }
         }
 
-        writer.OptimizeFts();
+        if (purgedRefs > 0 && !options.Json)
+            Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
+
+        if (ftsMutated)
+            writer.OptimizeFts();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
-        // ClearReadyFlags() ran at the start.
+        // readiness was demoted before the first committed mutation.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var graphTableAvailableAfter = false;
-        var issuesTableAvailableAfter = false;
-        var foldReadyAfter = false;
-        if (errors == 0)
+        var graphTableAvailableAfter = !readinessDemoted
+            ? (priorReadiness & DbContext.GraphReadyFlag) != 0
+            : false;
+        var issuesTableAvailableAfter = !readinessDemoted
+            ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
+            : false;
+        var foldReadyAfter = !readinessDemoted
+            && (priorReadiness & DbContext.FoldReadyFlag) != 0
+            && priorFoldVersion == currentFoldVersion
+            && priorFoldFingerprint == currentFoldFingerprint;
+        if (readinessDemoted && errors == 0)
         {
             // Restore each readiness bit independently based on what the DB carried BEFORE
             // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
@@ -603,14 +737,17 @@ public static class IndexCommandRunner
                 writer.MarkIssuesReady();
                 issuesTableAvailableAfter = true;
             }
+            RestampHotspotFamilyTrustForUpdate(
+                writer,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
             // FoldReady restamp requires both the prior stored version and fingerprint to
             // match the current binary/runtime. Otherwise untouched rows still carry keys
             // from an older fold implementation or runtime table set, and advertising
             // FoldReady would silently mismatch on --exact. Only full rebuild can re-fold all rows.
             // fold は version / fingerprint の両一致時のみ restamp。ズレた DB は rebuild まで
             // fold_ready=false のまま残す。
-            var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var currentFoldFingerprint = NameFold.Fingerprint();
             if ((priorReadiness & DbContext.FoldReadyFlag) != 0
                 && priorFoldVersion == currentFoldVersion
                 && priorFoldFingerprint == currentFoldFingerprint)
@@ -677,8 +814,121 @@ public static class IndexCommandRunner
         return CommandExitCodes.Success;
     }
 
+    private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = db.GetMetaString(keyFactory(lang));
+        return values;
+    }
+
+    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+            values[lang] = indexer.GetProjectMarkerFingerprint(lang);
+        return values;
+    }
+
+    private static void RestampHotspotFamilyTrustForUpdate(
+        DbWriter writer,
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            if (priorVersions.TryGetValue(lang, out var priorVersion)
+                && priorFingerprints.TryGetValue(lang, out var priorFingerprint)
+                && currentFingerprints.TryGetValue(lang, out var currentFingerprint)
+                && priorVersion == currentVersion
+                && priorFingerprint == currentFingerprint)
+            {
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+            }
+        }
+    }
+
+    private static void RestampHotspotFamilyTrustForFullScan(
+        DbWriter writer,
+        bool allFilesRewritten,
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            priorVersions.TryGetValue(lang, out var priorVersion);
+            priorFingerprints.TryGetValue(lang, out var priorFingerprint);
+            if (allFilesRewritten || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+        }
+    }
+
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
+
+    private static IReadOnlyList<string> NormalizeUpdateFileTargets(string projectRoot, IEnumerable<string> updateFiles, bool json)
+    {
+        var normalized = new List<string>();
+        foreach (var file in updateFiles)
+        {
+            var absPath = Path.IsPathRooted(file) ? file : Path.GetFullPath(Path.Combine(projectRoot, file));
+            var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
+            if (IsOutsideProjectRoot(relPath))
+            {
+                if (!json)
+                    Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {file}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
+                continue;
+            }
+
+            normalized.Add(relPath);
+        }
+
+        return normalized;
+    }
+
+    private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
+    {
+        lang = string.Empty;
+        error = null;
+
+        var indexability = FileIndexer.GetFileIndexability(absolutePath);
+        if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
+        {
+            error = "Could not probe file for indexability/language.";
+            return false;
+        }
+
+        if (indexability != FileIndexer.FileProbeStatus.Supported)
+            return false;
+
+        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+        {
+            error = "Could not probe file for indexability/language.";
+            return false;
+        }
+
+        if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+            return false;
+
+        try
+        {
+            var (record, _, _, warning) = indexer.BuildRecordWithRawBytes(absolutePath);
+            lang = record.Lang ?? "unknown";
+            error = warning;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
 
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
     {
@@ -703,16 +953,41 @@ public static class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
-        string? priorFoldFingerprint)
+        string? priorFoldFingerprint,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
+        IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
+        IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
+        string? priorIndexedProjectRoot)
     {
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
+            ? null
+            : Path.GetFullPath(priorIndexedProjectRoot);
+        var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+
+        void WriteProjectRootOnce()
+        {
+            if (projectRootWritten)
+                return;
+
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
+            projectRootWritten = true;
+        }
+
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
-        var files = indexer.ScanFiles();
+        var scanResult = indexer.ScanFilesDetailed();
+        var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
+        var errorList = scanResult.Errors
+            .Select(error => (object)new { file = error.Path, message = error.Message })
+            .ToList();
         if (!options.Json)
         {
             Console.WriteLine($"  Found {files.Count:N0} files");
+            foreach (var error in scanResult.Errors)
+                ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
             Console.WriteLine();
         }
 
@@ -723,14 +998,51 @@ public static class IndexCommandRunner
         // never reaches this point for any reason.
         // 実書き込み直前で readiness をクリア。--rebuild 経路は RunIndex で既に clear 済み。
         writer.ClearReadyFlags();
+        writer.ClearHotspotFamilyReady();
 
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
-        var purged = writer.PurgeStaleFiles(projectRoot);
+        var purged = 0;
+        var retainedPaths = files
+            .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+            .ToHashSet(StringComparer.Ordinal);
+        if (scanResult.HadErrors)
+        {
+            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths);
+
+            foreach (var relPath in scanResult.NonIndexablePaths)
+            {
+                if (!writer.HasFileAtPath(relPath))
+                    continue;
+
+                if (writer.DeleteFileByPath(relPath))
+                    purged++;
+            }
+
+            var authoritativeDirectories = scanResult.ListedDirectories
+                .ToHashSet(StringComparer.Ordinal);
+            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories);
+        }
+        else
+        {
+            purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+        }
+        if (purged > 0)
+            WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
-        if (purged > 0 && !options.Json)
-            Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
+        if (!options.Json)
+        {
+            if (purged > 0)
+            {
+                var purgeMessage = scanResult.HadErrors
+                    ? $"  Purged {purged:N0} previously indexed files that were positively observed as no longer indexable or missing from directories whose file listing completed successfully"
+                    : $"  Purged {purged:N0} stale files (missing or no longer indexable)";
+                Console.WriteLine(purgeMessage);
+            }
+            if (scanResult.HadErrors)
+                ConsoleUi.PrintWarning("Skipped authoritative purge outside directories whose file listing completed successfully because some paths could not be scanned.");
+        }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -740,8 +1052,7 @@ public static class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         if (!options.Json)
             indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
-        int processed = 0, skipped = 0, errors = 0;
-        var errorList = new List<object>();
+        int processed = 0, skipped = 0, errors = errorList.Count;
         bool indexSpinnerStopped = false;
 
         foreach (var filePath in files)
@@ -778,12 +1089,14 @@ public static class IndexCommandRunner
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
+                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                WriteProjectRootOnce();
                 txn.Commit();
 
                 if (options.Verbose && !options.Json)
@@ -836,6 +1149,12 @@ public static class IndexCommandRunner
             writer.MarkIssuesReady();
             graphTableAvailableAfter = true;
             issuesTableAvailableAfter = true;
+            RestampHotspotFamilyTrustForFullScan(
+                writer,
+                skipped == 0,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
             // FoldReady must reflect reality (#86). Full-scan is INCREMENTAL by default — it
             // skips unchanged files via GetUnchangedFileId, so a legacy DB's pre-#86 rows
             // keep NULL name_folded / *_folded values. Stamping FoldReady anyway would flip
@@ -871,6 +1190,12 @@ public static class IndexCommandRunner
             {
                 ConsoleUi.PrintWarning(GetFoldNotReadyWarning(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent));
             }
+
+            // Successful no-op full scans should repair stale / missing explicit-DB roots
+            // only after readiness stamps succeed, so an interruption cannot rewrite trust
+            // metadata ahead of the success markers.
+            // no-op full-scan の explicit DB root backfill は readiness stamp 後に限定する。
+            WriteProjectRootOnce();
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
@@ -926,6 +1251,17 @@ public static class IndexCommandRunner
         }
 
         return CommandExitCodes.Success;
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (left == null || right == null)
+            return false;
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(left, right, comparison);
     }
 
     private static string GetFoldNotReadyWarning(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)

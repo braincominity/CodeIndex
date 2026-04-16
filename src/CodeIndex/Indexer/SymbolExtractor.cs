@@ -9,12 +9,15 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static class SymbolExtractor
 {
+    private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private enum BodyStyle
     {
         None,
         Brace,
         Indent,
         RubyEnd,
+        VisualBasicEnd,
     }
 
     private sealed record SymbolPattern(
@@ -23,6 +26,12 @@ public static class SymbolExtractor
         BodyStyle BodyStyle,
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null);
+
+    private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
+    private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
+    private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async|Partial)";
+    private const string VbPropertyModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Default|ReadOnly|WriteOnly)";
+    private const string VbEventModifierPattern = @"(?:Shared|Custom)";
 
     private static readonly Dictionary<string, List<SymbolPattern>> PatternCache = new()
     {
@@ -86,12 +95,13 @@ public static class SymbolExtractor
             // 演算子オーバーロード — メソッドパターンより前に配置
             new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+\S+\s+operator\s+(?<name>\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
-            // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using).
+            // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
+            // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
             // Note: `new` is NOT excluded because `new void Hidden()` is a valid C# member-hiding declaration.
             // 戻り値型付きメソッド — 明示的インターフェース実装やネストメンバー向けに visibility 省略可。
-            // negative lookahead で呼び出し行（await/return/throw/yield/var/typeof 等）を除外する。
+            // negative lookahead で呼び出し行（await/return/throw/yield/var/typeof 等）と ternary continuation を除外する。
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex(@"^\s*(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex(@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -265,11 +275,14 @@ public static class SymbolExtractor
         ],
         ["vb"] =
         [
-            new("function", new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Shared|Overrides|Overridable|MustOverride|Async)\s+)*(?:Sub|Function)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("interface", new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*Interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("enum",     new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*Enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("struct",   new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Partial)\s+)*Structure\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
-            new("class",    new Regex(@"^\s*(?<visibility>(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?)\s*(?:(?:Partial|MustInherit|NotInheritable)\s+)*(?:Class|Module)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("namespace", new Regex(@"^\s*Namespace\s+(?<name>(?:Global\.)?[\w.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd),
+            new("function", new Regex(@$"^\s*(?:(?:{VbMemberModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbMemberModifierPattern})\s+)*(?:Sub|Function)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("property", new Regex(@$"^\s*(?:(?:{VbPropertyModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbPropertyModifierPattern})\s+)*Property\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("event",    new Regex(@$"^\s*(?:(?:{VbEventModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbEventModifierPattern})\s+)*Event\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("interface", new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*Interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
+            new("enum",     new Regex(@$"^\s*(?:(?<visibility>{VbVisibilityPattern})\s+)?Enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None, "visibility"),
+            new("struct",   new Regex(@$"^\s*(?:(?:Partial)\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:Partial)\s+)*Structure\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
+            new("class",    new Regex(@$"^\s*(?:(?:{VbTypeModifierPattern})\s+)*(?:(?<visibility>{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module)\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.VisualBasicEnd, "visibility"),
             new("import",   new Regex(@"^\s*Imports\s+(?<name>.+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["scala"] =
@@ -352,9 +365,14 @@ public static class SymbolExtractor
         ["sql"] =
         [
             // CREATE TABLE/VIEW/PROCEDURE/FUNCTION / テーブル・ビュー・プロシージャ・関数の定義
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>[\w.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|FUNCTION|TRIGGER)\s+(?<name>[\w.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:INDEX|UNIQUE\s+INDEX)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>[\w.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)|AUTHORIZATION\s+(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("class",    new Regex(@"^\s*ALTER\s+TABLE\s+(?<name>[\w.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["terraform"] =
@@ -424,6 +442,8 @@ public static class SymbolExtractor
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
+    private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -439,23 +459,31 @@ public static class SymbolExtractor
             return [];
 
         var lines = content.Split('\n');
+        var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var csharpSwitchExpressionLines = lang == "csharp"
+            ? FindCSharpSwitchExpressionLines(structuralLines)
+            : null;
         var symbols = new List<SymbolRecord>();
 
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(line) : line;
+            var structuralLine = structuralLines[i];
+            var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(structuralLine) : structuralLine;
             foreach (var pattern in patterns)
             {
                 var match = pattern.Regex.Match(matchLine);
                 if (!match.Success)
                     continue;
 
+                if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
+                    continue;
+
                 var name = match.Groups["name"].Success
                     ? match.Groups["name"].Value.Trim()
                     : match.Value.Trim();
 
-                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, pattern.BodyStyle);
+                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(structuralLines, i, pattern.BodyStyle);
                 var startLine = i + 1;
 
                 // Python @property decorator: reclassify the def as property
@@ -489,6 +517,17 @@ public static class SymbolExtractor
         return symbols;
     }
 
+    public static void ApplyFamilyScope(IEnumerable<SymbolRecord> symbols, string scopeKey)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (string.IsNullOrWhiteSpace(symbol.FamilyKey))
+                continue;
+
+            symbol.FamilyKey = $"{scopeKey}|{symbol.FamilyKey}";
+        }
+    }
+
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle)
     {
         return bodyStyle switch
@@ -496,6 +535,7 @@ public static class SymbolExtractor
             BodyStyle.Brace => FindBraceRange(lines, startIndex),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
+            BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
     }
@@ -620,6 +660,47 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindVisualBasicRange(string[] lines, int startIndex)
+    {
+        int depth = 0;
+        int? bodyStartLine = null;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            if (VisualBasicContainerStartRegex.IsMatch(trimmed))
+            {
+                depth++;
+                if (i > startIndex && bodyStartLine == null)
+                    bodyStartLine = i + 1;
+                continue;
+            }
+
+            if (VisualBasicContainerEndRegex.IsMatch(trimmed))
+            {
+                depth--;
+                if (depth <= 0)
+                {
+                    if (bodyStartLine == null || bodyStartLine > i + 1)
+                        return (i + 1, null, null);
+
+                    return (i + 1, bodyStartLine, i + 1);
+                }
+            }
+            else if (i > startIndex && bodyStartLine == null)
+            {
+                bodyStartLine = i + 1;
+            }
+        }
+
+        return bodyStartLine == null
+            ? (startIndex + 1, null, null)
+            : (lines.Length, bodyStartLine, lines.Length);
+    }
+
     private static string StripLeadingCSharpAttributeLists(string line)
     {
         var index = 0;
@@ -660,6 +741,127 @@ public static class SymbolExtractor
         return cursor < line.Length ? line[cursor..] : line;
     }
 
+    private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        string matchLine,
+        bool[]? csharpSwitchExpressionLines,
+        int lineIndex) =>
+        lang == "csharp"
+        && pattern.Kind == "property"
+        && csharpSwitchExpressionLines != null
+        && csharpSwitchExpressionLines[lineIndex]
+        && matchLine.Contains("=>", StringComparison.Ordinal);
+
+    private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
+    {
+        var switchExpressionLines = new bool[structuralLines.Length];
+        var braceKinds = new Stack<bool>();
+        var activeSwitchExpressionDepth = 0;
+        var pendingSwitchExpression = 0;
+        var pendingSwitchKeyword = false;
+        var insideBlockComment = false;
+
+        for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            if (activeSwitchExpressionDepth > 0)
+                switchExpressionLines[lineIndex] = true;
+
+            var line = structuralLines[lineIndex];
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                if (insideBlockComment)
+                {
+                    if (cursor + 1 < line.Length && line[cursor] == '*' && line[cursor + 1] == '/')
+                    {
+                        insideBlockComment = false;
+                        cursor++;
+                    }
+
+                    continue;
+                }
+
+                if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '/')
+                    break;
+
+                if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '*')
+                {
+                    insideBlockComment = true;
+                    cursor++;
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(line[cursor]))
+                    continue;
+
+                if (pendingSwitchKeyword)
+                {
+                    if (line[cursor] == '(')
+                    {
+                        pendingSwitchKeyword = false;
+                    }
+                    else if (line[cursor] == '{')
+                    {
+                        pendingSwitchExpression++;
+                        pendingSwitchKeyword = false;
+                    }
+                    else
+                    {
+                        pendingSwitchKeyword = false;
+                    }
+                }
+
+                if (IsCSharpKeywordAt(line, cursor, "switch"))
+                {
+                    pendingSwitchKeyword = true;
+                    cursor += "switch".Length - 1;
+                    continue;
+                }
+
+                if (line[cursor] == '{')
+                {
+                    var startsSwitchExpression = pendingSwitchExpression > 0;
+                    braceKinds.Push(startsSwitchExpression);
+                    if (startsSwitchExpression)
+                    {
+                        pendingSwitchExpression--;
+                        activeSwitchExpressionDepth++;
+                    }
+
+                    continue;
+                }
+
+                if (line[cursor] == '}' && braceKinds.Count > 0)
+                {
+                    if (braceKinds.Pop())
+                        activeSwitchExpressionDepth--;
+                }
+            }
+        }
+
+        return switchExpressionLines;
+    }
+
+    private static bool IsCSharpKeywordAt(string line, int index, string keyword)
+    {
+        if (index < 0 || index + keyword.Length > line.Length)
+            return false;
+
+        if (!line.AsSpan(index, keyword.Length).SequenceEqual(keyword))
+            return false;
+
+        var previous = index > 0 ? line[index - 1] : '\0';
+        if (previous == '@' || previous == '_' || char.IsLetterOrDigit(previous))
+            return false;
+
+        var nextIndex = index + keyword.Length;
+        if (nextIndex >= line.Length)
+            return true;
+
+        var next = line[nextIndex];
+        return next != '_' && !char.IsLetterOrDigit(next);
+    }
+
     private static void AssignContainers(List<SymbolRecord> symbols)
     {
         var ordered = symbols
@@ -670,7 +872,7 @@ public static class SymbolExtractor
         var stack = new Stack<SymbolRecord>();
         foreach (var symbol in ordered)
         {
-            while (stack.Count > 0 && symbol.StartLine > stack.Peek().EndLine)
+            while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
             while (stack.Count > 0 && !ContainsSymbol(stack.Peek(), symbol))
@@ -681,23 +883,74 @@ public static class SymbolExtractor
                 var container = stack.Peek();
                 symbol.ContainerKind = container.Kind;
                 symbol.ContainerName = container.Name;
+                var qualifiedContainerName = BuildQualifiedContainerName(stack);
+                symbol.ContainerQualifiedName = qualifiedContainerName;
+                symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
             }
+
+            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, stack);
 
             if (CanContainSymbols(symbol))
                 stack.Push(symbol);
         }
     }
 
+    private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)
+    {
+        var names = containers
+            .Reverse()
+            .Select(container => container.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+
+        return names.Count > 0
+            ? string.Join(".", names)
+            : null;
+    }
+
+    private static string? BuildInheritedFamilyKey(SymbolRecord container, string? qualifiedContainerName) =>
+        SupportsCrossFileFamily(container)
+            ? qualifiedContainerName
+            : null;
+
+    private static string? BuildSelfFamilyKey(SymbolRecord symbol, IEnumerable<SymbolRecord> containers)
+    {
+        if (!SupportsCrossFileFamily(symbol))
+            return null;
+
+        var names = containers
+            .Reverse()
+            .Select(container => container.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Append(symbol.Name)
+            .ToList();
+
+        return names.Count > 0
+            ? string.Join(".", names)
+            : null;
+    }
+
+    private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
+        symbol.Kind is "class" or "interface" or "struct"
+        && !string.IsNullOrWhiteSpace(symbol.Signature)
+        && PartialModifierRegex.IsMatch(symbol.Signature);
+
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
         if (!ContainerKinds.Contains(symbol.Kind))
             return false;
+
+        if (IsFileScopedNamespace(symbol))
+            return true;
 
         return symbol.BodyStartLine != null && symbol.BodyEndLine != null;
     }
 
     private static bool ContainsSymbol(SymbolRecord container, SymbolRecord candidate)
     {
+        if (IsFileScopedNamespace(container))
+            return candidate.StartLine > container.StartLine;
+
         if (container.BodyStartLine == null || container.BodyEndLine == null)
             return false;
 
@@ -705,6 +958,11 @@ public static class SymbolExtractor
             && candidate.StartLine <= container.BodyEndLine
             && candidate.StartLine > container.StartLine;
     }
+
+    private static bool IsFileScopedNamespace(SymbolRecord symbol) =>
+        symbol.Kind == "namespace" &&
+        symbol.BodyStartLine == null &&
+        symbol.BodyEndLine == null;
 
     private static int CountIndent(string line)
     {

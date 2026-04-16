@@ -41,6 +41,14 @@ public class UnusedSymbolResult : SymbolResult
     public string UnusedReason { get; set; } = string.Empty;
 }
 
+public class GroupedHotspotResult
+{
+    public SymbolResult Symbol { get; set; } = new();
+    public int ReferenceCount { get; set; }
+    public int DefinitionSites { get; set; }
+    public List<string> Paths { get; set; } = [];
+}
+
 public class FileResult
 {
     public string Path { get; set; } = string.Empty;
@@ -61,6 +69,7 @@ public class FileExcerptResult
     public int StartLine { get; set; }
     public int EndLine { get; set; }
     public string Content { get; set; } = string.Empty;
+    public bool ContentTruncated { get; set; }
 }
 
 public class FileFindResult
@@ -72,6 +81,7 @@ public class FileFindResult
     public int StartLine { get; set; }
     public int EndLine { get; set; }
     public string Snippet { get; set; } = string.Empty;
+    public bool SnippetTruncated { get; set; }
 }
 
 public class DefinitionResult : SymbolResult
@@ -127,6 +137,7 @@ public class ReferenceResult
     public int Line { get; set; }
     public int Column { get; set; }
     public string Context { get; set; } = string.Empty;
+    public bool ContextTruncated { get; set; }
     public string? ContainerKind { get; set; }
     public string? ContainerName { get; set; }
 }

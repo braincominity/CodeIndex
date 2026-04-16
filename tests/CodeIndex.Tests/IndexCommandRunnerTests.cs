@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.Versioning;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -108,6 +109,620 @@ public class IndexCommandRunnerTests
         finally
         {
             DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ExplicitDb_PersistsIndexedProjectRootMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_explicit_root_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            using var db = new DbContext(dbPath);
+            Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_NoOpAgainstSharedExplicitDb_DoesNotRewriteIndexedProjectRoot()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_root_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('from a')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
+            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var statusExitCode = QueryCommandRunner.RunStatus(["--db", dbPath, "--json"], _jsonOptions);
+                    Assert.Equal(CommandExitCodes.Success, statusExitCode);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    Assert.Equal(Path.GetFullPath(projectRootA), document.RootElement.GetProperty("project_root").GetString());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_NoOpAgainstSharedExplicitDb_PurgesUnsupportedReferencesWithoutRewritingIndexedProjectRoot()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_stale_refs_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('from a')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "docs/readme.md",
+                    Lang = "markdown",
+                    Size = 12,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "stale-edge",
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "LegacyLink",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = "LegacyLink",
+                    },
+                ]);
+            }
+
+            long CountReferences()
+            {
+                using var db = new DbContext(dbPath);
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references";
+                return (long)cmd.ExecuteScalar()!;
+            }
+
+            Assert.Equal(1, CountReferences());
+
+            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
+            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
+            Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
+
+            Assert.Equal(0, CountReferences());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var statusExitCode = QueryCommandRunner.RunStatus(["--db", dbPath, "--json"], _jsonOptions);
+                    Assert.Equal(CommandExitCodes.Success, statusExitCode);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    Assert.Equal(Path.GetFullPath(projectRootA), document.RootElement.GetProperty("project_root").GetString());
+                    Assert.Equal(0, document.RootElement.GetProperty("references").GetInt32());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_ExplicitDb_RealMutationRewritesIndexedProjectRootMetadata()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_rewrite_root_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRootA, "init");
+            File.WriteAllText(Path.Combine(projectRootA, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRootA, "add", ".");
+            RunGit(projectRootA, "commit", "-m", "init-a");
+            var headA = RunGitCaptureStdOut(projectRootA, "rev-parse", "HEAD").Trim();
+
+            RunGit(projectRootB, "init");
+            var sourcePathB = Path.Combine(projectRootB, "app.cs");
+            File.WriteAllText(sourcePathB, "public class App { public void Run() { } public void Extra() { } }\n");
+            RunGit(projectRootB, "add", ".");
+            RunGit(projectRootB, "commit", "-m", "init-b");
+            var headB = RunGitCaptureStdOut(projectRootB, "rev-parse", "HEAD").Trim();
+            File.SetLastWriteTimeUtc(sourcePathB, DateTime.UtcNow.AddSeconds(2));
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootB), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(Path.GetFullPath(projectRootB), statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(headB, statusJson.GetProperty("git_head").GetString());
+            Assert.NotEqual(headA, statusJson.GetProperty("git_head").GetString());
+            Assert.False(statusJson.GetProperty("git_is_dirty").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_LegacySharedExplicitDb_NoOpDoesNotHijackMissingIndexedProjectRootMetadata()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_noop_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRootA, "init");
+            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('hello')\n");
+            RunGit(projectRootA, "add", ".");
+            RunGit(projectRootA, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DeleteIndexedProjectRootMetadata(dbPath);
+
+            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
+            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Null(statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_is_dirty").ValueKind);
+        }
+        finally
+        {
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_LegacyExplicitDb_SuccessfulFileUpdateBackfillsIndexedProjectRootMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_update_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DeleteIndexedProjectRootMetadata(dbPath);
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(Path.GetFullPath(projectRoot), statusJson.GetProperty("project_root").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(statusJson.GetProperty("git_head").GetString()));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_LegacyExplicitDb_PurgeOnlyNoOpDoesNotBackfillIndexedProjectRootMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_purge_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DeleteIndexedProjectRootMetadata(dbPath);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "docs/readme.md",
+                    Lang = "markdown",
+                    Size = 12,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "stale-edge",
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "LegacyLink",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = "LegacyLink",
+                    },
+                ]);
+            }
+
+            Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+            File.WriteAllText(Path.Combine(projectRoot, "docs", "readme.txt"), "not indexable\n");
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal("success", updateJson.GetProperty("status").GetString());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, updateJson.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("references_total").GetInt32());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Null(statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_is_dirty").ValueKind);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_LegacyExplicitDb_RollbackedFirstMutationDoesNotBackfillIndexedProjectRootMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_legacy_explicit_rollback_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DeleteIndexedProjectRootMetadata(dbPath);
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TRIGGER fail_update
+                    BEFORE UPDATE ON files
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Null(db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Null(statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_head").ValueKind);
+            Assert.Equal(JsonValueKind.Null, statusJson.GetProperty("git_is_dirty").ValueKind);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_FailedFirstMutation_DemotesReadinessBeforeRollback()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TRIGGER fail_update
+                    BEFORE UPDATE ON files
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var verifyCmd = verify.CreateCommand();
+            verifyCmd.CommandText = "PRAGMA user_version";
+            var userVersion = (long)verifyCmd.ExecuteScalar()!;
+            Assert.Equal(0, userVersion & DbContext.GraphReadyFlag);
+            Assert.Equal(0, userVersion & DbContext.IssuesReadyFlag);
+            Assert.Equal(0, userVersion & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanExplicitDb_FailedFirstMutation_DoesNotRewriteIndexedProjectRootMetadata()
+    {
+        var projectRootA = CreateTempProject();
+        var projectRootB = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_fullscan_explicit_rollback_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRootA, "init");
+            var sourcePathA = Path.Combine(projectRootA, "app.cs");
+            File.WriteAllText(sourcePathA, "public class AppA { public void Run() { } }\n");
+            RunGit(projectRootA, "add", ".");
+            RunGit(projectRootA, "commit", "-m", "init-a");
+            var headA = RunGitCaptureStdOut(projectRootA, "rev-parse", "HEAD").Trim();
+
+            RunGit(projectRootB, "init");
+            var sourcePathB = Path.Combine(projectRootB, "app.cs");
+            File.WriteAllText(sourcePathB, "public class AppB { public void Run() { } public void Extra() { } }\n");
+            RunGit(projectRootB, "add", ".");
+            RunGit(projectRootB, "commit", "-m", "init-b");
+            File.SetLastWriteTimeUtc(sourcePathB, DateTime.UtcNow.AddSeconds(2));
+
+            var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TRIGGER fail_update
+                    BEFORE UPDATE ON files
+                    BEGIN
+                        SELECT RAISE(FAIL, 'boom');
+                    END;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRootA), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(Path.GetFullPath(projectRootA), statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(headA, statusJson.GetProperty("git_head").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRootA);
+            DeleteDirectory(projectRootB);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanExplicitDb_SuccessfulNoOpBackfillsMissingIndexedProjectRootMetadata()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_fullscan_explicit_noop_{Guid.NewGuid():N}.db");
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+            var head = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DeleteIndexedProjectRootMetadata(dbPath);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal(Path.GetFullPath(projectRoot), db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            }
+
+            var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(Path.GetFullPath(projectRoot), statusJson.GetProperty("project_root").GetString());
+            Assert.Equal(head, statusJson.GetProperty("git_head").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
         }
     }
 
@@ -691,6 +1306,524 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_RemovesIndexedScriptThatLosesShebang()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "tool", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithCommits_RemovesIndexedScriptThatLosesShebang()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            RunGit(projectRoot, "add", "tool");
+            RunGit(projectRoot, "commit", "-m", "remove shebang");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_RemovesIndexedScriptThatLosesShebang()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_scanned").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotPurgeFilesFromUnreadableDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("secret", stderr);
+            Assert.Contains("Could not scan directory due to permissions.", stderr);
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesStaleRowsWithinListedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_HumanOutput_ExplainsPartialPurgeScopeWhenAnotherDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot]);
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("positively observed as no longer indexable or missing from directories whose file listing completed successfully", stdout);
+            Assert.Contains("Skipped authoritative purge outside directories whose file listing completed successfully", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWithinFullyScannedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            var deletedPath = Path.Combine(projectRoot, "src", "a.cs");
+            File.WriteAllText(deletedPath, "public class Deleted { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/a.cs", indexedPaths);
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedRootFileWhenSiblingDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            var deletedPath = Path.Combine(projectRoot, "direct.cs");
+            File.WriteAllText(deletedPath, "public class Direct { }\n");
+            File.WriteAllText(Path.Combine(secretDir, "hidden.cs"), "public class Hidden { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("direct.cs", indexedPaths);
+            Assert.Contains("secret/hidden.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWhenUnreadableDescendantExistsUnderSameParentDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var srcDir = Path.Combine(projectRoot, "src");
+        var secretDir = Path.Combine(srcDir, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            var deletedPath = Path.Combine(srcDir, "direct.cs");
+            File.WriteAllText(deletedPath, "public class Direct { }\n");
+            File.WriteAllText(Path.Combine(secretDir, "hidden.cs"), "public class Hidden { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("src/secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/direct.cs", indexedPaths);
+            Assert.Contains("src/secret/hidden.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWithinDirectoryWhenExtensionlessSiblingProbeFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var srcDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(srcDir);
+            var deletedPath = Path.Combine(srcDir, "old.cs");
+            var toolPath = Path.Combine(srcDir, "tool");
+            File.WriteAllText(deletedPath, "public class Old { }\n");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(toolPath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("src/tool", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not probe file for indexability/language.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/old.cs", indexedPaths);
+            Assert.Contains("src/tool", indexedPaths);
+        }
+        finally
+        {
+            var toolPath = Path.Combine(projectRoot, "src", "tool");
+            if (File.Exists(toolPath))
+                SetUnixPermissions(toolPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DoesNotRemoveUnreadableExtensionlessScript()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(toolPath, UnixFileMode.None);
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "tool", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("tool", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not probe file for indexability/language.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("tool", indexedPaths);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            if (File.Exists(toolPath))
+                SetUnixPermissions(toolPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DemotesReadinessForUnreadableKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            File.WriteAllText(sourcePath, "public class A { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("a.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DemotesReadinessForUnreadableNewKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var sourcePath = Path.Combine(projectRoot, "b.cs");
+            File.WriteAllText(sourcePath, "public class B { }\n");
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "b.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("b.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "b.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
     {
         var projectRoot = CreateTempProject();
@@ -1028,6 +2161,171 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_IgnoresUnixFifoWithoutHanging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            CreateUnixFifo(Path.Combine(projectRoot, "tool"));
+            CreateUnixFifo(Path.Combine(projectRoot, "tool.sh"));
+            CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
+
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+
+            Assert.False(result.TimedOut, "cdidx index --dry-run hung on a FIFO entry.");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+
+            using var document = JsonDocument.Parse(result.StdOut);
+            Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_FullScan_ReportsUnreadableDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("secret", stderr);
+            Assert.Contains("Could not scan directory due to permissions.", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_IgnoresUnixFifoKnownFilename()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
+
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--files", "Dockerfile", "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+
+            Assert.False(result.TimedOut, "cdidx index --dry-run --files hung on a FIFO entry.");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+
+            using var document = JsonDocument.Parse(result.StdOut);
+            Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_IgnoresAbsolutePathOutsideProjectRoot()
+    {
+        var projectRoot = CreateTempProject();
+        var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_outside_{Guid.NewGuid():N}.cs");
+        try
+        {
+            File.WriteAllText(outsidePath, "public class Outside { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", outsidePath, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            if (File.Exists(outsidePath))
+                File.Delete(outsidePath);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_IgnoresTraversalOutsideProjectRoot()
+    {
+        var parentDir = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_parent_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(parentDir, "project");
+        var outsidePath = Path.Combine(parentDir, "outside.cs");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(outsidePath, "public class Outside { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "../outside.cs", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(parentDir))
+                DeleteDirectory(parentDir);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_DoesNotCountUnreadableKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            File.WriteAllText(sourcePath, "public class A { }\n");
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal("a.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_InWorktreeWithAbsoluteDbPathInsideProject_WritesRelativePatternToSharedExclude()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"cdidx_worktree_{Guid.NewGuid():N}");
@@ -1082,6 +2380,26 @@ public class IndexCommandRunnerTests
             // rebuild 後、全ファイルがスキャンされるべき（スキップなし）
             Assert.True(json.GetProperty("summary").GetProperty("files_total").GetInt32() >= 2);
             Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_RebuildFlag_SucceedsOnFreshDb()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_total").GetInt32() >= 1);
         }
         finally
         {
@@ -1252,6 +2570,8 @@ public class IndexCommandRunnerTests
             // because untouched rows still carry the old version's fold keys.
             // partial update 実行。FoldReady bit も version も新状態に進めてはいけない。
             var targetFile = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(targetFile, "public class App { public void Run() { } }\n");
+            File.SetLastWriteTimeUtc(targetFile, DateTime.UtcNow.AddSeconds(2));
             var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
 
@@ -1270,6 +2590,350 @@ public class IndexCommandRunnerTests
             // reader treat mixed-state rows as fully fold-ready.
             // version は "0" のままで OK。現在の NameFold.Version に昇格してはいけない。
             Assert.NotEqual(NameFold.Version.ToString(), storedVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_ClearsHotspotFamilyTrustOnPartialFailure()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+
+            WriteOversizedAsciiFile(Path.Combine(projectRoot, "app.cs"));
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("partial", json2.GetProperty("status").GetString());
+            Assert.Equal(1, json2.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run() { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                        api.Run(1);
+                    }
+                }
+                """);
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+
+            File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (exitCode1, json1) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode1);
+            Assert.Equal("success", json1.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var seededDb = new DbContext(dbPath))
+                Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), seededDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+
+            File.WriteAllText(Path.Combine(projectRoot, "Extra.csproj"), "<Project />");
+
+            var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "Extra.csproj", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, exitCode2);
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_KeepsCsharpHotspotFamilyTrustWhenOnlyVbMarkersChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+
+            File.WriteAllText(Path.Combine(projectRoot, "Unrelated.vbproj"), "<Project />");
+
+            var (rerunExitCode, rerunJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, rerunExitCode);
+            Assert.Equal("success", rerunJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("vb")));
+
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+            Assert.True(hotspotsExitCode is CommandExitCodes.Success or CommandExitCodes.NotFound);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+            if (hotspotsJson.TryGetProperty("degraded", out var degraded))
+                Assert.False(degraded.GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var unreadableDir = Path.Combine(projectRoot, "secret");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+            Directory.CreateDirectory(unreadableDir);
+            File.WriteAllText(Path.Combine(unreadableDir, "Hidden.csproj"), "<Project />");
+            originalMode = File.GetUnixFileMode(unreadableDir);
+            File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("app.cs", indexedPaths);
+        }
+        finally
+        {
+            if (originalMode.HasValue && Directory.Exists(unreadableDir))
+                File.SetUnixFileMode(unreadableDir, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_MarkerlessMultiSubtreePartialsStaySeparatedInHotspots()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "projA", "src"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "projB", "src"));
+
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Api.Part1.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run()
+                    {
+                        Run(1);
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Api.Part2.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part1.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run()
+                    {
+                        Run(1);
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part2.cs"),
+                """
+                namespace Shared;
+
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal("success", indexJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            var runRows = hotspotsJson.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(item => item.GetProperty("name").GetString() == "Run")
+                .OrderBy(item => item.GetProperty("path").GetString(), StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(2, runRows.Count);
+            Assert.StartsWith("projA/src/Api.Part", runRows[0].GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, runRows[0].GetProperty("reference_count").GetInt32());
+            Assert.StartsWith("projB/src/Api.Part", runRows[1].GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, runRows[1].GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_MarkerlessRootLevelPartialsStayVisibleInHotspots()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "Api.Part1.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run() { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "Api.Part2.cs"),
+                """
+                public partial class Api
+                {
+                    public void Run(int value) { }
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                        api.Run(1);
+                    }
+                }
+                """);
+
+            var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal("success", indexJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            var runRows = hotspotsJson.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(item => item.GetProperty("name").GetString() == "Run")
+                .ToList();
+
+            var runRow = Assert.Single(runRows);
+            Assert.Matches(@"Api\.Part[12]\.cs", runRow.GetProperty("path").GetString() ?? string.Empty);
+            Assert.Equal(2, runRow.GetProperty("reference_count").GetInt32());
         }
         finally
         {
@@ -1372,6 +3036,8 @@ public class IndexCommandRunnerTests
             SqliteConnection.ClearAllPools();
 
             var targetFile = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(targetFile, "public class App { public void Run() { } }\n");
+            File.SetLastWriteTimeUtc(targetFile, DateTime.UtcNow.AddSeconds(2));
             var exitCode2 = IndexCommandRunner.Run([projectRoot, "--files", targetFile, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
 
@@ -1572,6 +3238,61 @@ public class IndexCommandRunnerTests
         }
     }
 
+    private (int ExitCode, JsonElement Json) RunStatusAndCaptureJson(string[] args)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+
+            try
+            {
+                Console.SetOut(writer);
+                var exitCode = QueryCommandRunner.RunStatus(args, _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                return (exitCode, document.RootElement.Clone());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    private (int ExitCode, JsonElement Json) RunHotspotsJson(string dbPath, string lang, string kind)
+        => RunHotspotsJsonWithPaths(dbPath, lang, kind, null);
+
+    private (int ExitCode, JsonElement Json) RunHotspotsJsonWithPaths(string dbPath, string lang, string kind, IReadOnlyList<string>? paths)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+
+            try
+            {
+                Console.SetOut(writer);
+                var args = new List<string> { "--db", dbPath, "--json", "--lang", lang, "--kind", kind };
+                if (paths != null)
+                {
+                    foreach (var path in paths)
+                    {
+                        args.Add("--path");
+                        args.Add(path);
+                    }
+                }
+
+                var exitCode = QueryCommandRunner.RunHotspots(args.ToArray(), _jsonOptions);
+                using var document = JsonDocument.Parse(writer.ToString());
+                return (exitCode, document.RootElement.Clone());
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         lock (TestConsoleLock.Gate)
@@ -1619,6 +3340,34 @@ public class IndexCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
+    private static (int ExitCode, string StdOut, string StdErr, bool TimedOut) RunCliInSubprocessWithTimeout(string[] args, string workingDirectory, TimeSpan timeout)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(GetBuiltCliDllPath());
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cdidx subprocess / cdidx サブプロセスの起動に失敗");
+
+        if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            return (process.ExitCode, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd(), true);
+        }
+
+        return (process.ExitCode, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd(), false);
+    }
+
     private static string GetBuiltCliDllPath()
     {
         var tfm = new DirectoryInfo(AppContext.BaseDirectory).Name;
@@ -1661,11 +3410,63 @@ public class IndexCommandRunnerTests
             .ToHashSet(StringComparer.Ordinal);
     }
 
+    private static void DeleteIndexedProjectRootMetadata(string dbPath)
+    {
+        using var conn = OpenNonPoolingConnection(dbPath);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+        cmd.ExecuteNonQuery();
+    }
+
     private static string CreateTempProject()
     {
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void SetUnixPermissions(string path, UnixFileMode mode)
+    {
+        File.SetUnixFileMode(path, mode);
+    }
+
+    private static void CreateUnixFifo(string path)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "mkfifo",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(path);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
+    private static void WriteOversizedAsciiFile(string path)
+    {
+        const int targetBytes = 10 * 1024 * 1024 + 1;
+        var chunk = new byte[8192];
+        Array.Fill(chunk, (byte)'a');
+
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        int written = 0;
+        while (written < targetBytes)
+        {
+            var toWrite = Math.Min(chunk.Length, targetBytes - written);
+            stream.Write(chunk, 0, toWrite);
+            written += toWrite;
+        }
     }
 
     private static void RunGit(string workDir, params string[] args)
@@ -1695,6 +3496,32 @@ public class IndexCommandRunnerTests
             RunGit(workDir, "config", "user.name", "CodeIndex Tests");
             RunGit(workDir, "config", "user.email", "tests@codeindex.local");
         }
+    }
+
+    private static string RunGitCaptureStdOut(string workDir, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
+
+        return stdout;
     }
 
     private static void DeleteDirectory(string path)

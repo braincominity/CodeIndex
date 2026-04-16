@@ -426,7 +426,7 @@ public partial class DbReader
     /// Bundle definition, graph, and local file context for one symbol query.
     /// 単一シンボルクエリ向けに、定義・グラフ・ローカル文脈をまとめて返す。
     /// </summary>
-    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
@@ -451,7 +451,7 @@ public partial class DbReader
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
             : (ExactQuerySignal?)null;
-        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
         var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
@@ -585,32 +585,71 @@ public partial class DbReader
 
     /// <summary>
     /// Find symbols with the most references (hotspots — heavily used code).
-    /// Uses file-scoped join: counts references from the same file where the symbol is defined,
-    /// plus cross-file references where the container name matches to reduce bare-name collisions.
+    /// Counts total reference volume across the codebase for names that stay unambiguous within
+    /// the active language/kind candidate set. Path and test filters only decide which logical
+    /// target rows are returned, not whether a name is considered globally ambiguous. When
+    /// multiple logical targets still share the same name, falls back to conservative in-target
+    /// file counts; rows that collapse to one logical target family (same container or top-level
+    /// file) are grouped because bare-name references cannot disambiguate the true target symbol.
     /// 最も多く参照されるシンボルを検索する（ホットスポット — 多用されるコード）。
-    /// ファイルスコープ JOIN を使用: シンボルが定義されたファイル内の参照と、
-    /// コンテナ名が一致するクロスファイル参照をカウントし、名前衝突を軽減する。
+    /// active な言語/種別候補集合の中で名前が曖昧でないシンボルは codebase 全体の参照数を数える。
+    /// path/test フィルタは返す logical target 行だけを絞り、名前の曖昧性判定には使わない。
+    /// 複数の logical target が同名を共有する場合は bare-name 参照で真の対象を特定できないため
+    /// 保守的な in-target file 件数へフォールバックし、1 つの logical target family に収まる行は集約する。
     /// </summary>
     public List<(SymbolResult Symbol, int ReferenceCount)> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable) return new List<(SymbolResult, int)>();
-        // Count references where the symbol name matches AND either:
-        // 1. The reference is in the same file as the definition, OR
-        // 2. The reference's container/context mentions the symbol's container (cross-file usage)
-        // This reduces false inflation from unrelated same-named symbols.
-        // シンボル名が一致し、かつ以下のいずれかの参照をカウント:
-        // 1. 参照がシンボル定義と同じファイル内にある、または
-        // 2. 参照のコンテキストがシンボルのコンテナに言及している（クロスファイル使用）
-        // 無関係な同名シンボルによる水増しを軽減する。
+        var containerNameSql = GetSymbolColumnSql("container_name");
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
+        var familyKeySql = GetSymbolColumnSql("family_key");
+        var hotspotFamilyLangs = _hotspotFamilyReadyLanguages
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+        var familyLangConditionSql = hotspotFamilyLangs.Count > 0
+            ? $"f.lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hotspotFamilyLang{i}"))})"
+            : "0";
+        var familyTargetKeySql = hotspotFamilyLangs.Count > 0
+            ? $@"CASE
+                    WHEN {familyLangConditionSql}
+                     AND COALESCE({familyKeySql}, '') <> ''
+                        THEN 'family|' || COALESCE(f.lang, '') || '|' || COALESCE(s.kind, '') || '|' || {familyKeySql}
+                    ELSE NULL
+                END"
+            : "NULL";
+        var containerTargetKeySql = $@"CASE
+                    WHEN COALESCE({containerQualifiedNameSql}, '') <> ''
+                        THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
+                    ELSE NULL
+                END";
+        // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
+        // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
+        // back to codebase-wide counting. Cross-file grouping is allowed only when the
+        // extractor persisted an authoritative family key on a DB that is stamped as fully
+        // current for hotspot-family semantics (currently partial-type families). Same-file
+        // same-container overloads can still share one conservative target key, but only
+        // unique names or authoritative families may promote to codebase-wide counts.
+        // 曖昧性は path 非依存の候補集合で判定し、`--path` で隠れた重複定義が一意扱いに
+        // 戻ってしまうことを防ぐ。cross-file の集約は current な hotspot-family semantics で
+        // fully-ready と判定された DB 上の正式な family key のみに限定し、same-file の
+        // same-container overload は保守的な target として扱いつつ、codebase-wide 集計への
+        // 昇格は一意名か authoritative family のみに限定する。
         var sql = $@"
-            SELECT s.name, COUNT(DISTINCT sr.id) as ref_count,
-                   s.kind, f.path, f.lang, s.line,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("container_name")} AS container_name
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            JOIN symbol_references sr ON sr.symbol_name = s.name
-            WHERE s.kind NOT IN ('import', 'namespace')";
+            WITH all_candidate_symbols AS (
+                SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
+                       {GetSymbolColumnSql("visibility")} AS visibility,
+                       {containerNameSql} AS container_name,
+                       CASE
+                           WHEN {familyTargetKeySql} IS NOT NULL
+                               THEN {familyTargetKeySql}
+                           WHEN {containerTargetKeySql} IS NOT NULL
+                               THEN {containerTargetKeySql}
+                           ELSE 'file|' || CAST(s.file_id AS TEXT)
+                       END AS logical_target_key,
+                       COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.kind NOT IN ('import', 'namespace')";
 
         // Restrict to graph-supported languages only / グラフ対応言語のみに制限
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
@@ -621,8 +660,130 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
 
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" GROUP BY s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path ORDER BY ref_count DESC LIMIT @limit";
+        sql += @"
+            ),
+            name_cardinality AS (
+                SELECT lang,
+                       name,
+                       COUNT(*) AS defs,
+                       COUNT(DISTINCT logical_target_key) AS target_groups,
+                       COUNT(DISTINCT count_safe_key) AS count_safe_groups,
+                       COUNT(count_safe_key) AS count_safe_defs
+                FROM all_candidate_symbols
+                GROUP BY lang, name
+            ),
+            filtered_candidates AS (
+                SELECT *
+                FROM all_candidate_symbols
+                WHERE 1 = 1";
+        if (pathPatterns != null && pathPatterns.Count > 0)
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+        }
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";
+        sql += @"
+            ),
+            grouped_candidates AS (
+                SELECT MIN(id) AS symbol_id,
+                       name,
+                       kind,
+                       logical_target_key
+                FROM filtered_candidates
+                GROUP BY logical_target_key, name, kind
+            ),
+            grouped_metadata AS (
+                SELECT logical_target_key,
+                       name,
+                       kind,
+                       CASE
+                           WHEN COUNT(DISTINCT COALESCE(visibility, '')) = 1 THEN MIN(visibility)
+                           ELSE NULL
+                       END AS visibility,
+                       CASE
+                           WHEN COUNT(DISTINCT COALESCE(container_name, '')) = 1 THEN MIN(container_name)
+                           ELSE NULL
+                       END AS container_name
+                FROM filtered_candidates
+                GROUP BY logical_target_key, name, kind
+            ),
+            grouped_rows AS (
+                SELECT gc.symbol_id,
+                       gc.name,
+                       gc.kind,
+                       fc.path,
+                       fc.lang,
+                       fc.line,
+                       gm.visibility,
+                       gm.container_name,
+                       gc.logical_target_key
+                FROM grouped_candidates gc
+                JOIN filtered_candidates fc ON fc.id = gc.symbol_id
+                JOIN grouped_metadata gm
+                 ON gm.logical_target_key = gc.logical_target_key
+                 AND gm.name = gc.name
+                 AND gm.kind = gc.kind
+            ),
+            logical_references AS (
+                SELECT sr.file_id,
+                       rf.lang,
+                       sr.symbol_name,
+                       sr.line,
+                       sr.column_number,
+                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind,
+                       CAST(sr.file_id AS TEXT) || ':' || sr.symbol_name || ':' || CAST(sr.line AS TEXT) || ':' || CAST(sr.column_number AS TEXT) || ':' || " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_site_key
+                FROM symbol_references sr
+                JOIN files rf ON rf.id = sr.file_id
+                GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
+            ),
+            file_target_cardinality AS (
+                SELECT lang,
+                       file_id,
+                       name,
+                       kind,
+                       COUNT(DISTINCT logical_target_key) AS target_count
+                FROM filtered_candidates
+                GROUP BY lang, file_id, name, kind
+            ),
+            reference_counts AS (
+                SELECT gr.symbol_id, COUNT(DISTINCT sr.logical_site_key) AS ref_count
+                FROM grouped_rows gr
+                JOIN name_cardinality nc
+                  ON nc.lang = gr.lang
+                 AND nc.name = gr.name
+                JOIN logical_references sr
+                  ON sr.symbol_name = gr.name
+                 AND sr.lang = gr.lang
+                LEFT JOIN filtered_candidates fc
+                  ON fc.logical_target_key = gr.logical_target_key
+                 AND fc.name = gr.name
+                 AND fc.kind = gr.kind
+                 AND fc.file_id = sr.file_id
+                LEFT JOIN file_target_cardinality ftc
+                  ON ftc.lang = gr.lang
+                 AND ftc.file_id = sr.file_id
+                 AND ftc.name = gr.name
+                 AND ftc.kind = gr.kind
+                WHERE nc.defs = 1
+                   OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                   OR (fc.id IS NOT NULL AND COALESCE(ftc.target_count, 0) = 1)
+                GROUP BY gr.symbol_id
+            )
+            SELECT gr.name, rc.ref_count,
+                   gr.kind, gr.path, gr.lang, gr.line,
+                   gr.visibility, gr.container_name
+            FROM grouped_rows gr
+            JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
+            ORDER BY rc.ref_count DESC
+            LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
@@ -637,6 +798,8 @@ public partial class DbReader
         }
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
+            cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
 
         var results = new List<(SymbolResult, int)>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -653,6 +816,114 @@ public partial class DbReader
                 ContainerName = GetNullableString(reader, 7),
             }, reader.GetInt32(1)));
         }
+        return results;
+    }
+
+    /// <summary>
+    /// Return grouped hotspot rows collapsed by (name, kind) after the full filtered site set
+    /// has been considered, keeping the representative site deterministic.
+    /// フィルタ済みの全 definition site を見た上で、(name, kind) 単位に hotspot を集約して返す。
+    /// 代表 site は決定的な順序で選ぶ。
+    /// </summary>
+    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (!_hasReferencesTable) return [];
+
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
+        var sql = $@"
+            WITH hotspot_sites AS (
+                SELECT s.id AS symbol_id, s.name, COUNT(DISTINCT sr.id) AS ref_count,
+                       s.kind, f.path, f.lang, s.line,
+                       {GetSymbolColumnSql("visibility")} AS visibility,
+                       {GetSymbolColumnSql("container_name")} AS container_name
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                JOIN symbol_references sr ON sr.symbol_name = s.name
+                WHERE s.kind NOT IN ('import', 'namespace')";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        else
+            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $@"
+                GROUP BY s.id, s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path, f.lang, s.line, {GetSymbolColumnSql("visibility")}
+            ),
+            ranked_sites AS (
+                SELECT hs.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY hs.name, hs.kind
+                           ORDER BY hs.path, hs.line, COALESCE(hs.container_name, ''), COALESCE(hs.visibility, '')
+                       ) AS rep_rank
+                FROM hotspot_sites hs
+            ),
+            grouped AS (
+                SELECT hs.name, hs.kind, MAX(hs.ref_count) AS ref_count, COUNT(*) AS definition_sites
+                FROM ranked_sites hs
+                GROUP BY hs.name, hs.kind
+            )
+            SELECT g.name, g.kind, g.ref_count, g.definition_sites,
+                   rep.path, rep.lang, rep.line, rep.visibility, rep.container_name,
+                   (
+                       SELECT GROUP_CONCAT(path, char(10))
+                       FROM (
+                           SELECT DISTINCT hs2.path AS path
+                           FROM ranked_sites hs2
+                           WHERE hs2.name = g.name
+                             AND hs2.kind = g.kind
+                           ORDER BY path
+                       )
+                   ) AS grouped_paths
+            FROM grouped g
+            JOIN ranked_sites rep
+              ON rep.name = g.name
+             AND rep.kind = g.kind
+             AND rep.rep_rank = 1
+            ORDER BY g.ref_count DESC, g.name, g.kind
+            LIMIT @limit";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@limit", limit);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        else
+        {
+            for (int i = 0; i < graphLangs.Count; i++)
+                cmd.Parameters.AddWithValue($"@gl{i}", graphLangs[i]);
+        }
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var results = new List<GroupedHotspotResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var paths = GetNullableString(reader, 9)?
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList() ?? [];
+            results.Add(new GroupedHotspotResult
+            {
+                Symbol = new SymbolResult
+                {
+                    Name = reader.GetString(0),
+                    Kind = reader.GetString(1),
+                    Path = reader.GetString(4),
+                    Lang = GetNullableString(reader, 5),
+                    Line = reader.GetInt32(6),
+                    Visibility = GetNullableString(reader, 7),
+                    ContainerName = GetNullableString(reader, 8),
+                },
+                ReferenceCount = reader.GetInt32(2),
+                DefinitionSites = reader.GetInt32(3),
+                Paths = paths,
+            });
+        }
+
         return results;
     }
 
