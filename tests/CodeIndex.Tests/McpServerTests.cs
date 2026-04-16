@@ -545,6 +545,152 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_AnalyzeSymbol_KeepsSubscribeReferencesVisibleInBundle()
+    {
+        InsertIndexedFile("src/Publisher.cs", "csharp",
+            """
+            using System;
+
+            public class Publisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/Subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class Subscriber
+            {
+                public void Hook(Publisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var reference = response["result"]!["structuredContent"]!["references"]![0]!;
+        var caller = response["result"]!["structuredContent"]!["callers"]![0]!;
+
+        Assert.Equal("subscribe", reference["referenceKind"]!.GetValue<string>());
+        Assert.Equal("Hook", reference["containerName"]!.GetValue<string>());
+        Assert.Equal("Hook", caller["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", caller["calleeName"]!.GetValue<string>());
+        Assert.Empty(response["result"]!["structuredContent"]!["callees"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_KeepsSubscribeCalleesVisibleForCallerSymbols()
+    {
+        InsertIndexedFile("src/Publisher.cs", "csharp",
+            """
+            using System;
+
+            public class Publisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/Subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class Subscriber
+            {
+                public void Hook(Publisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Hook","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var callee = response["result"]!["structuredContent"]!["callees"]![0]!;
+
+        Assert.Equal("Hook", callee["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", callee["calleeName"]!.GetValue<string>());
+        Assert.Equal("subscribe", callee["referenceKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_DefaultQueryKeepsSubscribeRowsVisible()
+    {
+        InsertIndexedFile("src/Publisher.cs", "csharp",
+            """
+            using System;
+
+            public class Publisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/Subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class Subscriber
+            {
+                public void Hook(Publisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("Hook", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_DefaultQueryKeepsSubscribeRowsVisible()
+    {
+        InsertIndexedFile("src/Publisher.cs", "csharp",
+            """
+            using System;
+
+            public class Publisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/Subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class Subscriber
+            {
+                public void Hook(Publisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Hook","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("Hook", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+        Assert.Equal("subscribe", response["result"]!["structuredContent"]!["results"]![0]!["referenceKind"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_References_ReturnsIndexedReference()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");

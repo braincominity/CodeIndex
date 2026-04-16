@@ -336,9 +336,9 @@ public static class ConsoleUi
         Console.WriteLine("  backfill-fold              Upgrade folded-name columns in an existing index DB");
         Console.WriteLine("  search <query>             Full-text search across indexed chunks");
         Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
-        Console.WriteLine("  references <query>         Find indexed references for a symbol");
-        Console.WriteLine("  callers <query>            Find callers of a symbol");
-        Console.WriteLine("  callees <query>            Find callees used by a caller");
+        Console.WriteLine("  references <query>         Find indexed references for a symbol (--kind uses reference kind)");
+        Console.WriteLine("  callers <query>            Find callers of a symbol (--kind uses reference kind)");
+        Console.WriteLine("  callees <query>            Find callees used by a caller (--kind uses reference kind)");
         Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
         Console.WriteLine("  files [query]              List indexed files");
         Console.WriteLine("  find <query>               Find literal substring matches inside known indexed files");
@@ -388,7 +388,7 @@ public static class ConsoleUi
         Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect.");
         Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
         Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
-        Console.WriteLine("  --kind <kind>              Filter symbols or references by kind");
+        Console.WriteLine("  --kind <kind>              definition/symbols/hotspots/unused: symbol kind; references/callers/callees: reference kind (call/instantiate/subscribe); validate: issue kind");
         Console.WriteLine("  --count                    Return only the visible result count (for AI preflight)");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis (default: 5)");
@@ -406,6 +406,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
         Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
+        Console.WriteLine("  cdidx references DbContext --kind instantiate Filter constructor sites by reference kind");
         Console.WriteLine("  cdidx references e --path dist/app.js --max-line-width 120");
         Console.WriteLine("                                              Clamp a minified single-line context window");
         Console.WriteLine("  cdidx excerpt src/app.js --start 120 --focus-column 88 --max-line-width 120");
