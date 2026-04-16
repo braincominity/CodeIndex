@@ -147,23 +147,41 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        var raw = new List<SearchResult>();
+        var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
+        var count = 0;
+        var fileCount = 0;
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            raw.Add(new SearchResult
+            var path = reader.GetString(0);
+            var startLine = reader.GetInt32(1);
+            var endLine = reader.GetInt32(2);
+            if (!deduplicate)
             {
-                Path = reader.GetString(0),
-                StartLine = reader.GetInt32(1),
-                EndLine = reader.GetInt32(2),
-                Score = reader.GetDouble(3),
-            });
+                count++;
+                if (!keptIntervals.ContainsKey(path))
+                {
+                    keptIntervals[path] = new IntervalSet();
+                    fileCount++;
+                }
+                continue;
+            }
+
+            if (!keptIntervals.TryGetValue(path, out var intervals))
+            {
+                intervals = new IntervalSet();
+                keptIntervals[path] = intervals;
+            }
+
+            if (!intervals.AddIfNoOverlap(startLine, endLine))
+                continue;
+
+            count++;
+            if (intervals.Count == 1)
+                fileCount++;
         }
 
-        var counted = deduplicate ? DeduplicateOverlappingResults(raw) : raw;
-        return new QueryCountResult(
-            counted.Count,
-            counted.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+        return new QueryCountResult(count, fileCount);
     }
 
     /// <summary>
@@ -177,22 +195,65 @@ public partial class DbReader
         if (results.Count <= 1)
             return results;
 
+        var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
         var deduped = new List<SearchResult>();
         foreach (var r in results)
         {
-            var dominated = false;
-            foreach (var kept in deduped)
+            if (!keptIntervals.TryGetValue(r.Path, out var intervals))
             {
-                if (kept.Path == r.Path && kept.StartLine <= r.EndLine && kept.EndLine >= r.StartLine)
-                {
-                    dominated = true;
-                    break;
-                }
+                intervals = new IntervalSet();
+                keptIntervals[r.Path] = intervals;
             }
-            if (!dominated)
-                deduped.Add(r);
+
+            if (!intervals.AddIfNoOverlap(r.StartLine, r.EndLine))
+                continue;
+
+            deduped.Add(r);
         }
         return deduped;
+    }
+
+    private sealed class IntervalSet
+    {
+        private readonly List<(int Start, int End)> _intervals = [];
+
+        public int Count => _intervals.Count;
+
+        public bool AddIfNoOverlap(int start, int end)
+        {
+            if (end < start)
+                (start, end) = (end, start);
+
+            var insertIndex = FindInsertIndex(start);
+            if (insertIndex > 0 && Overlaps(_intervals[insertIndex - 1], start, end))
+                return false;
+            if (insertIndex < _intervals.Count && Overlaps(_intervals[insertIndex], start, end))
+                return false;
+
+            _intervals.Insert(insertIndex, (start, end));
+            return true;
+        }
+
+        private int FindInsertIndex(int start)
+        {
+            var low = 0;
+            var high = _intervals.Count;
+            while (low < high)
+            {
+                var mid = low + ((high - low) / 2);
+                if (_intervals[mid].Start < start)
+                    low = mid + 1;
+                else
+                    high = mid;
+            }
+
+            return low;
+        }
+
+        private static bool Overlaps((int Start, int End) interval, int start, int end)
+        {
+            return interval.Start <= end && interval.End >= start;
+        }
     }
 
     private static string GetSearchOrderSql()

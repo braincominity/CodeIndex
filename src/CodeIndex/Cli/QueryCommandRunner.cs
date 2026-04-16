@@ -178,7 +178,7 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
+                var counts = reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
                 var exactSignalForCount = reader.GetDefinitionExactQuerySignal();
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact,

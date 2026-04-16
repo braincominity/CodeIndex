@@ -422,12 +422,65 @@ public partial class DbReader
         return results;
     }
 
-    public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var definitions = GetDefinitions(query, int.MaxValue, kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since, exact);
-        return new QueryCountResult(
-            definitions.Count,
-            definitions.Select(definition => definition.Path).Distinct(StringComparer.Ordinal).Count());
+        using var cmd = _conn.CreateCommand();
+
+        var sql = $@"
+            SELECT COUNT(*), COUNT(DISTINCT path)
+            FROM (
+                SELECT f.path AS path
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE 1=1";
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
+            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
+            sql += exact
+                ? $" AND {exactColumn} = @query{exactSuffix}"
+                : " AND s.name LIKE @query ESCAPE '\\'";
+        }
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $@"
+                  AND EXISTS (
+                      SELECT 1
+                      FROM chunks c
+                      WHERE c.file_id = s.file_id
+                        AND c.end_line >= {GetSymbolColumnSql("start_line", "s.line")}
+                        AND c.start_line <= {GetSymbolColumnSql("end_line", "s.line")}
+                  )
+            )";
+
+        cmd.CommandText = sql;
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var paramValue = !exact
+                ? $"%{EscapeLikeQuery(query)}%"
+                : _foldReady
+                    ? NameFold.Fold(query) ?? query
+                    : query;
+            cmd.Parameters.AddWithValue("@query", paramValue);
+        }
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        using var reader = cmd.ExecuteTrackedReader();
+        return reader.TrackedRead()
+            ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
+            : new QueryCountResult(0, 0);
     }
 
     /// <summary>
