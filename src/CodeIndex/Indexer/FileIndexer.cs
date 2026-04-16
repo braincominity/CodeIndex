@@ -418,8 +418,23 @@ public class FileIndexer
 
         private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder)
         {
+            var contentStart = index + 1;
+            if (pattern[contentStart] is { Value: '!', Escaped: false })
+            {
+                contentStart++;
+            }
+            else if (pattern[contentStart] is { Value: '^', Escaped: false })
+            {
+                contentStart++;
+            }
+
+            var allowLeadingRightBracket =
+                contentStart < pattern.Count &&
+                pattern[contentStart] is { Value: ']', Escaped: false };
+
+            var scanStart = allowLeadingRightBracket ? contentStart + 1 : contentStart;
             var closingIndex = -1;
-            for (var i = index + 1; i < pattern.Count; i++)
+            for (var i = scanStart; i < pattern.Count; i++)
             {
                 if (pattern[i] is { Value: ']', Escaped: false })
                 {
@@ -428,19 +443,25 @@ public class FileIndexer
                 }
             }
 
-            if (closingIndex <= index + 1)
+            if (allowLeadingRightBracket && closingIndex < scanStart)
+                throw new ArgumentException("malformed character class");
+
+            if (closingIndex < scanStart)
                 return false;
 
             builder.Append('[');
-            var contentStart = index + 1;
-            if (pattern[contentStart] is { Value: '!', Escaped: false })
+            if (pattern[index + 1] is { Value: '!', Escaped: false })
             {
                 builder.Append('^');
-                contentStart++;
             }
-            else if (pattern[contentStart] is { Value: '^', Escaped: false })
+            else if (pattern[index + 1] is { Value: '^', Escaped: false })
             {
                 builder.Append(@"\^");
+            }
+
+            if (allowLeadingRightBracket)
+            {
+                builder.Append(@"\]");
                 contentStart++;
             }
 

@@ -1259,6 +1259,36 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_RemovesIndexedFileThatMatchesLeadingRightBracketCharacterClass()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "].cs"), "class Ignored { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("].cs", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "[]].cs\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "].cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("].cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithCommits_FallsBackToFullScanWhenIgnoreFilesChange()
     {
         var projectRoot = CreateTempProject();
