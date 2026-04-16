@@ -2759,6 +2759,55 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpExactNameReportsOwningEnumForDuplicateMemberNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_container");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "enums.cs"),
+                """
+                namespace Demo;
+
+                public enum First
+                {
+                    None,
+                }
+
+                public enum Second
+                {
+                    None,
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["None", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal("enum", rows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("First", rows[0].RootElement.GetProperty("container_name").GetString());
+            Assert.Equal("enum", rows[1].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Second", rows[1].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_CSharpBraceCharLiteralKeepsMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_char");

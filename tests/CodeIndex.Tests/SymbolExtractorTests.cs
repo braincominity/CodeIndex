@@ -3434,6 +3434,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_EnumMembersTrackOwningEnum()
+    {
+        var content = "namespace Demo;\n\npublic enum First\n{\n    None,\n}\n\npublic enum Second\n{\n    None,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var noneMembers = symbols
+            .Where(s => s.Kind == "enum" && s.Name == "None")
+            .OrderBy(s => s.Line)
+            .ToList();
+
+        Assert.Equal(2, noneMembers.Count);
+        Assert.Equal("enum", noneMembers[0].ContainerKind);
+        Assert.Equal("First", noneMembers[0].ContainerName);
+        Assert.Equal("Demo.First", noneMembers[0].ContainerQualifiedName);
+        Assert.Equal("enum", noneMembers[1].ContainerKind);
+        Assert.Equal("Second", noneMembers[1].ContainerName);
+        Assert.Equal("Demo.Second", noneMembers[1].ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_CSharp_EnumMemberDoesNotMatchObjectInitializer()
     {
         // Object initializer lines should not be extracted as enum members
