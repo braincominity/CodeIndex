@@ -32,7 +32,7 @@ public static class ConsoleUi
         ("impact", "cdidx impact <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>] [--count]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]"),
-        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]"),
+        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--group-by-name]"),
         ("languages", "cdidx languages [--json]"),
         ("mcp", "cdidx mcp [--db <path>]"),
     ];
@@ -393,6 +393,7 @@ public static class ConsoleUi
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis (default: 5)");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
+        Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
         Console.WriteLine("  Note: if a string value itself starts with '--', pass it as --opt=<value> (for example --path=--json-dir or --db=--tmp.db)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
@@ -425,6 +426,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
         Console.WriteLine("  cdidx unused --lang csharp --exclude-tests      Find potentially unused symbols");
         Console.WriteLine("  cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback");
+        Console.WriteLine("  cdidx hotspots --group-by-name --exclude-tests  Collapse same-name hotspots across files");
         Console.WriteLine("  cdidx impact Run --depth 3 --exclude-tests      Transitive callers of a symbol");
         Console.WriteLine("  cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints");
         Console.WriteLine("  cdidx files --lang python                      List Python files");
@@ -578,6 +580,8 @@ public static class ConsoleUi
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --max-line-width --exact --exact-name --help"" -- ""$cur""))
             elif [ ""$cmd"" = ""inspect"" ]; then
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --path --exclude-path --exclude-tests --body --max-line-width --exact --exact-name --help"" -- ""$cur""))
+            elif [ ""$cmd"" = ""hotspots"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --group-by-name --help"" -- ""$cur""))
             else
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
             fi
@@ -666,6 +670,19 @@ _cdidx() {{
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-name[Exact symbol-name equality]' \
                     '*:query'
+            elif [[ $subcmd == hotspots ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--kind[Filter by kind]:kind:(function class struct interface enum property event delegate namespace import)' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--count[Count only]' \
+                    '--group-by-name[Hotspots: collapse same-name rows across files]' \
+                    '*:query'
             else
                 _arguments \
                     '--db[Database path]:file:_files' \
@@ -718,6 +735,7 @@ _cdidx");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition inspect' -l body -d 'Include body'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l fts -d 'Raw FTS5 syntax'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l snippet-lines -r -d 'Snippet length'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from hotspots' -l group-by-name -d 'Collapse same-name rows across files'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols inspect' -l exact -d 'Backward-compatible exact shorthand'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search' -l exact-substring -d 'Search-only exact substring match'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from definition references callers callees symbols inspect' -l exact-name -d 'Exact symbol-name equality'");

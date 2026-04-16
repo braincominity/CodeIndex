@@ -19,6 +19,7 @@ public static class QueryCommandRunner
     internal const int MaxSymbolQueryNames = 256;
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
+    private const string HotspotsGroupedByNameKind = "name_kind";
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -57,6 +58,7 @@ public static class QueryCommandRunner
         "-h",
         "--version",
         "-V",
+        "--group-by-name",
     ];
     private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -1582,6 +1584,7 @@ public static class QueryCommandRunner
 
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        bool groupByName = cmdArgs.Any(a => a == "--group-by-name");
         var previewOptionError = ValidatePreviewOptions("hotspots", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -1589,7 +1592,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests"]))
+        if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, ["--db", "--json", "--limit", "--top", "--kind", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--group-by-name"]))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
             return CommandExitCodes.UsageError;
@@ -1598,6 +1601,87 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
+            if (groupByName)
+            {
+                var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                if (groupedResults.Count == 0)
+                {
+                    if (options.CountOnly)
+                    {
+                        if (options.Json)
+                            Console.WriteLine(BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable).ToJsonString(jsonOptions));
+                        else
+                            WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, new ExactQuerySignal(true, HasMissingIndex: false, HasMissingTable: false, null));
+                    }
+                    else if (options.Json)
+                        Console.WriteLine(BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable).ToJsonString(jsonOptions));
+                    else
+                    {
+                        Console.Error.WriteLine("No symbol hotspots found.");
+                        WriteZeroResultHints(options, reader);
+                        WriteKindHint(options.Kind, reader);
+                        WriteLangHint(options.Lang, reader);
+                        WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
+                    }
+                    return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                }
+
+                var definitionSiteTotal = groupedResults.Sum(g => g.DefinitionSites);
+                var groupedFileCount = groupedResults
+                    .SelectMany(g => g.Paths)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+
+                if (options.CountOnly)
+                {
+                    Console.WriteLine(options.Json
+                        ? JsonSerializer.Serialize(new
+                        {
+                            count = groupedResults.Count,
+                            files = groupedFileCount,
+                            definition_site_total = definitionSiteTotal,
+                            grouped_by = HotspotsGroupedByNameKind,
+                        }, jsonOptions)
+                        : $"{groupedResults.Count}");
+                    return CommandExitCodes.Success;
+                }
+
+                if (options.Json)
+                {
+                    var items = groupedResults.Select(g => new
+                    {
+                        name = g.Symbol.Name,
+                        kind = g.Symbol.Kind,
+                        path = g.Symbol.Path,
+                        line = g.Symbol.Line,
+                        reference_count = g.ReferenceCount,
+                        visibility = g.Symbol.Visibility,
+                        container = g.Symbol.ContainerName,
+                        definition_sites = g.DefinitionSites,
+                        paths = g.Paths,
+                    });
+                    Console.WriteLine(JsonSerializer.Serialize(new
+                    {
+                        count = groupedResults.Count,
+                        definition_site_total = definitionSiteTotal,
+                        grouped_by = HotspotsGroupedByNameKind,
+                        hotspots = items,
+                    }, jsonOptions));
+                }
+                else
+                {
+                    foreach (var g in groupedResults)
+                    {
+                        var s = g.Symbol;
+                        var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
+                        var multi = g.DefinitionSites > 1 ? $" (×{g.DefinitionSites} sites)" : "";
+                        Console.WriteLine($"{g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
+                    }
+                    Console.Error.WriteLine($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
+                }
+                return CommandExitCodes.Success;
+            }
+
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
             if (results.Count == 0)
@@ -2083,6 +2167,8 @@ public static class QueryCommandRunner
                     break;
                 case "--reverse":
                     break; // handled by specific commands / 特定コマンドで処理
+                case "--group-by-name":
+                    break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
                         pathPatterns.Add(pathPattern!); // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
@@ -2363,6 +2449,14 @@ public static class QueryCommandRunner
                 continue;
             }
 
+            if (normalizedArg == "--group-by-name")
+            {
+                Console.Error.WriteLine("Error: --group-by-name is only supported by 'hotspots'.");
+                Console.Error.WriteLine("Hint: remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.");
+                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+                return true;
+            }
+
             if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
                 i++;
 
@@ -2541,6 +2635,25 @@ public static class QueryCommandRunner
         extraFields?.Invoke(payload);
         AddFreshnessHint(payload, reader);
 
+        return payload;
+    }
+
+    private static JsonObject BuildGroupedHotspotsZeroJsonPayload(DbReader reader, JsonSerializerOptions jsonOptions, bool countOnly, bool graphAvailable)
+    {
+        var payload = BuildJsonZeroResultPayload(
+            reader,
+            jsonOptions,
+            resultsKey: countOnly ? null : "hotspots",
+            includeFiles: countOnly,
+            graphTableAvailable: graphAvailable,
+            degraded: !graphAvailable,
+            extraFields: static zeroPayload =>
+            {
+                zeroPayload["definition_site_total"] = 0;
+                zeroPayload["grouped_by"] = HotspotsGroupedByNameKind;
+            });
+        if (!graphAvailable)
+            payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
         return payload;
     }
 

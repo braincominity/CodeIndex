@@ -820,6 +820,114 @@ public partial class DbReader
     }
 
     /// <summary>
+    /// Return grouped hotspot rows collapsed by (name, kind) after the full filtered site set
+    /// has been considered, keeping the representative site deterministic.
+    /// フィルタ済みの全 definition site を見た上で、(name, kind) 単位に hotspot を集約して返す。
+    /// 代表 site は決定的な順序で選ぶ。
+    /// </summary>
+    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (!_hasReferencesTable) return [];
+
+        var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
+        var sql = $@"
+            WITH hotspot_sites AS (
+                SELECT s.id AS symbol_id, s.name, COUNT(DISTINCT sr.id) AS ref_count,
+                       s.kind, f.path, f.lang, s.line,
+                       {GetSymbolColumnSql("visibility")} AS visibility,
+                       {GetSymbolColumnSql("container_name")} AS container_name
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                JOIN symbol_references sr ON sr.symbol_name = s.name
+                WHERE s.kind NOT IN ('import', 'namespace')";
+
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        else
+            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += $@"
+                GROUP BY s.id, s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path, f.lang, s.line, {GetSymbolColumnSql("visibility")}
+            ),
+            ranked_sites AS (
+                SELECT hs.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY hs.name, hs.kind
+                           ORDER BY hs.path, hs.line, COALESCE(hs.container_name, ''), COALESCE(hs.visibility, '')
+                       ) AS rep_rank
+                FROM hotspot_sites hs
+            ),
+            grouped AS (
+                SELECT hs.name, hs.kind, MAX(hs.ref_count) AS ref_count, COUNT(*) AS definition_sites
+                FROM ranked_sites hs
+                GROUP BY hs.name, hs.kind
+            )
+            SELECT g.name, g.kind, g.ref_count, g.definition_sites,
+                   rep.path, rep.lang, rep.line, rep.visibility, rep.container_name,
+                   (
+                       SELECT GROUP_CONCAT(path, char(10))
+                       FROM (
+                           SELECT DISTINCT hs2.path AS path
+                           FROM ranked_sites hs2
+                           WHERE hs2.name = g.name
+                             AND hs2.kind = g.kind
+                           ORDER BY path
+                       )
+                   ) AS grouped_paths
+            FROM grouped g
+            JOIN ranked_sites rep
+              ON rep.name = g.name
+             AND rep.kind = g.kind
+             AND rep.rep_rank = 1
+            ORDER BY g.ref_count DESC, g.name, g.kind
+            LIMIT @limit";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@limit", limit);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        else
+        {
+            for (int i = 0; i < graphLangs.Count; i++)
+                cmd.Parameters.AddWithValue($"@gl{i}", graphLangs[i]);
+        }
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var results = new List<GroupedHotspotResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var paths = GetNullableString(reader, 9)?
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList() ?? [];
+            results.Add(new GroupedHotspotResult
+            {
+                Symbol = new SymbolResult
+                {
+                    Name = reader.GetString(0),
+                    Kind = reader.GetString(1),
+                    Path = reader.GetString(4),
+                    Lang = GetNullableString(reader, 5),
+                    Line = reader.GetInt32(6),
+                    Visibility = GetNullableString(reader, 7),
+                    ContainerName = GetNullableString(reader, 8),
+                },
+                ReferenceCount = reader.GetInt32(2),
+                DefinitionSites = reader.GetInt32(3),
+                Paths = paths,
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
     /// Find symbols that have no matching references in the reference table (potential dead code).
     /// Only meaningful for graph-supported languages — unsupported languages are excluded by default.
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。

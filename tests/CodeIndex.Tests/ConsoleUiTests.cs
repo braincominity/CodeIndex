@@ -54,8 +54,12 @@ public class ConsoleUiTests
         Assert.Contains("Note: if a string value itself starts with '--', pass it as --opt=<value>", output);
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
+        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)", output);
+        Assert.Contains("--group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line", output);
         Assert.Contains("cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search", output);
+        Assert.Contains("cdidx hotspots --group-by-name --exclude-tests", output);
+        Assert.Contains("Collapse same-name hotspots across files", output);
         Assert.Contains("cdidx symbols Run --exact-name                Exact symbol-name match", output);
         Assert.Contains("backfill-fold", output);
         Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);
@@ -132,8 +136,10 @@ public class ConsoleUiTests
                 var output = writer.ToString();
                 var exactSubstringToken = shell == "fish" ? "exact-substring" : "--exact-substring";
                 var exactNameToken = shell == "fish" ? "exact-name" : "--exact-name";
+                var groupByNameToken = shell == "fish" ? "group-by-name" : "--group-by-name";
                 Assert.Contains(exactSubstringToken, output);
                 Assert.Contains(exactNameToken, output);
+                Assert.Contains(groupByNameToken, output);
                 if (shell is "bash" or "zsh")
                 {
                     // Should contain dynamically generated languages, including newly added ones
@@ -142,6 +148,36 @@ public class ConsoleUiTests
                     Assert.Contains("graphql", output);
                     Assert.Contains("protobuf", output);
                 }
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("bash", "if [ \"$cmd\" = \"hotspots\" ]", "--group-by-name", "--exact-name")]
+    [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows across files]", "--exact-name[Exact symbol-name equality]")]
+    public void PrintCompletions_BashAndZshScopeGroupByNameToHotspots(string shell, string hotspotsBranchMarker, string groupedFlagToken, string genericExactNameToken)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions(shell));
+                var output = writer.ToString();
+                Assert.Contains(hotspotsBranchMarker, output);
+                Assert.Contains(groupedFlagToken, output);
+
+                var hotspotsIndex = output.IndexOf(hotspotsBranchMarker, StringComparison.Ordinal);
+                var genericIndex = output.LastIndexOf(genericExactNameToken, StringComparison.Ordinal);
+                Assert.True(hotspotsIndex >= 0);
+                Assert.True(genericIndex > hotspotsIndex);
+                Assert.DoesNotContain("--group-by-name --exact-name", output, StringComparison.Ordinal);
             }
             finally
             {
@@ -169,6 +205,8 @@ public class ConsoleUiTests
                 Assert.Contains("-l before -r -d 'Context lines before'", output);
                 Assert.Contains("-l after -r -d 'Context lines after'", output);
                 Assert.Contains("-l exact -d 'Exact match'", output);
+                Assert.Contains("__fish_seen_subcommand_from hotspots", output);
+                Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
             }
             finally
             {

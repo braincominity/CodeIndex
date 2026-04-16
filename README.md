@@ -427,6 +427,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `hotspots`, `unused`, `validate` | Filter by kind. `definition` / `symbols` / `hotspots` / `unused` use symbol kinds (`function`, `class`, `struct`, `interface`, `enum`, `property`, `event`, `delegate`, `namespace`, `import`); `references` / `callers` / `callees` use reference kinds (`call`, `instantiate`, `subscribe`), and omitting `--kind` keeps all indexed reference kinds visible while collapsing identical constructor `call` + `instantiate` rows at one physical site; `validate` uses issue kinds such as `bom` |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | Return only the result count (with `--json`: a single count object; commands that expose file counts add `files`) |
+| `--group-by-name` | `hotspots` | Collapse rows that share the same `(name, kind)` across files into one representative result while preserving `definition_sites` / `paths` metadata in JSON |
 | `--start <line>` | `excerpt` | Start line for excerpt reconstruction |
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match |
@@ -1284,6 +1285,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `hotspots`, `unused`, `validate` | 種別でフィルタ。`definition` / `symbols` / `hotspots` / `unused` は symbol kind（`function`、`class`、`struct`、`interface`、`enum`、`property`、`event`、`delegate`、`namespace`、`import`）、`references` / `callers` / `callees` は reference kind（`call`、`instantiate`、`subscribe`）を使い、`--kind` 未指定時は全 reference kind を表示したまま同じ物理位置にある constructor の `call` + `instantiate` 重複行を集約する。`validate` は `bom` などの issue kind を使う |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | 結果のカウントだけを返す（`--json` 併用時は単一の count オブジェクト。files 件数を出すコマンドは `files` も返す） |
+| `--group-by-name` | `hotspots` | ファイルをまたいで同じ `(name, kind)` を共有する行を代表1件に集約し、JSON では `definition_sites` / `paths` metadata を保持したまま返す |
 | `--start <line>` | `excerpt` | 抜粋再構成の開始行 |
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数 |

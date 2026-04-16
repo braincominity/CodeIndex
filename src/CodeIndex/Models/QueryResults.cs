@@ -41,6 +41,14 @@ public class UnusedSymbolResult : SymbolResult
     public string UnusedReason { get; set; } = string.Empty;
 }
 
+public class GroupedHotspotResult
+{
+    public SymbolResult Symbol { get; set; } = new();
+    public int ReferenceCount { get; set; }
+    public int DefinitionSites { get; set; }
+    public List<string> Paths { get; set; } = [];
+}
+
 public class FileResult
 {
     public string Path { get; set; } = string.Empty;
