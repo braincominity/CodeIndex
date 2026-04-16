@@ -1870,7 +1870,13 @@ public static class SymbolExtractor
             return false;
 
         var ch = sanitizedLine[index];
-        if (ch != '#' && ch != '*' && ch != '[' && !IsJavaScriptTypeScriptIdentifierStart(ch))
+        if (ch != '#'
+            && ch != '*'
+            && ch != '['
+            && ch != '\''
+            && ch != '"'
+            && !char.IsDigit(ch)
+            && !IsJavaScriptTypeScriptIdentifierStart(ch))
             return false;
 
         return index == 0 || !IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index - 1]);
@@ -1902,7 +1908,7 @@ public static class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.SingleQuote)
             {
-                sanitized[i] = ' ';
+                sanitized[i] = ch == '\'' ? '\'' : ' ';
 
                 if (state.EscapeNext)
                 {
@@ -1927,7 +1933,7 @@ public static class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.DoubleQuote)
             {
-                sanitized[i] = ' ';
+                sanitized[i] = ch == '"' ? '"' : ' ';
 
                 if (state.EscapeNext)
                 {
@@ -1952,7 +1958,7 @@ public static class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.TemplateString)
             {
-                sanitized[i] = ' ';
+                sanitized[i] = ch == '`' ? '`' : ' ';
 
                 if (state.EscapeNext)
                 {
@@ -2016,7 +2022,7 @@ public static class SymbolExtractor
 
             if (ch == '\'')
             {
-                sanitized[i] = ' ';
+                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.SingleQuote, EscapeNext = false };
                 i++;
                 continue;
@@ -2024,7 +2030,7 @@ public static class SymbolExtractor
 
             if (ch == '"')
             {
-                sanitized[i] = ' ';
+                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.DoubleQuote, EscapeNext = false };
                 i++;
                 continue;
@@ -2032,7 +2038,7 @@ public static class SymbolExtractor
 
             if (ch == '`')
             {
-                sanitized[i] = ' ';
+                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.TemplateString, EscapeNext = false };
                 i++;
                 continue;
@@ -2941,15 +2947,10 @@ public static class SymbolExtractor
                             continue;
                         }
 
-                        if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                        if (TrySkipTypeScriptTypeToken(sanitizedLine, ref index, out var typeToken))
                         {
-                            var returnTokenStart = index;
-                            index++;
-                            while (index < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index]))
-                                index++;
-
                             sawReturnTypeToken = true;
-                            previousReturnToken = sanitizedLine[returnTokenStart..index];
+                            previousReturnToken = typeToken;
                             continue;
                         }
 
@@ -3051,6 +3052,87 @@ public static class SymbolExtractor
     private static bool IsJavaScriptTypeScriptIdentifierPart(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_' || ch == '$';
 
+    private static bool TrySkipTypeScriptTypeToken(string sanitizedLine, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= sanitizedLine.Length)
+            return false;
+
+        return TryReadJavaScriptTypeScriptQuotedLiteralToken(sanitizedLine, ref index, out token)
+            || TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref index, out token)
+            || TryReadJavaScriptTypeScriptIdentifierToken(sanitizedLine, ref index, out token);
+    }
+
+    private static bool TryReadJavaScriptTypeScriptIdentifierToken(string input, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= input.Length || !IsJavaScriptTypeScriptIdentifierStart(input[index]))
+            return false;
+
+        var tokenStart = index;
+        index++;
+        while (index < input.Length && IsJavaScriptTypeScriptIdentifierPart(input[index]))
+            index++;
+
+        token = input[tokenStart..index];
+        return true;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptQuotedLiteralToken(string input, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= input.Length || input[index] is not ('\'' or '"' or '`'))
+            return false;
+
+        var delimiter = input[index];
+        var tokenStart = index;
+        index++;
+        while (index < input.Length)
+        {
+            if (input[index] == delimiter)
+            {
+                index++;
+                token = input[tokenStart..index];
+                return true;
+            }
+
+            index++;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadJavaScriptTypeScriptNumericLiteralToken(string input, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= input.Length || !char.IsDigit(input[index]))
+            return false;
+
+        var tokenStart = index;
+        if (input[index] == '0' && index + 1 < input.Length && input[index + 1] is 'x' or 'X' or 'o' or 'O' or 'b' or 'B')
+        {
+            index += 2;
+            while (index < input.Length && IsJavaScriptTypeScriptNumericLiteralPart(input[index], allowDecimalPoint: false))
+                index++;
+        }
+        else
+        {
+            while (index < input.Length && IsJavaScriptTypeScriptNumericLiteralPart(input[index], allowDecimalPoint: true))
+                index++;
+        }
+
+        token = input[tokenStart..index];
+        return true;
+    }
+
+    private static bool IsJavaScriptTypeScriptNumericLiteralPart(char ch, bool allowDecimalPoint)
+    {
+        if (char.IsLetterOrDigit(ch) || ch == '_')
+            return true;
+
+        return allowDecimalPoint && ch == '.';
+    }
+
     private static bool TryReadJavaScriptTypeScriptMethodToken(string sanitizedLine, ref int index, out string token)
     {
         token = string.Empty;
@@ -3074,6 +3156,12 @@ public static class SymbolExtractor
             return false;
 
         var tokenStart = index;
+        if (TryReadJavaScriptTypeScriptQuotedLiteralToken(sanitizedLine, ref index, out name)
+            || TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref index, out name))
+        {
+            return true;
+        }
+
         if (sanitizedLine[index] == '[')
         {
             var bracketDepth = 0;
@@ -3171,6 +3259,46 @@ public static class SymbolExtractor
         return TryReadJavaScriptTypeScriptSourceMethodName(line, ref index, out token);
     }
 
+    private static bool TryReadJavaScriptTypeScriptSourceQuotedLiteralToken(string line, ref int index, out string token)
+    {
+        token = string.Empty;
+        if (index >= line.Length || line[index] is not ('\'' or '"' or '`'))
+            return false;
+
+        var delimiter = line[index];
+        var tokenStart = index;
+        var escapeNext = false;
+        index++;
+        while (index < line.Length)
+        {
+            var ch = line[index];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                index++;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escapeNext = true;
+                index++;
+                continue;
+            }
+
+            if (ch == delimiter)
+            {
+                index++;
+                token = line[tokenStart..index];
+                return true;
+            }
+
+            index++;
+        }
+
+        return false;
+    }
+
     private static bool TryReadJavaScriptTypeScriptSourceMethodName(string line, ref int index, out string name)
     {
         name = string.Empty;
@@ -3178,6 +3306,12 @@ public static class SymbolExtractor
             return false;
 
         var tokenStart = index;
+        if (TryReadJavaScriptTypeScriptSourceQuotedLiteralToken(line, ref index, out name)
+            || TryReadJavaScriptTypeScriptNumericLiteralToken(line, ref index, out name))
+        {
+            return true;
+        }
+
         if (line[index] == '[')
         {
             var bracketDepth = 0;
@@ -3315,7 +3449,13 @@ public static class SymbolExtractor
         while (index < sanitizedLine.Length)
         {
             var ch = sanitizedLine[index];
-            if (ch != '#' && ch != '*' && ch != '[' && !IsJavaScriptTypeScriptIdentifierStart(ch))
+            if (ch != '#'
+                && ch != '*'
+                && ch != '['
+                && ch != '\''
+                && ch != '"'
+                && !char.IsDigit(ch)
+                && !IsJavaScriptTypeScriptIdentifierStart(ch))
             {
                 index++;
                 continue;
