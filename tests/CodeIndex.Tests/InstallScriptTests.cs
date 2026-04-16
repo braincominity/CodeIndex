@@ -1305,6 +1305,77 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_MissingChecksumEntry_PrintsActionableError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "missing_checksum_target");
+        var payloadDir = Path.Combine(_tempRoot, "missing_checksum_payload");
+        var archivePath = Path.Combine(_tempRoot, "missing_checksum.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "missing_checksum.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.2.3"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            : > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            printf '%s  %s\n' deadbeef CodeIndex-linux-arm64.tar.gz > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Verifying checksum...", stdout);
+        Assert.DoesNotContain("Installed cdidx", stdout);
+        Assert.Contains("Checksum for CodeIndex-linux-x64.tar.gz not found in sha256sums.txt.", stderr);
+    }
+
+    [Fact]
     public void CheckExisting_DifferentVersion_UsesNeutralSwitchingWording()
     {
         if (OperatingSystem.IsWindows())

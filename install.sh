@@ -435,7 +435,7 @@ download_and_install() {
     # Verify checksum / チェックサム検証
     info "Verifying checksum..."
     local expected_checksum
-    expected_checksum="$(grep "$archive_name" "${tmpdir}/sha256sums.txt" | awk '{print $1}')"
+    expected_checksum="$(awk -v name="$archive_name" '$2 == name { print $1; exit }' "${tmpdir}/sha256sums.txt")"
 
     if [ -z "$expected_checksum" ]; then
         error "Checksum for $archive_name not found in sha256sums.txt."
