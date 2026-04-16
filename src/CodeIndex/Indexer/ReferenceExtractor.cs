@@ -19,7 +19,7 @@ public static class ReferenceExtractor
         "zig", "css"
     ];
 
-    private static readonly HashSet<string> IgnoredCallNames = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // Control flow / 制御フロー
         "if", "else", "for", "foreach", "while", "switch", "catch", "lock", "do", "try", "when",
@@ -28,44 +28,73 @@ public static class ReferenceExtractor
         // Type/member keywords / 型・メンバーキーワード
         "class", "struct", "record", "interface", "enum", "delegate", "event", "namespace",
         "def", "function", "func",
+    };
+
+    private static readonly Dictionary<string, HashSet<string>> LanguageSpecificIgnoredCallNames = new(StringComparer.Ordinal)
+    {
         // C# contextual keywords and common false positives / C# 文脈キーワードとよくある偽陽性
-        "is", "as", "in", "var", "base", "this", "value", "get", "set", "init", "where",
-        "from", "select", "orderby", "group", "into", "join", "let", "on", "equals",
-        "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
+        ["csharp"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "is", "as", "in", "var", "base", "this", "value", "get", "set", "init", "where",
+            "from", "select", "orderby", "group", "into", "join", "let", "on", "equals",
+            "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
+        },
         // Java contextual keywords / Java 文脈キーワード
-        "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
+        ["java"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
+        },
         // F# contextual keywords / F# 文脈キーワード
-        "match", "with", "member", "override", "abstract", "mutable", "rec", "fun", "open",
-        "module", "type", "of", "then", "elif", "done", "begin", "end", "do",
-        // Shell built-in commands / Shell 組み込みコマンド
-        "echo", "exit", "cd", "set", "unset", "export", "source", "eval", "exec",
-        "test", "read", "shift", "trap", "local", "declare", "readonly",
+        ["fsharp"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "match", "with", "member", "override", "abstract", "mutable", "rec", "fun", "open",
+            "module", "type", "of", "then", "elif", "done", "begin", "end",
+        },
         // SQL keywords (uppercase only to avoid collisions with other languages)
         // SQL キーワード（他言語との衝突を避けるため大文字のみ）
-        "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "JOIN", "INTO",
-        "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "OFFSET", "UNION",
-        "EXISTS", "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE",
-        "AS", "ON", "AND", "OR", "NOT", "NULL", "IN", "IS",
-        "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "IF",
+        ["sql"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "JOIN", "INTO",
+            "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "OFFSET", "UNION",
+            "EXISTS", "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE",
+            "AS", "ON", "AND", "OR", "NOT", "NULL", "IN", "IS",
+            "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "IF",
+        },
         // R keywords / R キーワード
-        "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
-        "invisible", "tryCatch", "withCallingHandlers", "next", "break", "repeat",
+        ["r"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "library", "cat", "paste", "paste0", "sprintf", "stop", "warning", "message",
+            "invisible", "tryCatch", "withCallingHandlers", "next", "break", "repeat",
+        },
         // PowerShell keywords / PowerShell キーワード
-        "param", "begin", "process", "Write", "trap", "finally", "elseif",
+        ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "param", "begin", "process", "Write", "trap", "finally", "elseif",
+        },
         // Haskell keywords / Haskell キーワード
-        "data", "newtype", "instance", "deriving", "infixl", "infixr", "infix",
-        "qualified", "hiding", "forall", "Just", "Nothing", "Left", "Right", "True", "False",
-        "putStrLn", "putStr", "print",
+        ["haskell"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "data", "newtype", "instance", "deriving", "infixl", "infixr", "infix",
+            "qualified", "hiding", "forall", "Just", "Nothing", "Left", "Right", "True", "False",
+            "putStrLn", "putStr", "print",
+        },
         // Gradle/Groovy keywords / Gradle/Groovy キーワード
-        "apply", "plugins", "dependencies", "repositories", "allprojects", "subprojects",
-        "task", "buildscript", "ext", "group", "version", "description",
+        ["gradle"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "apply", "plugins", "dependencies", "repositories", "allprojects", "subprojects",
+            "task", "buildscript", "ext", "group", "version", "description",
+        },
         // Terraform keywords / Terraform キーワード
-        "resource", "data", "variable", "output", "locals", "module", "provider",
-        "terraform", "required_providers", "backend",
+        ["terraform"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "resource", "data", "variable", "output", "locals", "module", "provider",
+            "terraform", "required_providers", "backend",
+        },
         // Makefile keywords / Makefile キーワード
-        "all", "clean", "install", "build", "run", "help",
-        // Other languages / 他言語
-        "require", "import", "include", "raise", "lambda",
+        ["makefile"] = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "all", "clean", "install", "build", "run", "help",
+        },
     };
 
     private static readonly Regex StringLiteralRegex = new(
@@ -156,7 +185,7 @@ public static class ReferenceExtractor
             foreach (Match match in CallRegex.Matches(preparedLine))
             {
                 var name = match.Groups["name"].Value;
-                if (IgnoredCallNames.Contains(name))
+                if (IsIgnoredCallName(language, name))
                     continue;
                 if (definitionNames != null && definitionNames.Contains(name))
                     continue;
@@ -244,6 +273,15 @@ public static class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool IsIgnoredCallName(string language, string name)
+    {
+        if (SharedIgnoredCallNames.Contains(name))
+            return true;
+
+        return LanguageSpecificIgnoredCallNames.TryGetValue(language, out var languageSpecificIgnoredNames)
+            && languageSpecificIgnoredNames.Contains(name);
     }
 
     private static bool UsesHashComments(string lang) =>

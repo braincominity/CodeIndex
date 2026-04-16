@@ -227,6 +227,89 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonLegitimateCalls_AreNotDroppedByOtherLanguageKeywordLists()
+    {
+        const string content = """
+            def caller():
+                run()
+                build()
+                install()
+                clean()
+                help()
+                print()
+                require()
+                notexcluded()
+                apply()
+                task()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var names = references.Select(reference => reference.SymbolName).ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("run", names);
+        Assert.Contains("build", names);
+        Assert.Contains("install", names);
+        Assert.Contains("clean", names);
+        Assert.Contains("help", names);
+        Assert.Contains("print", names);
+        Assert.Contains("require", names);
+        Assert.Contains("notexcluded", names);
+        Assert.Contains("apply", names);
+        Assert.Contains("task", names);
+        Assert.Equal(10, references.Count(reference => reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_JavaScriptRequireCall_IsNotDropped()
+    {
+        const string content = """
+            function load() {
+                require("fs");
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_RubyRequireCall_IsNotDropped()
+    {
+        const string content = """
+            def load
+              require("json")
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_CsharpRunCall_IsNotDroppedByMakefileKeywordList()
+    {
+        const string content = """
+            public class Worker
+            {
+                public void Execute(Task task)
+                {
+                    task.Run();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Run" && reference.ContainerName == "Execute");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
