@@ -460,6 +460,9 @@ public static class SymbolExtractor
 
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
+        var csharpSwitchExpressionLines = lang == "csharp"
+            ? FindCSharpSwitchExpressionLines(structuralLines)
+            : null;
         var symbols = new List<SymbolRecord>();
 
         for (int i = 0; i < lines.Length; i++)
@@ -471,6 +474,9 @@ public static class SymbolExtractor
             {
                 var match = pattern.Regex.Match(matchLine);
                 if (!match.Success)
+                    continue;
+
+                if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
                     continue;
 
                 var name = match.Groups["name"].Success
@@ -733,6 +739,127 @@ public static class SymbolExtractor
         }
 
         return cursor < line.Length ? line[cursor..] : line;
+    }
+
+    private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        string matchLine,
+        bool[]? csharpSwitchExpressionLines,
+        int lineIndex) =>
+        lang == "csharp"
+        && pattern.Kind == "property"
+        && csharpSwitchExpressionLines != null
+        && csharpSwitchExpressionLines[lineIndex]
+        && matchLine.Contains("=>", StringComparison.Ordinal);
+
+    private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
+    {
+        var switchExpressionLines = new bool[structuralLines.Length];
+        var braceKinds = new Stack<bool>();
+        var activeSwitchExpressionDepth = 0;
+        var pendingSwitchExpression = 0;
+        var pendingSwitchKeyword = false;
+        var insideBlockComment = false;
+
+        for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            if (activeSwitchExpressionDepth > 0)
+                switchExpressionLines[lineIndex] = true;
+
+            var line = structuralLines[lineIndex];
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                if (insideBlockComment)
+                {
+                    if (cursor + 1 < line.Length && line[cursor] == '*' && line[cursor + 1] == '/')
+                    {
+                        insideBlockComment = false;
+                        cursor++;
+                    }
+
+                    continue;
+                }
+
+                if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '/')
+                    break;
+
+                if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '*')
+                {
+                    insideBlockComment = true;
+                    cursor++;
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(line[cursor]))
+                    continue;
+
+                if (pendingSwitchKeyword)
+                {
+                    if (line[cursor] == '(')
+                    {
+                        pendingSwitchKeyword = false;
+                    }
+                    else if (line[cursor] == '{')
+                    {
+                        pendingSwitchExpression++;
+                        pendingSwitchKeyword = false;
+                    }
+                    else
+                    {
+                        pendingSwitchKeyword = false;
+                    }
+                }
+
+                if (IsCSharpKeywordAt(line, cursor, "switch"))
+                {
+                    pendingSwitchKeyword = true;
+                    cursor += "switch".Length - 1;
+                    continue;
+                }
+
+                if (line[cursor] == '{')
+                {
+                    var startsSwitchExpression = pendingSwitchExpression > 0;
+                    braceKinds.Push(startsSwitchExpression);
+                    if (startsSwitchExpression)
+                    {
+                        pendingSwitchExpression--;
+                        activeSwitchExpressionDepth++;
+                    }
+
+                    continue;
+                }
+
+                if (line[cursor] == '}' && braceKinds.Count > 0)
+                {
+                    if (braceKinds.Pop())
+                        activeSwitchExpressionDepth--;
+                }
+            }
+        }
+
+        return switchExpressionLines;
+    }
+
+    private static bool IsCSharpKeywordAt(string line, int index, string keyword)
+    {
+        if (index < 0 || index + keyword.Length > line.Length)
+            return false;
+
+        if (!line.AsSpan(index, keyword.Length).SequenceEqual(keyword))
+            return false;
+
+        var previous = index > 0 ? line[index - 1] : '\0';
+        if (previous == '@' || previous == '_' || char.IsLetterOrDigit(previous))
+            return false;
+
+        var nextIndex = index + keyword.Length;
+        if (nextIndex >= line.Length)
+            return true;
+
+        var next = line[nextIndex];
+        return next != '_' && !char.IsLetterOrDigit(next);
     }
 
     private static void AssignContainers(List<SymbolRecord> symbols)

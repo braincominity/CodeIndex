@@ -364,6 +364,43 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SwitchExpressionArms_DoNotProducePhantomProperties()
+    {
+        var content = """
+            public class Matcher
+            {
+                public string Describe(object x) => x switch
+                {
+                    int n when n > 0 => "pos",
+                    int neg => "non-pos",
+                    string text => text,
+                    double d => "double",
+                    List<string> list => "list",
+                    _ => "other",
+                };
+
+                public int Count(int y) => y switch
+                {
+                    > 0 => 1,
+                    0 => 0,
+                    _ => -1,
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Matcher");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Describe");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Count");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.DoesNotContain(symbols, s => s.Name == "neg");
+        Assert.DoesNotContain(symbols, s => s.Name == "text");
+        Assert.DoesNotContain(symbols, s => s.Name == "d");
+        Assert.DoesNotContain(symbols, s => s.Name == "list");
+        Assert.DoesNotContain(symbols, s => s.Name == "0");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExplicitInterfaceImpl()
     {
         var content = "public class MyClass : IDisposable, IComparable<MyClass>\n{\n    void IDisposable.Dispose()\n    {\n    }\n    int IComparable<MyClass>.CompareTo(MyClass other) => 0;\n}";
