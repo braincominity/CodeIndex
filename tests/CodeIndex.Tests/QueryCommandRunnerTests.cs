@@ -2532,8 +2532,8 @@ public class QueryCommandRunnerTests
                 {
                     public Money(decimal amount) { }
                     public static explicit operator Money(decimal d) => new();
-                    public static explicit operator Dictionary<string, int>(Money m) => new();
-                    public static explicit operator (int whole, int cents)(Money m) => (0, 0);
+                    public static explicit operator Dictionary<string,int>(Money m) => new();
+                    public static explicit operator (int whole,int cents)(Money m) => (0, 0);
                 }
                 """);
 

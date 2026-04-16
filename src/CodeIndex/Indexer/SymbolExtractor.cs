@@ -246,7 +246,7 @@ public static class SymbolExtractor
             new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?<conversionKind>implicit|explicit)\s+operator\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern
             // 演算子オーバーロード — メソッドパターンより前に配置
-            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?:checked\s+)?\S+\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+.+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
             // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
@@ -5257,9 +5257,10 @@ public static class SymbolExtractor
         if (!TryReadCSharpTypeUntilParameterList(matchLine, cursor, out var targetType))
             return false;
 
+        var normalizedTargetType = NormalizeCSharpTypeDisplayName(targetType);
         name = hasChecked
-            ? $"{conversionKind} operator checked {targetType}"
-            : $"{conversionKind} operator {targetType}";
+            ? $"{conversionKind} operator checked {normalizedTargetType}"
+            : $"{conversionKind} operator {normalizedTargetType}";
         return true;
     }
 
@@ -5347,9 +5348,24 @@ public static class SymbolExtractor
         return nextIndex >= line.Length || char.IsWhiteSpace(line[nextIndex]);
     }
 
+    private static string NormalizeCSharpTypeDisplayName(string typeName)
+    {
+        var normalized = CSharpTypeWhitespaceRegex.Replace(typeName.Trim(), " ");
+        normalized = CSharpTypeDoubleColonWhitespaceRegex.Replace(normalized, "::");
+        normalized = CSharpTypeDotWhitespaceRegex.Replace(normalized, ".");
+        normalized = CSharpTypeBracketWhitespaceRegex.Replace(normalized, "$1");
+        normalized = CSharpTypeCommaWhitespaceRegex.Replace(normalized, ", ");
+        return normalized;
+    }
+
     private static readonly Regex ComplexityRegex = new(
         @"\b(?:if|else\s+if|elif|elsif|elseif|case|catch|except|when|while|for|foreach|guard)\b|(?:\?\?|&&|\|\||[?:](?!=))",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeWhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeDoubleColonWhitespaceRegex = new(@"\s*::\s*", RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeDotWhitespaceRegex = new(@"\s*\.\s*", RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeBracketWhitespaceRegex = new(@"\s*([<>\[\]\(\)\?])\s*", RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeCommaWhitespaceRegex = new(@"\s*,\s*", RegexOptions.Compiled);
 
     /// <summary>
     /// Estimate cyclomatic complexity of a code body using keyword counting.
