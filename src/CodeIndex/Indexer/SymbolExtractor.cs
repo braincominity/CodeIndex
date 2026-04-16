@@ -394,12 +394,22 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@mixin\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @keyframes / キーフレーム
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            // @font-face / フォントフェイス
+            new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled), BodyStyle.Brace),
+            // :root selector / :root セレクタ
+            new("class",    new Regex(@"^\s*:(?<name>root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
+            new("class",    new Regex(@"^\s*(?<name>(?:[#.]?[\w-]+|\*)(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
             new("class",    new Regex(@"^\.(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS ID selector at top level / トップレベルのIDセレクタ
             new("function", new Regex(@"^#(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // CSS custom property declaration / CSS カスタムプロパティ宣言
+            new("property", new Regex(@"^\s*--(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             // SCSS $variable declaration / SCSS 変数宣言
             new("property", new Regex(@"^\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
+            // SCSS placeholder selector / SCSS プレースホルダーセレクタ
+            new("class",    new Regex(@"^\s*%(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
         ["powershell"] =
         [
@@ -491,6 +501,9 @@ public static class SymbolExtractor
                 var kind = pattern.Kind;
                 if (kind == "function" && lang == "python" && i > 0 && lines[i - 1].TrimStart().StartsWith("@property"))
                     kind = "property";
+
+                if (lang == "css")
+                    name = ResolveCssSymbolName(matchLine, name, lines, i, endLine);
 
                 symbols.Add(new SymbolRecord
                 {
@@ -739,6 +752,49 @@ public static class SymbolExtractor
         }
 
         return cursor < line.Length ? line[cursor..] : line;
+    }
+
+    private static string ResolveCssSymbolName(string matchLine, string name, string[] lines, int startIndex, int endLine)
+    {
+        if (!matchLine.TrimStart().StartsWith("@font-face", StringComparison.Ordinal))
+            return name;
+
+        return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)
+            ? fontFamily
+            : name;
+    }
+
+    private static bool TryGetCssFontFaceFamilyName(string[] lines, int startIndex, int endLine, out string fontFamily)
+    {
+        fontFamily = string.Empty;
+        var lastLineIndex = Math.Min(lines.Length, Math.Max(startIndex + 1, endLine)) - 1;
+
+        for (int i = startIndex + 1; i <= lastLineIndex; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (!trimmed.StartsWith("font-family", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var colonIndex = trimmed.IndexOf(':');
+            var semicolonIndex = trimmed.LastIndexOf(';');
+            if (colonIndex < 0 || semicolonIndex <= colonIndex)
+                continue;
+
+            var rawName = trimmed[(colonIndex + 1)..semicolonIndex].Trim();
+            if (rawName.Length == 0)
+                continue;
+
+            if ((rawName.StartsWith('\'') && rawName.EndsWith('\'')) || (rawName.StartsWith('"') && rawName.EndsWith('"')))
+                rawName = rawName[1..^1].Trim();
+
+            if (rawName.Length == 0)
+                continue;
+
+            fontFamily = rawName;
+            return true;
+        }
+
+        return false;
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(

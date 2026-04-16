@@ -1444,6 +1444,55 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSS_DetectsCustomPropertiesFontFacesAndSelectorVariants()
+    {
+        var content = """
+            :root {
+              --main-color: #333;
+              --padding: 10px;
+              --font-stack: sans-serif;
+            }
+
+            @font-face {
+              font-family: 'My Font';
+              src: url('myfont.woff2');
+            }
+
+            a:hover {
+              text-decoration: underline;
+            }
+
+            a::before {
+              content: "→";
+            }
+
+            input[type="text"] {
+              border: 1px solid;
+            }
+
+            .btn:hover {
+              color: red;
+            }
+
+            %button-base {
+              padding: 5px 10px;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "root");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "main-color");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "padding");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "font-stack");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "My Font");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a:hover");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a::before");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "input[type=\"text\"]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn:hover");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "button-base");
+    }
+
+    [Fact]
     public void Extract_PowerShell_DetectsSymbols()
     {
         var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";
