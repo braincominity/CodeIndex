@@ -1067,10 +1067,11 @@ public static class QueryCommandRunner
 
     /// <summary>
     /// Heuristic: hint only when a non-trivial C# file has no type/namespace declarations and
-    /// its reconstructed content still contains file-scope executable code after skipping
-    /// imports, metadata-only attribute lines, comments, and preprocessor directives. This keeps
-    /// the note off common files such as GlobalUsings.cs and AssemblyInfo.cs while preserving
-    /// statement-only Program.cs files.
+    /// its reconstructed content still contains uncovered file-scope executable code after
+    /// skipping symbol-covered lines, imports, metadata-only attribute lines, comments, and
+    /// preprocessor directives. This keeps the note off common files such as GlobalUsings.cs,
+    /// AssemblyInfo.cs, and local-function-only files while preserving statement-only Program.cs
+    /// files.
     /// Tiny files (snippets, partials under ~20 lines) are excluded to avoid noise.
     /// ヒューリスティック: 20 行以上の C# ファイルで型/名前空間宣言が無く、かつ
     /// import 行、metadata-only 属性行、コメント、プリプロセッサ行を除いても
@@ -1091,11 +1092,26 @@ public static class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(content))
             return false;
 
+        var coveredLines = new bool[Math.Max(outline.TotalLines, 0) + 1];
+        foreach (var sym in outline.Symbols)
+        {
+            var startLine = sym.StartLine > 0 ? sym.StartLine : sym.Line;
+            var endLine = sym.EndLine >= startLine ? sym.EndLine : startLine;
+            startLine = Math.Max(1, startLine);
+            endLine = Math.Min(outline.TotalLines, endLine);
+            for (var lineNumber = startLine; lineNumber <= endLine; lineNumber++)
+                coveredLines[lineNumber] = true;
+        }
+
         var inBlockComment = false;
+        var currentLineNumber = 0;
         foreach (var rawLine in content.Split('\n'))
         {
+            currentLineNumber++;
             var line = rawLine.Trim();
             if (line.Length == 0)
+                continue;
+            if (currentLineNumber < coveredLines.Length && coveredLines[currentLineNumber])
                 continue;
 
             if (inBlockComment)

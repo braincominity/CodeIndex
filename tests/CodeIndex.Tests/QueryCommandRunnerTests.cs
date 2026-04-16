@@ -518,6 +518,61 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Human_CSharpLocalFunctionsOnlyFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_local_functions_only_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+
+                static int Sum(int left, int right)
+                {
+                    return left + right;
+                }
+
+                static int Diff(int left, int right)
+                {
+                    return left - right;
+                }
+
+                static int Mul(int left, int right)
+                {
+                    return left * right;
+                }
+
+                static int Div(int left, int right)
+                {
+                    return left / right;
+                }
+
+                static void Print(int value)
+                {
+                    Console.WriteLine(value);
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_Human_GlobalUsingsFile_DoesNotWriteTopLevelStatementsHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_global_usings_human");
