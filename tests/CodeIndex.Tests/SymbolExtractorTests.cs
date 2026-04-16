@@ -131,6 +131,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.Signature == "export const Service = class {");
     }
 
     [Fact]
@@ -275,6 +276,23 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMultilineParenthesizedDefaultExportClassSignature()
+    {
+        var content = """
+            export default
+            (
+                class {
+                    run() {}
+                }
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default" && s.Signature == "export default ( class {");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
     }
 
@@ -1257,6 +1275,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsMultilineParenthesizedDefaultExportClassSignature()
+    {
+        var content = """
+            export default
+            (
+                class {
+                    run(): void {}
+                }
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default" && s.Signature == "export default ( class {");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAnonymousAbstractDefaultExportClassMembers()
     {
         var content = """
@@ -1513,6 +1548,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsMultilineParenthesizedExportEqualsClassSignature()
+    {
+        var content = """
+            export =
+            (
+                class {
+                    run(): void {}
+                }
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default" && s.Signature == "export = ( class {");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "default");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsClassExpressionInsideNamespaceBlock()
     {
         var content = """
@@ -1545,6 +1597,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Foo");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerName == "Service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.Signature == "export const Service = class {");
     }
 
     [Fact]

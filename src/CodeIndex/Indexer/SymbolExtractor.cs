@@ -1316,7 +1316,7 @@ public static class SymbolExtractor
                 EndLine = Math.Max(declarationStartIndex + 1, endLine),
                 BodyStartLine = bodyStartLine,
                 BodyEndLine = bodyEndLine,
-                Signature = BuildJavaScriptTypeScriptSyntheticClassSignature(lines, declarationStartIndex, declarationStartColumn, classTokenLineIndex, classTokenStartColumn, bodyEndLine, lang),
+                Signature = BuildJavaScriptTypeScriptSyntheticClassSignature(lines, declarationStartIndex, declarationStartColumn, classTokenLineIndex, classTokenStartColumn, bodyStartLine, bodyEndLine, lang),
                 Visibility = visibility,
             });
         }
@@ -1339,6 +1339,7 @@ public static class SymbolExtractor
         int declarationStartColumn,
         int classTokenLineIndex,
         int classTokenStartColumn,
+        int? bodyStartLine,
         int? bodyEndLine,
         string lang)
     {
@@ -1353,7 +1354,40 @@ public static class SymbolExtractor
                 return line[declarationStartColumn..(sameLineEndColumn + 1)].Trim();
         }
 
-        return line[declarationStartColumn..].Trim();
+        if (bodyStartLine == null)
+            return line[declarationStartColumn..].Trim();
+
+        var bodyStartIndex = bodyStartLine.Value - 1;
+        var bodyOpenBraceColumn = FindJavaScriptBodyOpenBraceIndex(lines, classTokenLineIndex, bodyStartIndex, lang, classTokenStartColumn);
+        if (bodyOpenBraceColumn < 0)
+            return line[declarationStartColumn..].Trim();
+
+        var signatureBuilder = new System.Text.StringBuilder();
+        for (int lineIndex = declarationStartIndex; lineIndex <= bodyStartIndex; lineIndex++)
+        {
+            var sourceLine = lines[lineIndex];
+            var startColumn = lineIndex == declarationStartIndex
+                ? Math.Min(declarationStartColumn, sourceLine.Length)
+                : 0;
+            var endExclusive = lineIndex == bodyStartIndex
+                ? Math.Min(bodyOpenBraceColumn + 1, sourceLine.Length)
+                : sourceLine.Length;
+            if (startColumn >= endExclusive)
+                continue;
+
+            var segment = sourceLine[startColumn..endExclusive].Trim();
+            if (segment.Length == 0)
+                continue;
+
+            if (signatureBuilder.Length > 0)
+                signatureBuilder.Append(' ');
+
+            signatureBuilder.Append(segment);
+        }
+
+        return signatureBuilder.Length > 0
+            ? signatureBuilder.ToString()
+            : line[declarationStartColumn..].Trim();
     }
 
     private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerName)
