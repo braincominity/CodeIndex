@@ -50,6 +50,7 @@ public static class SymbolExtractor
         String,
         Char,
         VerbatimString,
+        RawString,
         BlockComment,
     }
 
@@ -88,7 +89,8 @@ public static class SymbolExtractor
 
     private readonly record struct CSharpLexState(
         CSharpLexMode Mode = CSharpLexMode.Code,
-        bool EscapeNext = false);
+        bool EscapeNext = false,
+        int RawDelimiterLength = 0);
 
     private readonly record struct CSharpLexedLine(
         string SanitizedLine,
@@ -593,11 +595,18 @@ public static class SymbolExtractor
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
             : null;
         var symbols = new List<SymbolRecord>();
+        var csharpLexState = new CSharpLexState();
 
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            var matchLine = lang == "csharp" ? StripLeadingCSharpAttributeLists(line) : line;
+            var matchLine = line;
+            if (lang == "csharp")
+            {
+                var lexedLine = LexCSharpLine(line, csharpLexState);
+                csharpLexState = lexedLine.EndState;
+                matchLine = StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine);
+            }
             var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
             {
@@ -2835,6 +2844,24 @@ public static class SymbolExtractor
                 continue;
             }
 
+            if (state.Mode == CSharpLexMode.RawString)
+            {
+                sanitized[i] = ' ';
+                if (ch == '"' && HasCSharpQuoteRun(line, i, state.RawDelimiterLength))
+                {
+                    var quoteRunLength = GetCSharpQuoteRunLength(line, i);
+                    for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
+                        sanitized[i + j] = ' ';
+
+                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
+                    i += quoteRunLength;
+                    continue;
+                }
+
+                i++;
+                continue;
+            }
+
             if (ch == '/' && next == '/')
             {
                 while (i < line.Length)
@@ -2859,6 +2886,16 @@ public static class SymbolExtractor
             {
                 sanitized[i] = ch;
                 i++;
+                continue;
+            }
+
+            if (TryReadCSharpRawStringStart(line, i, out var rawPrefixLength, out var rawDelimiterLength))
+            {
+                for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < line.Length; j++)
+                    sanitized[i + j] = ' ';
+
+                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
+                i += rawPrefixLength + rawDelimiterLength;
                 continue;
             }
 
@@ -2921,6 +2958,39 @@ public static class SymbolExtractor
         }
 
         return new CSharpLexedLine(new string(sanitized), state);
+    }
+
+    private static bool TryReadCSharpRawStringStart(string line, int index, out int prefixLength, out int delimiterLength)
+    {
+        prefixLength = 0;
+        delimiterLength = 0;
+        var probe = index;
+
+        while (probe < line.Length && line[probe] == '$')
+        {
+            prefixLength++;
+            probe++;
+        }
+
+        delimiterLength = GetCSharpQuoteRunLength(line, probe);
+        return delimiterLength >= 3;
+    }
+
+    private static int GetCSharpQuoteRunLength(string line, int index)
+    {
+        var length = 0;
+        while (index + length < line.Length && line[index + length] == '"')
+            length++;
+
+        return length;
+    }
+
+    private static bool HasCSharpQuoteRun(string line, int index, int requiredLength)
+    {
+        if (requiredLength <= 0)
+            return false;
+
+        return GetCSharpQuoteRunLength(line, index) >= requiredLength;
     }
 
     private static bool CanStartJavaScriptRegexLiteral(JavaScriptLexState state)

@@ -3154,6 +3154,55 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotExtractSymbolsFromRawStringsVerbatimStringsOrComments()
+    {
+        var content = """"
+            public class RealExample
+            {
+                public const string RawFixture = """
+                    class Hidden
+                    {
+                        public void Fake()
+                        {
+                        }
+                    }
+                    """;
+
+                public const string VerbatimFixture = @"class AlsoHidden
+            {
+                public void FakeVerbatim()
+                {
+                }
+            }";
+
+                /*
+                class CommentHidden
+                {
+                    public void FakeComment()
+                    {
+                    }
+                }
+                */
+
+                public void Keep()
+                {
+                }
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RealExample");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Keep");
+        Assert.DoesNotContain(symbols, s => s.Name == "Hidden");
+        Assert.DoesNotContain(symbols, s => s.Name == "Fake");
+        Assert.DoesNotContain(symbols, s => s.Name == "AlsoHidden");
+        Assert.DoesNotContain(symbols, s => s.Name == "FakeVerbatim");
+        Assert.DoesNotContain(symbols, s => s.Name == "CommentHidden");
+        Assert.DoesNotContain(symbols, s => s.Name == "FakeComment");
+        Assert.Equal(1, symbols.Count(s => s.Kind == "class"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsNullableReturnTypeMethods()
     {
         var content = "public static class GitHelper\n{\n    public static string? ResolveGitCommonDir(string projectRoot)\n    {\n        return null;\n    }\n}";
