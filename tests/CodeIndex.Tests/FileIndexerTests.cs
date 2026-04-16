@@ -681,6 +681,31 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_RespectsGitignorePosixBracketCharacterClass()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:digit:]].py\n");
+            File.WriteAllText(Path.Combine(tempDir, "1.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "a.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsGitignoreNegatedBracketCharacterClassWithLeadingLiteralRightBracket()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

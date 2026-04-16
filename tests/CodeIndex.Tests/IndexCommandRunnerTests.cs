@@ -1598,6 +1598,40 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_FallsBackToFullScanWhenAncestorIgnoreFileChanges()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var ancestorIgnorePath = Path.Combine(repoRoot, ".gitignore");
+            File.WriteAllText(ancestorIgnorePath, "subproj/generated.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", ancestorIgnorePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithCommits_SubdirectoryProjectRoot_UsesRepositoryRelativePaths()
     {
         var repoRoot = CreateTempProject();

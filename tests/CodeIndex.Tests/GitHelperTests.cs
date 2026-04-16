@@ -298,8 +298,9 @@ public class GitHelperTests : IDisposable
         RunGitWithEnvironment(fakeHome, environment, "config", "--global", "core.ignorecase", "false");
 
         var resolved = GitHelper.ResolveIgnoreCase(nonRepoDir, environment);
+        var expected = ProbeDirectoryIgnoreCaseLikeProduction(nonRepoDir);
 
-        Assert.True(resolved);
+        Assert.Equal(expected, resolved);
     }
 
     private string CreateGitRepo()
@@ -353,6 +354,44 @@ public class GitHelperTests : IDisposable
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
 
         return stdout;
+    }
+
+    private static bool ProbeDirectoryIgnoreCaseLikeProduction(string path)
+    {
+        if (TryCreateCaseVariant(path, out var variant))
+            return Directory.Exists(variant);
+
+        var probePath = Path.Combine(path, $".cdidx_case_probe_test_{Guid.NewGuid():N}");
+        File.WriteAllText(probePath, string.Empty);
+        try
+        {
+            return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(probeVariant);
+        }
+        finally
+        {
+            if (File.Exists(probePath))
+                File.Delete(probePath);
+        }
+    }
+
+    private static bool TryCreateCaseVariant(string path, out string variant)
+    {
+        var chars = path.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            var ch = chars[i];
+            if (!char.IsLetter(ch))
+                continue;
+
+            chars[i] = char.IsUpper(ch)
+                ? char.ToLowerInvariant(ch)
+                : char.ToUpperInvariant(ch);
+            variant = new string(chars);
+            return true;
+        }
+
+        variant = path;
+        return false;
     }
 
     private static void DeleteDirectoryRobust(string path)

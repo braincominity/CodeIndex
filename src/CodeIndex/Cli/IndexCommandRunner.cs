@@ -108,8 +108,9 @@ public static class IndexCommandRunner
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
+                var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(options.ProjectPath, options.UpdateFiles);
                 var updatePaths = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json);
-                if (ContainsIgnoreFilePath(updatePaths))
+                if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
                 {
                     var scanResult = dryIndexer.ScanFilesDetailed();
                     dryCandidates = scanResult.Files;
@@ -552,6 +553,7 @@ public static class IndexCommandRunner
 
         if (options.UpdateFiles.Count > 0)
         {
+            relevantIgnoreFileChanged |= ContainsRelevantIgnoreFileUpdate(projectRoot, options.UpdateFiles);
             foreach (var relPath in NormalizeUpdateFileTargets(projectRoot, options.UpdateFiles, options.Json))
                 targetPaths.Add(relPath);
         }
@@ -1005,6 +1007,20 @@ public static class IndexCommandRunner
 
     private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
         => paths.Any(FileIndexer.IsIgnoreFilePath);
+
+    private static bool ContainsRelevantIgnoreFileUpdate(string projectRoot, IEnumerable<string> updateFiles)
+    {
+        foreach (var file in updateFiles)
+        {
+            var absolutePath = Path.IsPathRooted(file)
+                ? Path.GetFullPath(file)
+                : Path.GetFullPath(Path.Combine(projectRoot, file));
+            if (FileIndexer.IsIgnoreFilePath(absolutePath) && IsRelevantIgnoreFileForProjectRoot(projectRoot, absolutePath))
+                return true;
+        }
+
+        return false;
+    }
 
     private static IReadOnlyList<string> NormalizeCommitFileTargets(
         string projectRoot,

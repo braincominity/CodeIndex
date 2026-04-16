@@ -433,15 +433,7 @@ public class FileIndexer
                 pattern[contentStart] is { Value: ']', Escaped: false };
 
             var scanStart = allowLeadingRightBracket ? contentStart + 1 : contentStart;
-            var closingIndex = -1;
-            for (var i = scanStart; i < pattern.Count; i++)
-            {
-                if (pattern[i] is { Value: ']', Escaped: false })
-                {
-                    closingIndex = i;
-                    break;
-                }
-            }
+            var closingIndex = FindCharacterClassClosingIndex(pattern, scanStart);
 
             if (allowLeadingRightBracket && closingIndex < scanStart)
                 throw new ArgumentException("malformed character class");
@@ -475,6 +467,9 @@ public class FileIndexer
                     continue;
                 }
 
+                if (ch == '[' && TryAppendPosixCharacterClass(pattern, closingIndex, ref i, builder))
+                    continue;
+
                 if (ch is '\\' or '[' or ']')
                 {
                     builder.Append('\\');
@@ -489,6 +484,77 @@ public class FileIndexer
             index = closingIndex;
             return true;
         }
+
+        private static int FindCharacterClassClosingIndex(IReadOnlyList<PatternToken> pattern, int scanStart)
+        {
+            for (var i = scanStart; i < pattern.Count; i++)
+            {
+                if (pattern[i].Escaped)
+                    continue;
+
+                if (pattern[i].Value == '[' && TryFindPosixCharacterClassEnd(pattern, i, out var posixEnd))
+                {
+                    i = posixEnd;
+                    continue;
+                }
+
+                if (pattern[i].Value == ']')
+                    return i;
+            }
+
+            return -1;
+        }
+
+        private static bool TryAppendPosixCharacterClass(IReadOnlyList<PatternToken> pattern, int closingIndex, ref int index, StringBuilder builder)
+        {
+            if (!TryFindPosixCharacterClassEnd(pattern, index, out var posixEnd) || posixEnd >= closingIndex)
+                return false;
+
+            var nameChars = new StringBuilder();
+            for (var i = index + 2; i < posixEnd - 1; i++)
+                nameChars.Append(pattern[i].Value);
+
+            builder.Append(GetPosixCharacterClassPattern(nameChars.ToString()));
+            index = posixEnd;
+            return true;
+        }
+
+        private static bool TryFindPosixCharacterClassEnd(IReadOnlyList<PatternToken> pattern, int startIndex, out int endIndex)
+        {
+            endIndex = -1;
+            if (startIndex + 3 >= pattern.Count ||
+                pattern[startIndex] is not { Value: '[', Escaped: false } ||
+                pattern[startIndex + 1] is not { Value: ':', Escaped: false })
+            {
+                return false;
+            }
+
+            for (var i = startIndex + 2; i + 1 < pattern.Count; i++)
+            {
+                if (pattern[i] is { Value: ':', Escaped: false } &&
+                    pattern[i + 1] is { Value: ']', Escaped: false })
+                {
+                    endIndex = i + 1;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string GetPosixCharacterClassPattern(string className)
+            => className switch
+            {
+                "alnum" => @"\p{L}\p{Nd}",
+                "alpha" => @"\p{L}",
+                "blank" => " \t",
+                "digit" => @"\p{Nd}",
+                "lower" => @"\p{Ll}",
+                "space" => @"\s",
+                "upper" => @"\p{Lu}",
+                "xdigit" => "0-9A-Fa-f",
+                _ => throw new ArgumentException($"unsupported POSIX character class '{className}'"),
+            };
 
         private static string EscapeCharacterClassLiteral(char ch)
             => ch switch
