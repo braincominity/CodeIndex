@@ -1027,6 +1027,8 @@ public static class QueryCommandRunner
             }
             else
             {
+                var outlineContent = reader.GetExcerpt(filePath, 1, outline.TotalLines)?.Content;
+
                 Console.WriteLine($"# {outline.Path}  ({outline.Lang ?? "unknown"}, {outline.TotalLines} lines, {outline.SymbolCount} symbols)");
                 Console.WriteLine();
                 foreach (var sym in outline.Symbols)
@@ -1052,7 +1054,7 @@ public static class QueryCommandRunner
                 // （class / struct / interface / enum / namespace / record / delegate が一切無い）は、
                 // 実行本体が import と local function の間に書かれるため outline に現れない。
                 // 人間向け本体を汚さないよう、理由を短く stderr に出す。
-                if (LooksLikeCsharpTopLevelStatements(outline))
+                if (LooksLikeCsharpTopLevelStatements(outline, outlineContent))
                 {
                     Console.Error.WriteLine();
                     Console.Error.WriteLine("Note: no type/namespace declarations found; this file likely uses C# top-level statements.");
@@ -1064,16 +1066,17 @@ public static class QueryCommandRunner
     }
 
     /// <summary>
-    /// Heuristic: only hint when a non-trivial C# file has no type/namespace declarations
-    /// but does expose at least one file-scope function, which strongly suggests top-level
-    /// statements rather than metadata-only files such as GlobalUsings.cs or AssemblyInfo.cs.
+    /// Heuristic: hint only when a non-trivial C# file has no type/namespace declarations and
+    /// its reconstructed content still contains file-scope executable code after skipping
+    /// imports and metadata-only attribute lines. This keeps the note off common files such as
+    /// GlobalUsings.cs and AssemblyInfo.cs while preserving statement-only Program.cs files.
     /// Tiny files (snippets, partials under ~20 lines) are excluded to avoid noise.
-    /// ヒューリスティック: 20 行以上の C# ファイルで型/名前空間宣言が無く、さらに
-    /// file-scope function が少なくとも 1 つ見えているときだけトップレベルステートメント
-    /// 想定のヒントを出す。GlobalUsings.cs や AssemblyInfo.cs のような metadata-only
-    /// ファイルで誤検出しないため。小さい断片はノイズ回避のため除外。
+    /// ヒューリスティック: 20 行以上の C# ファイルで型/名前空間宣言が無く、かつ
+    /// import 行や metadata-only 属性行を除いても file-scope の実行コードが残る場合だけ
+    /// ヒントを出す。これにより GlobalUsings.cs や AssemblyInfo.cs の誤検出を避けつつ、
+    /// statement-only の Program.cs は拾い続ける。小さい断片はノイズ回避のため除外。
     /// </summary>
-    private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline)
+    private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline, string? content)
     {
         if (outline.Lang != "csharp") return false;
         if (outline.TotalLines < 20) return false;
@@ -1083,11 +1086,26 @@ public static class QueryCommandRunner
                 return false;
         }
 
-        return outline.Symbols.Any(sym =>
-            sym.Kind == "function"
-            && sym.ContainerName == null
-            && !((sym.Signature?.StartsWith("[assembly:", StringComparison.Ordinal) ?? false)
-                 || (sym.Signature?.StartsWith("[module:", StringComparison.Ordinal) ?? false)));
+        if (string.IsNullOrWhiteSpace(content))
+            return false;
+
+        foreach (var rawLine in content.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+            if (line.StartsWith("using ", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("global using ", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("[assembly:", StringComparison.Ordinal))
+                continue;
+            if (line.StartsWith("[module:", StringComparison.Ordinal))
+                continue;
+            return true;
+        }
+
+        return false;
     }
 
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)

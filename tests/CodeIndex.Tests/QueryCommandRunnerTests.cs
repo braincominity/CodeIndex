@@ -367,6 +367,55 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Human_CSharpStatementOnlyTopLevelFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_statement_only_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+
+                Console.WriteLine("boot");
+                Console.WriteLine("run");
+                Console.WriteLine("more");
+                Console.WriteLine("lines");
+                Console.WriteLine("to");
+                Console.WriteLine("cross");
+                Console.WriteLine("the");
+                Console.WriteLine("top-level");
+                Console.WriteLine("statement");
+                Console.WriteLine("threshold");
+                Console.WriteLine("without");
+                Console.WriteLine("declaring");
+                Console.WriteLine("types");
+                Console.WriteLine("or");
+                Console.WriteLine("namespaces");
+                Console.WriteLine("in");
+                Console.WriteLine("this");
+                Console.WriteLine("file");
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_Human_GlobalUsingsFile_DoesNotWriteTopLevelStatementsHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_global_usings_human");
