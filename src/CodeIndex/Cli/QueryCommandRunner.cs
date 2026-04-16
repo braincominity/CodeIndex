@@ -1383,14 +1383,6 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        // Opt-in aggregation: collapse rows that share the same (name, kind) across files.
-        // The hotspots SQL groups by f.path so same-named symbols in different files produce
-        // one row each with the same ref_count (counted by s.name). That's useful when you
-        // want every definition site, but noisy when you just want "which names are hot".
-        // 任意集約: (name, kind) が同じ行をファイル横断で1行に集約する。
-        // hotspots SQL は f.path でも GROUP BY するため、同名シンボルが別ファイルにあると、
-        // 同じ ref_count で 1 ファイル 1 行ずつ出力される。全定義サイトを列挙したい場合は有用だが、
-        // 「どの名前が hotspot か」を見たいだけなら冗長なので、フラグで畳み込める経路を用意する。
         bool groupByName = cmdArgs.Any(a => a == "--group-by-name");
 
         return WithDb(options.DbPath, reader =>
@@ -1426,56 +1418,40 @@ public static class QueryCommandRunner
 
             if (groupByName)
             {
-                // Group by (name, kind). Pick the highest-ref definition as the representative
-                // and carry the number of definition sites we collapsed so callers can see the
-                // multiplicity. ref_count is the same for every site (the JOIN is on name),
-                // so any representative is correct; we pick the largest for stability.
-                // (name, kind) でグループ化。ref 数は全サイト同一（JOIN が name 基準）なので
-                // 代表を決めて良い。視認性と安定性のため最大 ref 数の行を選ぶ。
-                var groups = results
-                    .GroupBy(r => (r.Symbol.Name, r.Symbol.Kind), System.Collections.Generic.EqualityComparer<(string, string)>.Default)
-                    .Select(g => new
-                    {
-                        Rep = g.OrderByDescending(x => x.ReferenceCount).First(),
-                        DefinitionSites = g.Count(),
-                        Paths = g.Select(x => x.Symbol.Path).Distinct().OrderBy(p => p).ToList(),
-                    })
-                    .OrderByDescending(g => g.Rep.ReferenceCount)
-                    .ThenBy(g => g.Rep.Symbol.Name)
-                    .ToList();
+                var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
 
                 if (options.Json)
                 {
-                    var items = groups.Select(g => new
+                    var items = groupedResults.Select(g => new
                     {
-                        name = g.Rep.Symbol.Name,
-                        kind = g.Rep.Symbol.Kind,
-                        path = g.Rep.Symbol.Path,
-                        line = g.Rep.Symbol.Line,
-                        reference_count = g.Rep.ReferenceCount,
-                        visibility = g.Rep.Symbol.Visibility,
-                        container = g.Rep.Symbol.ContainerName,
+                        name = g.Symbol.Name,
+                        kind = g.Symbol.Kind,
+                        path = g.Symbol.Path,
+                        line = g.Symbol.Line,
+                        reference_count = g.ReferenceCount,
+                        visibility = g.Symbol.Visibility,
+                        container = g.Symbol.ContainerName,
                         definition_sites = g.DefinitionSites,
                         paths = g.Paths,
                     });
                     Console.WriteLine(JsonSerializer.Serialize(new
                     {
-                        count = groups.Count,
-                        definition_site_total = results.Count,
-                        grouped_by = "name",
+                        count = groupedResults.Count,
+                        definition_site_total = groupedResults.Sum(g => g.DefinitionSites),
+                        grouped_by = "name_kind",
                         hotspots = items,
                     }, jsonOptions));
                 }
                 else
                 {
-                    foreach (var g in groups)
+                    foreach (var g in groupedResults)
                     {
-                        var s = g.Rep.Symbol;
+                        var s = g.Symbol;
                         var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                         var multi = g.DefinitionSites > 1 ? $" (×{g.DefinitionSites} sites)" : "";
-                        Console.WriteLine($"{g.Rep.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
+                        Console.WriteLine($"{g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
                     }
-                    Console.Error.WriteLine($"({groups.Count} unique names, {results.Count} definition sites)");
+                    Console.Error.WriteLine($"({groupedResults.Count} unique name/kind groups, {groupedResults.Sum(g => g.DefinitionSites)} definition sites)");
                 }
                 return CommandExitCodes.Success;
             }
