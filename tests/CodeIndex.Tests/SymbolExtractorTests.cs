@@ -3159,6 +3159,50 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordBaseAndWhereDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Animal(string Name);
+
+            public record Dog(
+                string Name)
+                : Animal(Name);
+
+            public record Box<T>(
+                T Value)
+                where T : class;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var dog = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Dog"));
+        Assert.Equal(7, dog.EndLine);
+
+        var box = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Box"));
+        Assert.Equal(11, box.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_TracksRecordPrimaryComponentLineAfterAttributes()
+    {
+        var content = """
+            public record Person(
+                [property: Obsolete]
+                string Name,
+                [property: Obsolete]
+                int Age);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name" && s.ContainerName == "Person"));
+        Assert.Equal(3, name.Line);
+
+        var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Age" && s.ContainerName == "Person"));
+        Assert.Equal(5, age.Line);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsCompoundVisibility()
     {
         // protected internal and private protected / 複合アクセス修飾子
@@ -3747,6 +3791,26 @@ public class SymbolExtractorTests
 
         var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point"));
         Assert.Equal(40, pointY.Line);
+    }
+
+    [Fact]
+    public void Extract_Java_TracksRecordPrimaryComponentLineAfterAnnotations()
+    {
+        var content = """
+            public record Person(
+                @Deprecated
+                String name,
+                @Deprecated
+                int age
+            ) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "Person"));
+        Assert.Equal(3, name.Line);
+
+        var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "Person"));
+        Assert.Equal(5, age.Line);
     }
 
     [Fact]

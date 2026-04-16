@@ -109,6 +109,10 @@ public static class SymbolExtractor
         string Text,
         int Line);
 
+    private readonly record struct StrippedRecordComponentText(
+        string Text,
+        int ConsumedNewlines);
+
     private readonly record struct JavaScriptClassScanTarget(
         int StartIndex,
         int StartColumn,
@@ -5186,7 +5190,9 @@ public static class SymbolExtractor
         var parameterCloseIndex = FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex);
         if (parameterCloseIndex <= parameterOpenIndex)
             return false;
-        declarationEndLine = declarationLineIndex + 1 + declaration[..(parameterCloseIndex + 1)].Count(ch => ch == '\n');
+        var declarationTerminatorIndex = FindRecordDeclarationTerminatorIndex(declaration, parameterCloseIndex + 1);
+        var declarationLineSpanEnd = declarationTerminatorIndex >= 0 ? declarationTerminatorIndex + 1 : parameterCloseIndex + 1;
+        declarationEndLine = declarationLineIndex + 1 + declaration[..declarationLineSpanEnd].Count(ch => ch == '\n');
 
         var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
         foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, declarationLineIndex + 1))
@@ -5202,6 +5208,7 @@ public static class SymbolExtractor
     {
         var builder = new System.Text.StringBuilder();
         var parameterOpenIndex = -1;
+        var parameterCloseIndex = -1;
         for (int i = declarationLineIndex; i < lines.Length; i++)
         {
             if (builder.Length > 0)
@@ -5219,7 +5226,14 @@ public static class SymbolExtractor
                     continue;
             }
 
-            if (FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex) > parameterOpenIndex)
+            if (parameterCloseIndex < 0)
+            {
+                parameterCloseIndex = FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex);
+                if (parameterCloseIndex <= parameterOpenIndex)
+                    continue;
+            }
+
+            if (FindRecordDeclarationTerminatorIndex(declaration, parameterCloseIndex + 1) >= 0)
                 return declaration;
         }
 
@@ -5368,6 +5382,119 @@ public static class SymbolExtractor
                     if (braceDepth > 0)
                         braceDepth--;
                     continue;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindRecordDeclarationTerminatorIndex(string declaration, int startIndex)
+    {
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = Math.Max(0, startIndex); i < declaration.Length; i++)
+        {
+            var ch = declaration[i];
+            var next = i + 1 < declaration.Length ? declaration[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '<':
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return i;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+                case ';' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return i;
             }
         }
 
@@ -5611,10 +5738,16 @@ public static class SymbolExtractor
         if (normalized.Length == 0)
             return false;
 
-        normalized = lang == "csharp"
+        var componentLine = rawComponent.Line;
+        var stripped = lang == "csharp"
             ? StripLeadingCSharpRecordComponentAttributes(normalized)
             : StripLeadingJavaRecordComponentAnnotations(normalized);
-        normalized = StripLeadingRecordComponentModifiers(lang, normalized);
+        normalized = stripped.Text;
+        componentLine += stripped.ConsumedNewlines;
+
+        stripped = StripLeadingRecordComponentModifiers(lang, normalized);
+        normalized = stripped.Text;
+        componentLine += stripped.ConsumedNewlines;
         if (normalized.Length == 0)
             return false;
 
@@ -5627,7 +5760,7 @@ public static class SymbolExtractor
         if (componentName.Length == 0 || componentType.Length == 0)
             return false;
 
-        component = new RecordPrimaryComponent(componentName, componentType, normalized, rawComponent.Line);
+        component = new RecordPrimaryComponent(componentName, componentType, normalized, componentLine);
         return true;
     }
 
@@ -5712,24 +5845,27 @@ public static class SymbolExtractor
         return text;
     }
 
-    private static string StripLeadingCSharpRecordComponentAttributes(string component)
+    private static StrippedRecordComponentText StripLeadingCSharpRecordComponentAttributes(string component)
     {
-        var trimmed = component.TrimStart();
+        var consumedNewlines = 0;
+        var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
         while (trimmed.StartsWith("[", StringComparison.Ordinal))
         {
             var endIndex = FindMatchingBracket(trimmed, 0, '[', ']');
             if (endIndex < 0)
-                return component.Trim();
+                return new(component.Trim(), 0);
 
-            trimmed = trimmed[(endIndex + 1)..].TrimStart();
+            consumedNewlines += CountNewlines(trimmed.AsSpan(0, endIndex + 1));
+            trimmed = TrimLeadingWhitespaceAndCountNewlines(trimmed[(endIndex + 1)..], ref consumedNewlines);
         }
 
-        return trimmed;
+        return new(trimmed, consumedNewlines);
     }
 
-    private static string StripLeadingJavaRecordComponentAnnotations(string component)
+    private static StrippedRecordComponentText StripLeadingJavaRecordComponentAnnotations(string component)
     {
-        var trimmed = component.TrimStart();
+        var consumedNewlines = 0;
+        var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
         while (trimmed.StartsWith("@", StringComparison.Ordinal))
         {
             var index = 1;
@@ -5743,40 +5879,69 @@ public static class SymbolExtractor
             {
                 var endIndex = FindMatchingBracket(trimmed, index, '(', ')');
                 if (endIndex < 0)
-                    return component.Trim();
+                    return new(component.Trim(), 0);
 
                 index = endIndex + 1;
             }
 
-            trimmed = trimmed[index..].TrimStart();
+            consumedNewlines += CountNewlines(trimmed.AsSpan(0, index));
+            trimmed = TrimLeadingWhitespaceAndCountNewlines(trimmed[index..], ref consumedNewlines);
         }
 
-        return trimmed;
+        return new(trimmed, consumedNewlines);
     }
 
-    private static string StripLeadingRecordComponentModifiers(string lang, string component)
+    private static StrippedRecordComponentText StripLeadingRecordComponentModifiers(string lang, string component)
     {
         ReadOnlySpan<string> modifiers = lang == "csharp"
             ? ["params", "this", "ref", "out", "in", "scoped", "readonly"]
             : ["final"];
 
-        var trimmed = component.TrimStart();
+        var consumedNewlines = 0;
+        var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
         var removedModifier = true;
         while (removedModifier)
         {
             removedModifier = false;
             foreach (var modifier in modifiers)
             {
-                if (trimmed.StartsWith(modifier + " ", StringComparison.Ordinal))
+                if (trimmed.StartsWith(modifier, StringComparison.Ordinal)
+                    && trimmed.Length > modifier.Length
+                    && char.IsWhiteSpace(trimmed[modifier.Length]))
                 {
-                    trimmed = trimmed[(modifier.Length + 1)..].TrimStart();
+                    trimmed = TrimLeadingWhitespaceAndCountNewlines(trimmed[(modifier.Length + 1)..], ref consumedNewlines);
                     removedModifier = true;
                     break;
                 }
             }
         }
 
-        return trimmed;
+        return new(trimmed, consumedNewlines);
+    }
+
+    private static string TrimLeadingWhitespaceAndCountNewlines(string text, ref int consumedNewlines)
+    {
+        var index = 0;
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+        {
+            if (text[index] == '\n')
+                consumedNewlines++;
+            index++;
+        }
+
+        return text[index..];
+    }
+
+    private static int CountNewlines(ReadOnlySpan<char> text)
+    {
+        var count = 0;
+        foreach (var ch in text)
+        {
+            if (ch == '\n')
+                count++;
+        }
+
+        return count;
     }
 
     private static int FindMatchingBracket(string text, int openIndex, char openBracket, char closeBracket)
