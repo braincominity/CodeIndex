@@ -17,6 +17,7 @@ STAGE_DIR_CLEANUP=""
 EXISTING_BIN=""
 EXISTING_VERSION=""
 RESOLVE_VERSION_SKIP=0
+EXPLICIT_VERSION_REQUESTED=0
 
 # --- Helpers / ヘルパー ---
 
@@ -316,8 +317,10 @@ detect_platform() {
 
 resolve_version() {
     RESOLVE_VERSION_SKIP=0
+    EXPLICIT_VERSION_REQUESTED=0
 
     if [ -n "${1:-}" ]; then
+        EXPLICIT_VERSION_REQUESTED=1
         VERSION="$1"
         # Ensure v prefix / vプレフィックスを補完
         case "$VERSION" in
@@ -362,9 +365,14 @@ check_existing() {
     if [ -n "$EXISTING_VERSION" ]; then
         local target_version="${VERSION#v}"
         if [ "$EXISTING_VERSION" = "$target_version" ]; then
-            if existing_install_is_reusable; then
+            if existing_install_is_reusable && [ "$EXPLICIT_VERSION_REQUESTED" != "1" ]; then
                 info "cdidx $target_version is already installed at $EXISTING_BIN. Skipping."
                 exit 0
+            fi
+
+            if [ "$EXPLICIT_VERSION_REQUESTED" = "1" ]; then
+                info "Reinstalling cdidx $target_version because it was requested explicitly..."
+                return 0
             fi
 
             info "Reinstalling cdidx $target_version because the existing install is incomplete..."

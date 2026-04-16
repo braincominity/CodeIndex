@@ -703,12 +703,12 @@ What `install.sh` does, in order (see `install.sh`):
    failures are classified explicitly (`403` rate limit vs `404` vs
    `5xx` vs real curl network errors) instead of collapsing everything
    into a generic “check your network connection” message.
-4. **Short-circuit if the explicit target is already installed and
-   healthy.** If `INSTALL_DIR/cdidx --version` already reports the
-   requested target version and the adjacent runtime assets are present,
-   exit 0. Broken `v0.0.0` installs or same-version installs missing
-   required assets are treated as replacements, which is the desired
-   behaviour.
+4. **Reinstall or switch when an explicit version is requested.** A
+   healthy no-argument rerun short-circuits before the API call, but an
+   explicit target version always proceeds into reinstall/switch logic.
+   Same-version explicit requests force a reinstall, while broken
+   `v0.0.0` installs or same-version installs missing required assets
+   are also treated as replacements, which is the desired behaviour.
 5. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
    into a `mktemp -d` directory trap-cleaned on exit.
 6. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
@@ -1687,7 +1687,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
 2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、GitHub rate limit が厳しいホストでも引数なし再実行を idempotent にできる。
 3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしで既存インストールも無い場合だけ GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩き、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。引数なしで健全な既存インストールがある場合は API を叩かず 0 終了し、再インストールやバージョン切り替えには明示バージョン指定を促す。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
-4. **明示ターゲットが既に入り、かつ健全なら短絡終了。** `INSTALL_DIR/cdidx --version` が要求バージョンを返し、隣接ランタイム資産も揃っている場合だけ 0 終了する。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install は置き換え対象として扱う — これは意図した挙動。
+4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なしの健全な再実行だけが API 呼び出し前に短絡終了する。明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。
 5. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
 6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
 7. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。

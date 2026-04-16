@@ -150,7 +150,47 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Version: v1.2.3", stdout);
-        Assert.Contains("Reinstalling cdidx 1.2.3 because the existing install is incomplete", stdout);
+        Assert.Contains("Reinstalling cdidx 1.2.3 because it was requested explicitly", stdout);
+        Assert.Contains("DOWNLOAD_RAN", stdout);
+        Assert.DoesNotContain("already installed", stdout);
+        Assert.DoesNotContain("CURL_SHOULD_NOT_RUN", stdout);
+    }
+
+    [Fact]
+    public void Main_ExplicitSameVersionHealthyInstall_ReinstallsInsteadOfSkipping()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "explicit_healthy_bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            download_and_install() { echo "DOWNLOAD_RAN"; }
+            check_path() { :; }
+            curl() { echo "CURL_SHOULD_NOT_RUN"; return 99; }
+
+            mkdir -p "{{installDir}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.2.3"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(installDir, "version.json")}}"
+            : > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+
+            main v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Version: v1.2.3", stdout);
+        Assert.Contains("Reinstalling cdidx 1.2.3 because it was requested explicitly", stdout);
         Assert.Contains("DOWNLOAD_RAN", stdout);
         Assert.DoesNotContain("already installed", stdout);
         Assert.DoesNotContain("CURL_SHOULD_NOT_RUN", stdout);
