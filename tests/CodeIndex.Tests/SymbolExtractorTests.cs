@@ -3044,6 +3044,44 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsAsProperties()
+    {
+        var content = """
+            namespace App;
+
+            public record Point(int X, int Y);
+            public readonly record struct Vec3(double X, double Y, double Z);
+            public record Animal(string Name);
+            public record Dog(string Name, string Breed) : Animal(Name);
+            public record Options(
+                string Host,
+                int Port) { public bool UseTls { get; init; } = true; }
+            public record Container<T>(T Value, int Count) where T : class;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var pointX = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point"));
+        Assert.Equal("int", pointX.ReturnType);
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("App.Point", pointX.ContainerQualifiedName);
+        Assert.Equal("public", pointX.Visibility);
+
+        var vec3Z = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Z" && s.ContainerName == "Vec3"));
+        Assert.Equal("double", vec3Z.ReturnType);
+        Assert.Equal("struct", vec3Z.ContainerKind);
+
+        var dogBreed = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Breed" && s.ContainerName == "Dog"));
+        Assert.Equal("string", dogBreed.ReturnType);
+
+        var optionsHost = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Host" && s.ContainerName == "Options"));
+        Assert.Equal("string", optionsHost.ReturnType);
+        Assert.Contains("string Host", optionsHost.Signature);
+
+        var containerValue = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Value" && s.ContainerName == "Container"));
+        Assert.Equal("T", containerValue.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsCompoundVisibility()
     {
         // protected internal and private protected / 複合アクセス修飾子
@@ -3565,6 +3603,37 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsRecordPrimaryComponentsAsProperties()
+    {
+        var content = """
+            package com.example;
+
+            public record Point(int x, int y) {}
+            public record Range(
+                int low,
+                int high
+            ) {
+                public int span() { return high - low; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var pointX = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point"));
+        Assert.Equal("int", pointX.ReturnType);
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("Point", pointX.ContainerQualifiedName);
+        Assert.Equal("public", pointX.Visibility);
+
+        var rangeLow = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "low" && s.ContainerName == "Range"));
+        Assert.Equal("int", rangeLow.ReturnType);
+
+        var rangeHigh = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "high" && s.ContainerName == "Range"));
+        Assert.Equal("int", rangeHigh.ReturnType);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "span");
     }
 
     [Fact]

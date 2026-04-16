@@ -99,6 +99,11 @@ public static class SymbolExtractor
         string SanitizedLine,
         CSharpLexState EndState);
 
+    private readonly record struct RecordPrimaryComponent(
+        string Name,
+        string Type,
+        string Signature);
+
     private readonly record struct JavaScriptClassScanTarget(
         int StartIndex,
         int StartColumn,
@@ -730,6 +735,15 @@ public static class SymbolExtractor
                         ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
                     });
 
+                    AddRecordPrimaryComponentSymbols(
+                        fileId,
+                        lang,
+                        lines,
+                        i,
+                        kind,
+                        name,
+                        symbols);
+
                     if (lang is not "javascript" and not "typescript"
                         || pattern.BodyStyle != BodyStyle.Brace
                         || bodyEndLine != startLine
@@ -754,6 +768,7 @@ public static class SymbolExtractor
             ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
 
         AssignContainers(symbols);
+        PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
 
@@ -5069,6 +5084,585 @@ public static class SymbolExtractor
 
         var next = line[nextIndex];
         return next != '_' && !char.IsLetterOrDigit(next);
+    }
+
+    private static void AddRecordPrimaryComponentSymbols(
+        long fileId,
+        string lang,
+        string[] lines,
+        int declarationLineIndex,
+        string kind,
+        string recordName,
+        List<SymbolRecord> symbols)
+    {
+        if (kind is not "class" and not "struct")
+            return;
+
+        if (!TryGetRecordPrimaryComponents(lang, lines, declarationLineIndex, recordName, out var components))
+            return;
+
+        foreach (var component in components)
+        {
+            if (symbols.Any(symbol =>
+                symbol.FileId == fileId
+                && symbol.Kind == "property"
+                && symbol.Name == component.Name
+                && symbol.Line == declarationLineIndex + 1
+                && symbol.ContainerKind == kind
+                && symbol.ContainerName == recordName))
+            {
+                continue;
+            }
+
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = component.Name,
+                Line = declarationLineIndex + 1,
+                StartLine = declarationLineIndex + 1,
+                EndLine = declarationLineIndex + 1,
+                Signature = component.Signature,
+                ContainerKind = kind,
+                ContainerName = recordName,
+                Visibility = "public",
+                ReturnType = component.Type,
+            });
+        }
+    }
+
+    private static bool TryGetRecordPrimaryComponents(
+        string lang,
+        string[] lines,
+        int declarationLineIndex,
+        string recordName,
+        out List<RecordPrimaryComponent> components)
+    {
+        components = [];
+
+        if (lang is not "csharp" and not "java")
+            return false;
+
+        var declaration = CollectRecordDeclarationText(lines, declarationLineIndex);
+        if (string.IsNullOrWhiteSpace(declaration))
+            return false;
+
+        var recordRegex = lang == "csharp"
+            ? new Regex(@"\brecord(?:\s+class|\s+struct)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
+            : new Regex(@"\brecord\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        var recordMatch = recordRegex.Match(declaration);
+        if (!recordMatch.Success)
+            return false;
+
+        var parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, recordMatch.Index + recordMatch.Length);
+        if (parameterOpenIndex < 0)
+            return false;
+
+        var parameterCloseIndex = FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex);
+        if (parameterCloseIndex <= parameterOpenIndex)
+            return false;
+
+        var rawParameterList = declaration[(parameterOpenIndex + 1)..parameterCloseIndex];
+        foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList))
+        {
+            if (TryParseRecordPrimaryComponent(lang, rawComponent, out var component))
+                components.Add(component);
+        }
+
+        return components.Count > 0;
+    }
+
+    private static string CollectRecordDeclarationText(string[] lines, int declarationLineIndex)
+    {
+        var builder = new System.Text.StringBuilder();
+        var maxLineIndex = Math.Min(lines.Length, declarationLineIndex + 24);
+        for (int i = declarationLineIndex; i < maxLineIndex; i++)
+        {
+            if (builder.Length > 0)
+                builder.Append('\n');
+
+            builder.Append(lines[i]);
+        }
+
+        return builder.ToString();
+    }
+
+    private static int FindRecordPrimaryComponentListStart(string declaration, int startIndex)
+    {
+        var angleDepth = 0;
+        for (int i = Math.Max(0, startIndex); i < declaration.Length; i++)
+        {
+            var ch = declaration[i];
+            if (ch == '<')
+            {
+                angleDepth++;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                if (angleDepth > 0)
+                    angleDepth--;
+                continue;
+            }
+
+            if (ch == '(' && angleDepth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingRecordPrimaryComponentListEnd(string declaration, int openIndex)
+    {
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = openIndex; i < declaration.Length; i++)
+        {
+            var ch = declaration[i];
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    parenDepth--;
+                    if (parenDepth == 0)
+                        return i;
+                    continue;
+                case '<':
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+            }
+        }
+
+        return -1;
+    }
+
+    private static List<string> SplitTopLevelRecordPrimaryComponents(string parameterList)
+    {
+        var components = new List<string>();
+        var builder = new System.Text.StringBuilder();
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        foreach (var ch in parameterList)
+        {
+            if (escapeNext)
+            {
+                builder.Append(ch);
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    builder.Append(ch);
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    builder.Append(ch);
+                    continue;
+                case '(':
+                    parenDepth++;
+                    builder.Append(ch);
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    builder.Append(ch);
+                    continue;
+                case '<':
+                    angleDepth++;
+                    builder.Append(ch);
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    builder.Append(ch);
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    builder.Append(ch);
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    builder.Append(ch);
+                    continue;
+                case '{':
+                    braceDepth++;
+                    builder.Append(ch);
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    builder.Append(ch);
+                    continue;
+                case ',' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    var component = builder.ToString().Trim();
+                    if (component.Length > 0)
+                        components.Add(component);
+                    builder.Clear();
+                    continue;
+                default:
+                    builder.Append(ch);
+                    continue;
+            }
+        }
+
+        var trailingComponent = builder.ToString().Trim();
+        if (trailingComponent.Length > 0)
+            components.Add(trailingComponent);
+
+        return components;
+    }
+
+    private static bool TryParseRecordPrimaryComponent(string lang, string rawComponent, out RecordPrimaryComponent component)
+    {
+        component = default;
+        if (string.IsNullOrWhiteSpace(rawComponent))
+            return false;
+
+        var normalized = TrimAfterTopLevelEquals(rawComponent).Trim();
+        if (normalized.Length == 0)
+            return false;
+
+        normalized = lang == "csharp"
+            ? StripLeadingCSharpRecordComponentAttributes(normalized)
+            : StripLeadingJavaRecordComponentAnnotations(normalized);
+        normalized = StripLeadingRecordComponentModifiers(lang, normalized);
+        if (normalized.Length == 0)
+            return false;
+
+        var nameMatch = Regex.Match(normalized, @"(?<name>@?[\p{L}_$][\p{L}\p{Nd}_$]*)\s*$", RegexOptions.CultureInvariant);
+        if (!nameMatch.Success)
+            return false;
+
+        var componentName = nameMatch.Groups["name"].Value.TrimStart('@');
+        var componentType = normalized[..nameMatch.Index].Trim();
+        if (componentName.Length == 0 || componentType.Length == 0)
+            return false;
+
+        component = new RecordPrimaryComponent(componentName, componentType, normalized);
+        return true;
+    }
+
+    private static string TrimAfterTopLevelEquals(string text)
+    {
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '<':
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+                case '=' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return text[..i].TrimEnd();
+            }
+        }
+
+        return text;
+    }
+
+    private static string StripLeadingCSharpRecordComponentAttributes(string component)
+    {
+        var trimmed = component.TrimStart();
+        while (trimmed.StartsWith("[", StringComparison.Ordinal))
+        {
+            var endIndex = FindMatchingBracket(trimmed, 0, '[', ']');
+            if (endIndex < 0)
+                return component.Trim();
+
+            trimmed = trimmed[(endIndex + 1)..].TrimStart();
+        }
+
+        return trimmed;
+    }
+
+    private static string StripLeadingJavaRecordComponentAnnotations(string component)
+    {
+        var trimmed = component.TrimStart();
+        while (trimmed.StartsWith("@", StringComparison.Ordinal))
+        {
+            var index = 1;
+            while (index < trimmed.Length && (char.IsLetterOrDigit(trimmed[index]) || trimmed[index] is '_' or '$' or '.'))
+                index++;
+
+            while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+                index++;
+
+            if (index < trimmed.Length && trimmed[index] == '(')
+            {
+                var endIndex = FindMatchingBracket(trimmed, index, '(', ')');
+                if (endIndex < 0)
+                    return component.Trim();
+
+                index = endIndex + 1;
+            }
+
+            trimmed = trimmed[index..].TrimStart();
+        }
+
+        return trimmed;
+    }
+
+    private static string StripLeadingRecordComponentModifiers(string lang, string component)
+    {
+        ReadOnlySpan<string> modifiers = lang == "csharp"
+            ? ["params", "this", "ref", "out", "in", "scoped", "readonly"]
+            : ["final"];
+
+        var trimmed = component.TrimStart();
+        var removedModifier = true;
+        while (removedModifier)
+        {
+            removedModifier = false;
+            foreach (var modifier in modifiers)
+            {
+                if (trimmed.StartsWith(modifier + " ", StringComparison.Ordinal))
+                {
+                    trimmed = trimmed[(modifier.Length + 1)..].TrimStart();
+                    removedModifier = true;
+                    break;
+                }
+            }
+        }
+
+        return trimmed;
+    }
+
+    private static int FindMatchingBracket(string text, int openIndex, char openBracket, char closeBracket)
+    {
+        var depth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = openIndex; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (ch == openBracket)
+            {
+                depth++;
+                continue;
+            }
+
+            if (ch == closeBracket)
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static void PopulateDeclaredContainerQualifiedNames(List<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.ContainerKind == null
+                || symbol.ContainerName == null)
+            {
+                continue;
+            }
+
+            var container = symbols.FirstOrDefault(candidate =>
+                candidate.FileId == symbol.FileId
+                && candidate.Kind == symbol.ContainerKind
+                && candidate.Name == symbol.ContainerName
+                && candidate.StartLine == symbol.StartLine);
+            if (container == null)
+                continue;
+
+            symbol.ContainerQualifiedName = container.ContainerQualifiedName != null
+                ? $"{container.ContainerQualifiedName}.{container.Name}"
+                : container.Name;
+        }
     }
 
     private static void AssignContainers(List<SymbolRecord> symbols)
