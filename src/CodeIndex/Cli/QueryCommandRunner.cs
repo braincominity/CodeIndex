@@ -1122,6 +1122,8 @@ public static class QueryCommandRunner
             }
             if (line.StartsWith("global using ", StringComparison.Ordinal))
                 continue;
+            if (line.StartsWith("extern alias ", StringComparison.Ordinal))
+                continue;
             if (line.StartsWith("[assembly:", StringComparison.Ordinal))
                 continue;
             if (line.StartsWith("[module:", StringComparison.Ordinal))

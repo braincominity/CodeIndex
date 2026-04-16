@@ -825,6 +825,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Human_ExternAliasOnlyFile_DoesNotWriteTopLevelStatementsHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_extern_alias_only_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Aliases.cs",
+                "csharp",
+                """
+                extern alias Foo01;
+                extern alias Foo02;
+                extern alias Foo03;
+                extern alias Foo04;
+                extern alias Foo05;
+                extern alias Foo06;
+                extern alias Foo07;
+                extern alias Foo08;
+                extern alias Foo09;
+                extern alias Foo10;
+                extern alias Foo11;
+                extern alias Foo12;
+                extern alias Foo13;
+                extern alias Foo14;
+                extern alias Foo15;
+                extern alias Foo16;
+                extern alias Foo17;
+                extern alias Foo18;
+                extern alias Foo19;
+                extern alias Foo20;
+                extern alias Foo21;
+                extern alias Foo22;
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Aliases.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/Aliases.cs", stdout);
+            Assert.DoesNotContain("likely uses C# top-level statements", stderr);
+            Assert.DoesNotContain("executable body is not indexed as symbols", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_references_zero_json_missing_graph");
