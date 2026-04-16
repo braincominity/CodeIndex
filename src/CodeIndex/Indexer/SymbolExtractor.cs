@@ -5176,7 +5176,9 @@ public static class SymbolExtractor
                 cursor++;
         }
 
-        return cursor < line.Length ? line[cursor..] : line;
+        return cursor < line.Length
+            ? line[..index] + new string(' ', cursor - index) + line[cursor..]
+            : line[..index] + new string(' ', cursor - index);
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
