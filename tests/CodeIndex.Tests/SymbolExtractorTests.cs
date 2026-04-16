@@ -1879,6 +1879,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsGenericClassMethodsWithFunctionTypeDefault()
+    {
+        var content = """
+            export class Example {
+                method<T = () => void>(): number {}
+                keep(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ReturnType == "number");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsGenericClassMethodsWithFunctionTypeConstraint()
+    {
+        var content = """
+            export class Example {
+                method<T extends () => void>(): number {}
+                keep(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Example");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ReturnType == "number");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "keep");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsInlineGenericClassMethods()
     {
         var content = """export class Example { first<T extends Foo<Bar>>(): void {} second(): void {} }""";

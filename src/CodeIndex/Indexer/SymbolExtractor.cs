@@ -2772,6 +2772,11 @@ public static class SymbolExtractor
                         {
                             angleDepth++;
                         }
+                        else if (sanitizedLine[index] == '=' && index + 1 < sanitizedLine.Length && sanitizedLine[index + 1] == '>')
+                        {
+                            index += 2;
+                            continue;
+                        }
                         else if (sanitizedLine[index] == '>')
                         {
                             angleDepth--;
