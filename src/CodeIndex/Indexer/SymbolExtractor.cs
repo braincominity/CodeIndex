@@ -105,6 +105,27 @@ public static class SymbolExtractor
         string SanitizedLine,
         CSharpLexState EndState);
 
+    private readonly record struct RecordPrimaryComponent(
+        string Name,
+        string Type,
+        string Signature,
+        int Line);
+
+    private readonly record struct RecordPrimaryComponentSlice(
+        string Text,
+        int Line);
+
+    private readonly record struct PendingRecordPrimaryComponents(
+        long FileId,
+        string Kind,
+        string RecordName,
+        int RecordStartLine,
+        List<RecordPrimaryComponent> Components);
+
+    private readonly record struct StrippedRecordComponentText(
+        string Text,
+        int ConsumedNewlines);
+
     private readonly record struct JavaScriptClassScanTarget(
         int StartIndex,
         int StartColumn,
@@ -645,6 +666,7 @@ public static class SymbolExtractor
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
             : null;
         var symbols = new List<SymbolRecord>();
+        var pendingRecordPrimaryComponents = new List<PendingRecordPrimaryComponents>();
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
@@ -794,6 +816,17 @@ public static class SymbolExtractor
                             ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
                         });
 
+                    CollectRecordPrimaryComponentSymbols(
+                        fileId,
+                        lang,
+                        lines,
+                        i,
+                        absoluteStartColumn,
+                        kind,
+                        name,
+                        pendingRecordPrimaryComponents,
+                        symbols);
+
                     if (lang is not "javascript" and not "typescript"
                         || pattern.BodyStyle != BodyStyle.Brace
                         || bodyEndLine != startLine
@@ -853,6 +886,8 @@ public static class SymbolExtractor
             ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
 
         AssignContainers(symbols);
+        MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
+        PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
 
@@ -5521,6 +5556,1277 @@ public static class SymbolExtractor
 
         var next = line[nextIndex];
         return next != '_' && !char.IsLetterOrDigit(next);
+    }
+
+    private static void CollectRecordPrimaryComponentSymbols(
+        long fileId,
+        string lang,
+        string[] lines,
+        int declarationLineIndex,
+        int declarationStartColumn,
+        string kind,
+        string recordName,
+        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents,
+        List<SymbolRecord> symbols)
+    {
+        if (kind is not "class" and not "struct")
+            return;
+
+        if (!TryGetRecordPrimaryComponents(
+            lang,
+            lines,
+            declarationLineIndex,
+            declarationStartColumn,
+            kind,
+            recordName,
+            out var components,
+            out var declarationEndLine))
+            return;
+
+        var parentSymbol = symbols.LastOrDefault(symbol =>
+            symbol.FileId == fileId
+            && symbol.Kind == kind
+            && symbol.Name == recordName
+            && symbol.StartLine == declarationLineIndex + 1);
+        if (parentSymbol != null)
+            parentSymbol.EndLine = Math.Max(parentSymbol.EndLine, declarationEndLine);
+
+        if (components.Count > 0)
+        {
+            pendingRecordPrimaryComponents.Add(new PendingRecordPrimaryComponents(
+                fileId,
+                kind,
+                recordName,
+                declarationLineIndex + 1,
+                components));
+        }
+    }
+
+    private static void MaterializeRecordPrimaryComponentSymbols(
+        List<SymbolRecord> symbols,
+        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents)
+    {
+        foreach (var pending in pendingRecordPrimaryComponents)
+        {
+            var parentSymbol = symbols.LastOrDefault(symbol =>
+                symbol.FileId == pending.FileId
+                && symbol.Kind == pending.Kind
+                && symbol.Name == pending.RecordName
+                && symbol.StartLine == pending.RecordStartLine);
+            if (parentSymbol == null)
+                continue;
+
+            foreach (var component in pending.Components)
+            {
+                if (symbols.Any(symbol =>
+                    symbol.FileId == pending.FileId
+                    && symbol.Kind == "property"
+                    && symbol.Name == component.Name
+                    && symbol.ContainerKind == pending.Kind
+                    && symbol.ContainerName == pending.RecordName
+                    && symbol.StartLine >= parentSymbol.StartLine
+                    && symbol.EndLine <= parentSymbol.EndLine))
+                {
+                    continue;
+                }
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = pending.FileId,
+                    Kind = "property",
+                    Name = component.Name,
+                    Line = component.Line,
+                    StartLine = component.Line,
+                    EndLine = component.Line,
+                    Signature = component.Signature,
+                    ContainerKind = pending.Kind,
+                    ContainerName = pending.RecordName,
+                    Visibility = "public",
+                    ReturnType = component.Type,
+                });
+            }
+        }
+    }
+
+    private static bool TryGetRecordPrimaryComponents(
+        string lang,
+        string[] lines,
+        int declarationLineIndex,
+        int declarationStartColumn,
+        string kind,
+        string recordName,
+        out List<RecordPrimaryComponent> components,
+        out int declarationEndLine)
+    {
+        components = [];
+        declarationEndLine = declarationLineIndex + 1;
+
+        if (lang is not "csharp" and not "java")
+            return false;
+
+        var declaration = CollectRecordDeclarationText(lines, declarationLineIndex, declarationStartColumn);
+        if (string.IsNullOrWhiteSpace(declaration))
+            return false;
+
+        var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
+        var recordMatch = recordRegex.Match(declaration);
+        if (!recordMatch.Success)
+            return false;
+
+        var parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, recordMatch.Index + recordMatch.Length);
+        if (parameterOpenIndex < 0)
+            return false;
+
+        var parameterCloseIndex = FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex);
+        if (parameterCloseIndex <= parameterOpenIndex)
+            return false;
+        var declarationTerminatorIndex = FindRecordDeclarationTerminatorIndex(declaration, parameterCloseIndex + 1);
+        var declarationLineSpanEnd = declarationTerminatorIndex >= 0 ? declarationTerminatorIndex + 1 : parameterCloseIndex + 1;
+        declarationEndLine = declarationLineIndex + 1 + declaration[..declarationLineSpanEnd].Count(ch => ch == '\n');
+
+        var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
+        foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, declarationLineIndex + 1))
+        {
+            if (TryParseRecordPrimaryComponent(lang, rawComponent, out var component))
+                components.Add(component);
+        }
+
+        return true;
+    }
+
+    private static string CollectRecordDeclarationText(string[] lines, int declarationLineIndex, int declarationStartColumn)
+    {
+        var builder = new System.Text.StringBuilder();
+        var parameterOpenIndex = -1;
+        var parameterCloseIndex = -1;
+        for (int i = declarationLineIndex; i < lines.Length; i++)
+        {
+            if (builder.Length > 0)
+                builder.Append('\n');
+
+            builder.Append(i == declarationLineIndex
+                ? lines[i][Math.Min(declarationStartColumn, lines[i].Length)..]
+                : lines[i]);
+
+            var declaration = builder.ToString();
+            if (parameterOpenIndex < 0)
+            {
+                parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, 0);
+                if (parameterOpenIndex < 0)
+                    continue;
+            }
+
+            if (parameterCloseIndex < 0)
+            {
+                parameterCloseIndex = FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex);
+                if (parameterCloseIndex <= parameterOpenIndex)
+                    continue;
+            }
+
+            if (FindRecordDeclarationTerminatorIndex(declaration, parameterCloseIndex + 1) >= 0)
+                return declaration;
+        }
+
+        return builder.ToString();
+    }
+
+    private static Regex GetCurrentDeclarationRecordRegex(string lang, string kind, string recordName)
+    {
+        if (lang == "csharp")
+        {
+            return kind == "struct"
+                ? new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*record\s+struct\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant)
+                : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        }
+
+        return new Regex(@"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+    }
+
+    private static int FindRecordPrimaryComponentListStart(string declaration, int startIndex)
+    {
+        var angleDepth = 0;
+        for (int i = Math.Max(0, startIndex); i < declaration.Length; i++)
+        {
+            var ch = declaration[i];
+            if (ch == '<')
+            {
+                angleDepth++;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                if (angleDepth > 0)
+                    angleDepth--;
+                continue;
+            }
+
+            if (ch == '(' && angleDepth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingRecordPrimaryComponentListEnd(string declaration, int openIndex)
+    {
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = openIndex; i < declaration.Length; i++)
+        {
+            var ch = declaration[i];
+            var next = i + 1 < declaration.Length ? declaration[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    parenDepth--;
+                    if (parenDepth == 0)
+                        return i;
+                    continue;
+                case '<' when LooksLikeRecordGenericAngleStart(declaration, i):
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindRecordDeclarationTerminatorIndex(string declaration, int startIndex)
+    {
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = Math.Max(0, startIndex); i < declaration.Length; i++)
+        {
+            var ch = declaration[i];
+            var next = i + 1 < declaration.Length ? declaration[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '<' when LooksLikeRecordGenericAngleStart(declaration, i):
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return i;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+                case ';' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static List<RecordPrimaryComponentSlice> SplitTopLevelRecordPrimaryComponents(string parameterList, int firstLineNumber)
+    {
+        var components = new List<RecordPrimaryComponentSlice>();
+        var builder = new System.Text.StringBuilder();
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+        var currentLineNumber = firstLineNumber;
+        var componentLineNumber = firstLineNumber;
+        var componentHasToken = false;
+
+        for (int index = 0; index < parameterList.Length; index++)
+        {
+            var ch = parameterList[index];
+            if (!componentHasToken && !char.IsWhiteSpace(ch))
+            {
+                componentHasToken = true;
+                componentLineNumber = currentLineNumber;
+            }
+
+            if (escapeNext)
+            {
+                builder.Append(ch);
+                escapeNext = false;
+                if (ch == '\n')
+                    currentLineNumber++;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                else if (ch == '\n')
+                    currentLineNumber++;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                else if (ch == '\n')
+                    currentLineNumber++;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    builder.Append(ch);
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    builder.Append(ch);
+                    continue;
+                case '(':
+                    parenDepth++;
+                    builder.Append(ch);
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    builder.Append(ch);
+                    continue;
+                case '<' when LooksLikeRecordGenericAngleStart(parameterList, index):
+                    angleDepth++;
+                    builder.Append(ch);
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    builder.Append(ch);
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    builder.Append(ch);
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    builder.Append(ch);
+                    continue;
+                case '{':
+                    braceDepth++;
+                    builder.Append(ch);
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    builder.Append(ch);
+                    continue;
+                case ',' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    var component = builder.ToString().Trim();
+                    if (component.Length > 0)
+                        components.Add(new RecordPrimaryComponentSlice(component, componentLineNumber));
+                    builder.Clear();
+                    componentHasToken = false;
+                    componentLineNumber = currentLineNumber;
+                    continue;
+                default:
+                    builder.Append(ch);
+                    if (ch == '\n')
+                        currentLineNumber++;
+                    continue;
+            }
+        }
+
+        var trailingComponent = builder.ToString().Trim();
+        if (trailingComponent.Length > 0)
+            components.Add(new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber));
+
+        return components;
+    }
+
+    private static string StripRecordComponentComments(string text)
+    {
+        var builder = new System.Text.StringBuilder(text.Length);
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                {
+                    inLineComment = false;
+                    builder.Append(ch);
+                }
+
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                    builder.Append(' ');
+                }
+                else if (ch == '\n')
+                {
+                    builder.Append(ch);
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                builder.Append(ch);
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                builder.Append(ch);
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            if (ch == '\'' )
+            {
+                inSingleQuote = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryParseRecordPrimaryComponent(string lang, RecordPrimaryComponentSlice rawComponent, out RecordPrimaryComponent component)
+    {
+        component = default;
+        if (string.IsNullOrWhiteSpace(rawComponent.Text))
+            return false;
+
+        var normalized = TrimAfterTopLevelEquals(rawComponent.Text).Trim();
+        if (normalized.Length == 0)
+            return false;
+
+        var componentLine = rawComponent.Line;
+        var stripped = lang == "csharp"
+            ? StripLeadingCSharpRecordComponentAttributes(normalized)
+            : StripLeadingJavaRecordComponentAnnotations(normalized);
+        normalized = stripped.Text;
+        componentLine += stripped.ConsumedNewlines;
+
+        stripped = StripLeadingRecordComponentModifiers(lang, normalized);
+        normalized = stripped.Text;
+        componentLine += stripped.ConsumedNewlines;
+        if (normalized.Length == 0)
+            return false;
+
+        var nameMatch = Regex.Match(normalized, @"(?<name>@?[\p{L}_$][\p{L}\p{Nd}_$]*)\s*$", RegexOptions.CultureInvariant);
+        if (!nameMatch.Success)
+            return false;
+
+        var componentName = nameMatch.Groups["name"].Value.TrimStart('@');
+        var componentType = normalized[..nameMatch.Index].Trim();
+        if (componentName.Length == 0 || componentType.Length == 0)
+            return false;
+
+        component = new RecordPrimaryComponent(componentName, componentType, normalized, componentLine);
+        return true;
+    }
+
+    private static string TrimAfterTopLevelEquals(string text)
+    {
+        var parenDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '<' when LooksLikeRecordGenericAngleStart(text, i):
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+                case '=' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                    return text[..i].TrimEnd();
+            }
+        }
+
+        return text;
+    }
+
+    private static StrippedRecordComponentText StripLeadingCSharpRecordComponentAttributes(string component)
+    {
+        var consumedNewlines = 0;
+        var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
+        while (trimmed.StartsWith("[", StringComparison.Ordinal))
+        {
+            var endIndex = FindMatchingBracket(trimmed, 0, '[', ']');
+            if (endIndex < 0)
+                return new(component.Trim(), 0);
+
+            consumedNewlines += CountNewlines(trimmed.AsSpan(0, endIndex + 1));
+            trimmed = TrimLeadingWhitespaceAndCountNewlines(trimmed[(endIndex + 1)..], ref consumedNewlines);
+        }
+
+        return new(trimmed, consumedNewlines);
+    }
+
+    private static bool LooksLikeRecordGenericAngleStart(string text, int index)
+    {
+        if (index < 0 || index >= text.Length || text[index] != '<')
+            return false;
+
+        var previousIndex = FindPreviousNonWhitespaceIndex(text, index - 1);
+        if (previousIndex < 0)
+            return false;
+
+        var nextIndex = FindNextNonWhitespaceIndex(text, index + 1);
+        if (nextIndex < 0)
+            return false;
+
+        var previous = text[previousIndex];
+        var next = text[nextIndex];
+        if (!IsRecordGenericAnglePredecessor(previous)
+            || !IsRecordGenericAngleSuccessor(next))
+        {
+            return false;
+        }
+
+        return TryFindRecordGenericAngleEnd(text, index, out _);
+    }
+
+    private static bool IsRecordGenericAnglePredecessor(char ch) =>
+        char.IsLetterOrDigit(ch)
+        || ch is '_' or '$' or '@' or '.' or '>' or ')' or ']' or '?';
+
+    private static bool IsRecordGenericAngleSuccessor(char ch) =>
+        char.IsLetter(ch)
+        || ch is '_' or '$' or '@' or '?' or '(';
+
+    private static int FindPreviousNonWhitespaceIndex(string text, int index)
+    {
+        for (int i = Math.Min(index, text.Length - 1); i >= 0; i--)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindNextNonWhitespaceIndex(string text, int index)
+    {
+        for (int i = Math.Max(0, index); i < text.Length; i++)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool TryFindRecordGenericAngleEnd(string text, int openIndex, out int closeIndex)
+    {
+        closeIndex = -1;
+
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = openIndex; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+                case '<' when i == openIndex || LooksLikeRecordGenericAngleCandidate(text, i):
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth == 0)
+                        continue;
+
+                    angleDepth--;
+                    if (angleDepth == 0)
+                    {
+                        if (!IsRecordGenericAnglePayloadTypeLike(text.AsSpan(openIndex + 1, i - openIndex - 1)))
+                            return false;
+
+                        closeIndex = i;
+                        return true;
+                    }
+
+                    continue;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool LooksLikeRecordGenericAngleCandidate(string text, int index)
+    {
+        if (index < 0 || index >= text.Length || text[index] != '<')
+            return false;
+
+        var previousIndex = FindPreviousNonWhitespaceIndex(text, index - 1);
+        if (previousIndex < 0)
+            return false;
+
+        var nextIndex = FindNextNonWhitespaceIndex(text, index + 1);
+        if (nextIndex < 0)
+            return false;
+
+        return IsRecordGenericAnglePredecessor(text[previousIndex])
+            && IsRecordGenericAngleSuccessor(text[nextIndex]);
+    }
+
+    private static bool IsRecordGenericAnglePayloadTypeLike(ReadOnlySpan<char> text)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuote = true;
+                    continue;
+                case '"':
+                    inDoubleQuote = true;
+                    continue;
+                case '/' when next == '/':
+                    inLineComment = true;
+                    i++;
+                    continue;
+                case '/' when next == '*':
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    continue;
+            }
+
+            if (parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0
+                && ch is '=' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '!' or '^' or '~' or ';')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static StrippedRecordComponentText StripLeadingJavaRecordComponentAnnotations(string component)
+    {
+        var consumedNewlines = 0;
+        var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
+        while (trimmed.StartsWith("@", StringComparison.Ordinal))
+        {
+            var index = 1;
+            while (index < trimmed.Length && (char.IsLetterOrDigit(trimmed[index]) || trimmed[index] is '_' or '$' or '.'))
+                index++;
+
+            while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
+                index++;
+
+            if (index < trimmed.Length && trimmed[index] == '(')
+            {
+                var endIndex = FindMatchingBracket(trimmed, index, '(', ')');
+                if (endIndex < 0)
+                    return new(component.Trim(), 0);
+
+                index = endIndex + 1;
+            }
+
+            consumedNewlines += CountNewlines(trimmed.AsSpan(0, index));
+            trimmed = TrimLeadingWhitespaceAndCountNewlines(trimmed[index..], ref consumedNewlines);
+        }
+
+        return new(trimmed, consumedNewlines);
+    }
+
+    private static StrippedRecordComponentText StripLeadingRecordComponentModifiers(string lang, string component)
+    {
+        ReadOnlySpan<string> modifiers = lang == "csharp"
+            ? ["params", "this", "ref", "out", "in", "scoped", "readonly"]
+            : ["final"];
+
+        var consumedNewlines = 0;
+        var trimmed = TrimLeadingWhitespaceAndCountNewlines(component, ref consumedNewlines);
+        var removedModifier = true;
+        while (removedModifier)
+        {
+            removedModifier = false;
+            foreach (var modifier in modifiers)
+            {
+                if (trimmed.StartsWith(modifier, StringComparison.Ordinal)
+                    && trimmed.Length > modifier.Length
+                    && char.IsWhiteSpace(trimmed[modifier.Length]))
+                {
+                    trimmed = TrimLeadingWhitespaceAndCountNewlines(trimmed[(modifier.Length + 1)..], ref consumedNewlines);
+                    removedModifier = true;
+                    break;
+                }
+            }
+        }
+
+        return new(trimmed, consumedNewlines);
+    }
+
+    private static string TrimLeadingWhitespaceAndCountNewlines(string text, ref int consumedNewlines)
+    {
+        var index = 0;
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+        {
+            if (text[index] == '\n')
+                consumedNewlines++;
+            index++;
+        }
+
+        return text[index..];
+    }
+
+    private static int CountNewlines(ReadOnlySpan<char> text)
+    {
+        var count = 0;
+        foreach (var ch in text)
+        {
+            if (ch == '\n')
+                count++;
+        }
+
+        return count;
+    }
+
+    private static int FindMatchingBracket(string text, int openIndex, char openBracket, char closeBracket)
+    {
+        var depth = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
+
+        for (int i = openIndex; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '\\')
+                    escapeNext = true;
+                else if (ch == '"')
+                    inDoubleQuote = false;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (ch == openBracket)
+            {
+                depth++;
+                continue;
+            }
+
+            if (ch == closeBracket)
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static void PopulateDeclaredContainerQualifiedNames(List<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.ContainerKind == null
+                || symbol.ContainerName == null)
+            {
+                continue;
+            }
+
+            var container = symbols
+                .Where(candidate =>
+                candidate.FileId == symbol.FileId
+                && candidate.Kind == symbol.ContainerKind
+                && candidate.Name == symbol.ContainerName
+                && candidate.StartLine <= symbol.StartLine
+                && candidate.EndLine >= symbol.EndLine)
+                .OrderByDescending(candidate => candidate.StartLine)
+                .ThenBy(candidate => candidate.EndLine)
+                .FirstOrDefault();
+            if (container == null)
+                continue;
+
+            symbol.ContainerQualifiedName = container.ContainerQualifiedName != null
+                ? $"{container.ContainerQualifiedName}.{container.Name}"
+                : container.Name;
+        }
     }
 
     private static void AssignContainers(List<SymbolRecord> symbols)
