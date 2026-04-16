@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -33,6 +34,7 @@ public class FileIndexer
     }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp"];
+    private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -158,6 +160,159 @@ public class FileIndexer
     private const long MaxFileSize = 10 * 1024 * 1024;
 
     private readonly string _projectRoot;
+
+    private sealed class IgnoreRuleSet
+    {
+        internal static readonly IgnoreRuleSet Empty = new(null, []);
+
+        private readonly IgnoreRuleSet? _parent;
+        private readonly IReadOnlyList<IgnoreRule> _rules;
+
+        private IgnoreRuleSet(IgnoreRuleSet? parent, IReadOnlyList<IgnoreRule> rules)
+        {
+            _parent = parent;
+            _rules = rules;
+        }
+
+        internal static IgnoreRuleSet CreateChild(IgnoreRuleSet parent, IReadOnlyList<IgnoreRule> rules)
+            => rules.Count == 0 ? parent : new IgnoreRuleSet(parent, rules);
+
+        internal bool IsIgnored(string absolutePath, bool isDirectory)
+        {
+            var ignored = _parent?.IsIgnored(absolutePath, isDirectory) ?? false;
+            foreach (var rule in _rules)
+            {
+                if (rule.IsMatch(absolutePath, isDirectory))
+                    ignored = !rule.Negated;
+            }
+
+            return ignored;
+        }
+    }
+
+    private sealed class IgnoreRule
+    {
+        private readonly string _sourceDirectory;
+        private readonly Regex _matcher;
+        private readonly bool _directoryOnly;
+        private readonly bool _matchBasenameOnly;
+
+        private IgnoreRule(
+            string sourceDirectory,
+            Regex matcher,
+            bool negated,
+            bool directoryOnly,
+            bool matchBasenameOnly)
+        {
+            _sourceDirectory = sourceDirectory;
+            _matcher = matcher;
+            Negated = negated;
+            _directoryOnly = directoryOnly;
+            _matchBasenameOnly = matchBasenameOnly;
+        }
+
+        internal bool Negated { get; }
+
+        internal static bool TryParse(string sourceDirectory, string rawLine, out IgnoreRule? rule)
+        {
+            rule = null;
+            if (string.IsNullOrWhiteSpace(rawLine))
+                return false;
+
+            var pattern = rawLine.TrimEnd();
+            if (pattern.Length == 0)
+                return false;
+
+            if (pattern[0] == '#' && !pattern.StartsWith(@"\#", StringComparison.Ordinal))
+                return false;
+
+            var negated = false;
+            if (pattern[0] == '!' && !pattern.StartsWith(@"\!", StringComparison.Ordinal))
+            {
+                negated = true;
+                pattern = pattern[1..];
+            }
+            else if (pattern.StartsWith(@"\#", StringComparison.Ordinal) ||
+                     pattern.StartsWith(@"\!", StringComparison.Ordinal))
+            {
+                pattern = pattern[1..];
+            }
+
+            if (pattern.Length == 0)
+                return false;
+
+            var directoryOnly = pattern.EndsWith("/", StringComparison.Ordinal);
+            if (directoryOnly)
+                pattern = pattern[..^1];
+
+            if (pattern.Length == 0)
+                return false;
+
+            if (pattern.StartsWith("/", StringComparison.Ordinal))
+                pattern = pattern[1..];
+
+            pattern = pattern.Replace(@"\#", "#", StringComparison.Ordinal)
+                .Replace(@"\!", "!", StringComparison.Ordinal);
+
+            var matchBasenameOnly = !pattern.Contains('/', StringComparison.Ordinal);
+            var matcher = BuildMatcher(pattern);
+            rule = new IgnoreRule(sourceDirectory, matcher, negated, directoryOnly, matchBasenameOnly);
+            return true;
+        }
+
+        internal bool IsMatch(string absolutePath, bool isDirectory)
+        {
+            if (_directoryOnly && !isDirectory)
+                return false;
+
+            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_sourceDirectory, absolutePath));
+            if (relativePath.Length == 0 ||
+                relativePath == "." ||
+                relativePath.StartsWith("../", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var candidate = _matchBasenameOnly
+                ? Path.GetFileName(relativePath)
+                : relativePath;
+
+            return !string.IsNullOrEmpty(candidate) && _matcher.IsMatch(candidate);
+        }
+
+        private static Regex BuildMatcher(string pattern)
+        {
+            var builder = new StringBuilder();
+            builder.Append('^');
+
+            for (var i = 0; i < pattern.Length; i++)
+            {
+                var ch = pattern[i];
+                if (ch == '*')
+                {
+                    var isDoubleStar = i + 1 < pattern.Length && pattern[i + 1] == '*';
+                    builder.Append(isDoubleStar ? ".*" : "[^/]*");
+                    if (isDoubleStar)
+                        i++;
+                    continue;
+                }
+
+                if (ch == '?')
+                {
+                    builder.Append("[^/]");
+                    continue;
+                }
+
+                builder.Append(Regex.Escape(ch.ToString()));
+            }
+
+            builder.Append('$');
+            var options = RegexOptions.CultureInvariant | RegexOptions.Compiled;
+            if (OperatingSystem.IsWindows())
+                options |= RegexOptions.IgnoreCase;
+            return new Regex(builder.ToString(), options);
+        }
+    }
 
     public FileIndexer(string projectRoot)
     {
@@ -357,7 +512,7 @@ public class FileIndexer
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, IgnoreRuleSet.Empty);
         return new ScanFilesResult(
             files,
             errors,
@@ -374,14 +529,21 @@ public class FileIndexer
         HashSet<string> nonIndexablePaths,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories)
+        HashSet<string> fullyScannedDirectories,
+        IgnoreRuleSet activeIgnoreRules)
     {
+        var relativeDir = ToRelativePath(dir);
+
         // Check for skip directories / スキップ対象ディレクトリかチェック
         var dirName = Path.GetFileName(dir);
-        if (SkipDirs.Contains(dirName))
+        if (SkipDirs.Contains(dirName) || activeIgnoreRules.IsIgnored(dir, isDirectory: true))
+        {
+            listedDirectories.Add(relativeDir);
+            fullyScannedDirectories.Add(relativeDir);
             return true;
+        }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
     }
 
     private bool EnumerateDirectory(
@@ -391,17 +553,23 @@ public class FileIndexer
         HashSet<string> nonIndexablePaths,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories)
+        HashSet<string> fullyScannedDirectories,
+        IgnoreRuleSet inheritedIgnoreRules)
     {
         var fullyScanned = true;
         try
         {
+            var activeIgnoreRules = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, errors, ref fullyScanned);
+
             foreach (var file in Directory.EnumerateFiles(dir))
             {
                 var fileName = Path.GetFileName(file);
 
                 // Skip excluded file names / 除外ファイル名をスキップ
                 if (SkipFiles.Contains(fileName))
+                    continue;
+
+                if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
                     continue;
 
                 // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
@@ -446,7 +614,7 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
             }
         }
         catch (UnauthorizedAccessException)
@@ -467,6 +635,46 @@ public class FileIndexer
 
         return fullyScanned;
     }
+
+    private IgnoreRuleSet LoadIgnoreRulesForDirectory(
+        string dir,
+        IgnoreRuleSet inheritedIgnoreRules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
+        var rules = new List<IgnoreRule>();
+
+        foreach (var ignoreFileName in IgnoreFileNames)
+        {
+            var ignorePath = Path.Combine(dir, ignoreFileName);
+            if (!File.Exists(ignorePath))
+                continue;
+
+            try
+            {
+                foreach (var line in File.ReadLines(ignorePath))
+                {
+                    if (IgnoreRule.TryParse(dir, line, out var rule) && rule != null)
+                        rules.Add(rule);
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+                fullyScanned = false;
+            }
+            catch (IOException)
+            {
+                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+                fullyScanned = false;
+            }
+        }
+
+        return IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules);
+    }
+
+    private static string NormalizeIgnorePath(string path)
+        => path.Replace('\\', '/').TrimEnd('/');
 
     /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).

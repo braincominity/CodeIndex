@@ -33,7 +33,7 @@ src/CodeIndex/
     LineWidthFormatter.cs     — Shared single-line payload clamp helper used by find/references/excerpt/inspect and MCP counterparts to keep focused tokens visible while shrinking long lines
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
-    FileIndexer.cs            — Directory scan, extension/file-name/shebang language detection, FileRecord building
+    FileIndexer.cs            — Directory scan, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
     SymbolExtractor.cs        — Regex-based symbol extraction (32 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction (31 languages with graph queries)
@@ -66,7 +66,7 @@ tests/CodeIndex.Tests/
 ### Indexing pipeline
 
 ```
-Directory scan → Language detection → File read (UTF-8)
+Directory scan (built-in skip lists + `.gitignore` / `.cdidxignore`) → Language detection → File read (UTF-8)
   → UPSERT file record
   → Split into chunks (80 lines, 10-line overlap)
   → Extract symbols via regex
@@ -557,6 +557,7 @@ See [Exit codes](README.md#exit-codes) in README.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
 - **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
 - **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
+- **Git-style ignore awareness** — `FileIndexer` keeps the always-on `SkipDirs` / `SkipFiles` baseline for non-repo directories, then layers user `.gitignore` and optional `.cdidxignore` rules directory-by-directory while scanning. Last-match-wins negation allows users to keep secrets, generated code, fixtures, and build output out of the index without changing cdidx defaults for non-Git trees.
 - **Literal-safe search by default** — Search uses token-by-token quoting by default to avoid FTS syntax errors. Raw FTS5 syntax is opt-in via `--fts` or MCP `rawQuery`.
 - **Path-aware narrowing and ranking** — `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` share path include/exclude filters plus `--exclude-tests`. Read queries prefer source files over tests/docs, and full-text search boosts exact symbol-name and path matches to surface likely implementation files first.
 - **Compact search snippets for AI** — `search --json` and MCP `search` return match-centered snippets with explicit snippet ranges, match lines, highlights, and context counts instead of whole chunks. `--snippet-lines` lets clients trade recall for smaller payloads.
@@ -1004,7 +1005,7 @@ src/CodeIndex/
     LineWidthFormatter.cs     — find/references/excerpt/inspect と MCP 側の長い単一行クランプを共有し、注目トークンを残したまま行幅を縮めるヘルパー
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
-    FileIndexer.cs            — ディレクトリ走査、拡張子・ファイル名・shebang による言語検出、FileRecord構築
+    FileIndexer.cs            — ディレクトリ走査、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
     SymbolExtractor.cs        — 正規表現によるシンボル抽出（32言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
@@ -1037,7 +1038,7 @@ tests/CodeIndex.Tests/
 ### インデックスパイプライン
 
 ```
-ディレクトリ走査 → 言語検出 → ファイル読み込み（UTF-8）
+ディレクトリ走査（組み込みスキップ + `.gitignore` / `.cdidxignore`）→ 言語検出 → ファイル読み込み（UTF-8）
   → ファイルレコードUPSERT
   → チャンク分割（80行、10行重複）
   → 正規表現でシンボル抽出
@@ -1528,6 +1529,7 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 - **バッチコミット** — 書き込み性能のため1トランザクション500レコード。fsyncオーバーヘッドを削減。
 - **WALモード + busy_timeout** — Write-Ahead Loggingで読み書き同時アクセスとクラッシュ安全性を確保。5秒のbusy_timeoutで即座のSQLITE_BUSYエラーを回避。
 - **デフォルトはリテラル安全検索** — 検索は既定でトークンごとに引用してFTS構文エラーを避ける。生のFTS5構文は `--fts` またはMCPの `rawQuery` で明示 opt-in。
+- **Git 風 ignore ルール対応** — `FileIndexer` は non-repo ディレクトリ向けに常時有効な `SkipDirs` / `SkipFiles` を維持しつつ、走査時にはユーザーの `.gitignore` と任意の `.cdidxignore` をディレクトリごとに積み上げて適用する。後勝ちの negation により、秘密情報、生成コード、fixture、ビルド成果物を index から外しつつ、Git でないツリーに対する cdidx 既定の挙動も崩さない。
 - **パス考慮の絞り込みとランキング** — `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` はパス include/exclude フィルタと `--exclude-tests` を共有する。読み取りクエリは tests や docs より source を優先し、全文検索はシンボル名やパスの exact match を追加ブーストして、実装ファイルを先に返しやすくする。
 - **AI向けの軽量検索スニペット** — `search --json` と MCP の `search` は、チャンク全文ではなく snippet range、match line、highlight、context count を持つ一致中心スニペットを返す。`--snippet-lines` でペイロード量と文脈量のバランスを取れる。
 - **初動向けの repo map** — `map` は、インデックス済みデータから言語、モジュール、主要ファイル、ホットスポット、推定エントリポイントを集約し、AIクライアントが精密検索前に見るべき場所を決めやすくする。シンボル抽出が `Main` 系シンボルを出さない場合でも、既知のトップレベル実行ファイルへフォールバックして入口候補を補う。

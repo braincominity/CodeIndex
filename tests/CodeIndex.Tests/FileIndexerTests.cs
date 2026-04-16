@@ -239,6 +239,66 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_RespectsGitignorePatternsAndNegation()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "secret.py\nbuild_output/\n*.generated.js\n!keep.generated.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
+            File.WriteAllText(Path.Combine(tempDir, "app.generated.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "keep.generated.js"), "export const kept = true;");
+            Directory.CreateDirectory(Path.Combine(tempDir, "build_output"));
+            File.WriteAllText(Path.Combine(tempDir, "build_output", "inside.py"), "print('ignored')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.generated.js", "keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsCdidxignoreAndNestedGitignore()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "fixtures"));
+            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "fixtures/\n*.cache.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "src", ".gitignore"), "*.generated.cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "src", "Service.cs"), "public class Service { }");
+            File.WriteAllText(Path.Combine(tempDir, "src", "Generated.generated.cs"), "public class Generated { }");
+            File.WriteAllText(Path.Combine(tempDir, "fixtures", "sample.py"), "print('fixture')");
+            File.WriteAllText(Path.Combine(tempDir, "app.cache.js"), "export const cache = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js", "src/.gitignore", "src/Service.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_IncludesModernNodeModuleExtensions()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
