@@ -27,6 +27,12 @@ public static class SymbolExtractor
         string? VisibilityGroup = null,
         string? ReturnTypeGroup = null);
 
+    private enum CssContextKind
+    {
+        GroupingAtRule,
+        QualifiedRule,
+    }
+
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
     private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
     private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async|Partial)";
@@ -401,9 +407,9 @@ public static class SymbolExtractor
             // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
             new("class",    new Regex(@"^\s*(?<name>(?:[#.]?[\w-]+|\*)(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
-            new("class",    new Regex(@"^\.(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*\.(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS ID selector at top level / トップレベルのIDセレクタ
-            new("function", new Regex(@"^#(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*#(?<name>[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS custom property declaration / CSS カスタムプロパティ宣言
             new("property", new Regex(@"^\s*--(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             // SCSS $variable declaration / SCSS 変数宣言
@@ -474,8 +480,8 @@ public static class SymbolExtractor
         var csharpSwitchExpressionLines = lang == "csharp"
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
-        var cssBraceDepths = lang == "css"
-            ? FindCssBraceDepths(lines)
+        var cssQualifiedRuleAncestors = lang == "css"
+            ? FindCssQualifiedRuleAncestors(lines)
             : null;
         var symbols = new List<SymbolRecord>();
 
@@ -493,7 +499,7 @@ public static class SymbolExtractor
                 if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
                     continue;
 
-                if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssBraceDepths, i))
+                if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssQualifiedRuleAncestors, i))
                     continue;
 
                 var name = match.Groups["name"].Success
@@ -836,10 +842,10 @@ public static class SymbolExtractor
         string? lang,
         SymbolPattern pattern,
         string matchLine,
-        int[]? cssBraceDepths,
+        bool[]? cssQualifiedRuleAncestors,
         int lineIndex)
     {
-        if (lang != "css" || cssBraceDepths == null || cssBraceDepths[lineIndex] == 0)
+        if (lang != "css" || cssQualifiedRuleAncestors == null || !cssQualifiedRuleAncestors[lineIndex])
             return false;
 
         var trimmed = matchLine.TrimStart();
@@ -847,10 +853,11 @@ public static class SymbolExtractor
             || (pattern.Kind == "function" && trimmed.StartsWith('#'));
     }
 
-    private static int[] FindCssBraceDepths(string[] lines)
+    private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
     {
-        var depths = new int[lines.Length];
-        var depth = 0;
+        var qualifiedRuleAncestors = new bool[lines.Length];
+        var contexts = new Stack<CssContextKind>();
+        var qualifiedRuleDepth = 0;
         var parenthesisDepth = 0;
         var insideBlockComment = false;
         var inSingleQuote = false;
@@ -858,8 +865,9 @@ public static class SymbolExtractor
 
         for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
-            depths[lineIndex] = depth;
+            qualifiedRuleAncestors[lineIndex] = qualifiedRuleDepth > 0;
             var line = lines[lineIndex];
+            var segmentStart = 0;
 
             for (int i = 0; i < line.Length; i++)
             {
@@ -883,7 +891,7 @@ public static class SymbolExtractor
                     continue;
                 }
 
-                if (!inSingleQuote && !inDoubleQuote && parenthesisDepth == 0 && i + 1 < line.Length && ch == '/' && line[i + 1] == '/')
+                if (!inSingleQuote && !inDoubleQuote && parenthesisDepth == 0 && i + 1 < line.Length && ch == '/' && line[i + 1] == '/' && HasOnlyWhitespaceBefore(line, i))
                     break;
 
                 if ((inSingleQuote || inDoubleQuote) && ch == '\\' && i + 1 < line.Length)
@@ -908,17 +916,45 @@ public static class SymbolExtractor
                     continue;
 
                 if (ch == '{')
-                    depth++;
-                else if (ch == '}' && depth > 0)
-                    depth--;
+                {
+                    var segment = line[segmentStart..i].Trim();
+                    var contextKind = segment.StartsWith('@')
+                        ? CssContextKind.GroupingAtRule
+                        : CssContextKind.QualifiedRule;
+                    contexts.Push(contextKind);
+                    if (contextKind == CssContextKind.QualifiedRule)
+                        qualifiedRuleDepth++;
+
+                    segmentStart = i + 1;
+                }
+                else if (ch == '}' && contexts.Count > 0)
+                {
+                    if (contexts.Pop() == CssContextKind.QualifiedRule)
+                        qualifiedRuleDepth--;
+
+                    segmentStart = i + 1;
+                }
                 else if (ch == '(')
                     parenthesisDepth++;
                 else if (ch == ')' && parenthesisDepth > 0)
                     parenthesisDepth--;
+                else if (ch == ';')
+                    segmentStart = i + 1;
             }
         }
 
-        return depths;
+        return qualifiedRuleAncestors;
+    }
+
+    private static bool HasOnlyWhitespaceBefore(string line, int index)
+    {
+        for (int i = 0; i < index; i++)
+        {
+            if (!char.IsWhiteSpace(line[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(

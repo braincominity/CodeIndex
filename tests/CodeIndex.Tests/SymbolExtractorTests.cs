@@ -1525,7 +1525,7 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSS_OnlyCapturesTopLevelSelectors()
+    public void Extract_CSS_CapturesSelectorsInsideGroupingAtRulesButNotTrueNesting()
     {
         var content = """
             .top-level {
@@ -1533,12 +1533,18 @@ public class SymbolExtractorTests
             }
 
             @media screen {
-              a:hover {
+              .responsive:hover {
                 color: blue;
               }
 
-              .nested {
+              .media-class {
                 color: green;
+              }
+            }
+
+            @supports (display: grid) {
+              .supports-class {
+                display: grid;
               }
             }
 
@@ -1555,9 +1561,10 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "top-level");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".responsive:hover");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "media-class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "supports-class");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "parent");
-        Assert.DoesNotContain(symbols, s => s.Name == "a:hover");
-        Assert.DoesNotContain(symbols, s => s.Name == "nested");
         Assert.DoesNotContain(symbols, s => s.Name == "child");
         Assert.DoesNotContain(symbols, s => s.Name == "nested-id");
     }
