@@ -454,7 +454,7 @@ public static class SymbolExtractor
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CssFontFaceFamilyRegex = new(@"(?:^|[;{])\s*font-family\s*:\s*(?<value>[^;]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssFontFaceFamilyRegex = new(@"(?:^|[;{])\s*font-family\s*:\s*(?<value>(?:""[^""]*""|'[^']*'|[^;])+)\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -769,28 +769,23 @@ public static class SymbolExtractor
     {
         fontFamily = string.Empty;
         var lastLineIndex = Math.Min(lines.Length, Math.Max(startIndex + 1, endLine)) - 1;
+        var blockText = string.Join('\n', lines[startIndex..(lastLineIndex + 1)]);
+        var match = CssFontFaceFamilyRegex.Match(blockText);
+        if (!match.Success)
+            return false;
 
-        for (int i = startIndex; i <= lastLineIndex; i++)
-        {
-            var match = CssFontFaceFamilyRegex.Match(lines[i]);
-            if (!match.Success)
-                continue;
+        var rawName = match.Groups["value"].Value.Trim();
+        if (rawName.Length == 0)
+            return false;
 
-            var rawName = match.Groups["value"].Value.Trim();
-            if (rawName.Length == 0)
-                continue;
+        if ((rawName.StartsWith('\'') && rawName.EndsWith('\'')) || (rawName.StartsWith('"') && rawName.EndsWith('"')))
+            rawName = rawName[1..^1].Trim();
 
-            if ((rawName.StartsWith('\'') && rawName.EndsWith('\'')) || (rawName.StartsWith('"') && rawName.EndsWith('"')))
-                rawName = rawName[1..^1].Trim();
+        if (rawName.Length == 0)
+            return false;
 
-            if (rawName.Length == 0)
-                continue;
-
-            fontFamily = rawName;
-            return true;
-        }
-
-        return false;
+        fontFamily = rawName;
+        return true;
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
