@@ -3377,10 +3377,12 @@ public static class SymbolExtractor
             if (lookahead >= sanitizedLine.Length)
                 return false;
 
-            return sanitizedLine[lookahead] == '#' || IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[lookahead]);
+            return sanitizedLine[lookahead] is '[' or '#'
+                || IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[lookahead]);
         }
 
-        return ch == '#' || IsJavaScriptTypeScriptIdentifierStart(ch);
+        return ch is '[' or '#'
+            || IsJavaScriptTypeScriptIdentifierStart(ch);
     }
 
     private static bool CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(string? previousReturnToken)
