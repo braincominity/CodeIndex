@@ -1319,6 +1319,40 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_DoesNotDeleteIndexedFileForMalformedBracketIgnoreRule()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "[a.py"), "print('keep literal')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("[a.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "[a.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "[a.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(".gitignore:1", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Contains("Invalid ignore rule skipped", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("[a.py", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithCommits_FallsBackToFullScanWhenIgnoreFilesChange()
     {
         var projectRoot = CreateTempProject();

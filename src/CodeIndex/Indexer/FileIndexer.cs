@@ -419,6 +419,9 @@ public class FileIndexer
         private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder)
         {
             var contentStart = index + 1;
+            if (contentStart >= pattern.Count)
+                throw new ArgumentException("malformed character class");
+
             if (pattern[contentStart] is { Value: '!', Escaped: false })
             {
                 contentStart++;
@@ -428,6 +431,9 @@ public class FileIndexer
                 contentStart++;
             }
 
+            if (contentStart >= pattern.Count)
+                throw new ArgumentException("malformed character class");
+
             var allowLeadingRightBracket =
                 contentStart < pattern.Count &&
                 pattern[contentStart] is { Value: ']', Escaped: false };
@@ -435,11 +441,8 @@ public class FileIndexer
             var scanStart = allowLeadingRightBracket ? contentStart + 1 : contentStart;
             var closingIndex = FindCharacterClassClosingIndex(pattern, scanStart);
 
-            if (allowLeadingRightBracket && closingIndex < scanStart)
-                throw new ArgumentException("malformed character class");
-
             if (closingIndex < scanStart)
-                return false;
+                throw new ArgumentException("malformed character class");
 
             builder.Append('[');
             if (pattern[index + 1] is { Value: '!', Escaped: false })

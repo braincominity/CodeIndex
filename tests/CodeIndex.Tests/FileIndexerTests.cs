@@ -817,7 +817,8 @@ public class FileIndexerTests
         try
         {
             Directory.CreateDirectory(tempDir);
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[z-a].py\n[!].cs\nignored.py\n");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[z-a].py\n[!].cs\n[a.py\n[!a\n[^\n[\n[]\nignored.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "[a.py"), "print('kept malformed literal')");
             File.WriteAllText(Path.Combine(tempDir, "ignored.py"), "print('ignored')");
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
 
@@ -828,8 +829,8 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal([".gitignore", "keep.py"], files);
-            Assert.Equal(2, scanResult.Errors.Count);
+            Assert.Equal([".gitignore", "[a.py", "keep.py"], files);
+            Assert.Equal(7, scanResult.Errors.Count);
             Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
         }
