@@ -1845,6 +1845,67 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CssExactNameSeparatesLiteralSelectors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_css_exact_name");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "styles.css"),
+                """
+                :root { --accent: #09f; }
+                .root { color: red; }
+                #root { color: blue; }
+                .btn:hover { color: green; }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                [".root", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (idExitCode, idStdout, idStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["#root", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+            var (pseudoExitCode, pseudoStdout, pseudoStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                [".btn:hover", "--db", dbPath, "--json", "--exact-name", "--lang", "css"],
+                _jsonOptions));
+
+            var classRows = ParseJsonLines(classStdout);
+            var idRows = ParseJsonLines(idStdout);
+            var pseudoRows = ParseJsonLines(pseudoStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, classExitCode);
+            Assert.Equal(string.Empty, classStderr);
+            Assert.Single(classRows);
+            Assert.Equal(".root", classRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", classRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, idExitCode);
+            Assert.Equal(string.Empty, idStderr);
+            Assert.Single(idRows);
+            Assert.Equal("#root", idRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("function", idRows[0].RootElement.GetProperty("kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, pseudoExitCode);
+            Assert.Equal(string.Empty, pseudoStderr);
+            Assert.Single(pseudoRows);
+            Assert.Equal(".btn:hover", pseudoRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", pseudoRows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");
@@ -6192,6 +6253,14 @@ public class QueryCommandRunnerTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Last();
         return JsonDocument.Parse(jsonLine);
+    }
+
+    private static List<JsonDocument> ParseJsonLines(string stdout)
+    {
+        return stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => JsonDocument.Parse(line))
+            .ToList();
     }
 
     private static (string ProjectRoot, string DbPath) CreateUnusedFixtureDb()
