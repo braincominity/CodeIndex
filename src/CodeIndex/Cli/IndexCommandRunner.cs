@@ -80,10 +80,12 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
+
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
         {
-            var dryIndexer = new FileIndexer(options.ProjectPath);
+            var dryIndexer = new FileIndexer(options.ProjectPath, ignoreCase);
             IReadOnlyList<string> dryCandidates;
             var errorList = new List<object>();
             var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -249,7 +251,7 @@ public static class IndexCommandRunner
         AddToGitExclude(options.ProjectPath, dbPath);
 
         var writer = new DbWriter(db.Connection);
-        var indexer = new FileIndexer(options.ProjectPath);
+        var indexer = new FileIndexer(options.ProjectPath, ignoreCase);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 

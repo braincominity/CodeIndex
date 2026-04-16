@@ -175,6 +175,7 @@ public class FileIndexer
     private const long MaxFileSize = 10 * 1024 * 1024;
 
     private readonly string _projectRoot;
+    private readonly bool _ignoreCase;
 
     private sealed class IgnoreRuleSet
     {
@@ -230,7 +231,7 @@ public class FileIndexer
 
         internal bool Negated { get; }
 
-        internal static bool TryParse(string sourceDirectory, string rawLine, out IgnoreRule? rule, out string? errorMessage)
+        internal static bool TryParse(string sourceDirectory, string rawLine, bool ignoreCase, out IgnoreRule? rule, out string? errorMessage)
         {
             rule = null;
             errorMessage = null;
@@ -267,7 +268,7 @@ public class FileIndexer
             var matchBasenameOnly = !anchoredToSourceDirectory && !tokens.Any(token => token is { Value: '/', Escaped: false });
             try
             {
-                var matcher = BuildMatcher(tokens);
+                var matcher = BuildMatcher(tokens, ignoreCase);
                 rule = new IgnoreRule(sourceDirectory, matcher, negated, directoryOnly, matchBasenameOnly);
                 return true;
             }
@@ -335,7 +336,7 @@ public class FileIndexer
             return tokens.Count > 0;
         }
 
-        private static Regex BuildMatcher(IReadOnlyList<PatternToken> pattern)
+        private static Regex BuildMatcher(IReadOnlyList<PatternToken> pattern, bool ignoreCase)
         {
             var builder = new StringBuilder();
             builder.Append('^');
@@ -373,7 +374,7 @@ public class FileIndexer
                             continue;
                         }
 
-                        builder.Append(".*");
+                        builder.Append("[^/]*");
                     }
                     else
                     {
@@ -399,7 +400,7 @@ public class FileIndexer
 
             builder.Append('$');
             var options = RegexOptions.CultureInvariant | RegexOptions.Compiled;
-            if (OperatingSystem.IsWindows())
+            if (ignoreCase)
                 options |= RegexOptions.IgnoreCase;
             return new Regex(builder.ToString(), options);
         }
@@ -466,8 +467,60 @@ public class FileIndexer
     }
 
     public FileIndexer(string projectRoot)
+        : this(projectRoot, ignoreCase: ProbeFileSystemIgnoreCase(projectRoot))
+    {
+    }
+
+    public FileIndexer(string projectRoot, bool ignoreCase)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
+        _ignoreCase = ignoreCase;
+    }
+
+    private static bool ProbeFileSystemIgnoreCase(string projectRoot)
+    {
+        try
+        {
+            var normalizedRoot = Path.GetFullPath(projectRoot);
+            if (TryCreateCaseVariant(normalizedRoot, out var rootVariant))
+                return Directory.Exists(rootVariant);
+
+            var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
+            File.WriteAllText(probePath, string.Empty);
+            try
+            {
+                return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(probeVariant);
+            }
+            finally
+            {
+                if (File.Exists(probePath))
+                    File.Delete(probePath);
+            }
+        }
+        catch
+        {
+            return OperatingSystem.IsWindows();
+        }
+    }
+
+    private static bool TryCreateCaseVariant(string path, out string variant)
+    {
+        var chars = path.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            var ch = chars[i];
+            if (!char.IsLetter(ch))
+                continue;
+
+            chars[i] = char.IsUpper(ch)
+                ? char.ToLowerInvariant(ch)
+                : char.ToUpperInvariant(ch);
+            variant = new string(chars);
+            return true;
+        }
+
+        variant = path;
+        return false;
     }
 
     /// <summary>
@@ -857,7 +910,7 @@ public class FileIndexer
                 foreach (var line in File.ReadLines(ignorePath))
                 {
                     lineNumber++;
-                    if (IgnoreRule.TryParse(dir, line, out var rule, out var errorMessage) && rule != null)
+                    if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
                         rules.Add(rule);
                     else if (errorMessage != null)
                         errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage));

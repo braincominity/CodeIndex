@@ -240,6 +240,24 @@ public class GitHelperTests : IDisposable
         Assert.True(GitHelper.TryIsWorktreeDirty(repoDir));
     }
 
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsTrue()
+    {
+        var repoDir = CreateGitRepo();
+        RunGit(repoDir, "config", "core.ignorecase", "true");
+
+        Assert.True(GitHelper.ResolveIgnoreCase(repoDir));
+    }
+
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsFalse()
+    {
+        var repoDir = CreateGitRepo();
+        RunGit(repoDir, "config", "core.ignorecase", "false");
+
+        Assert.False(GitHelper.ResolveIgnoreCase(repoDir));
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");

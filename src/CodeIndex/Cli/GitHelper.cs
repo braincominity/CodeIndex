@@ -105,6 +105,22 @@ public static class GitHelper
     }
 
     /// <summary>
+    /// Resolve whether ignore matching should be case-insensitive for this workspace.
+    /// git 管理下なら core.ignorecase を優先し、そうでなければファイルシステム特性を推定する。
+    /// </summary>
+    public static bool ResolveIgnoreCase(string projectRoot)
+    {
+        if (ResolveGitCommonDir(projectRoot) != null)
+        {
+            var configured = TryRunGit(projectRoot, "config", "--bool", "--get", "core.ignorecase")?.Trim();
+            if (bool.TryParse(configured, out var ignoreCase))
+                return ignoreCase;
+        }
+
+        return ProbeFileSystemIgnoreCase(projectRoot);
+    }
+
+    /// <summary>
     /// Try to determine whether the worktree has uncommitted changes.
     /// worktree に未コミット変更があるか安全に判定する。
     /// </summary>
@@ -149,5 +165,64 @@ public static class GitHelper
         {
             return null;
         }
+    }
+
+    private static bool ProbeFileSystemIgnoreCase(string projectRoot)
+    {
+        try
+        {
+            var normalizedRoot = Path.GetFullPath(projectRoot);
+            if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
+                return ignoreCase;
+
+            var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
+            File.WriteAllText(probePath, string.Empty);
+            try
+            {
+                if (TryCreateCaseVariant(probePath, out var variant))
+                    return File.Exists(variant);
+            }
+            finally
+            {
+                if (File.Exists(probePath))
+                    File.Delete(probePath);
+            }
+        }
+        catch
+        {
+            // Best-effort fallback only / best-effort のフォールバックのみ
+        }
+
+        return OperatingSystem.IsWindows();
+    }
+
+    private static bool TryProbeExistingDirectoryPath(string path, out bool ignoreCase)
+    {
+        ignoreCase = false;
+        if (!TryCreateCaseVariant(path, out var variant))
+            return false;
+
+        ignoreCase = Directory.Exists(variant);
+        return true;
+    }
+
+    private static bool TryCreateCaseVariant(string path, out string variant)
+    {
+        var chars = path.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            var ch = chars[i];
+            if (!char.IsLetter(ch))
+                continue;
+
+            chars[i] = char.IsUpper(ch)
+                ? char.ToLowerInvariant(ch)
+                : char.ToUpperInvariant(ch);
+            variant = new string(chars);
+            return true;
+        }
+
+        variant = path;
+        return false;
     }
 }

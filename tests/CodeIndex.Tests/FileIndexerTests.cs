@@ -1,6 +1,7 @@
-using CodeIndex.Indexer;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using CodeIndex.Cli;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
@@ -432,6 +433,64 @@ public class FileIndexerTests
                 .ToList();
 
             Assert.Equal([".gitignore", "foo/bar.py", "foo/keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_TreatsNonSpecialDoubleStarAsSingleSegmentWildcard()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "dir"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a", "x"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "dir/a**b.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "dir", "ab.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "dir", "axxb.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "dir", "a", "x", "b.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "dir/a/x/b.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitIgnoreCaseSettingFromRepository()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            RunGit(tempDir, "config", "core.ignorecase", "true");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "FOO.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "foo.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
         }
         finally
         {
@@ -967,5 +1026,32 @@ public class FileIndexerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
+    private static string RunGit(string workDir, params string[] args)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
+
+        return stdout;
     }
 }
