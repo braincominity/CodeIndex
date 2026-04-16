@@ -2515,6 +2515,54 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpConversionOperatorsUseDistinctExactNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_names");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Money.cs",
+                "csharp",
+                """
+                public struct Money
+                {
+                    public Money(decimal amount) { }
+                    public static explicit operator Money(decimal d) => new();
+                }
+                """);
+
+            var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                _jsonOptions));
+
+            using var operatorDocument = ParseJsonOutput(operatorStdout);
+            var operatorSymbol = operatorDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, operatorExitCode);
+            Assert.Equal(string.Empty, operatorStderr);
+            Assert.Equal("explicit operator Money", operatorSymbol.GetProperty("name").GetString());
+
+            var (constructorExitCode, constructorStdout, constructorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "Money", "--exact-name"],
+                _jsonOptions));
+
+            using var constructorDocument = ParseJsonOutput(constructorStdout);
+            var constructorSymbol = constructorDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, constructorExitCode);
+            Assert.Equal(string.Empty, constructorStderr);
+            Assert.Equal("Money", constructorSymbol.GetProperty("name").GetString());
+            Assert.Contains("public Money(decimal amount)", constructorSymbol.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");

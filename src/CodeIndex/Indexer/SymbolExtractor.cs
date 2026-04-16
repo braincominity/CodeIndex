@@ -242,10 +242,10 @@ public static class SymbolExtractor
             new("class",     new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern
             // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置
-            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?:implicit|explicit)\s+operator\s+(?<name>(?:global::)?[\w?.<>\[\],:]+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?<name>(?:implicit|explicit)\s+operator\s+(?:checked\s+)?(?:global::)?[\w?.<>\[\],:]+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern
             // 演算子オーバーロード — メソッドパターンより前に配置
-            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+\S+\s+(?<name>operator\s+\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?static\s+(?:checked\s+)?\S+\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
             // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.

@@ -251,8 +251,11 @@ public class DbReaderTests : IDisposable
             public struct Money
             {
                 public static Money operator +(Money a, Money b) => new();
+                public static checked Money operator checked +(Money a, Money b) => new();
                 public static implicit operator decimal(Money m) => 0m;
                 public static explicit operator Money(decimal d) => new();
+                public Money(decimal amount) { }
+                public static explicit operator checked byte(Money m) => 0;
             }
 
             public class Bag
@@ -263,7 +266,10 @@ public class DbReaderTests : IDisposable
             """);
 
         Assert.Single(_reader.SearchSymbols("operator +", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("decimal", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("operator checked +", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("implicit operator decimal", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
     }

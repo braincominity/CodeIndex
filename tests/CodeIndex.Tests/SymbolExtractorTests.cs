@@ -3157,14 +3157,16 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsOperatorOverloads()
     {
-        var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
+        var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static checked Money operator checked +(Money a, Money b) => new();\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n    public static explicit operator checked byte(Money m) => 0;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator ==");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "decimal");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Money" && s.Signature != null && s.Signature.Contains("explicit operator", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator decimal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Money");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked byte");
     }
 
     [Fact]
