@@ -2504,6 +2504,112 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_GroupByNameJson_CollapsesDuplicateDefinitionSites()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FirstHelper.cs", "csharp",
+                """
+                public class FirstHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/SecondHelper.cs", "csharp",
+                """
+                public class SecondHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(2, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal("name", json.GetProperty("grouped_by").GetString());
+            Assert.Equal("SharedHelper", hotspot.GetProperty("name").GetString());
+            Assert.Equal("function", hotspot.GetProperty("kind").GetString());
+            Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(2, hotspot.GetProperty("paths").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByNameHumanOutput_ShowsCollapsedSiteCount()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/FirstHelper.cs", "csharp",
+                """
+                public class FirstHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/SecondHelper.cs", "csharp",
+                """
+                public class SecondHelper
+                {
+                    private void SharedHelper() { }
+
+                    public void Use()
+                    {
+                        SharedHelper();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("SharedHelper", stdout);
+            Assert.Contains("(×2 sites)", stdout);
+            Assert.DoesNotContain("(×1 sites)", stdout);
+            Assert.Contains("(1 unique names, 2 definition sites)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void BuildExactZeroHint_NoRelaxedMatch_DoesNotRunSampleQuery()
     {
         var sampleInvoked = false;

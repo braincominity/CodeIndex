@@ -423,6 +423,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--kind <kind>` | `definition`, `symbols` | Filter by symbol kind (function/class/struct/interface/enum/property/event/delegate/namespace/import) |
 | `--body` | `definition`, `inspect` | Include reconstructed body content when the language extractor can infer the body range |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `unused` | Return only the result count (with `--json`: a single count object; graph-aware commands may add trust metadata) |
+| `--group-by-name` | `hotspots` | Collapse rows that share the same `(name, kind)` across files into one representative result while preserving `definition_sites` / `paths` metadata in JSON |
 | `--start <line>` | `excerpt` | Start line for excerpt reconstruction |
 | `--end <line>` | `excerpt` | End line for excerpt reconstruction (defaults to `--start`) |
 | `--before <n>` | `excerpt`, `find` | Include extra context lines before the requested excerpt or match |
@@ -1267,6 +1268,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--kind <kind>` | `definition`, `symbols` | シンボル種別でフィルタ（function/class/struct/interface/enum/property/event/delegate/namespace/import） |
 | `--body` | `definition`, `inspect` | 言語抽出器が本体範囲を推論できる場合に本体内容も含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `unused` | 結果のカウントだけを返す（`--json` 併用時は単一の count オブジェクト。graph 系は trust metadata を含む場合あり） |
+| `--group-by-name` | `hotspots` | ファイルをまたいで同じ `(name, kind)` を共有する行を代表1件に集約し、JSON では `definition_sites` / `paths` metadata を保持したまま返す |
 | `--start <line>` | `excerpt` | 抜粋再構成の開始行 |
 | `--end <line>` | `excerpt` | 抜粋再構成の終了行（省略時は `--start` と同じ） |
 | `--before <n>` | `excerpt`, `find` | 指定範囲または一致箇所の前に追加する文脈行数 |
