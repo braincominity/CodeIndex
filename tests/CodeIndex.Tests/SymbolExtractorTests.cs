@@ -1703,6 +1703,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DoesNotLeakClassMethodLocalSyntheticClassExpressionsWithObjectReturnType()
+    {
+        var content = """
+            export class Outer {
+                method(): { value: string } {
+                    var Service = class Hidden {
+                        run(): void {}
+                    };
+                    module.exports = class ModuleHidden {
+                        keep(): void {}
+                    };
+                    return { value: "x" };
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerName == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "keep");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DoesNotLeakClassMethodDirectLocalClasses()
     {
         var content = """
@@ -1971,6 +1997,30 @@ public class SymbolExtractorTests
 
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Inner");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotLeakObjectLiteralConciseMethodSyntheticClassExpressionsWithObjectReturnType()
+    {
+        var content = """
+            const obj = {
+                method(): { value: string } {
+                    var Service = class Hidden {
+                        run(): void {}
+                    };
+                    module.exports = class ModuleHidden {
+                        keep(): void {}
+                    };
+                    return { value: "x" };
+                }
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "keep");
     }
 
     [Fact]

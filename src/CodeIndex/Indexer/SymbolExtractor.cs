@@ -713,6 +713,13 @@ public static class SymbolExtractor
         var pendingClassScope = false;
         var pendingNamespaceScope = false;
         var pendingConciseMethodScope = false;
+        var pendingConciseMethodReturnType = false;
+        var conciseMethodReturnParenDepth = 0;
+        var conciseMethodReturnBracketDepth = 0;
+        var conciseMethodReturnAngleDepth = 0;
+        var conciseMethodReturnBraceDepth = 0;
+        var conciseMethodReturnSawToken = false;
+        string? previousConciseMethodReturnToken = null;
         var pendingArrowBody = false;
         var arrowExpressionActive = false;
         var arrowExpressionParenDepth = 0;
@@ -761,6 +768,176 @@ public static class SymbolExtractor
                     pendingArrowBody = false;
                 }
 
+                if (pendingConciseMethodReturnType)
+                {
+                    if (ch == '(')
+                    {
+                        conciseMethodReturnParenDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "(";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == ')' && conciseMethodReturnParenDepth > 0)
+                    {
+                        conciseMethodReturnParenDepth--;
+                        previousConciseMethodReturnToken = ")";
+                        previousTokenKind = JavaScriptPrevTokenKind.CloseParen;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '[')
+                    {
+                        conciseMethodReturnBracketDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "[";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == ']' && conciseMethodReturnBracketDepth > 0)
+                    {
+                        conciseMethodReturnBracketDepth--;
+                        previousConciseMethodReturnToken = "]";
+                        previousTokenKind = JavaScriptPrevTokenKind.CloseBracket;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '<')
+                    {
+                        conciseMethodReturnAngleDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "<";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '>' && conciseMethodReturnAngleDepth > 0)
+                    {
+                        conciseMethodReturnAngleDepth--;
+                        previousConciseMethodReturnToken = ">";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '{')
+                    {
+                        if (conciseMethodReturnParenDepth == 0
+                            && conciseMethodReturnBracketDepth == 0
+                            && conciseMethodReturnAngleDepth == 0
+                            && conciseMethodReturnBraceDepth == 0)
+                        {
+                            if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(previousConciseMethodReturnToken))
+                            {
+                                conciseMethodReturnBraceDepth++;
+                                conciseMethodReturnSawToken = true;
+                                previousConciseMethodReturnToken = "{";
+                                previousTokenKind = JavaScriptPrevTokenKind.Other;
+                                previousIdentifier = null;
+                                previousSignificantChar = ch;
+                                continue;
+                            }
+
+                            if (conciseMethodReturnSawToken)
+                            {
+                                linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                                scopeStack.Push(JavaScriptScopeKind.Function);
+                                pendingConciseMethodScope = false;
+                                pendingConciseMethodReturnType = false;
+                                conciseMethodReturnParenDepth = 0;
+                                conciseMethodReturnBracketDepth = 0;
+                                conciseMethodReturnAngleDepth = 0;
+                                conciseMethodReturnBraceDepth = 0;
+                                conciseMethodReturnSawToken = false;
+                                previousConciseMethodReturnToken = null;
+                                previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                                previousIdentifier = null;
+                                previousSignificantChar = ch;
+                                continue;
+                            }
+                        }
+
+                        conciseMethodReturnBraceDepth++;
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "{";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '}' && conciseMethodReturnBraceDepth > 0)
+                    {
+                        conciseMethodReturnBraceDepth--;
+                        previousConciseMethodReturnToken = "}";
+                        previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '?' || ch == ':' || ch == '|' || ch == '&' || ch == ',')
+                    {
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = ch.ToString();
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = ch;
+                        continue;
+                    }
+
+                    if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+                    {
+                        linePrivateColumns[column + 1] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = "=>";
+                        previousTokenKind = JavaScriptPrevTokenKind.Other;
+                        previousIdentifier = null;
+                        previousSignificantChar = '>';
+                        column++;
+                        continue;
+                    }
+
+                    if (IsJavaScriptTypeScriptIdentifierStart(ch))
+                    {
+                        var returnTokenStart = column;
+                        column++;
+                        while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
+                        {
+                            linePrivateColumns[column] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
+                            column++;
+                        }
+
+                        conciseMethodReturnSawToken = true;
+                        previousConciseMethodReturnToken = sanitizedLine[returnTokenStart..column];
+                        previousTokenKind = JavaScriptPrevTokenKind.Identifier;
+                        previousIdentifier = previousConciseMethodReturnToken;
+                        previousSignificantChar = sanitizedLine[column - 1];
+                        column--;
+                        continue;
+                    }
+
+                    conciseMethodReturnSawToken = true;
+                    previousConciseMethodReturnToken = ch.ToString();
+                    previousTokenKind = JavaScriptPrevTokenKind.Other;
+                    previousIdentifier = null;
+                    previousSignificantChar = ch;
+                    continue;
+                }
+
                 if (IsJavaScriptTypeScriptIdentifierStart(ch))
                 {
                     var tokenStart = column;
@@ -778,6 +955,7 @@ public static class SymbolExtractor
                         pendingFunctionScope = true;
                         pendingStaticBlockScope = false;
                         pendingConciseMethodScope = false;
+                        pendingConciseMethodReturnType = false;
                     }
                     else if (token == "static")
                     {
@@ -788,6 +966,7 @@ public static class SymbolExtractor
                         pendingClassScope = true;
                         pendingStaticBlockScope = false;
                         pendingConciseMethodScope = false;
+                        pendingConciseMethodReturnType = false;
                     }
                     else if (lang == "typescript" && token is "namespace" or "module")
                     {
@@ -816,6 +995,13 @@ public static class SymbolExtractor
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
                     previousTokenKind = JavaScriptPrevTokenKind.Other;
                     previousIdentifier = null;
                     previousSignificantChar = '>';
@@ -840,7 +1026,16 @@ public static class SymbolExtractor
                         arrowExpressionParenDepth--;
 
                     if (IsInsideJavaScriptTypeScriptMethodContainer(scopeStack))
+                    {
                         pendingConciseMethodScope = true;
+                        pendingConciseMethodReturnType = false;
+                        conciseMethodReturnParenDepth = 0;
+                        conciseMethodReturnBracketDepth = 0;
+                        conciseMethodReturnAngleDepth = 0;
+                        conciseMethodReturnBraceDepth = 0;
+                        conciseMethodReturnSawToken = false;
+                        previousConciseMethodReturnToken = null;
+                    }
 
                     previousTokenKind = JavaScriptPrevTokenKind.CloseParen;
                     previousIdentifier = null;
@@ -899,6 +1094,13 @@ public static class SymbolExtractor
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
                     previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
                     previousIdentifier = null;
                     previousSignificantChar = ch;
@@ -922,6 +1124,13 @@ public static class SymbolExtractor
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
                     previousTokenKind = JavaScriptPrevTokenKind.CloseBrace;
                     previousIdentifier = null;
                     previousSignificantChar = ch;
@@ -944,6 +1153,13 @@ public static class SymbolExtractor
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
                     pendingConciseMethodScope = false;
+                    pendingConciseMethodReturnType = false;
+                    conciseMethodReturnParenDepth = 0;
+                    conciseMethodReturnBracketDepth = 0;
+                    conciseMethodReturnAngleDepth = 0;
+                    conciseMethodReturnBraceDepth = 0;
+                    conciseMethodReturnSawToken = false;
+                    previousConciseMethodReturnToken = null;
                     previousTokenKind = JavaScriptPrevTokenKind.Other;
                     previousIdentifier = null;
                     previousSignificantChar = ch;
@@ -952,6 +1168,17 @@ public static class SymbolExtractor
 
                 if (ch == ':')
                 {
+                    if (pendingConciseMethodScope && lang == "typescript")
+                    {
+                        pendingConciseMethodReturnType = true;
+                        conciseMethodReturnParenDepth = 0;
+                        conciseMethodReturnBracketDepth = 0;
+                        conciseMethodReturnAngleDepth = 0;
+                        conciseMethodReturnBraceDepth = 0;
+                        conciseMethodReturnSawToken = false;
+                        previousConciseMethodReturnToken = ":";
+                    }
+
                     previousTokenKind = JavaScriptPrevTokenKind.Other;
                     previousIdentifier = null;
                     previousSignificantChar = ch;
