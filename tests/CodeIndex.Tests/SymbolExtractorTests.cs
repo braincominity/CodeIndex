@@ -3077,6 +3077,8 @@ public class SymbolExtractorTests
         Assert.Equal("string", optionsHost.ReturnType);
         Assert.Contains("string Host", optionsHost.Signature);
         Assert.Equal(8, optionsHost.Line);
+        var optionsRecord = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Options"));
+        Assert.Equal(9, optionsRecord.EndLine);
 
         var containerValue = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Value" && s.ContainerName == "Container"));
         Assert.Equal("T", containerValue.ReturnType);
@@ -3109,6 +3111,8 @@ public class SymbolExtractorTests
 
         var tail = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Tail" && s.ContainerName == "Big"));
         Assert.Equal(34, tail.Line);
+        var bigRecord = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Big"));
+        Assert.Equal(34, bigRecord.EndLine);
 
         var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point"));
         Assert.Equal(39, pointY.Line);
@@ -3132,6 +3136,26 @@ public class SymbolExtractorTests
 
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "A.Point");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "B.Point");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordStructDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public readonly record struct Bodyless(
+                int X,
+                int Y);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var bodyless = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Bodyless"));
+        Assert.Equal(5, bodyless.EndLine);
+
+        var y = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Bodyless"));
+        Assert.Equal(5, y.Line);
+        Assert.Equal("App.Bodyless", y.ContainerQualifiedName);
     }
 
     [Fact]

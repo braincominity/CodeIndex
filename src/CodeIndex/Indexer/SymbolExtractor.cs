@@ -5105,8 +5105,24 @@ public static class SymbolExtractor
         if (kind is not "class" and not "struct")
             return;
 
-        if (!TryGetRecordPrimaryComponents(lang, lines, declarationLineIndex, declarationStartColumn, kind, recordName, out var components))
+        if (!TryGetRecordPrimaryComponents(
+            lang,
+            lines,
+            declarationLineIndex,
+            declarationStartColumn,
+            kind,
+            recordName,
+            out var components,
+            out var declarationEndLine))
             return;
+
+        var parentSymbol = symbols.LastOrDefault(symbol =>
+            symbol.FileId == fileId
+            && symbol.Kind == kind
+            && symbol.Name == recordName
+            && symbol.StartLine == declarationLineIndex + 1);
+        if (parentSymbol != null)
+            parentSymbol.EndLine = Math.Max(parentSymbol.EndLine, declarationEndLine);
 
         foreach (var component in components)
         {
@@ -5145,9 +5161,11 @@ public static class SymbolExtractor
         int declarationStartColumn,
         string kind,
         string recordName,
-        out List<RecordPrimaryComponent> components)
+        out List<RecordPrimaryComponent> components,
+        out int declarationEndLine)
     {
         components = [];
+        declarationEndLine = declarationLineIndex + 1;
 
         if (lang is not "csharp" and not "java")
             return false;
@@ -5168,6 +5186,7 @@ public static class SymbolExtractor
         var parameterCloseIndex = FindMatchingRecordPrimaryComponentListEnd(declaration, parameterOpenIndex);
         if (parameterCloseIndex <= parameterOpenIndex)
             return false;
+        declarationEndLine = declarationLineIndex + 1 + declaration[..(parameterCloseIndex + 1)].Count(ch => ch == '\n');
 
         var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
         foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, declarationLineIndex + 1))
@@ -5833,11 +5852,16 @@ public static class SymbolExtractor
                 continue;
             }
 
-            var container = symbols.FirstOrDefault(candidate =>
+            var container = symbols
+                .Where(candidate =>
                 candidate.FileId == symbol.FileId
                 && candidate.Kind == symbol.ContainerKind
                 && candidate.Name == symbol.ContainerName
-                && candidate.StartLine == symbol.StartLine);
+                && candidate.StartLine <= symbol.StartLine
+                && candidate.EndLine >= symbol.EndLine)
+                .OrderByDescending(candidate => candidate.StartLine)
+                .ThenBy(candidate => candidate.EndLine)
+                .FirstOrDefault();
             if (container == null)
                 continue;
 
