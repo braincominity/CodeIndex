@@ -686,33 +686,42 @@ What `install.sh` does, in order (see `install.sh`):
    front with an actionable error because the self-contained binary
    links against glibc. `osx-x64` is rejected because the release matrix
    does not ship that RID.
-2. **Resolve version.** With no argument, it hits the GitHub API
-   (`/repos/Widthdom/CodeIndex/releases/latest`) and greps `tag_name`.
-   With an argument it accepts either the `v`-prefixed or bare form
-   (e.g. `v1.8.0` or `1.8.0` — the version string itself is not
-   hard-coded in `install.sh`; `version.json` at the repo root and the
-   GitHub Releases tag are the sources of truth). Failure produces a
-   single actionable error, not a stack trace.
-3. **Short-circuit if already installed.** If `INSTALL_DIR/cdidx --version`
-   already reports the target version, exit 0. This relies on
-   `version.json` being present — previously-broken installs return
-   `v0.0.0` and are treated as upgrades, which is the desired behaviour.
-4. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
+2. **Detect existing install first.** If `INSTALL_DIR/cdidx` already
+   exists, the installer caches its parsed `--version` output before any
+   network work. This makes no-argument re-runs idempotent on hosts that
+   are rate-limited by GitHub.
+3. **Resolve version.** With an explicit argument, the installer accepts
+   either the `v`-prefixed or bare form (`v1.8.0` or `1.8.0`). With no
+   argument and no existing install, it calls the GitHub API
+   (`/repos/Widthdom/CodeIndex/releases/latest`), prefers `jq` when
+   available for `tag_name` parsing, and falls back to the existing
+   `grep` + `sed` extraction for portability. With no argument and an
+   existing install, it exits 0 before the API call and tells the user
+   to pass an explicit version to reinstall or switch versions. HTTP
+   failures are classified explicitly (`403` rate limit vs `404` vs
+   `5xx` vs real curl network errors) instead of collapsing everything
+   into a generic “check your network connection” message.
+4. **Short-circuit if the explicit target is already installed.** If
+   `INSTALL_DIR/cdidx --version` already reports the requested target
+   version, exit 0. This still relies on `version.json` being present —
+   previously-broken installs return `v0.0.0` and are treated as
+   replacements, which is the desired behaviour.
+5. **Download.** Fetches `CodeIndex-<rid>.tar.gz` and `sha256sums.txt`
    into a `mktemp -d` directory trap-cleaned on exit.
-5. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
+6. **Verify.** Computes SHA256 via `sha256sum` / `shasum` / `openssl`
    (whichever is present) and compares against the signed checksum file.
    A mismatch aborts before any file is placed into `INSTALL_DIR`.
-6. **Extract into a dedicated subdirectory.** `tar xzf … -C
+7. **Extract into a dedicated subdirectory.** `tar xzf … -C
    ${tmpdir}/extract` so the unpacked payload does not mix with the
    downloaded archive or checksum file.
-7. **Install binary.** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` +
+8. **Install binary.** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` +
    `chmod +x`.
-8. **Install adjacent runtime assets.** Loops over `version.json`,
-   `libe_sqlite3.so`, `libe_sqlite3.dylib` and copies whichever of them
-   exist in the extract directory into `INSTALL_DIR`. This covers both
-   Linux (`.so`) and macOS (`.dylib`) with one code path and silently
-   skips assets that this RID's tarball does not ship.
-9. **PATH guidance.** If `INSTALL_DIR` is not on `PATH`, emit the
+9. **Install adjacent runtime assets.** Requires `version.json` plus the
+   platform-specific native SQLite library (`libe_sqlite3.so` on Linux,
+   `libe_sqlite3.dylib` on macOS) and aborts if any required asset is
+   missing from the tarball. This prevents a “successful” install that
+   would later crash with `v0.0.0` or `DllNotFoundException`.
+10. **PATH guidance.** If `INSTALL_DIR` is not on `PATH`, emit the
    shell-specific snippet (`bashrc` / `zshrc` / `fish_add_path`).
 
 After a successful run, `ls $HOME/.local/bin/` shows `cdidx`,
@@ -731,9 +740,16 @@ sequenceDiagram
     U->>S: curl | bash
     S->>S: detect_platform (uname)
     Note over S: reject musl / osx-x64 early
-    S->>API: GET /releases/latest
-    API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
-    S->>FS: if existing cdidx --version matches → exit 0
+    S->>FS: inspect existing cdidx --version
+    alt no explicit version and cdidx already installed
+        S-->>U: exit 0 with explicit-version guidance
+    else explicit version or clean install
+        alt no explicit version
+            S->>API: GET /releases/latest
+            API-->>S: tag_name (e.g. v1.8.0 — actual value per GitHub Releases)
+        end
+        S->>FS: if requested version already matches → exit 0
+    end
     S->>TMP: mkdir, trap cleanup
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
     S->>GH: GET sha256sums.txt
@@ -1644,14 +1660,15 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
 1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否する。
-2. **バージョン解決。** 引数なしなら GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて `tag_name` を grep する。引数ありなら `v` プレフィックス付き・無しの両方を受け付ける（例: `v1.8.0` と `1.8.0` のどちらでも可。バージョン番号自体は `install.sh` にハードコードされておらず、リポジトリ直下の `version.json` と GitHub Releases のタグが真実の源）。失敗時はスタックトレースではなく実行可能なエラーを1行で出す。
-3. **既にインストール済みなら短絡終了。** `INSTALL_DIR/cdidx --version` が目的のバージョンを返すなら 0 終了。これは `version.json` の存在に依存する。過去の壊れたインストールは `v0.0.0` を返すためアップグレード扱いになる — これは意図した挙動。
-4. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
-5. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
-6. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
-7. **バイナリ配置。** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` + `chmod +x`。
-8. **隣接ランタイム資産の配置。** `version.json`、`libe_sqlite3.so`、`libe_sqlite3.dylib` をループし、extract ディレクトリに存在するものだけを `INSTALL_DIR` にコピー。これで Linux（`.so`）と macOS（`.dylib`）を1つのコードパスで扱いつつ、この RID の tarball に含まれない資産は静かにスキップする。
-9. **PATH ガイダンス。** `INSTALL_DIR` が `PATH` に無ければ、シェル別のスニペット（`bashrc` / `zshrc` / `fish_add_path`）を表示する。
+2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、GitHub rate limit が厳しいホストでも引数なし再実行を idempotent にできる。
+3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしで既存インストールも無い場合だけ GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩き、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。引数なしで既存インストールがある場合は API を叩かず 0 終了し、再インストールやバージョン切り替えには明示バージョン指定を促す。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
+4. **明示ターゲットが既に入っていれば短絡終了。** `INSTALL_DIR/cdidx --version` が要求バージョンを返すなら 0 終了。ここも `version.json` の存在に依存する。過去の壊れたインストールは `v0.0.0` を返すため置き換え対象として扱われる — これは意図した挙動。
+5. **ダウンロード。** `CodeIndex-<rid>.tar.gz` と `sha256sums.txt` を `mktemp -d` のディレクトリ（trap で自動クリーンアップ）に取得。
+6. **検証。** `sha256sum` / `shasum` / `openssl`（利用可能なもの）で SHA256 を計算し、チェックサムファイルと比較。不一致なら `INSTALL_DIR` に一切ファイルを置かずに中断する。
+7. **専用サブディレクトリへ展開。** `tar xzf … -C ${tmpdir}/extract` で、展開物がダウンロード済みアーカイブやチェックサムと混ざらないようにする。
+8. **バイナリ配置。** `cp ${extract}/cdidx ${INSTALL_DIR}/cdidx` + `chmod +x`。
+9. **隣接ランタイム資産の配置。** `version.json` と、OS ごとに必須の native SQLite ライブラリ（Linux は `libe_sqlite3.so`、macOS は `libe_sqlite3.dylib`）を要求し、不足していれば tarball 不備として中断する。これにより、見かけ上は成功しても後で `v0.0.0` や `DllNotFoundException` で落ちる半壊れ install を防ぐ。
+10. **PATH ガイダンス。** `INSTALL_DIR` が `PATH` に無ければ、シェル別のスニペット（`bashrc` / `zshrc` / `fish_add_path`）を表示する。
 
 成功後は `ls $HOME/.local/bin/` に `cdidx`、`libe_sqlite3.so`（Linux の場合）、`version.json` が並んで見える。それ以外のレイアウトはバグである。
 
@@ -1667,9 +1684,16 @@ sequenceDiagram
     U->>S: curl | bash
     S->>S: detect_platform (uname)
     Note over S: musl / osx-x64 は早期に拒否
-    S->>API: GET /releases/latest
-    API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
-    S->>FS: 既存 cdidx --version と一致 → exit 0
+    S->>FS: 既存 cdidx --version を確認
+    alt 引数なし かつ cdidx 既存あり
+        S-->>U: 明示バージョン指定を案内して exit 0
+    else 明示バージョンあり または新規 install
+        alt 引数なし
+            S->>API: GET /releases/latest
+            API-->>S: tag_name（例: v1.8.0。実際の値は GitHub Releases による）
+        end
+        S->>FS: 要求バージョンと一致していれば exit 0
+    end
     S->>TMP: mkdir、trap でクリーンアップ
     S->>GH: GET CodeIndex-&lt;rid&gt;.tar.gz
     S->>GH: GET sha256sums.txt

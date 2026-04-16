@@ -13,6 +13,8 @@ REPO="Widthdom/CodeIndex"
 INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
 TMPDIR_CLEANUP=""
+EXISTING_BIN=""
+EXISTING_VERSION=""
 
 # --- Helpers / ヘルパー ---
 
@@ -20,13 +22,125 @@ info()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33mWARN:\033[0m %s\n' "$1" >&2; }
 error() { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 
-cleanup() { [ -n "$TMPDIR_CLEANUP" ] && rm -rf "$TMPDIR_CLEANUP"; }
+cleanup() {
+    if [ -n "$TMPDIR_CLEANUP" ]; then
+        rm -rf "$TMPDIR_CLEANUP"
+    fi
+}
 trap cleanup EXIT
 
 need_cmd() {
     if ! command -v "$1" > /dev/null 2>&1; then
         error "Required command not found: $1"
     fi
+}
+
+strip_version_prefix() {
+    printf '%s' "$1" | sed 's/^[^0-9]*//'
+}
+
+extract_release_tag_name() {
+    local api_response="$1"
+    local version=""
+
+    if command -v jq > /dev/null 2>&1; then
+        version="$(printf '%s' "$api_response" | jq -r '.tag_name // empty' 2>/dev/null || true)"
+    fi
+
+    if [ -z "$version" ]; then
+        version="$(printf '%s' "$api_response" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+    fi
+
+    printf '%s' "$version"
+}
+
+curl_http_get() {
+    local url="$1"
+    local output_path="$2"
+    local http_code
+
+    http_code="$(curl -sSL -o "$output_path" -w '%{http_code}' "$url")"
+    local curl_status=$?
+
+    if [ $curl_status -ne 0 ]; then
+        case "$curl_status" in
+            6|7|28|35|52|56)
+                error "Network error reaching GitHub while fetching $url (curl exit $curl_status). Check your connection or corporate proxy."
+                ;;
+            *)
+                error "curl failed while fetching $url (exit $curl_status)."
+                ;;
+        esac
+    fi
+
+    printf '%s' "$http_code"
+}
+
+fetch_latest_release_version() {
+    need_cmd curl
+    need_cmd mktemp
+
+    local api_url="https://api.github.com/repos/${REPO}/releases/latest"
+    local response_file
+    response_file="$(mktemp)"
+
+    local http_code
+    http_code="$(curl_http_get "$api_url" "$response_file")"
+    local api_response
+    api_response="$(cat "$response_file")"
+    rm -f "$response_file"
+
+    case "$http_code" in
+        200) ;;
+        403)
+            if printf '%s' "$api_response" | grep -qi "rate limit"; then
+                error "GitHub API rate limit exceeded while fetching the latest release. Retry later, or pass an explicit version: 'curl ... | bash -s -- vX.Y.Z'."
+            fi
+            error "GitHub API returned HTTP 403 while fetching the latest release. Check your GitHub access or proxy configuration."
+            ;;
+        404)
+            error "GitHub API returned HTTP 404 while fetching the latest release. Check that REPO=${REPO} exists."
+            ;;
+        5??)
+            error "GitHub API returned HTTP $http_code while fetching the latest release. GitHub may be temporarily unavailable; retry in a few minutes."
+            ;;
+        *)
+            error "GitHub API returned HTTP $http_code while fetching the latest release."
+            ;;
+    esac
+
+    local version
+    version="$(extract_release_tag_name "$api_response")"
+    if [ -z "$version" ]; then
+        error "Could not determine latest version from GitHub API response."
+    fi
+
+    printf '%s' "$version"
+}
+
+download_release_file() {
+    local url="$1"
+    local output_path="$2"
+    local description="$3"
+
+    local http_code
+    http_code="$(curl_http_get "$url" "$output_path")"
+
+    case "$http_code" in
+        200) ;;
+        403)
+            error "Failed to download ${description} from $url (HTTP 403). GitHub may be rate-limiting or blocking the request."
+            ;;
+        404)
+            error "Failed to download ${description} from $url (HTTP 404). Check that version ${VERSION} exists and publishes ${RID} assets."
+            ;;
+        5??)
+            error "Failed to download ${description} from $url (HTTP $http_code). GitHub may be temporarily unavailable; retry in a few minutes."
+            ;;
+        *)
+            error "Failed to download ${description} from $url (HTTP $http_code)."
+            ;;
+    esac
 }
 
 # --- Detect OS and architecture / OS・アーキテクチャ検出 ---
@@ -75,39 +189,47 @@ resolve_version() {
             *)  VERSION="v${VERSION}" ;;
         esac
     else
-        info "Fetching latest release version..."
-        need_cmd curl
-        local api_response
-        api_response="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" \
-            || error "Failed to fetch latest release from GitHub API. Check your network connection."
-
-        VERSION="$(printf '%s' "$api_response" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
-
-        if [ -z "$VERSION" ]; then
-            error "Could not determine latest version from GitHub API response."
+        if [ -n "$EXISTING_VERSION" ]; then
+            VERSION="v${EXISTING_VERSION}"
+            info "cdidx ${EXISTING_VERSION} is already installed at ${EXISTING_BIN}. Skipping latest-release lookup. Pass an explicit version to reinstall or switch versions."
+            return 1
         fi
+
+        info "Fetching latest release version..."
+        VERSION="$(fetch_latest_release_version)"
     fi
 
     info "Version: $VERSION"
+    return 0
 }
 
 # --- Check existing installation / 既存インストール確認 ---
 
-check_existing() {
-    local existing_bin="${INSTALL_DIR}/${BINARY_NAME}"
-    if [ -x "$existing_bin" ]; then
-        local existing_version
+detect_existing_install() {
+    EXISTING_BIN="${INSTALL_DIR}/${BINARY_NAME}"
+    EXISTING_VERSION=""
+
+    if [ -x "$EXISTING_BIN" ]; then
         local raw_version
-        raw_version="$("$existing_bin" --version 2>/dev/null || echo "unknown")"
+        raw_version="$("$EXISTING_BIN" --version 2>/dev/null || echo "unknown")"
         # Strip any prefix like "cdidx " or "cdidx v" / プレフィックスを除去
-        existing_version="$(printf '%s' "$raw_version" | sed 's/^[^0-9]*//')"
+        EXISTING_VERSION="$(strip_version_prefix "$raw_version")"
+    fi
+
+    return 0
+}
+
+check_existing() {
+    if [ -n "$EXISTING_VERSION" ]; then
         local target_version="${VERSION#v}"
-        if [ "$existing_version" = "$target_version" ]; then
-            info "cdidx $target_version is already installed at $existing_bin. Skipping."
+        if [ "$EXISTING_VERSION" = "$target_version" ]; then
+            info "cdidx $target_version is already installed at $EXISTING_BIN. Skipping."
             exit 0
         fi
-        info "Upgrading cdidx from $existing_version to ${VERSION#v}..."
+        info "Switching cdidx from $EXISTING_VERSION to ${VERSION#v}..."
     fi
+
+    return 0
 }
 
 # --- Download and verify / ダウンロード・検証 ---
@@ -127,12 +249,10 @@ download_and_install() {
     TMPDIR_CLEANUP="$tmpdir"
 
     info "Downloading ${archive_name}..."
-    curl -fsSL -o "${tmpdir}/${archive_name}" "$archive_url" \
-        || error "Failed to download $archive_url. Check that version $VERSION exists and has a ${RID} binary."
+    download_release_file "$archive_url" "${tmpdir}/${archive_name}" "${archive_name}"
 
     info "Downloading checksums..."
-    curl -fsSL -o "${tmpdir}/sha256sums.txt" "$checksums_url" \
-        || error "Failed to download checksums from $checksums_url."
+    download_release_file "$checksums_url" "${tmpdir}/sha256sums.txt" "sha256sums.txt"
 
     # Verify checksum / チェックサム検証
     info "Verifying checksum..."
@@ -251,7 +371,10 @@ main() {
     info "cdidx installer"
     detect_platform
     info "Detected platform: ${RID}"
-    resolve_version "${1:-}"
+    detect_existing_install
+    if ! resolve_version "${1:-}"; then
+        return 0
+    fi
     check_existing
     download_and_install
     check_path
@@ -266,4 +389,6 @@ main() {
     echo ""
 }
 
-main "$@"
+if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
+    main "$@"
+fi
