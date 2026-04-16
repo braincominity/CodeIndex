@@ -1908,7 +1908,7 @@ public static class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.SingleQuote)
             {
-                sanitized[i] = ch == '\'' ? '\'' : ' ';
+                sanitized[i] = ch is '\'' or '\\' ? ch : ' ';
 
                 if (state.EscapeNext)
                 {
@@ -1933,7 +1933,7 @@ public static class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.DoubleQuote)
             {
-                sanitized[i] = ch == '"' ? '"' : ' ';
+                sanitized[i] = ch is '"' or '\\' ? ch : ' ';
 
                 if (state.EscapeNext)
                 {
@@ -1958,7 +1958,7 @@ public static class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.TemplateString)
             {
-                sanitized[i] = ch == '`' ? '`' : ' ';
+                sanitized[i] = ch is '`' or '\\' ? ch : ' ';
 
                 if (state.EscapeNext)
                 {
@@ -3084,19 +3084,37 @@ public static class SymbolExtractor
         if (index >= input.Length || input[index] is not ('\'' or '"' or '`'))
             return false;
 
-        var delimiter = input[index];
-        var tokenStart = index;
-        index++;
-        while (index < input.Length)
+        var probe = index;
+        var delimiter = input[probe];
+        var tokenStart = probe;
+        var escapeNext = false;
+        probe++;
+        while (probe < input.Length)
         {
-            if (input[index] == delimiter)
+            var ch = input[probe];
+            if (escapeNext)
             {
-                index++;
+                escapeNext = false;
+                probe++;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escapeNext = true;
+                probe++;
+                continue;
+            }
+
+            if (ch == delimiter)
+            {
+                probe++;
+                index = probe;
                 token = input[tokenStart..index];
                 return true;
             }
 
-            index++;
+            probe++;
         }
 
         return false;
