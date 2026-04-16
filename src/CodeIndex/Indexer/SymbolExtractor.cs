@@ -103,11 +103,34 @@ public static class SymbolExtractor
         int BodyStartLineIndex,
         int BodyStartColumn);
 
+    private struct JavaScriptTypeScriptFunctionHeaderState
+    {
+        public bool Active;
+        public bool SawParameterList;
+        public bool InReturnType;
+        public int ParenDepth;
+        public int BracketDepth;
+        public int BraceDepth;
+        public int ReturnParenDepth;
+        public int ReturnBracketDepth;
+        public int ReturnAngleDepth;
+        public int ReturnBraceDepth;
+        public bool ReturnSawToken;
+        public string? PreviousReturnToken;
+    }
+
     private enum JavaScriptTypeScriptMethodHeaderParseStatus
     {
         IncompleteOrInvalid = 0,
         Parsed = 1,
         DeclarationOnly = 2,
+    }
+
+    private enum JavaScriptTypeScriptFunctionHeaderConsumeResult
+    {
+        NotActive = 0,
+        Consumed = 1,
+        BodyStart = 2,
     }
 
     private const string JavaScriptTypeScriptIdentifierPattern = @"[$\p{L}_][$\p{L}\p{Nd}_]*";
@@ -718,12 +741,229 @@ public static class SymbolExtractor
         return scopeStack.Count > 0 && scopeStack.Peek() is JavaScriptScopeKind.Class or JavaScriptScopeKind.Object;
     }
 
+    private static void BeginJavaScriptTypeScriptFunctionHeader(ref JavaScriptTypeScriptFunctionHeaderState state)
+    {
+        state = new JavaScriptTypeScriptFunctionHeaderState
+        {
+            Active = true,
+        };
+    }
+
+    private static JavaScriptTypeScriptFunctionHeaderConsumeResult ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+        ref JavaScriptTypeScriptFunctionHeaderState state,
+        string sanitizedLine,
+        int column,
+        string lang,
+        out int advanceColumns)
+    {
+        advanceColumns = 0;
+        if (!state.Active)
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.NotActive;
+
+        var ch = sanitizedLine[column];
+        if (char.IsWhiteSpace(ch))
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+
+        if (state.InReturnType)
+        {
+            if (ch == ';'
+                && state.ReturnParenDepth == 0
+                && state.ReturnBracketDepth == 0
+                && state.ReturnAngleDepth == 0
+                && state.ReturnBraceDepth == 0)
+            {
+                state = default;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '(')
+            {
+                state.ReturnParenDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "(";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == ')' && state.ReturnParenDepth > 0)
+            {
+                state.ReturnParenDepth--;
+                state.PreviousReturnToken = ")";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '[')
+            {
+                state.ReturnBracketDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "[";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == ']' && state.ReturnBracketDepth > 0)
+            {
+                state.ReturnBracketDepth--;
+                state.PreviousReturnToken = "]";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '<')
+            {
+                state.ReturnAngleDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "<";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '>' && state.ReturnAngleDepth > 0)
+            {
+                state.ReturnAngleDepth--;
+                state.PreviousReturnToken = ">";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '{')
+            {
+                if (state.ReturnParenDepth == 0
+                    && state.ReturnBracketDepth == 0
+                    && state.ReturnAngleDepth == 0
+                    && state.ReturnBraceDepth == 0)
+                {
+                    if (CanStartJavaScriptTypeScriptReturnTypeObjectLiteral(state.PreviousReturnToken))
+                    {
+                        state.ReturnBraceDepth++;
+                        state.ReturnSawToken = true;
+                        state.PreviousReturnToken = "{";
+                        return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+                    }
+
+                    if (state.ReturnSawToken)
+                    {
+                        state = default;
+                        return JavaScriptTypeScriptFunctionHeaderConsumeResult.BodyStart;
+                    }
+                }
+
+                state.ReturnBraceDepth++;
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "{";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '}' && state.ReturnBraceDepth > 0)
+            {
+                state.ReturnBraceDepth--;
+                state.PreviousReturnToken = "}";
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch is '?' or ':' or '|' or '&' or ',')
+            {
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = ch.ToString();
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            if (ch == '=' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '>')
+            {
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = "=>";
+                advanceColumns = 1;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            var returnTypeIndex = column;
+            if (TrySkipTypeScriptTypeToken(sanitizedLine, ref returnTypeIndex, out var returnTypeToken))
+            {
+                state.ReturnSawToken = true;
+                state.PreviousReturnToken = returnTypeToken;
+                advanceColumns = returnTypeIndex - column - 1;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+            }
+
+            state.ReturnSawToken = true;
+            state.PreviousReturnToken = ch.ToString();
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (lang == "typescript" && state.SawParameterList && ch == ':')
+        {
+            state.InReturnType = true;
+            state.ReturnParenDepth = 0;
+            state.ReturnBracketDepth = 0;
+            state.ReturnAngleDepth = 0;
+            state.ReturnBraceDepth = 0;
+            state.ReturnSawToken = false;
+            state.PreviousReturnToken = ":";
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '(')
+        {
+            state.ParenDepth++;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == ')' && state.ParenDepth > 0)
+        {
+            state.ParenDepth--;
+            if (state.ParenDepth == 0 && state.BracketDepth == 0 && state.BraceDepth == 0)
+                state.SawParameterList = true;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '[' && (state.ParenDepth > 0 || state.BracketDepth > 0 || state.BraceDepth > 0 || !state.SawParameterList))
+        {
+            state.BracketDepth++;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == ']' && state.BracketDepth > 0)
+        {
+            state.BracketDepth--;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '{')
+        {
+            if (state.SawParameterList && state.ParenDepth == 0 && state.BracketDepth == 0 && state.BraceDepth == 0)
+            {
+                state = default;
+                return JavaScriptTypeScriptFunctionHeaderConsumeResult.BodyStart;
+            }
+
+            state.BraceDepth++;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == '}' && state.BraceDepth > 0)
+        {
+            state.BraceDepth--;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        if (ch == ';')
+        {
+            state = default;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        var tokenIndex = column;
+        if (TrySkipTypeScriptTypeToken(sanitizedLine, ref tokenIndex, out _))
+        {
+            advanceColumns = tokenIndex - column - 1;
+            return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+        }
+
+        return JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed;
+    }
+
     private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
     {
         var privateColumns = new JavaScriptScopePrivacyFlags[lines.Length][];
         var lexState = new JavaScriptLexState();
         var scopeStack = new Stack<JavaScriptScopeKind>();
         var pendingFunctionScope = false;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
         var pendingStaticBlockScope = false;
         var pendingClassScope = false;
         var pendingNamespaceScope = false;
@@ -953,6 +1193,29 @@ public static class SymbolExtractor
                     continue;
                 }
 
+                if (pendingFunctionScope)
+                {
+                    var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                        ref functionHeaderState,
+                        sanitizedLine,
+                        column,
+                        lang,
+                        out var functionHeaderAdvanceColumns);
+                    if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+                    {
+                        previousTokenKind = ch switch
+                        {
+                            ')' => JavaScriptPrevTokenKind.CloseParen,
+                            ']' => JavaScriptPrevTokenKind.CloseBracket,
+                            _ => JavaScriptPrevTokenKind.Other,
+                        };
+                        previousIdentifier = null;
+                        previousSignificantChar = sanitizedLine[Math.Min(column + functionHeaderAdvanceColumns, sanitizedLine.Length - 1)];
+                        column += functionHeaderAdvanceColumns;
+                        continue;
+                    }
+                }
+
                 if (IsJavaScriptTypeScriptIdentifierStart(ch))
                 {
                     var tokenStart = column;
@@ -968,6 +1231,7 @@ public static class SymbolExtractor
                     if (token == "function")
                     {
                         pendingFunctionScope = true;
+                        BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
                         pendingStaticBlockScope = false;
                         pendingConciseMethodScope = false;
                         pendingConciseMethodReturnType = false;
@@ -1006,6 +1270,7 @@ public static class SymbolExtractor
                     linePrivateColumns[column + 1] = GetJavaScriptTypeScriptPrivacyFlags(scopeStack, arrowExpressionActive);
                     pendingArrowBody = true;
                     pendingFunctionScope = false;
+                    functionHeaderState = default;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
@@ -1105,6 +1370,7 @@ public static class SymbolExtractor
                         arrowExpressionBraceDepth++;
 
                     pendingFunctionScope = false;
+                    functionHeaderState = default;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
@@ -1135,6 +1401,7 @@ public static class SymbolExtractor
                         scopeStack.Pop();
 
                     pendingFunctionScope = false;
+                    functionHeaderState = default;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
@@ -1164,6 +1431,7 @@ public static class SymbolExtractor
                     }
 
                     pendingFunctionScope = false;
+                    functionHeaderState = default;
                     pendingStaticBlockScope = false;
                     pendingClassScope = false;
                     pendingNamespaceScope = false;
@@ -2319,6 +2587,7 @@ public static class SymbolExtractor
         var arrowExpressionParenDepth = 0;
         var arrowExpressionBracketDepth = 0;
         var arrowExpressionBraceDepth = 0;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
         int? bodyStartLine = null;
         var lexState = new JavaScriptLexState();
 
@@ -2352,6 +2621,39 @@ public static class SymbolExtractor
             for (int column = 0; column < scanLine.Length; column++)
             {
                 var ch = scanLine[column];
+                if (!opened
+                    && !arrowExpressionActive
+                    && !functionHeaderState.Active
+                    && IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    var tokenEnd = column + 1;
+                    while (tokenEnd < scanLine.Length && IsJavaScriptTypeScriptIdentifierPart(scanLine[tokenEnd]))
+                        tokenEnd++;
+
+                    if (scanLine[tokenStart..tokenEnd] == "function")
+                    {
+                        BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                        column = tokenEnd - 1;
+                        continue;
+                    }
+                }
+
+                if (!opened && !arrowExpressionActive)
+                {
+                    var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                        ref functionHeaderState,
+                        scanLine,
+                        column,
+                        lang ?? "javascript",
+                        out var functionHeaderAdvanceColumns);
+                    if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+                    {
+                        column += functionHeaderAdvanceColumns;
+                        continue;
+                    }
+                }
+
                 if (!opened && !arrowExpressionActive && i == startIndex && ch == '=' && column + 1 < scanLine.Length && scanLine[column + 1] == '>')
                 {
                     pendingArrowBody = true;
@@ -2485,6 +2787,7 @@ public static class SymbolExtractor
 
             if (!opened
                 && !arrowExpressionActive
+                && !functionHeaderState.Active
                 && parenDepth == 0
                 && bracketDepth == 0
                 && angleDepth == 0
@@ -2547,6 +2850,7 @@ public static class SymbolExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var angleDepth = 0;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
         var lexState = new JavaScriptLexState();
 
         for (int i = startIndex; i <= bodyStartIndex; i++)
@@ -2559,6 +2863,33 @@ public static class SymbolExtractor
             for (int column = initialColumn; column < sanitizedLine.Length; column++)
             {
                 var ch = sanitizedLine[column];
+                if (!functionHeaderState.Active && IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    var tokenEnd = column + 1;
+                    while (tokenEnd < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[tokenEnd]))
+                        tokenEnd++;
+
+                    if (sanitizedLine[tokenStart..tokenEnd] == "function")
+                    {
+                        BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                        column = tokenEnd - 1;
+                        continue;
+                    }
+                }
+
+                var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                    ref functionHeaderState,
+                    sanitizedLine,
+                    column,
+                    lang ?? "javascript",
+                    out var functionHeaderAdvanceColumns);
+                if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+                {
+                    column += functionHeaderAdvanceColumns;
+                    continue;
+                }
+
                 if (!char.IsWhiteSpace(ch))
                 {
                     if (ch == '(')
@@ -2686,9 +3017,37 @@ public static class SymbolExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var angleDepth = 0;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
         for (int column = Math.Max(0, startColumn); column < sanitizedLine.Length; column++)
         {
             var ch = sanitizedLine[column];
+            if (!functionHeaderState.Active && IsJavaScriptTypeScriptIdentifierStart(ch))
+            {
+                var tokenStart = column;
+                var tokenEnd = column + 1;
+                while (tokenEnd < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[tokenEnd]))
+                    tokenEnd++;
+
+                if (sanitizedLine[tokenStart..tokenEnd] == "function")
+                {
+                    BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                    column = tokenEnd - 1;
+                    continue;
+                }
+            }
+
+            var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                ref functionHeaderState,
+                sanitizedLine,
+                column,
+                lang ?? "javascript",
+                out var functionHeaderAdvanceColumns);
+            if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+            {
+                column += functionHeaderAdvanceColumns;
+                continue;
+            }
+
             if (!char.IsWhiteSpace(ch))
             {
                 if (ch == '(')

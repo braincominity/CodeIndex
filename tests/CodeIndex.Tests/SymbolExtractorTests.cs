@@ -2593,6 +2593,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_FunctionRangeIgnoresObjectReturnTypeBraces()
+    {
+        var content = """
+            function outer(): { a: number } {
+                return { a: 1 };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var outer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "outer"));
+        Assert.Equal(1, outer.StartLine);
+        Assert.Equal(3, outer.EndLine);
+        Assert.Equal(1, outer.BodyStartLine);
+        Assert.Equal(3, outer.BodyEndLine);
+        Assert.Equal("function outer(): { a: number } {", outer.Signature);
+    }
+
+    [Theory]
+    [InlineData(
+        "typescript",
+        """
+        function outer({ value }) {
+            var Service = class Hidden {
+                run() {}
+            };
+        }
+        """)]
+    [InlineData(
+        "typescript",
+        """
+        function outer(value: { a: number }) {
+            var Service = class Hidden {
+                run() {}
+            };
+        }
+        """)]
+    [InlineData(
+        "typescript",
+        """
+        const outer = function(value = { a: 1 }) {
+            var Service = class Hidden {
+                run() {}
+            };
+        };
+        """)]
+    public void Extract_TypeScript_DoesNotLeakClassExpressionsFromClassicFunctionHeaders(string lang, string content)
+    {
+        var symbols = SymbolExtractor.Extract(1, lang, content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Service");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
     public void Extract_TypeScript_KeepsSiblingMethodsAfterWrappedControlFlowRegexLiterals()
     {
         var content = """
