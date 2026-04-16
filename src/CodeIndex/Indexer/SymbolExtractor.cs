@@ -120,7 +120,7 @@ public static class SymbolExtractor
     ];
 
     private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex CSharpEnumMemberRegex = new(@"^\s{2,}(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumMemberRegex = new(@"^\s+(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
     [
@@ -5139,46 +5139,63 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
-    private static string StripLeadingCSharpAttributeLists(string line)
+    private static string StripLeadingCSharpAttributeLists(string line, ref bool inLeadingAttributeBlock, ref int attributeBracketDepth)
     {
         var index = 0;
         while (index < line.Length && char.IsWhiteSpace(line[index]))
             index++;
 
-        if (index >= line.Length || line[index] != '[')
+        if (index >= line.Length)
+            return line;
+
+        if (!inLeadingAttributeBlock && line[index] != '[')
             return line;
 
         var cursor = index;
-        while (cursor < line.Length && line[cursor] == '[')
+        var blankUntil = index;
+        while (cursor < line.Length)
         {
-            var depth = 0;
-            var sawBracket = false;
+            if (!inLeadingAttributeBlock)
+            {
+                if (line[cursor] != '[')
+                    break;
+
+                inLeadingAttributeBlock = true;
+                attributeBracketDepth = 0;
+            }
+
             while (cursor < line.Length)
             {
                 var ch = line[cursor++];
                 if (ch == '[')
                 {
-                    depth++;
-                    sawBracket = true;
+                    attributeBracketDepth++;
                 }
                 else if (ch == ']')
                 {
-                    depth--;
-                    if (depth == 0 && sawBracket)
+                    attributeBracketDepth--;
+                    if (attributeBracketDepth == 0)
+                    {
+                        inLeadingAttributeBlock = false;
                         break;
+                    }
                 }
             }
 
-            if (depth != 0)
-                return line;
+            if (inLeadingAttributeBlock)
+                return line[..index] + new string(' ', line.Length - index);
 
             while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
                 cursor++;
+
+            blankUntil = cursor;
+            if (cursor >= line.Length || line[cursor] != '[')
+                break;
         }
 
-        return cursor < line.Length
-            ? line[..index] + new string(' ', cursor - index) + line[cursor..]
-            : line[..index] + new string(' ', cursor - index);
+        return blankUntil < line.Length
+            ? line[..index] + new string(' ', blankUntil - index) + line[blankUntil..]
+            : line[..index] + new string(' ', blankUntil - index);
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
@@ -5206,11 +5223,16 @@ public static class SymbolExtractor
     {
         var matchLines = new string[structuralLines.Length];
         var csharpLexState = new CSharpLexState();
+        var inLeadingAttributeBlock = false;
+        var attributeBracketDepth = 0;
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
             var lexedLine = LexCSharpLine(structuralLines[lineIndex], csharpLexState);
             csharpLexState = lexedLine.EndState;
-            matchLines[lineIndex] = StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine);
+            matchLines[lineIndex] = StripLeadingCSharpAttributeLists(
+                lexedLine.SanitizedLine,
+                ref inLeadingAttributeBlock,
+                ref attributeBracketDepth);
         }
 
         return matchLines;

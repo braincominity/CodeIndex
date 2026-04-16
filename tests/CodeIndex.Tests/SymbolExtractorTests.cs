@@ -3434,6 +3434,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotTreatMultilineEnumMemberAttributeArgumentsAsMembers()
+    {
+        var content = "public enum Mode\n{\n    [EnumMember(\n        Value = Alias | Other)]\n    A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Value");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsTabIndentedEnumMembers()
+    {
+        var content = "public enum Mode\n{\n\tA,\n\tB = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
     public void Extract_CSharp_EnumMembersTrackOwningEnum()
     {
         var content = "namespace Demo;\n\npublic enum First\n{\n    None,\n}\n\npublic enum Second\n{\n    None,\n}";
