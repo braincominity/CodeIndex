@@ -372,6 +372,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ConstructorCalls_AreInstantiateOnly()
+    {
+        const string content = """
+            public class Worker
+            {
+                public void Execute()
+                {
+                    var foo = new Foo();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_PhpIncludeRequireConstructs_AreIgnored()
     {
         const string content = """
@@ -398,6 +418,49 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Include_Once");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "include_once");
         Assert.Contains(references, reference => reference.SymbolName == "custom" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_PhpCaseInsensitiveSharedKeywords_AreIgnored()
+    {
+        const string content = """
+            <?php
+            function load($flag, $items) {
+                IF($flag) { custom(); }
+                WHILE($flag) { break; }
+                FOREACH($items as $item) { custom(); }
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "IF");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "WHILE");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "FOREACH");
+        Assert.Equal(2, references.Count(reference => reference.SymbolName == "custom" && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_PhpCaseInsensitiveNew_IsInstantiate()
+    {
+        const string content = """
+            <?php
+            function load() {
+                new Foo();
+                NEW Bar();
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "instantiate");
+        Assert.Contains(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "call");
     }
 
     [Fact]
