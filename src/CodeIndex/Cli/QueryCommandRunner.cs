@@ -1064,11 +1064,14 @@ public static class QueryCommandRunner
     }
 
     /// <summary>
-    /// Heuristic: a C# file with no type/namespace-scoped declarations is almost certainly
-    /// using top-level statements, so the executable body won't appear in outline.
+    /// Heuristic: only hint when a non-trivial C# file has no type/namespace declarations
+    /// but does expose at least one file-scope function, which strongly suggests top-level
+    /// statements rather than metadata-only files such as GlobalUsings.cs or AssemblyInfo.cs.
     /// Tiny files (snippets, partials under ~20 lines) are excluded to avoid noise.
-    /// ヒューリスティック: C# で型/名前空間宣言が一切無いファイルはトップレベルステートメント
-    /// の可能性が高く、実行本体が outline に出ない。20 行未満の小さい断片は誤検出回避のため除外。
+    /// ヒューリスティック: 20 行以上の C# ファイルで型/名前空間宣言が無く、さらに
+    /// file-scope function が少なくとも 1 つ見えているときだけトップレベルステートメント
+    /// 想定のヒントを出す。GlobalUsings.cs や AssemblyInfo.cs のような metadata-only
+    /// ファイルで誤検出しないため。小さい断片はノイズ回避のため除外。
     /// </summary>
     private static bool LooksLikeCsharpTopLevelStatements(OutlineResult outline)
     {
@@ -1079,7 +1082,12 @@ public static class QueryCommandRunner
             if (sym.Kind is "class" or "struct" or "interface" or "enum" or "namespace" or "delegate" or "record")
                 return false;
         }
-        return true;
+
+        return outline.Symbols.Any(sym =>
+            sym.Kind == "function"
+            && sym.ContainerName == null
+            && !((sym.Signature?.StartsWith("[assembly:", StringComparison.Ordinal) ?? false)
+                 || (sym.Signature?.StartsWith("[module:", StringComparison.Ordinal) ?? false)));
     }
 
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
