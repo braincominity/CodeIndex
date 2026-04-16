@@ -20,6 +20,14 @@ public static class SymbolExtractor
         VisualBasicEnd,
     }
 
+    private enum BraceScanMode
+    {
+        Standard,
+        CSharp,
+        Rust,
+        Legacy,
+    }
+
     private sealed record SymbolPattern(
         string Kind,
         Regex Regex,
@@ -519,8 +527,15 @@ public static class SymbolExtractor
                 var rangeLines = lang == "css" && cssScannerLines != null
                     ? cssScannerLines
                     : structuralLines;
+                var braceScanMode = lang switch
+                {
+                    "css" => BraceScanMode.Legacy,
+                    "csharp" => BraceScanMode.CSharp,
+                    "rust" => BraceScanMode.Rust,
+                    _ => BraceScanMode.Standard,
+                };
                 var rangeRawLines = lang == "csharp" ? lines : null;
-                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, rangeRawLines);
+                var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, braceScanMode, rangeRawLines);
                 var startLine = i + 1;
 
                 // Python @property decorator: reclassify the def as property
@@ -709,7 +724,7 @@ public static class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 return;
 
-            var (endLine, bodyStartLine, bodyEndLine) = FindBraceRange(cssScannerLines, lineIndex, openingBraceIndex);
+            var (endLine, bodyStartLine, bodyEndLine) = FindBraceRange(cssScannerLines, lineIndex, openingBraceIndex, BraceScanMode.Legacy);
             var startLine = lineIndex + 1;
             AddSymbolRecord(
                 symbols,
@@ -731,11 +746,11 @@ public static class SymbolExtractor
         }
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, string[]? rawLines = null)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) ResolveRange(string[] lines, int startIndex, BodyStyle bodyStyle, BraceScanMode braceScanMode = BraceScanMode.Standard, string[]? rawLines = null)
     {
         return bodyStyle switch
         {
-            BodyStyle.Brace => FindBraceRange(lines, startIndex, rawLines: rawLines),
+            BodyStyle.Brace => FindBraceRange(lines, startIndex, 0, braceScanMode, rawLines),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
@@ -743,20 +758,22 @@ public static class SymbolExtractor
         };
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int openingBraceOffset = 0, string[]? rawLines = null)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int openingBraceOffset = 0, BraceScanMode braceScanMode = BraceScanMode.Standard, string[]? rawLines = null)
     {
-        if (rawLines == null)
+        if (braceScanMode == BraceScanMode.Legacy)
             return FindBraceRangeLegacy(lines, startIndex, openingBraceOffset);
 
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
         var insideBlockComment = false;
+        var tracksSingleQuotes = braceScanMode != BraceScanMode.Rust;
+        var usesRawCSharpLines = braceScanMode == BraceScanMode.CSharp && rawLines != null;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
             var line = lines[i];
-            var rawLine = rawLines != null && i < rawLines.Length ? rawLines[i] : line;
+            var rawLine = usesRawCSharpLines && i < rawLines!.Length ? rawLines[i] : line;
             var charStart = i == startIndex
                 ? Math.Clamp(openingBraceOffset, 0, Math.Max(0, line.Length - 1))
                 : 0;
@@ -800,7 +817,7 @@ public static class SymbolExtractor
                     continue;
                 }
 
-                if (c == '\'' && !inDoubleQuote)
+                if (tracksSingleQuotes && c == '\'' && !inDoubleQuote)
                 {
                     inSingleQuote = !inSingleQuote;
                     continue;
@@ -809,7 +826,7 @@ public static class SymbolExtractor
                 if (inSingleQuote || inDoubleQuote)
                     continue;
 
-                if ((c == '{' || c == '}') && IsSingleCharLiteralBrace(rawLine, charIndex, c))
+                if (braceScanMode == BraceScanMode.CSharp && (c == '{' || c == '}') && IsSingleCharLiteralBrace(rawLine, charIndex, c))
                     continue;
 
                 if (c == '{')

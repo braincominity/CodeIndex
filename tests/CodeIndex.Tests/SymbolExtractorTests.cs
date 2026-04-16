@@ -59,6 +59,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """
+            export class Example {
+              foo() {
+                const value = "}";
+                return value;
+              }
+
+              bar() {
+                return 1;
+              }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+
+        Assert.Equal(10, example.EndLine);
+        Assert.Equal(5, foo.EndLine);
+        Assert.Equal("class", bar.ContainerKind);
+        Assert.Equal("Example", bar.ContainerName);
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsAbstractClassAndNamespace()
     {
         var content = "export abstract class BaseService {\n    abstract getName(): string;\n}\ndeclare module 'express' {\n    interface Request { }\n}\nnamespace App.Models {\n    export type ID = string;\n}";
