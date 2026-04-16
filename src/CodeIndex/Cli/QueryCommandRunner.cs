@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -2389,6 +2390,14 @@ public static class QueryCommandRunner
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
+
+            if (ex is SqliteException sqliteEx && sqliteEx.SqliteErrorCode == 13)
+            {
+                Console.Error.WriteLine("Error: SQLite temp-store exhausted while evaluating this query.");
+                Console.Error.WriteLine("Hint: narrow the query with `--lang`, `--path`, or `--kind`, then retry with a freshly updated cdidx build if the problem persists.");
+                Database.DbDebug.DumpToStderr(ex);
+                return CommandExitCodes.DatabaseError;
+            }
 
             Console.Error.WriteLine($"Error: database error: {ex.Message}");
             Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");

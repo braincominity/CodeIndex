@@ -4218,6 +4218,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal(2, json.GetProperty("definition_site_total").GetInt32());
+            Assert.Equal(3, hotspot.GetProperty("reference_count").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(1, hotspot.GetProperty("paths").GetArrayLength());
         }

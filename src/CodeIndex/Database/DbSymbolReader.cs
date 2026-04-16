@@ -738,11 +738,17 @@ public partial class DbReader
                        sr.symbol_name,
                        sr.line,
                        sr.column_number,
-                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind,
-                       CAST(sr.file_id AS TEXT) || ':' || sr.symbol_name || ':' || CAST(sr.line AS TEXT) || ':' || CAST(sr.column_number AS TEXT) || ':' || " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_site_key
+                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
                 GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
+            ),
+            global_reference_counts AS (
+                SELECT lang,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                GROUP BY lang, symbol_name
             ),
             file_target_cardinality AS (
                 SELECT lang,
@@ -753,35 +759,66 @@ public partial class DbReader
                 FROM filtered_candidates
                 GROUP BY lang, file_id, name, kind
             ),
+            conservative_target_files AS (
+                SELECT DISTINCT lang,
+                       file_id,
+                       name,
+                       kind,
+                       logical_target_key
+                FROM filtered_candidates
+            ),
+            file_reference_counts AS (
+                SELECT lang,
+                       file_id,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                GROUP BY lang, file_id, symbol_name
+            ),
+            conservative_reference_counts AS (
+                SELECT ctf.logical_target_key,
+                       ctf.name,
+                       ctf.kind,
+                       SUM(COALESCE(frc.ref_count, 0)) AS ref_count
+                FROM conservative_target_files ctf
+                JOIN file_target_cardinality ftc
+                  ON ftc.lang = ctf.lang
+                 AND ftc.file_id = ctf.file_id
+                 AND ftc.name = ctf.name
+                 AND ftc.kind = ctf.kind
+                 AND ftc.target_count = 1
+                LEFT JOIN file_reference_counts frc
+                  ON frc.lang = ctf.lang
+                 AND frc.file_id = ctf.file_id
+                 AND frc.symbol_name = ctf.name
+                GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
+            ),
             reference_counts AS (
-                SELECT gr.symbol_id, COUNT(DISTINCT sr.logical_site_key) AS ref_count
+                SELECT gr.symbol_id,
+                       CASE
+                           WHEN nc.defs = 1
+                             OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                               THEN COALESCE(grc.ref_count, 0)
+                           ELSE COALESCE(crc.ref_count, 0)
+                       END AS ref_count
                 FROM grouped_rows gr
                 JOIN name_cardinality nc
                   ON nc.lang = gr.lang
                  AND nc.name = gr.name
-                JOIN logical_references sr
-                  ON sr.symbol_name = gr.name
-                 AND sr.lang = gr.lang
-                LEFT JOIN filtered_candidates fc
-                  ON fc.logical_target_key = gr.logical_target_key
-                 AND fc.name = gr.name
-                 AND fc.kind = gr.kind
-                 AND fc.file_id = sr.file_id
-                LEFT JOIN file_target_cardinality ftc
-                  ON ftc.lang = gr.lang
-                 AND ftc.file_id = sr.file_id
-                 AND ftc.name = gr.name
-                 AND ftc.kind = gr.kind
-                WHERE nc.defs = 1
-                   OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
-                   OR (fc.id IS NOT NULL AND COALESCE(ftc.target_count, 0) = 1)
-                GROUP BY gr.symbol_id
+                LEFT JOIN global_reference_counts grc
+                  ON grc.lang = gr.lang
+                 AND grc.symbol_name = gr.name
+                LEFT JOIN conservative_reference_counts crc
+                  ON crc.logical_target_key = gr.logical_target_key
+                 AND crc.name = gr.name
+                 AND crc.kind = gr.kind
             )
             SELECT gr.name, rc.ref_count,
                    gr.kind, gr.path, gr.lang, gr.line,
                    gr.visibility, gr.container_name
             FROM grouped_rows gr
             JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
+            WHERE rc.ref_count > 0
             ORDER BY rc.ref_count DESC
             LIMIT @limit";
 
@@ -829,16 +866,44 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return [];
 
+        var containerNameSql = GetSymbolColumnSql("container_name");
+        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
+        var familyKeySql = GetSymbolColumnSql("family_key");
+        var hotspotFamilyLangs = _hotspotFamilyReadyLanguages
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+        var familyLangConditionSql = hotspotFamilyLangs.Count > 0
+            ? $"f.lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hotspotFamilyLang{i}"))})"
+            : "0";
+        var familyTargetKeySql = hotspotFamilyLangs.Count > 0
+            ? $@"CASE
+                    WHEN {familyLangConditionSql}
+                     AND COALESCE({familyKeySql}, '') <> ''
+                        THEN 'family|' || COALESCE(f.lang, '') || '|' || COALESCE(s.kind, '') || '|' || {familyKeySql}
+                    ELSE NULL
+                END"
+            : "NULL";
+        var containerTargetKeySql = $@"CASE
+                    WHEN COALESCE({containerQualifiedNameSql}, '') <> ''
+                        THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
+                    ELSE NULL
+                END";
         var graphLangs = ReferenceExtractor.GetSupportedLanguages().ToList();
         var sql = $@"
-            WITH hotspot_sites AS (
-                SELECT s.id AS symbol_id, s.name, COUNT(DISTINCT sr.id) AS ref_count,
-                       s.kind, f.path, f.lang, s.line,
+            WITH all_candidate_symbols AS (
+                SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
-                       {GetSymbolColumnSql("container_name")} AS container_name
+                       {containerNameSql} AS container_name,
+                       CASE
+                           WHEN {familyTargetKeySql} IS NOT NULL
+                               THEN {familyTargetKeySql}
+                           WHEN {containerTargetKeySql} IS NOT NULL
+                               THEN {containerTargetKeySql}
+                           ELSE 'file|' || CAST(s.file_id AS TEXT)
+                       END AS logical_target_key,
+                       COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
-                JOIN symbol_references sr ON sr.symbol_name = s.name
                 WHERE s.kind NOT IN ('import', 'namespace')";
 
         if (lang != null)
@@ -848,9 +913,133 @@ public partial class DbReader
         if (kind != null)
             sql += " AND s.kind = @kind";
 
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $@"
-                GROUP BY s.id, s.name, {GetSymbolColumnSql("container_name")}, s.kind, f.path, f.lang, s.line, {GetSymbolColumnSql("visibility")}
+        sql += @"
+            ),
+            name_cardinality AS (
+                SELECT lang,
+                       name,
+                       COUNT(*) AS defs,
+                       COUNT(DISTINCT logical_target_key) AS target_groups,
+                       COUNT(DISTINCT count_safe_key) AS count_safe_groups,
+                       COUNT(count_safe_key) AS count_safe_defs
+                FROM all_candidate_symbols
+                GROUP BY lang, name
+            ),
+            filtered_candidates AS (
+                SELECT *
+                FROM all_candidate_symbols
+                WHERE 1 = 1";
+        if (pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+        }
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";
+        sql += @"
+            ),
+            logical_references AS (
+                SELECT sr.file_id,
+                       rf.lang,
+                       sr.symbol_name,
+                       sr.line,
+                       sr.column_number,
+                       " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
+                FROM symbol_references sr
+                JOIN files rf ON rf.id = sr.file_id
+                GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
+            ),
+            global_reference_counts AS (
+                SELECT lang,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                GROUP BY lang, symbol_name
+            ),
+            file_target_cardinality AS (
+                SELECT lang,
+                       file_id,
+                       name,
+                       kind,
+                       COUNT(DISTINCT logical_target_key) AS target_count
+                FROM filtered_candidates
+                GROUP BY lang, file_id, name, kind
+            ),
+            conservative_target_files AS (
+                SELECT DISTINCT lang,
+                       file_id,
+                       name,
+                       kind,
+                       logical_target_key
+                FROM filtered_candidates
+            ),
+            file_reference_counts AS (
+                SELECT lang,
+                       file_id,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                GROUP BY lang, file_id, symbol_name
+            ),
+            conservative_reference_counts AS (
+                SELECT ctf.logical_target_key,
+                       ctf.name,
+                       ctf.kind,
+                       SUM(COALESCE(frc.ref_count, 0)) AS ref_count
+                FROM conservative_target_files ctf
+                JOIN file_target_cardinality ftc
+                  ON ftc.lang = ctf.lang
+                 AND ftc.file_id = ctf.file_id
+                 AND ftc.name = ctf.name
+                 AND ftc.kind = ctf.kind
+                 AND ftc.target_count = 1
+                LEFT JOIN file_reference_counts frc
+                  ON frc.lang = ctf.lang
+                 AND frc.file_id = ctf.file_id
+                 AND frc.symbol_name = ctf.name
+                GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
+            ),
+            site_reference_counts AS (
+                SELECT fc.id AS symbol_id,
+                       CASE
+                           WHEN nc.defs = 1
+                             OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                               THEN COALESCE(grc.ref_count, 0)
+                           ELSE COALESCE(crc.ref_count, 0)
+                       END AS ref_count
+                FROM filtered_candidates fc
+                JOIN name_cardinality nc
+                  ON nc.lang = fc.lang
+                 AND nc.name = fc.name
+                LEFT JOIN global_reference_counts grc
+                  ON grc.lang = fc.lang
+                 AND grc.symbol_name = fc.name
+                LEFT JOIN conservative_reference_counts crc
+                  ON crc.logical_target_key = fc.logical_target_key
+                 AND crc.name = fc.name
+                 AND crc.kind = fc.kind
+            ),
+            hotspot_sites AS (
+                SELECT fc.id AS symbol_id,
+                       fc.name,
+                       fc.kind,
+                       fc.path,
+                       fc.lang,
+                       fc.line,
+                       fc.visibility,
+                       fc.container_name,
+                       fc.logical_target_key,
+                       src.ref_count
+                FROM filtered_candidates fc
+                JOIN site_reference_counts src ON src.symbol_id = fc.id
+                WHERE src.ref_count > 0
             ),
             ranked_sites AS (
                 SELECT hs.*,
@@ -860,9 +1049,28 @@ public partial class DbReader
                        ) AS rep_rank
                 FROM hotspot_sites hs
             ),
+            grouped_reference_counts AS (
+                SELECT hs.name,
+                       hs.kind,
+                       SUM(hs.ref_count) AS ref_count
+                FROM (
+                    SELECT DISTINCT name,
+                           kind,
+                           logical_target_key,
+                           ref_count
+                    FROM hotspot_sites
+                ) hs
+                GROUP BY hs.name, hs.kind
+            ),
             grouped AS (
-                SELECT hs.name, hs.kind, MAX(hs.ref_count) AS ref_count, COUNT(*) AS definition_sites
+                SELECT hs.name,
+                       hs.kind,
+                       MAX(grc.ref_count) AS ref_count,
+                       COUNT(*) AS definition_sites
                 FROM ranked_sites hs
+                JOIN grouped_reference_counts grc
+                  ON grc.name = hs.name
+                 AND grc.kind = hs.kind
                 GROUP BY hs.name, hs.kind
             )
             SELECT g.name, g.kind, g.ref_count, g.definition_sites,
@@ -898,6 +1106,8 @@ public partial class DbReader
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        for (int i = 0; i < hotspotFamilyLangs.Count; i++)
+            cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
 
         var results = new List<GroupedHotspotResult>();
         using var reader = cmd.ExecuteTrackedReader();
