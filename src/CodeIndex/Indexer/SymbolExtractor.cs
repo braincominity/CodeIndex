@@ -397,7 +397,7 @@ public static class SymbolExtractor
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // :root selector / :root セレクタ
-            new("class",    new Regex(@"^\s*:(?<name>root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>:root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
             new("class",    new Regex(@"^\s*(?<name>(?:[#.]?[\w-]+|\*)(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS class selector at top level (not nested) / トップレベルのCSSクラスセレクタ
@@ -851,6 +851,7 @@ public static class SymbolExtractor
     {
         var depths = new int[lines.Length];
         var depth = 0;
+        var parenthesisDepth = 0;
         var insideBlockComment = false;
         var inSingleQuote = false;
         var inDoubleQuote = false;
@@ -882,7 +883,7 @@ public static class SymbolExtractor
                     continue;
                 }
 
-                if (!inSingleQuote && !inDoubleQuote && i + 1 < line.Length && ch == '/' && line[i + 1] == '/')
+                if (!inSingleQuote && !inDoubleQuote && parenthesisDepth == 0 && i + 1 < line.Length && ch == '/' && line[i + 1] == '/')
                     break;
 
                 if ((inSingleQuote || inDoubleQuote) && ch == '\\' && i + 1 < line.Length)
@@ -910,6 +911,10 @@ public static class SymbolExtractor
                     depth++;
                 else if (ch == '}' && depth > 0)
                     depth--;
+                else if (ch == '(')
+                    parenthesisDepth++;
+                else if (ch == ')' && parenthesisDepth > 0)
+                    parenthesisDepth--;
             }
         }
 

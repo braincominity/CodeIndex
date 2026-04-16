@@ -1480,7 +1480,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "root");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "main-color");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "padding");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "font-stack");
@@ -1569,13 +1569,32 @@ public class SymbolExtractorTests
             // {
             .top-level { color: red; }
             .foo::before { content: "\""; }
+            .url-http { background-image: url(http://example.com/a.png); }
+            .url-cdn { background-image: url(//cdn.example.com/app.css); }
             .bar { color: blue; }
             """;
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "top-level");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".foo::before");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "url-http");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "url-cdn");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "bar");
+    }
+
+    [Fact]
+    public void Extract_CSS_PreservesLiteralRootSelectorName()
+    {
+        var content = """
+            :root { --accent: #09f; }
+            .root { color: red; }
+            #root { color: blue; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "root");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "root");
     }
 
     [Fact]
