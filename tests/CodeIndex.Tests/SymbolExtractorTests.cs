@@ -825,6 +825,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_PreservesGetterSetterSignaturesAndMethodNamedGetSet()
+    {
+        var content = """
+            class Example {
+                get value() {}
+                set value(input) {}
+                get() {}
+                set() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "value" && s.Signature == "get value() {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "value" && s.Signature == "set value(input) {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "get" && s.Signature == "get() {}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "set" && s.Signature == "set() {}");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotLeakNamedClassExpressionsAfterColon()
     {
         var content = """
@@ -1977,6 +1996,25 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenGetter");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "HiddenSetter");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_PreservesGetterSetterSignaturesVisibilityAndMethodNamedGetSet()
+    {
+        var content = """
+            class Example {
+                public get value(): number {}
+                private set value(input: number) {}
+                get(): void {}
+                set(): void {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "value" && s.Signature == "public get value(): number {}" && s.Visibility == "public" && s.ReturnType == "number");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "value" && s.Signature == "private set value(input: number) {}" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "get" && s.Signature == "get(): void {}" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "set" && s.Signature == "set(): void {}" && s.ReturnType == "void");
     }
 
     [Fact]

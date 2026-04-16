@@ -85,7 +85,7 @@ public static class SymbolExtractor
 
     private static readonly HashSet<string> TypeScriptBareMethodModifiers =
     [
-        "public", "private", "protected", "static", "readonly", "abstract", "override", "async"
+        "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
     private readonly record struct JavaScriptTypeScriptMethodHeaderInfo(
