@@ -105,10 +105,20 @@ public static class IndexCommandRunner
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
-                dryCandidates = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json)
-                    .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                    .Where(File.Exists)
-                    .ToList();
+                var updatePaths = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json);
+                if (ContainsIgnoreFilePath(updatePaths))
+                {
+                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    dryCandidates = scanResult.Files;
+                    RecordDryRunScanErrors(scanResult.Errors);
+                }
+                else
+                {
+                    dryCandidates = updatePaths
+                        .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
+                        .Where(File.Exists)
+                        .ToList();
+                }
             }
             else if (options.Commits.Count > 0)
             {
@@ -535,7 +545,7 @@ public static class IndexCommandRunner
                 targetPaths.Add(relPath);
         }
 
-        if (options.Commits.Count > 0 && ContainsIgnoreFilePath(targetPaths))
+        if (ContainsIgnoreFilePath(targetPaths))
         {
             if (!options.Json)
             {

@@ -368,7 +368,7 @@ public class FileIndexer
                             i + 2 == pattern.Count)
                         {
                             builder.Length -= 1;
-                            builder.Append("(?:/.*)?");
+                            builder.Append("/.*");
                             i++;
                             continue;
                         }

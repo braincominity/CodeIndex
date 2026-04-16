@@ -1294,6 +1294,36 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_FallsBackToFullScanWhenIgnoreFilesChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "generated.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", ".gitignore", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+            Assert.Contains(".gitignore", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_WithMalformedIgnoreRule_ReturnsPartialInsteadOfCrashing()
     {
         var projectRoot = CreateTempProject();
