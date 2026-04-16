@@ -395,7 +395,7 @@ public static class SymbolExtractor
             // @keyframes / キーフレーム
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @font-face / フォントフェイス
-            new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // :root selector / :root セレクタ
             new("class",    new Regex(@"^\s*:(?<name>root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
@@ -454,7 +454,7 @@ public static class SymbolExtractor
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex CssFontFaceFamilyRegex = new(@"(?:^|[;{])\s*font-family\s*:\s*(?<value>(?:""[^""]*""|'[^']*'|[^;])+)\s*;", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CssFontFaceFamilyRegex = new(@"(?:^|[;{])\s*font-family\s*:\s*(?<value>(?:""[^""]*""|'[^']*'|[^;}])+?)\s*(?=;|})", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -757,7 +757,7 @@ public static class SymbolExtractor
 
     private static string ResolveCssSymbolName(string matchLine, string name, string[] lines, int startIndex, int endLine)
     {
-        if (!matchLine.TrimStart().StartsWith("@font-face", StringComparison.Ordinal))
+        if (!matchLine.TrimStart().StartsWith("@font-face", StringComparison.OrdinalIgnoreCase))
             return name;
 
         return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)

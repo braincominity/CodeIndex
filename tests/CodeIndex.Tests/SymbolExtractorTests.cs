@@ -1498,17 +1498,27 @@ public class SymbolExtractorTests
         var content = """
             @font-face { font-family: "Inline Font"; src: url("inline.woff2"); }
             @font-face { src: url("same-line.woff2"); font-family: "Trailing Font"; unicode-range: U+0-5FF; }
+            @font-face { src: url("valid-last.woff2"); font-family: "Last No Semicolon" }
             @font-face {
               font-family:
                 "Split Font";
               src: url("split.woff2");
+            }
+            @FONT-FACE { font-family: "Upper Rule" }
+            @Font-Face {
+              src: url("mixed-last.woff2");
+              font-family:
+                "Mixed Last No Semicolon"
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Inline Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Trailing Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Last No Semicolon");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Upper Rule");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Mixed Last No Semicolon");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
     }
 
