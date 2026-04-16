@@ -33,7 +33,7 @@ src/CodeIndex/
     LineWidthFormatter.cs     — Shared single-line payload clamp helper used by find/references/excerpt/inspect and MCP counterparts to keep focused tokens visible while shrinking long lines
     RepoMapBuilder.cs         — Repo-level overview builder (map): file stats, entrypoint scoring, module grouping
   Indexer/
-    FileIndexer.cs            — Directory scan, language detection, FileRecord building
+    FileIndexer.cs            — Directory scan, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
     SymbolExtractor.cs        — Regex-based symbol extraction (32 languages)
     ReferenceExtractor.cs     — Regex-based call/reference extraction (31 languages with graph queries)
@@ -1004,7 +1004,7 @@ src/CodeIndex/
     LineWidthFormatter.cs     — find/references/excerpt/inspect と MCP 側の長い単一行クランプを共有し、注目トークンを残したまま行幅を縮めるヘルパー
     RepoMapBuilder.cs         — リポジトリ俯瞰ビルダー（map）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/
-    FileIndexer.cs            — ディレクトリ走査、言語検出、FileRecord構築
+    FileIndexer.cs            — ディレクトリ走査、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
     SymbolExtractor.cs        — 正規表現によるシンボル抽出（32言語対応）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出

@@ -10,6 +10,28 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public class FileIndexer
 {
+    internal enum FileProbeStatus
+    {
+        Supported,
+        Unsupported,
+        ProbeFailed,
+    }
+
+    internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
+
+    public readonly record struct ScanError(string Path, string Message);
+
+    public readonly record struct ScanFilesResult(
+        IReadOnlyList<string> Files,
+        IReadOnlyList<ScanError> Errors,
+        IReadOnlyList<string> NonIndexablePaths,
+        IReadOnlyList<string> ProbeFailedFilePaths,
+        IReadOnlyList<string> ListedDirectories,
+        IReadOnlyList<string> FullyScannedDirectories)
+    {
+        public bool HadErrors => Errors.Count > 0;
+    }
+
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp"];
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
@@ -157,14 +179,39 @@ public class FileIndexer
     }
 
     public static string? DetectLanguage(string filePath)
+        => TryDetectLanguage(filePath).Language;
+
+    internal static LanguageDetectionResult TryDetectLanguage(string filePath)
     {
         var ext = Path.GetExtension(filePath);
         if (LangMap.TryGetValue(ext, out var lang))
-            return lang;
+            return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
 
         // Fall back to exact file name matching / ファイル名の完全一致で言語を検出
         var fileName = Path.GetFileName(filePath);
-        return FileNameMap.TryGetValue(fileName, out var nameLang) ? nameLang : null;
+        if (FileNameMap.TryGetValue(fileName, out var nameLang))
+            return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
+
+        if (!string.IsNullOrEmpty(ext))
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+        return TryDetectLanguageFromShebang(filePath);
+    }
+
+    internal static bool CanIndexFile(string filePath)
+        => GetFileIndexability(filePath) == FileProbeStatus.Supported;
+
+    internal static FileProbeStatus GetFileIndexability(string filePath)
+    {
+        if (OperatingSystem.IsWindows())
+            return FileProbeStatus.Supported;
+
+        if (!UnixFileStatus.TryGetFileMode(filePath, out var mode))
+            return FileProbeStatus.ProbeFailed;
+
+        return (mode & UnixFileStatus.FileTypeMask) == UnixFileStatus.RegularFile
+            ? FileProbeStatus.Supported
+            : FileProbeStatus.Unsupported;
     }
 
     public string GetFamilyScopeKey(string absolutePath, string? lang)
@@ -300,24 +347,53 @@ public class FileIndexer
     /// プロジェクトルート以下のインデックス対象ファイルを列挙する。
     /// </summary>
     public IReadOnlyList<string> ScanFiles()
+        => ScanFilesDetailed().Files;
+
+    internal ScanFilesResult ScanFilesDetailed()
     {
         var files = new List<string>();
-        EnumerateDirectory(_projectRoot, files);
-        return files;
+        var errors = new List<ScanError>();
+        var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
+        var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
+        var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+        return new ScanFilesResult(
+            files,
+            errors,
+            nonIndexablePaths.ToList(),
+            probeFailedFilePaths.ToList(),
+            listedDirectories.ToList(),
+            fullyScannedDirectories.ToList());
     }
 
-    private void ScanDirectory(string dir, List<string> results)
+    private bool ScanDirectory(
+        string dir,
+        List<string> results,
+        List<ScanError> errors,
+        HashSet<string> nonIndexablePaths,
+        HashSet<string> probeFailedFilePaths,
+        HashSet<string> listedDirectories,
+        HashSet<string> fullyScannedDirectories)
     {
         // Check for skip directories / スキップ対象ディレクトリかチェック
         var dirName = Path.GetFileName(dir);
         if (SkipDirs.Contains(dirName))
-            return;
+            return true;
 
-        EnumerateDirectory(dir, results);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
     }
 
-    private void EnumerateDirectory(string dir, List<string> results)
+    private bool EnumerateDirectory(
+        string dir,
+        List<string> results,
+        List<ScanError> errors,
+        HashSet<string> nonIndexablePaths,
+        HashSet<string> probeFailedFilePaths,
+        HashSet<string> listedDirectories,
+        HashSet<string> fullyScannedDirectories)
     {
+        var fullyScanned = true;
         try
         {
             foreach (var file in Directory.EnumerateFiles(dir))
@@ -328,26 +404,68 @@ public class FileIndexer
                 if (SkipFiles.Contains(fileName))
                     continue;
 
-                // Include files with a known extension or known filename
-                // 既知の拡張子または既知のファイル名のファイルを含める
-                var ext = Path.GetExtension(file);
-                if (LangMap.ContainsKey(ext) || FileNameMap.ContainsKey(fileName))
+                // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
+                // Unix では通常ファイルのみをインデックス対象にする。FIFO/socket/device でのブロックを避ける。
+                var indexability = GetFileIndexability(file);
+                if (indexability == FileProbeStatus.ProbeFailed)
+                {
+                    var relativePath = ToRelativePath(file);
+                    errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+                    probeFailedFilePaths.Add(relativePath);
+                    continue;
+                }
+
+                if (indexability != FileProbeStatus.Supported)
+                {
+                    nonIndexablePaths.Add(ToRelativePath(file));
+                    continue;
+                }
+
+                // Include files with a known extension/filename or an extensionless recognized shebang
+                // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
+                var language = TryDetectLanguage(file);
+                if (language.Status == FileProbeStatus.ProbeFailed)
+                {
+                    var relativePath = ToRelativePath(file);
+                    errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+                    probeFailedFilePaths.Add(relativePath);
+                    continue;
+                }
+
+                if (language.Status == FileProbeStatus.Supported)
                     results.Add(file);
+                else
+                    nonIndexablePaths.Add(ToRelativePath(file));
             }
+
+            // A successful file listing proves the direct children of this directory.
+            // Child subtree failures must not revoke that authority for sibling-file purge.
+            // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
+            // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
+            listedDirectories.Add(ToRelativePath(dir));
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                ScanDirectory(subDir, results);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
             }
         }
         catch (UnauthorizedAccessException)
         {
             // Skip inaccessible directories / アクセス不可ディレクトリはスキップ
+            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
+            fullyScanned = false;
         }
         catch (IOException)
         {
             // Skip on I/O errors / I/Oエラー時はスキップ
+            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
+            fullyScanned = false;
         }
+
+        if (fullyScanned)
+            fullyScannedDirectories.Add(ToRelativePath(dir));
+
+        return fullyScanned;
     }
 
     /// <summary>
@@ -368,6 +486,10 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath)
     {
+        var indexability = GetFileIndexability(absolutePath);
+        if (indexability != FileProbeStatus.Supported)
+            throw new InvalidOperationException("Only regular files can be indexed");
+
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var info = new FileInfo(absolutePath);
 
@@ -406,7 +528,7 @@ public class FileIndexer
         var record = new FileRecord
         {
             Path = relativePath.Replace('\\', '/'),
-            Lang = DetectLanguage(absolutePath),
+            Lang = TryDetectLanguage(absolutePath).Language,
             Size = info.Length,
             Lines = lines.Length,
             Checksum = checksum,
@@ -507,5 +629,154 @@ public class FileIndexer
     {
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Try to infer a language from an extensionless script shebang.
+    /// This is a cheap fallback used only after extension and exact-filename checks fail.
+    /// 拡張子・完全一致ファイル名で判定できない場合だけ、拡張子なしスクリプトの shebang から言語を推定する。
+    /// </summary>
+    private static LanguageDetectionResult TryDetectLanguageFromShebang(string filePath)
+    {
+        if (GetFileIndexability(filePath) != FileProbeStatus.Supported)
+            return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+        try
+        {
+            using var stream = File.OpenRead(filePath);
+            if (!stream.CanRead)
+                return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
+
+            Span<byte> buffer = stackalloc byte[256];
+            var bytesRead = stream.Read(buffer);
+            if (bytesRead <= 0)
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var firstLine = Encoding.UTF8.GetString(buffer[..bytesRead])
+                .Split(['\r', '\n'], 2)[0];
+
+            if (firstLine.StartsWith('\uFEFF'))
+                firstLine = firstLine[1..];
+
+            if (!firstLine.StartsWith("#!", StringComparison.Ordinal))
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var commandLine = firstLine[2..].Trim();
+            if (string.IsNullOrWhiteSpace(commandLine))
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var tokens = commandLine
+                .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (tokens.Length == 0)
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var interpreter = ResolveShebangInterpreter(tokens);
+            if (interpreter == null)
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var language = MapShebangInterpreterToLanguage(interpreter);
+            return language != null
+                ? new LanguageDetectionResult(FileProbeStatus.Supported, language)
+                : new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+        }
+        catch (IOException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.ProbeFailed, null);
+        }
+    }
+
+    private static string? ResolveShebangInterpreter(IReadOnlyList<string> tokens)
+    {
+        var interpreter = Path.GetFileName(tokens[0]).ToLowerInvariant();
+        if (interpreter is not "env")
+            return interpreter;
+
+        for (var i = 1; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (token.StartsWith("-", StringComparison.Ordinal))
+                continue;
+
+            // `env FOO=bar python` style assignments before the real interpreter.
+            // `env FOO=bar python` のような代入はスキップして本体の interpreter を探す。
+            if (token.Contains('='))
+                continue;
+
+            return Path.GetFileName(token).ToLowerInvariant();
+        }
+
+        return null;
+    }
+
+    private static string? MapShebangInterpreterToLanguage(string interpreter) => interpreter switch
+    {
+        "bash" or "sh" or "zsh" or "fish" or "dash" or "ksh" or "ash" => "shell",
+        "node" or "nodejs" => "javascript",
+        "ruby" => "ruby",
+        "php" => "php",
+        "lua" => "lua",
+        "pwsh" or "powershell" => "powershell",
+        _ when interpreter.StartsWith("python", StringComparison.Ordinal) => "python",
+        _ => null,
+    };
+
+    private string ToRelativePath(string absolutePath)
+    {
+        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath).Replace('\\', '/');
+        return relativePath == "." ? string.Empty : relativePath;
+    }
+
+    private static class UnixFileStatus
+    {
+        internal const int FileTypeMask = 0xF000;
+        internal const int RegularFile = 0x8000;
+
+        internal static bool TryGetFileMode(string filePath, out int mode)
+        {
+            mode = 0;
+            if (NativeMethods.Stat(filePath, out var status) != 0)
+                return false;
+
+            mode = status.Mode;
+            return true;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct FileStatus
+        {
+            internal FileStatusFlags Flags;
+            internal int Mode;
+            internal uint Uid;
+            internal uint Gid;
+            internal long Size;
+            internal long ATime;
+            internal long ATimeNsec;
+            internal long MTime;
+            internal long MTimeNsec;
+            internal long CTime;
+            internal long CTimeNsec;
+            internal long BirthTime;
+            internal long BirthTimeNsec;
+            internal long Dev;
+            internal long RDev;
+            internal long Ino;
+            internal uint UserFlags;
+        }
+
+        [System.Flags]
+        private enum FileStatusFlags : uint
+        {
+            None = 0,
+        }
+
+        private static class NativeMethods
+        {
+            [System.Runtime.InteropServices.DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = System.Runtime.InteropServices.CharSet.Ansi)]
+            internal static extern int Stat(string path, out FileStatus output);
+        }
     }
 }

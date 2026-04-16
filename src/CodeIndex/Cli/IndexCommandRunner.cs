@@ -84,13 +84,14 @@ public static class IndexCommandRunner
         if (options.DryRun)
         {
             var dryIndexer = new FileIndexer(options.ProjectPath);
-            IReadOnlyList<string> dryFiles;
+            IReadOnlyList<string> dryCandidates;
+            var errorList = new List<object>();
 
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
-                dryFiles = options.UpdateFiles
-                    .Select(f => Path.IsPathRooted(f) ? f : Path.Combine(options.ProjectPath, f))
+                dryCandidates = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json)
+                    .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
                     .Where(File.Exists)
                     .ToList();
             }
@@ -107,22 +108,48 @@ public static class IndexCommandRunner
                     }
                     catch { /* ignore git errors in dry-run */ }
                 }
-                dryFiles = changedFiles.Distinct().ToList();
+                dryCandidates = changedFiles.Distinct().ToList();
             }
             else
             {
-                dryFiles = dryIndexer.ScanFiles();
+                var scanResult = dryIndexer.ScanFilesDetailed();
+                dryCandidates = scanResult.Files;
+                errorList.AddRange(scanResult.Errors.Select(error => (object)new { file = error.Path, message = error.Message }));
+                if (!options.Json)
+                {
+                    foreach (var error in scanResult.Errors)
+                        ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
+                }
             }
 
+            var dryFiles = new List<string>();
             var langCounts = new Dictionary<string, int>();
-            foreach (var f in dryFiles)
+            foreach (var f in dryCandidates)
             {
-                var lang = FileIndexer.DetectLanguage(f) ?? "unknown";
+                if (!TryProbeDryRunFile(dryIndexer, f, out var lang, out var message))
+                {
+                    if (message != null)
+                    {
+                        var displayPath = Path.GetRelativePath(options.ProjectPath, f).Replace('\\', '/');
+                        errorList.Add(new { file = displayPath, message });
+                        if (!options.Json)
+                            ConsoleUi.PrintWarning($"{displayPath}: {message}");
+                    }
+                    continue;
+                }
+
+                dryFiles.Add(f);
                 langCounts[lang] = langCounts.GetValueOrDefault(lang) + 1;
             }
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { status = "dry_run", files_total = dryFiles.Count, languages = langCounts }, jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    status = "dry_run",
+                    files_total = dryFiles.Count,
+                    languages = langCounts,
+                    errors = errorList.Count > 0 ? errorList : null,
+                }, jsonOptions));
             }
             else
             {
@@ -475,18 +502,8 @@ public static class IndexCommandRunner
 
         if (options.UpdateFiles.Count > 0)
         {
-            foreach (var f in options.UpdateFiles)
-            {
-                var absPath = Path.IsPathRooted(f) ? f : Path.GetFullPath(Path.Combine(projectRoot, f));
-                var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
-                if (IsOutsideProjectRoot(relPath))
-                {
-                    if (!options.Json)
-                        Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {f}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
-                    continue;
-                }
+            foreach (var relPath in NormalizeUpdateFileTargets(projectRoot, options.UpdateFiles, options.Json))
                 targetPaths.Add(relPath);
-            }
         }
 
         if (!options.Json)
@@ -576,11 +593,51 @@ public static class IndexCommandRunner
                     continue;
                 }
 
-                if (FileIndexer.DetectLanguage(absPath) == null)
+                var indexability = FileIndexer.GetFileIndexability(absPath);
+                var detection = FileIndexer.TryDetectLanguage(absPath);
+                if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
                 {
-                    skipped++;
-                    if (options.Verbose && !options.Json)
-                        Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                    DemoteReadinessOnce();
+
+                    errors++;
+                    errorList.Add(new { file = relPath, message = "Could not probe file for indexability/language." });
+                    if (!options.Json)
+                    {
+                        if (options.Verbose)
+                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                        else
+                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                    }
+                    continue;
+                }
+
+                if (indexability != FileIndexer.FileProbeStatus.Supported || detection.Status != FileIndexer.FileProbeStatus.Supported)
+                {
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
+                    if (writer.DeleteFileByPath(relPath))
+                    {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
+                        removed++;
+                        ftsMutated = true;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
+                    }
+                    else
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                    }
                     continue;
                 }
 
@@ -621,14 +678,7 @@ public static class IndexCommandRunner
             }
             catch (Exception ex)
             {
-                // If an already-indexed target file can no longer be re-read/re-parsed, the
-                // existing hotspot-family metadata may be stale relative to the user's
-                // requested refresh. Demote trust even though the attempted rewrite failed
-                // before commit so readers do not keep treating the DB as authoritative.
-                // 既存 index 対象ファイルの再読込/再解析に失敗した場合は、commit 前失敗でも
-                // refresh 未完了として hotspot-family trust を縮退させる。
-                if (File.Exists(absPath) && writer.HasFileAtPath(relPath))
-                    DemoteReadinessOnce();
+                DemoteReadinessOnce();
 
                 errors++;
                 errorList.Add(new { file = relPath, message = ex.Message });
@@ -821,6 +871,65 @@ public static class IndexCommandRunner
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
 
+    private static IReadOnlyList<string> NormalizeUpdateFileTargets(string projectRoot, IEnumerable<string> updateFiles, bool json)
+    {
+        var normalized = new List<string>();
+        foreach (var file in updateFiles)
+        {
+            var absPath = Path.IsPathRooted(file) ? file : Path.GetFullPath(Path.Combine(projectRoot, file));
+            var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
+            if (IsOutsideProjectRoot(relPath))
+            {
+                if (!json)
+                    Console.Error.WriteLine($"  [WARN] Skipping file outside project root: {file}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
+                continue;
+            }
+
+            normalized.Add(relPath);
+        }
+
+        return normalized;
+    }
+
+    private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
+    {
+        lang = string.Empty;
+        error = null;
+
+        var indexability = FileIndexer.GetFileIndexability(absolutePath);
+        if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
+        {
+            error = "Could not probe file for indexability/language.";
+            return false;
+        }
+
+        if (indexability != FileIndexer.FileProbeStatus.Supported)
+            return false;
+
+        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+        {
+            error = "Could not probe file for indexability/language.";
+            return false;
+        }
+
+        if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+            return false;
+
+        try
+        {
+            var (record, _, _, warning) = indexer.BuildRecordWithRawBytes(absolutePath);
+            lang = record.Lang ?? "unknown";
+            error = warning;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null)
     {
         if (json)
@@ -868,11 +977,17 @@ public static class IndexCommandRunner
         CancellationTokenSource? spinnerCts = null;
         if (!options.Json)
             spinnerCts = ConsoleUi.StartSpinner("Scanning...", spinnerFrames);
-        var files = indexer.ScanFiles();
+        var scanResult = indexer.ScanFilesDetailed();
+        var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
+        var errorList = scanResult.Errors
+            .Select(error => (object)new { file = error.Path, message = error.Message })
+            .ToList();
         if (!options.Json)
         {
             Console.WriteLine($"  Found {files.Count:N0} files");
+            foreach (var error in scanResult.Errors)
+                ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
             Console.WriteLine();
         }
 
@@ -888,12 +1003,46 @@ public static class IndexCommandRunner
         CancellationTokenSource? purgeCts = null;
         if (!options.Json)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
-        var purged = writer.PurgeStaleFiles(projectRoot);
+        var purged = 0;
+        var retainedPaths = files
+            .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+            .ToHashSet(StringComparer.Ordinal);
+        if (scanResult.HadErrors)
+        {
+            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths);
+
+            foreach (var relPath in scanResult.NonIndexablePaths)
+            {
+                if (!writer.HasFileAtPath(relPath))
+                    continue;
+
+                if (writer.DeleteFileByPath(relPath))
+                    purged++;
+            }
+
+            var authoritativeDirectories = scanResult.ListedDirectories
+                .ToHashSet(StringComparer.Ordinal);
+            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories);
+        }
+        else
+        {
+            purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+        }
         if (purged > 0)
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
-        if (purged > 0 && !options.Json)
-            Console.WriteLine($"  Purged {purged:N0} stale files (no longer on disk)");
+        if (!options.Json)
+        {
+            if (purged > 0)
+            {
+                var purgeMessage = scanResult.HadErrors
+                    ? $"  Purged {purged:N0} previously indexed files that were positively observed as no longer indexable or missing from directories whose file listing completed successfully"
+                    : $"  Purged {purged:N0} stale files (missing or no longer indexable)";
+                Console.WriteLine(purgeMessage);
+            }
+            if (scanResult.HadErrors)
+                ConsoleUi.PrintWarning("Skipped authoritative purge outside directories whose file listing completed successfully because some paths could not be scanned.");
+        }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
         var purgedRefs = writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
@@ -903,8 +1052,7 @@ public static class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         if (!options.Json)
             indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
-        int processed = 0, skipped = 0, errors = 0;
-        var errorList = new List<object>();
+        int processed = 0, skipped = 0, errors = errorList.Count;
         bool indexSpinnerStopped = false;
 
         foreach (var filePath in files)

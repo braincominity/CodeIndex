@@ -547,6 +547,105 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Remove files from DB that are not part of the current authoritative full-scan set.
+    /// This covers both deleted files and files that still exist on disk but are no longer indexable.
+    /// 現在の authoritative な full-scan 結果に含まれないファイルをDBから削除する。
+    /// ディスク上から消えたファイルだけでなく、存在はするがインデックス対象外になったファイルも含む。
+    /// </summary>
+    public int PurgeFilesOutsideRetainedSet(IReadOnlySet<string> retainedRelativePaths)
+    {
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var path = reader.GetString(1);
+                if (!retainedRelativePaths.Contains(path))
+                    staleIds.Add(id);
+            }
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = BeginTransaction();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn.Commit();
+
+        return staleIds.Count;
+    }
+
+    /// <summary>
+    /// Remove files from DB that are outside the retained set, but only when their immediate
+    /// parent directory completed its own file listing authoritatively. Used by partial full
+    /// scans so unreadable descendants do not block stale-file cleanup for already-listed
+    /// siblings, while still protecting unreadable subtrees from speculative deletes.
+    /// retained set の外にある DB ファイルを削除するが、即時親ディレクトリ自身の file listing が
+    /// authoritative に完了した場合に限定する。partial full scan で、unreadable descendant の
+    /// せいで既に列挙済み sibling の stale cleanup が止まらないようにしつつ、unreadable subtree
+    /// 自体は推測ベースで削除しない。
+    /// </summary>
+    public int PurgeFilesOutsideRetainedSetWithinListedDirectories(IReadOnlySet<string> retainedRelativePaths, IReadOnlySet<string> listedDirectories)
+    {
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var path = reader.GetString(1);
+                if (retainedRelativePaths.Contains(path))
+                    continue;
+
+                if (HasListedParentDirectory(path, listedDirectories))
+                    staleIds.Add(id);
+            }
+        }
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = BeginTransaction();
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn.Commit();
+
+        return staleIds.Count;
+    }
+
+    private static bool HasListedParentDirectory(string path, IReadOnlySet<string> listedDirectories)
+    {
+        var directory = GetDirectoryPath(path);
+        return listedDirectories.Contains(directory);
+    }
+
+    private static string GetDirectoryPath(string path)
+    {
+        var separatorIndex = path.LastIndexOf('/');
+        return separatorIndex >= 0 ? path[..separatorIndex] : string.Empty;
+    }
+
+    /// <summary>
     /// Count symbol_references for files whose language is no longer graph-supported.
     /// Used by update mode to demote readiness before the first real mutation commits.
     /// グラフ非対応になった言語の symbol_references 件数を数える。

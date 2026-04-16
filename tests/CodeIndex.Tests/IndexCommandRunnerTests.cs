@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.Versioning;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -1305,6 +1306,524 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_RemovesIndexedScriptThatLosesShebang()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "tool", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithCommits_RemovesIndexedScriptThatLosesShebang()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            RunGit(projectRoot, "add", "tool");
+            RunGit(projectRoot, "commit", "-m", "remove shebang");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_RemovesIndexedScriptThatLosesShebang()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_scanned").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_DoesNotPurgeFilesFromUnreadableDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("secret", stderr);
+            Assert.Contains("Could not scan directory due to permissions.", stderr);
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesStaleRowsWithinListedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("tool", indexedPaths);
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_HumanOutput_ExplainsPartialPurgeScopeWhenAnotherDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(toolPath, "plain text now\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot]);
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("positively observed as no longer indexable or missing from directories whose file listing completed successfully", stdout);
+            Assert.Contains("Skipped authoritative purge outside directories whose file listing completed successfully", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWithinFullyScannedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            var deletedPath = Path.Combine(projectRoot, "src", "a.cs");
+            File.WriteAllText(deletedPath, "public class Deleted { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/a.cs", indexedPaths);
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedRootFileWhenSiblingDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            var deletedPath = Path.Combine(projectRoot, "direct.cs");
+            File.WriteAllText(deletedPath, "public class Direct { }\n");
+            File.WriteAllText(Path.Combine(secretDir, "hidden.cs"), "public class Hidden { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("direct.cs", indexedPaths);
+            Assert.Contains("secret/hidden.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWhenUnreadableDescendantExistsUnderSameParentDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var srcDir = Path.Combine(projectRoot, "src");
+        var secretDir = Path.Combine(srcDir, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            var deletedPath = Path.Combine(srcDir, "direct.cs");
+            File.WriteAllText(deletedPath, "public class Direct { }\n");
+            File.WriteAllText(Path.Combine(secretDir, "hidden.cs"), "public class Hidden { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal("src/secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/direct.cs", indexedPaths);
+            Assert.Contains("src/secret/hidden.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_PurgesDeletedFilesWithinDirectoryWhenExtensionlessSiblingProbeFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var srcDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(srcDir);
+            var deletedPath = Path.Combine(srcDir, "old.cs");
+            var toolPath = Path.Combine(srcDir, "tool");
+            File.WriteAllText(deletedPath, "public class Old { }\n");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.Delete(deletedPath);
+            SetUnixPermissions(toolPath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("src/tool", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not probe file for indexability/language.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("src/old.cs", indexedPaths);
+            Assert.Contains("src/tool", indexedPaths);
+        }
+        finally
+        {
+            var toolPath = Path.Combine(projectRoot, "src", "tool");
+            if (File.Exists(toolPath))
+                SetUnixPermissions(toolPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DoesNotRemoveUnreadableExtensionlessScript()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            File.WriteAllText(toolPath, "#!/usr/bin/env bash\necho hi\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(toolPath, UnixFileMode.None);
+            File.SetLastWriteTimeUtc(toolPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "tool", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("tool", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not probe file for indexability/language.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("tool", indexedPaths);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var toolPath = Path.Combine(projectRoot, "tool");
+            if (File.Exists(toolPath))
+                SetUnixPermissions(toolPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DemotesReadinessForUnreadableKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            File.WriteAllText(sourcePath, "public class A { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("a.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DemotesReadinessForUnreadableNewKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var sourcePath = Path.Combine(projectRoot, "b.cs");
+            File.WriteAllText(sourcePath, "public class B { }\n");
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "b.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("b.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "b.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonReportsDegradedReadinessWhenBitsStayDown()
     {
         var projectRoot = CreateTempProject();
@@ -1637,6 +2156,171 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_IgnoresUnixFifoWithoutHanging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            CreateUnixFifo(Path.Combine(projectRoot, "tool"));
+            CreateUnixFifo(Path.Combine(projectRoot, "tool.sh"));
+            CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
+
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+
+            Assert.False(result.TimedOut, "cdidx index --dry-run hung on a FIFO entry.");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+
+            using var document = JsonDocument.Parse(result.StdOut);
+            Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_FullScan_ReportsUnreadableDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var secretDir = Path.Combine(projectRoot, "secret");
+        try
+        {
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
+
+            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("secret", stderr);
+            Assert.Contains("Could not scan directory due to permissions.", stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_IgnoresUnixFifoKnownFilename()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
+
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--files", "Dockerfile", "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+
+            Assert.False(result.TimedOut, "cdidx index --dry-run --files hung on a FIFO entry.");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+
+            using var document = JsonDocument.Parse(result.StdOut);
+            Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_IgnoresAbsolutePathOutsideProjectRoot()
+    {
+        var projectRoot = CreateTempProject();
+        var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_outside_{Guid.NewGuid():N}.cs");
+        try
+        {
+            File.WriteAllText(outsidePath, "public class Outside { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", outsidePath, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            if (File.Exists(outsidePath))
+                File.Delete(outsidePath);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_IgnoresTraversalOutsideProjectRoot()
+    {
+        var parentDir = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_parent_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(parentDir, "project");
+        var outsidePath = Path.Combine(parentDir, "outside.cs");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(outsidePath, "public class Outside { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "../outside.cs", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(parentDir))
+                DeleteDirectory(parentDir);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_DoesNotCountUnreadableKnownExtensionFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            File.WriteAllText(sourcePath, "public class A { }\n");
+            SetUnixPermissions(sourcePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal("a.cs", json.GetProperty("errors")[0].GetProperty("file").GetString());
+        }
+        finally
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            if (File.Exists(sourcePath))
+                SetUnixPermissions(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             DeleteDirectory(projectRoot);
         }
     }
@@ -2104,7 +2788,7 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("partial", json.GetProperty("status").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("app.cs", indexedPaths);
@@ -2656,6 +3340,34 @@ public class IndexCommandRunnerTests
         return (process.ExitCode, stdOut, stdErr);
     }
 
+    private static (int ExitCode, string StdOut, string StdErr, bool TimedOut) RunCliInSubprocessWithTimeout(string[] args, string workingDirectory, TimeSpan timeout)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(GetBuiltCliDllPath());
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start cdidx subprocess / cdidx サブプロセスの起動に失敗");
+
+        if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            return (process.ExitCode, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd(), true);
+        }
+
+        return (process.ExitCode, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd(), false);
+    }
+
     private static string GetBuiltCliDllPath()
     {
         var tfm = new DirectoryInfo(AppContext.BaseDirectory).Name;
@@ -2713,6 +3425,32 @@ public class IndexCommandRunnerTests
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void SetUnixPermissions(string path, UnixFileMode mode)
+    {
+        File.SetUnixFileMode(path, mode);
+    }
+
+    private static void CreateUnixFifo(string path)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "mkfifo",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(path);
+
+        using var process = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
     }
 
     private static void WriteOversizedAsciiFile(string path)
