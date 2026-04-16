@@ -416,6 +416,108 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Human_CSharpUsingVarTopLevelFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_using_var_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+                using System.IO;
+
+                using var stream01 = new MemoryStream();
+                using var stream02 = new MemoryStream();
+                using var stream03 = new MemoryStream();
+                using var stream04 = new MemoryStream();
+                using var stream05 = new MemoryStream();
+                using var stream06 = new MemoryStream();
+                using var stream07 = new MemoryStream();
+                using var stream08 = new MemoryStream();
+                using var stream09 = new MemoryStream();
+                using var stream10 = new MemoryStream();
+                using var stream11 = new MemoryStream();
+                using var stream12 = new MemoryStream();
+                using var stream13 = new MemoryStream();
+                using var stream14 = new MemoryStream();
+                using var stream15 = new MemoryStream();
+                using var stream16 = new MemoryStream();
+                using var stream17 = new MemoryStream();
+                using var stream18 = new MemoryStream();
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Human_CSharpUsingStatementTopLevelFile_WritesHelpfulNote()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_using_statement_human");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/program.cs",
+                "csharp",
+                """
+                using System;
+                using System.IO;
+
+                using (var stream01 = new MemoryStream())
+                {
+                    Console.WriteLine(stream01.Length);
+                }
+                using (var stream02 = new MemoryStream())
+                {
+                    Console.WriteLine(stream02.Length);
+                }
+                using (var stream03 = new MemoryStream())
+                {
+                    Console.WriteLine(stream03.Length);
+                }
+                using (var stream04 = new MemoryStream())
+                {
+                    Console.WriteLine(stream04.Length);
+                }
+                using (var stream05 = new MemoryStream())
+                {
+                    Console.WriteLine(stream05.Length);
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/program.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("# src/program.cs", stdout);
+            Assert.Contains("Note: no type/namespace declarations found; this file likely uses C# top-level statements.", stderr);
+            Assert.Contains("Outline lists imports and local functions only; the executable body is not indexed as symbols.", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_Human_GlobalUsingsFile_DoesNotWriteTopLevelStatementsHint()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_global_usings_human");

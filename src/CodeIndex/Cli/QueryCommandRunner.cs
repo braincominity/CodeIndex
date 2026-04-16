@@ -1097,7 +1097,13 @@ public static class QueryCommandRunner
             if (line.Length == 0)
                 continue;
             if (line.StartsWith("using ", StringComparison.Ordinal))
+            {
+                if (line.StartsWith("using var ", StringComparison.Ordinal))
+                    return true;
+                if (line.StartsWith("using (", StringComparison.Ordinal))
+                    return true;
                 continue;
+            }
             if (line.StartsWith("global using ", StringComparison.Ordinal))
                 continue;
             if (line.StartsWith("[assembly:", StringComparison.Ordinal))
