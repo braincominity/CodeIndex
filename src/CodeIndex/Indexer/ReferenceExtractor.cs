@@ -41,9 +41,12 @@ public static class ReferenceExtractor
             "async", "yield", "checked", "unchecked", "default", "stackalloc", "fixed",
         },
         // Java contextual keywords / Java 文脈キーワード
+        // `this` is listed so generic CallRegex does not emit a phantom `call this` edge
+        // after EmitJavaCtorChainReferences rewrites the chain to the owning class.
+        // `this` も含めることで、連鎖書き換え後の generic CallRegex が `call this` を二重に出すのを防ぐ。
         ["java"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "instanceof", "super", "assert", "throws", "extends", "implements", "synchronized",
+            "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
@@ -143,6 +146,15 @@ public static class ReferenceExtractor
     // Inline `where` constraint in a C# type header; used to trim base-list parsing
     // C# 型ヘッダーの where 制約句。base-list 解析の終端として使用
     private static readonly Regex CSharpWhereClauseRegex = new(@"\s+where\s+[\w?.]+\s*:", RegexOptions.Compiled);
+    // C# record declaration with a primary-constructor parameter list.
+    // Used to synthesize a function-kind container for primary-ctor base calls
+    // (e.g. `record Child(int x) : Parent(x)`), so `callers` / `callees` / `impact`
+    // can attribute the `Parent(x)` edge to the record's synthetic constructor.
+    // C# record のプライマリーコンストラクタ宣言を検出し、base primary-ctor 呼び出しの
+    // 参照を record の合成コンストラクタに紐付けるために使う。
+    private static readonly Regex CSharpRecordPrimaryCtorSignatureRegex = new(
+        @"\brecord\s+(?:class\s+|struct\s+)?\w+(?:<[^>]+>)?\s*\(",
+        RegexOptions.Compiled);
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -196,6 +208,12 @@ public static class ReferenceExtractor
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
 
+        // Synthetic function-kind container per-line for C# record primary-ctor declarations
+        // that include a base primary-ctor call such as `record Child(int x) : Parent(x)`.
+        // Keyed by the record class symbol's StartLine so only the declaration line is overridden.
+        // C# record のプライマリーコンストラクタ宣言行に限って、合成 function コンテナを用意する。
+        var recordPrimaryCtorContainers = BuildCSharpRecordPrimaryCtorContainers(language, symbols);
+
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
@@ -215,6 +233,8 @@ public static class ReferenceExtractor
                 ? namesOnLine
                 : null;
             var container = FindInnermostContainer(containerCandidates, lineNumber);
+            if (recordPrimaryCtorContainers.TryGetValue(lineNumber, out var syntheticRecordCtor))
+                container = syntheticRecordCtor;
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
             if (language is "csharp")
@@ -234,7 +254,7 @@ public static class ReferenceExtractor
             else if (language is "java")
             {
                 EmitJavaCtorChainReferences(
-                    preparedLine, enclosingTypeCandidates, references, seen, fileId, context, lineNumber, container);
+                    preparedLine, enclosingTypeCandidates, symbols, references, seen, fileId, context, lineNumber, container);
             }
 
             foreach (Match match in CallRegex.Matches(preparedLine))
@@ -384,6 +404,7 @@ public static class ReferenceExtractor
     private static void EmitJavaCtorChainReferences(
         string preparedLine,
         IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        IReadOnlyList<SymbolRecord> symbols,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -395,15 +416,30 @@ public static class ReferenceExtractor
         if (!match.Success)
             return;
 
-        // Only emit when the enclosing function is a Java constructor (same name as enclosing class).
-        // 外側の関数が Java のコンストラクタ（外側クラスと同名）であるときだけ参照を出す。
-        if (container == null || container.Kind != "function")
-            return;
-
         var enclosingType = FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
         if (enclosingType == null)
             return;
-        if (!string.Equals(container.Name, enclosingType.Name, StringComparison.Ordinal))
+
+        // Prefer the innermost container when it is already a constructor of the enclosing class.
+        // Otherwise, fall back to scanning all function-kind symbols by name match against the enclosing
+        // class. Package-private ctors like `Leaf(int x){super(x);}` can appear without body ranges in
+        // SymbolExtractor, so they are excluded from containerCandidates and the innermost container
+        // becomes the class itself. The fallback still finds them by declaration StartLine.
+        // 外側クラスのコンストラクタが innermost container として既に見つかっていれば使う。
+        // そうでなければ、関数シンボル全体を走査して外側クラスと同名のコンストラクタを
+        // declaration StartLine ベースで引き直す。body 範囲を持たない package-private ctor でも拾える。
+        SymbolRecord? ctorContainer = null;
+        if (container != null && container.Kind == "function"
+            && string.Equals(container.Name, enclosingType.Name, StringComparison.Ordinal))
+        {
+            ctorContainer = container;
+        }
+        else
+        {
+            ctorContainer = FindEnclosingJavaConstructor(symbols, enclosingType, lineNumber);
+        }
+
+        if (ctorContainer == null)
             return;
 
         var kindToken = match.Groups["kind"].Value;
@@ -421,7 +457,80 @@ public static class ReferenceExtractor
 
         AddChainReference(
             references, seen, fileId, target!, match.Groups["kind"].Index + 1,
-            "call", context, lineNumber, container);
+            "call", context, lineNumber, ctorContainer);
+    }
+
+    /// <summary>
+    /// Find the Java constructor symbol that encloses the given line number by name-matching
+    /// the enclosing class. Covers package-private ctors that SymbolExtractor records without
+    /// body ranges (so they are absent from containerCandidates).
+    /// 指定行を内包する Java コンストラクタを、外側クラス名との一致で走査して探す。
+    /// body 範囲を持たない package-private ctor でも declaration StartLine 起点で拾える。
+    /// </summary>
+    private static SymbolRecord? FindEnclosingJavaConstructor(
+        IReadOnlyList<SymbolRecord> symbols,
+        SymbolRecord enclosingType,
+        int lineNumber)
+    {
+        var classStart = enclosingType.BodyStartLine ?? enclosingType.StartLine;
+        var classEnd = enclosingType.BodyEndLine ?? enclosingType.EndLine;
+
+        // Collect all ctor-name function symbols declared inside the class body at or before
+        // `lineNumber`. When the symbol carries a body range, we can check the range directly.
+        // Otherwise we fall back to the most recent declaration line at or before `lineNumber`,
+        // bounded above by the next same-name ctor declaration (so the reference is still
+        // attributed to the constructor that actually owns the chain line).
+        // body 範囲があるシンボルは範囲判定、body 範囲の無い package-private ctor は
+        // 次の同名 ctor 宣言の直前までを占有範囲として扱う。
+        List<SymbolRecord>? candidates = null;
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function")
+                continue;
+            if (!string.Equals(symbol.Name, enclosingType.Name, StringComparison.Ordinal))
+                continue;
+            if (symbol.StartLine < classStart || symbol.StartLine > classEnd)
+                continue;
+            if (symbol.StartLine > lineNumber)
+                continue;
+            (candidates ??= new List<SymbolRecord>()).Add(symbol);
+        }
+
+        if (candidates == null)
+            return null;
+
+        candidates.Sort((a, b) => a.StartLine.CompareTo(b.StartLine));
+
+        SymbolRecord? best = null;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            var symbol = candidates[i];
+            var hasBodyRange = symbol.BodyStartLine != null && symbol.BodyEndLine != null;
+            int rangeEnd;
+            if (hasBodyRange)
+            {
+                rangeEnd = symbol.BodyEndLine!.Value;
+            }
+            else
+            {
+                // Extend to just before the next same-name ctor declaration, else to the end
+                // of the enclosing class body. This approximates the ctor's true range when
+                // SymbolExtractor could not parse the braces (e.g. package-private Java ctors).
+                // 次の同名 ctor 宣言の直前、もしくは外側クラス body の終端まで拡張する。
+                var nextStart = (i + 1 < candidates.Count) ? candidates[i + 1].StartLine : classEnd + 1;
+                rangeEnd = nextStart - 1;
+            }
+
+            if (rangeEnd < lineNumber)
+                continue;
+
+            // Innermost / most recent declaration wins.
+            // 一番近い宣言行を選ぶ。
+            if (best == null || symbol.StartLine > best.StartLine)
+                best = symbol;
+        }
+
+        return best;
     }
 
     private static void AddChainReference(
@@ -450,6 +559,91 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    /// <summary>
+    /// Build a per-line map of synthetic function-kind containers for C# record declarations
+    /// that carry a base primary-constructor call (e.g. `record Child(int x) : Parent(x)`).
+    /// SymbolExtractor does not synthesize a separate ctor symbol for the implicit primary
+    /// constructor, so the `Parent(x)` reference would otherwise be attributed to the class
+    /// itself (or to no container at all) and `callers` / `callees` / `impact` would miss the
+    /// edge. We override the container on the record's declaration line so the chain edge is
+    /// attributed to a synthetic function named after the record.
+    /// C# record のプライマリーコンストラクタ宣言（`record Child(int x) : Parent(x)` など）に対して、
+    /// 宣言行だけ合成 function コンテナへ差し替えるための辞書を作る。
+    /// </summary>
+    private static Dictionary<int, SymbolRecord> BuildCSharpRecordPrimaryCtorContainers(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var map = new Dictionary<int, SymbolRecord>();
+        if (language != "csharp")
+            return map;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "class")
+                continue;
+            var signature = symbol.Signature;
+            if (string.IsNullOrWhiteSpace(signature))
+                continue;
+            if (!CSharpRecordPrimaryCtorSignatureRegex.IsMatch(signature))
+                continue;
+            if (!HasCSharpRecordBasePrimaryCtorCall(signature))
+                continue;
+
+            var synthetic = new SymbolRecord
+            {
+                FileId = symbol.FileId,
+                Kind = "function",
+                Name = symbol.Name,
+                Line = symbol.Line,
+                StartLine = symbol.StartLine,
+                EndLine = symbol.StartLine,
+                BodyStartLine = symbol.StartLine,
+                BodyEndLine = symbol.StartLine,
+                Signature = signature,
+                ContainerKind = symbol.ContainerKind,
+                ContainerName = symbol.ContainerName,
+                ContainerQualifiedName = symbol.ContainerQualifiedName,
+                FamilyKey = symbol.FamilyKey,
+                Visibility = symbol.Visibility,
+            };
+
+            // Record declaration StartLine is the line the base primary-ctor call sits on.
+            // Only that exact line is overridden so method bodies inside `{...}` keep their
+            // real containers via FindInnermostContainer.
+            // 宣言行のみを上書きし、`{...}` 本体内のメソッドは本来のコンテナを保つ。
+            map[symbol.StartLine] = synthetic;
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// Returns true when the C# type signature carries a base-list entry that looks like a
+    /// primary-constructor call (contains `(`).
+    /// C# 型シグネチャの base-list 先頭エントリが primary-ctor 呼び出し（`(` を含む）かを判定する。
+    /// </summary>
+    private static bool HasCSharpRecordBasePrimaryCtorCall(string signature)
+    {
+        var text = signature.TrimEnd();
+        if (text.EndsWith(";", StringComparison.Ordinal))
+            text = text.Substring(0, text.Length - 1).TrimEnd();
+        if (text.EndsWith("{", StringComparison.Ordinal))
+            text = text.Substring(0, text.Length - 1).TrimEnd();
+
+        var colonIndex = FindSignatureColonIndex(text);
+        if (colonIndex < 0)
+            return false;
+
+        var baseList = text.Substring(colonIndex + 1);
+        var whereMatch = CSharpWhereClauseRegex.Match(baseList);
+        if (whereMatch.Success)
+            baseList = baseList.Substring(0, whereMatch.Index);
+
+        var firstEntry = TakeFirstBaseEntry(baseList).Trim();
+        return firstEntry.Contains('(');
     }
 
     /// <summary>

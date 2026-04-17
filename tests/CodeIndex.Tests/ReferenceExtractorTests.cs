@@ -929,6 +929,14 @@ public class ReferenceExtractorTests
 
         Assert.DoesNotContain(references, r => r.SymbolName == "base");
         Assert.DoesNotContain(references, r => r.SymbolName == "this");
+
+        // Record primary-ctor base call is attributed to a synthetic function named after
+        // the record, so `callers` / `callees` / `impact` can traverse the chain edge.
+        // record のプライマリーコンストラクタの base 呼び出しが、record 名の合成 function に紐付く。
+        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
+        Assert.Equal("call", parentRef.ReferenceKind);
+        Assert.Equal("function", parentRef.ContainerKind);
+        Assert.Equal("Child", parentRef.ContainerName);
     }
 
     [Fact]
@@ -1017,6 +1025,44 @@ public class ReferenceExtractorTests
         var thisRef = Assert.Single(references, r =>
             r.SymbolName == "Leaf" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
         Assert.Equal("call", thisRef.ReferenceKind);
+
+        // The generic CallRegex loop runs after EmitJavaCtorChainReferences; `this` must be
+        // in the Java ignore set so it does not leak as a phantom `call this` edge.
+        // chain 書き換え後に generic CallRegex が `call this` を二重に出さないこと。
+        Assert.DoesNotContain(references, r => r.SymbolName == "this");
+    }
+
+    [Fact]
+    public void Extract_JavaCtorChainSuper_PackagePrivateCtor_RewritesToBaseClass()
+    {
+        // Package-private Java ctors like `Leaf(int x){...}` do not receive body ranges from
+        // SymbolExtractor, so they are excluded from the innermost-container lookup. The
+        // constructor-chain rewrite must still attribute the super(x) call to the ctor
+        // through a name-based fallback against the enclosing class.
+        // SymbolExtractor は package-private ctor に body 範囲を付けないため、innermost container
+        // 判定からは外れる。chain 書き換えは外側クラス名との一致 fallback で救う。
+        const string content = """
+            package demo;
+
+            public class Root {
+                Root(int x) {}
+            }
+
+            class Leaf extends Root {
+                Leaf(int x) {
+                    super(x);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var superRef = Assert.Single(references, r =>
+            r.SymbolName == "Root" && r.ContainerKind == "function");
+        Assert.Equal("call", superRef.ReferenceKind);
+        Assert.Equal("Leaf", superRef.ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
     }
 
     [Fact]
