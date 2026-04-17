@@ -1860,6 +1860,61 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpNoArgParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): no-arg parameter attributes such as
+        // `void M([FromServices] IService s)` must still classify as `attribute`.
+        // A previous iteration of the top-level-zone gate tracked paren depth globally
+        // so the attribute section — which opens at global paren depth 1 inside the
+        // method parameter list — never entered top-level. The fix is to track paren
+        // depth section-locally so the section's own `[` / `]` define its zero point.
+        // リグレッション (issue #293 補足): `void M([FromServices] IService s)` のような
+        // 引数なしパラメータ属性も引き続き `attribute` として取り込まれること。
+        const string content = """
+            public class S
+            {
+                public void M([FromServices] IService s) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fromServices = Assert.Single(references.Where(r => r.SymbolName == "FromServices"));
+        Assert.Equal("attribute", fromServices.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "FromServices" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpNoArgDelegateAndLambdaParameterAttributes_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): no-arg attributes on delegate parameters and
+        // lambda parameters also open their `[` inside outer parens, so they require
+        // section-local paren-depth tracking for top-level zone detection.
+        // リグレッション (issue #293 補足): デリゲート・ラムダの仮引数に付く no-arg 属性も
+        // `(` の中で `[` が開くため、section-local の paren 深さ追跡が必要。
+        const string content = """
+            public delegate void D([Attr] int x);
+            public class C
+            {
+                public void M()
+                {
+                    System.Func<int, int> f = ([Attr] int x) => x;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // Both occurrences of `Attr` should be classified as `attribute`, not `call`.
+        // 2 箇所の `Attr` が `attribute` として分類され、`call` にはならないこと。
+        var attrs = references.Where(r => r.SymbolName == "Attr").ToList();
+        Assert.Equal(2, attrs.Count);
+        Assert.All(attrs, r => Assert.Equal("attribute", r.ReferenceKind));
+    }
+
+    [Fact]
     public void Extract_CsharpMultiLineAttributeArgumentEnum_NotClassifiedAsAttribute()
     {
         // Regression (issue #293 follow-up): identifiers appearing inside the argument list of

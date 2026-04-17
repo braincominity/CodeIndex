@@ -547,21 +547,30 @@ public static class ReferenceExtractor
             perLineTopLevel.Add(new List<(int, int)>());
         }
 
-        // Stack entries capture the opening `[` position and whether that bracket was at
-        // a C# declaration (attribute) position. Parens inside a section are tracked so the
-        // stack only pops when the bracket actually closes, not when an inner `)` appears.
-        // スタックは `[` の位置と、その bracket が属性位置だったかを保持する。セクション内の
-        // 括弧は独立して追跡し、内部の `)` によってスタックが誤って pop されないようにする。
-        var bracketStack = new Stack<(int li, int ci, bool isAttr)>();
+        // Stack entries capture the opening `[` position, whether that bracket was at
+        // a C# declaration (attribute) position, and a snapshot of the global paren depth
+        // at that moment. The snapshot lets us compute an attribute-section-local paren
+        // depth (`parenDepth - parenDepthAtOpen`), which is what the top-level zone tracking
+        // uses so that parameter attributes like `void M([Attr] int x)` still have their
+        // attribute-list top level at section-local depth 0 even though the global depth
+        // is inside the method's parameter list.
+        // スタックは `[` の位置、その bracket が属性位置だったか、および開いた瞬間の
+        // グローバル paren 深さのスナップショットを保持する。スナップショットを使うと
+        // 属性セクション内ローカルの paren 深さ (`parenDepth - parenDepthAtOpen`) が
+        // 得られるので、`void M([Attr] int x)` のように外側の method 引数リストの中で
+        // 開く属性セクションでも、セクション内では top-level (local depth 0) として扱える。
+        var bracketStack = new Stack<(int li, int ci, bool isAttr, int parenDepthAtOpen)>();
         char lastMeaningful = '\0';
         int parenDepth = 0;
         bool lastClosedBracketWasAttribute = false;
 
-        // Top-level zone tracking: while we are inside an attribute section and parenDepth==0,
-        // the current zone span is open. When parens open we close it; when they fully close
-        // again we reopen. When the attribute section itself closes, we emit the final span.
-        // top-level ゾーン追跡: 属性セクション内かつ paren 深さ 0 のあいだだけゾーンを開いておき、
-        // `(` で閉じ、`)` で再び開く。セクションが閉じる `]` で確定させる。
+        // Top-level zone tracking: while we are inside an attribute section and the paren
+        // depth is at the section's open snapshot (section-local depth 0), the current zone
+        // span is open. When parens open inside the section we close it; when they fully
+        // close again we reopen. When the attribute section itself closes, we emit the span.
+        // top-level ゾーン追跡: 属性セクション内かつセクションローカルの paren 深さが 0 の
+        // あいだだけゾーンを開いておき、セクション内の `(` で閉じ、`)` で再び開く。
+        // セクションが閉じる `]` で確定させる。
         int topZoneStartLi = -1;
         int topZoneStartCi = 0;
 
@@ -590,12 +599,19 @@ public static class ReferenceExtractor
 
                 if (c == '(')
                 {
-                    // If we are in a top-level attribute zone and this `(` opens the first
-                    // paren depth, close the top-level zone just before the `(`.
-                    // top-level ゾーン中で paren 深さが 0→1 になる `(` ならここでゾーンを閉じる。
-                    if (parenDepth == 0 && bracketStack.Count > 0 && bracketStack.Peek().isAttr && topZoneStartLi >= 0)
+                    // If the innermost enclosing bracket is an attribute section and we are
+                    // currently at that section's local top level, close the top-level zone
+                    // just before the `(`. Use the stack top's `parenDepthAtOpen` snapshot so
+                    // parameter attributes inside an outer `(...)` still get their top level
+                    // tracked correctly.
+                    // 直近の `[` が属性セクションで、かつその section-local 深さで top-level のとき、
+                    // `(` 直前でゾーンを閉じる。外側の `(...)` の中で開く属性セクションにも対応するため、
+                    // グローバル depth ではなくスタック top の開いたときの snapshot と比較する。
+                    if (bracketStack.Count > 0)
                     {
-                        EmitTopZone(li, ci);
+                        var top = bracketStack.Peek();
+                        if (top.isAttr && parenDepth == top.parenDepthAtOpen && topZoneStartLi >= 0)
+                            EmitTopZone(li, ci);
                     }
                     parenDepth++;
                     lastMeaningful = c;
@@ -606,11 +622,18 @@ public static class ReferenceExtractor
                     if (parenDepth > 0)
                     {
                         parenDepth--;
-                        // paren 深さが 1→0 に戻ったら、依然として属性セクション内なら top-level ゾーンを再開する。
-                        if (parenDepth == 0 && bracketStack.Count > 0 && bracketStack.Peek().isAttr && topZoneStartLi < 0)
+                        // If the innermost `[` is an attribute section and we just returned
+                        // to that section's local top level, reopen the top-level zone.
+                        // 直近の `[` が属性セクションで、section-local top-level に戻ってきたら
+                        // top-level ゾーンを再開する。
+                        if (bracketStack.Count > 0)
                         {
-                            topZoneStartLi = li;
-                            topZoneStartCi = ci + 1;
+                            var top = bracketStack.Peek();
+                            if (top.isAttr && parenDepth == top.parenDepthAtOpen && topZoneStartLi < 0)
+                            {
+                                topZoneStartLi = li;
+                                topZoneStartCi = ci + 1;
+                            }
                         }
                     }
                     lastMeaningful = c;
@@ -621,12 +644,13 @@ public static class ReferenceExtractor
                 {
                     bool isAttr = EvaluateCSharpAttributePosition(
                         lastMeaningful, lastClosedBracketWasAttribute, preparedLines, li, ci);
-                    bracketStack.Push((li, ci, isAttr));
-                    if (isAttr && parenDepth == 0 && topZoneStartLi < 0)
+                    bracketStack.Push((li, ci, isAttr, parenDepth));
+                    if (isAttr && topZoneStartLi < 0)
                     {
                         // Start top-level zone just after the `[` so the `[` itself is not
-                        // inside the zone.
-                        // `[` 直後から top-level ゾーンを開始する。
+                        // inside the zone. Section-local depth is 0 by construction at the
+                        // open bracket.
+                        // `[` 直後から top-level ゾーンを開始する。開いた瞬間は section-local 深さ 0。
                         topZoneStartLi = li;
                         topZoneStartCi = ci + 1;
                     }
@@ -652,12 +676,13 @@ public static class ReferenceExtractor
                                 int e = (l == li) ? ci + 1 : preparedLines[l].Length;
                                 perLine[l].Add((s, e));
                             }
-                            // Close the top-level zone at the `]` (paren depth should already
-                            // be 0 here — if it is not, we simply drop the open zone because
-                            // paren balancing was malformed).
-                            // ここで top-level ゾーンを確定する。paren が閉じ切っていない場合は
-                            // 不整合入力なのでゾーンを捨てる。
-                            if (parenDepth == 0)
+                            // Close the top-level zone at the `]`. Section-local depth should
+                            // be 0 here (we are at the closing bracket of this section) — if
+                            // it is not, we drop the open zone because paren balancing was
+                            // malformed.
+                            // `]` で top-level ゾーンを確定する。section-local 深さが 0 のはず。
+                            // 不整合入力ならゾーンを捨てる。
+                            if (parenDepth == opened.parenDepthAtOpen)
                             {
                                 EmitTopZone(li, ci + 1);
                             }
