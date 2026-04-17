@@ -1792,6 +1792,75 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGlobalQualifiedNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): `[global::System.Obsolete]` — fully qualified
+        // attribute using the `global::` alias. The no-arg attribute regex must accept both
+        // `.` and `::` as qualifier separators so these references are not silently dropped.
+        // リグレッション (issue #293 補足): `[global::System.Obsolete]` のように `::` で修飾した
+        // 引数なし属性も `attribute` として取り込まれること。
+        const string content = """
+            [global::System.Obsolete]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var obsolete = Assert.Single(references.Where(r => r.SymbolName == "Obsolete"));
+        Assert.Equal("attribute", obsolete.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpAliasQualifiedNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): `[Alias::MyAttr]` — alias-qualified attribute.
+        // The qualifier separator may be `::` (extern alias) as well as `.`; the name segment
+        // must still be emitted with kind `attribute`.
+        // リグレッション (issue #293 補足): `[Alias::MyAttr]` のように extern alias 修飾された
+        // 引数なし属性も `attribute` として取り込まれること。
+        const string content = """
+            [Alias::MyAttr]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "MyAttr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptDecorator_ClassifiedAsAnnotation()
+    {
+        // Regression (issue #293 follow-up): JavaScript is a graph-supported language, so
+        // its `@Decorator` / `@Decorator()` forms must be reclassified to `annotation` instead
+        // of leaking into call-graph edges. Both bare `@sealed` (no-arg, via the dedicated
+        // regex) and `@injectable()` (via CallRegex + TryClassifyMetadataReference) must end
+        // up as `annotation`.
+        // リグレッション (issue #293 補足): JavaScript も graph 対応言語なので、`@Decorator`
+        // / `@Decorator()` は `annotation` に再分類され、call graph を汚染しないこと。
+        const string content = """
+            @sealed
+            @injectable()
+            class Foo {}
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "javascript", content, []);
+
+        var sealedRef = Assert.Single(references.Where(r => r.SymbolName == "sealed"));
+        Assert.Equal("annotation", sealedRef.ReferenceKind);
+        var injectable = Assert.Single(references.Where(r => r.SymbolName == "injectable"));
+        Assert.Equal("annotation", injectable.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_KotlinQualifiedFieldTargetAnnotation_ClassifiedAsAnnotation()
     {
         // issue #293 follow-up: Kotlin use-site target with a fully-qualified annotation

@@ -133,17 +133,19 @@ public static class ReferenceExtractor
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
 
     // No-arg C# attribute name (`[Serializable]`, `[assembly: CLSCompliant]`, `[System.Obsolete]`,
-    // `[Required, Key]`). CallRegex only matches identifiers followed by `(`, so no-arg attributes
-    // would otherwise never be indexed. The pattern anchors to `[` / `,` boundaries and refuses to
-    // match when the identifier is followed by `(` (handled by CallRegex + TryClassifyMetadataReference)
-    // or `.` (qualifier continues). A subsequent `IsInsideCSharpAttributeRange` filter keeps the
-    // match from firing on indexer access like `arr[i]`.
+    // `[global::System.Obsolete]`, `[Alias::MyAttr]`, `[Required, Key]`). CallRegex only matches
+    // identifiers followed by `(`, so no-arg attributes would otherwise never be indexed. The
+    // pattern anchors to `[` / `,` boundaries and refuses to match when the identifier is followed
+    // by `(` (handled by CallRegex + TryClassifyMetadataReference) or a qualifier continuation
+    // (`.` / `::`). A subsequent `IsInsideCSharpAttributeRange` filter keeps the match from firing
+    // on indexer access like `arr[i]`.
     // 引数なしの C# attribute 名用 regex。`[Serializable]` などは CallRegex では拾えないため専用の
-    // 入口で捕捉する。`[` / `,` 境界にアンカーし、後続が `(`（CallRegex 経路で処理）や `.`（qualifier 継続）
-    // なら採用しない。`arr[i]` のような indexer を排除するため、マッチ後に
+    // 入口で捕捉する。`global::System.Obsolete` や `Alias::MyAttr` のように `::` 修飾子の付く形も
+    // 許容する。`[` / `,` 境界にアンカーし、後続が `(`（CallRegex 経路で処理）や `.` / `::`
+    // （qualifier 継続）なら採用しない。`arr[i]` のような indexer を排除するため、マッチ後に
     // `IsInsideCSharpAttributeRange` で範囲内かも確認する。
     private static readonly Regex CSharpNoArgAttributeRegex = new(
-        @"[\[,]\s*(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\s*(?=[\],])",
+        @"[\[,]\s*(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)\s*(?=[\],])",
         RegexOptions.Compiled);
 
     // No-arg Java-family annotation (`@Deprecated`, `@Override`, `@org.junit.Test`, `@field:Deprecated`).
@@ -162,7 +164,7 @@ public static class ReferenceExtractor
     // 記録すべき言語 (issue #293)。
     private static readonly HashSet<string> AnnotationLanguages = new(StringComparer.Ordinal)
     {
-        "java", "kotlin", "scala", "typescript",
+        "java", "kotlin", "scala", "typescript", "javascript",
     };
 
     // Kotlin use-site target prefixes for annotations (e.g. `@field:Deprecated("msg")`,
