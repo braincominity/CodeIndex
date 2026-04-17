@@ -694,24 +694,30 @@ public static class ReferenceExtractor
 
         SkipWhitespace(line, ref i);
 
-        while (i < n && line[i] == '@')
-        {
-            i++;
-            if (!ConsumeQualifiedIdentifier(line, ref i))
-                return null;
-            SkipWhitespace(line, ref i);
-            if (i < n && line[i] == '(')
-            {
-                if (!SkipBalancedParens(line, ref i))
-                    return null;
-            }
-            SkipWhitespace(line, ref i);
-        }
-
+        // Consume annotations and access / misc modifiers in any order so that forms such as
+        // `public @Deprecated Leaf(...)` and `@demo.Ann private Leaf(...)` are both accepted
+        // instead of bailing when an annotation appears after a modifier keyword.
+        // アノテーションと access modifier は順不同で交互に現れ得るため、両方を 1 つのループで
+        // 反復消費する。途中でどちらでもないトークンが来たら ctor 名（または `<...>`）へ遷移する。
         while (true)
         {
+            SkipWhitespace(line, ref i);
+            if (i < n && line[i] == '@')
+            {
+                i++;
+                if (!ConsumeQualifiedIdentifier(line, ref i))
+                    return null;
+                SkipWhitespace(line, ref i);
+                if (i < n && line[i] == '(')
+                {
+                    if (!SkipBalancedParens(line, ref i))
+                        return null;
+                }
+                continue;
+            }
+
             int wordStart = i;
-            while (i < n && (char.IsLetter(line[i])))
+            while (i < n && char.IsLetter(line[i]))
                 i++;
             if (i == wordStart)
                 break;
@@ -721,8 +727,9 @@ public static class ReferenceExtractor
                 i = wordStart;
                 break;
             }
-            SkipWhitespace(line, ref i);
         }
+
+        SkipWhitespace(line, ref i);
 
         if (i < n && line[i] == '<')
         {
@@ -949,20 +956,35 @@ public static class ReferenceExtractor
     /// structuralLines を使って、class / struct / record 宣言ヘッダーを最初の `;` / `{` まで連結する。
     /// record primary-ctor のコンテナ合成と、複数行 `: base(...)` 解決の両方で使う。
     /// </summary>
-    private static (int EndLine, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
+    internal static (int EndLine, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
     {
         var startIdx = Math.Max(0, startLine - 1);
         if (structuralLines.Length == 0)
             return (startLine, string.Empty);
 
+        // Depth-aware termination so that `{` / `;` inside annotation arg lists (e.g. the `{` in
+        // `@Ann({A.class, B.class})`), parentheses, or angle brackets does not cut the header
+        // off before the real base-list terminator, which would silently drop the base type.
+        // アノテーション引数の `{` などを本当のヘッダ終端と誤認しないよう、`()` / `[]` / `<>`
+        // の深さを追いながら最初の top-level `;` / `{` でのみ終了する。
         var sb = new System.Text.StringBuilder();
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        int angleDepth = 0;
         for (int i = startIdx; i < structuralLines.Length; i++)
         {
             var line = structuralLines[i];
             var terminatorIdx = -1;
             for (int j = 0; j < line.Length; j++)
             {
-                if (line[j] == ';' || line[j] == '{')
+                var c = line[j];
+                if (c == '(') parenDepth++;
+                else if (c == ')') { if (parenDepth > 0) parenDepth--; }
+                else if (c == '[') bracketDepth++;
+                else if (c == ']') { if (bracketDepth > 0) bracketDepth--; }
+                else if (c == '<') angleDepth++;
+                else if (c == '>') { if (angleDepth > 0) angleDepth--; }
+                else if ((c == ';' || c == '{') && parenDepth == 0 && bracketDepth == 0 && angleDepth == 0)
                 {
                     terminatorIdx = j;
                     break;

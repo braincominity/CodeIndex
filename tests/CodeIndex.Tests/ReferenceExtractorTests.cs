@@ -2184,4 +2184,71 @@ public class ReferenceExtractorTests
             && r.ContainerKind == "function" && r.ContainerName == "Shade" && r.Line == 8);
         Assert.DoesNotContain(references, r => r.SymbolName == "this");
     }
+
+    [Fact]
+    public void Extract_JavaSuperCall_SameLineCtorWithModifierThenAnnotation_AttributesToRealBase()
+    {
+        // Regression for same-line ctor bodies where an access modifier precedes an annotation,
+        // e.g. `public @Deprecated Leaf(...)`. Before the fix the scanner consumed the modifier
+        // first, hit `@` in ConsumeIdentifier, and returned null, dropping the super(...) edge.
+        // 修正前は modifier の後に annotation が来ると ctor 名抽出が失敗し、super(...) が落ちた。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int value) {}
+            }
+
+            class Leaf extends Root {
+                public @Deprecated Leaf(int x){super(x);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf" && r.Line == 8);
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void CollectCSharpRecordHeader_MultiLineExtendsWithBraceAnnotationArg_CollectsThroughRealBase()
+    {
+        // Depth-aware header collector regression. Before the fix the collector terminated at
+        // the first raw `{` without tracking `()` / `[]` / `<>` depth, so the `{` inside
+        // `@Ann({A.class, B.class})` truncated the header before `Root`. ParseJavaBaseType and
+        // the C# record primary-ctor container synthesis both feed off this helper, so any
+        // multi-line Java `extends` or C# record base-list that carries a brace-containing
+        // annotation argument must still reach the real base type. (End-to-end super(...)
+        // attribution is currently blocked upstream by SymbolExtractor not computing the right
+        // class body range for Java headers with brace-containing annotation arguments; this is
+        // a pre-existing extractor limitation unrelated to #257, so the regression is locked at
+        // the helper boundary until the extractor can see the full class body.)
+        // annotation 引数内の `{}` をヘッダ終端と誤認しない depth-aware 収集を直接検証する。
+        // ParseJavaBaseType と record primary-ctor container synthesis の両方が依存する。
+        var structuralLines = new[]
+        {
+            "class Leaf",
+            "    extends @Ann({A.class, B.class}) Root {",
+            "    Leaf() {",
+            "        super(0);",
+            "    }",
+            "}",
+        };
+
+        var (endLine, text) = ReferenceExtractor.CollectCSharpRecordHeader(structuralLines, startLine: 1);
+
+        // Header must reach `Root` (the real base), which means the collector treated the inner
+        // `{` as nested rather than the body opener. The terminator `{` is the one right after
+        // `Root`, so endLine points at the second structural line and text ends with `Root `.
+        Assert.Equal(2, endLine);
+        Assert.Contains("Root", text);
+        Assert.EndsWith("Root ", text);
+
+        // ParseJavaBaseType on the collected header must also resolve to `Root`, not a phantom
+        // annotated segment. This is the downstream path that super(...) attribution uses.
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType(text));
+    }
 }
