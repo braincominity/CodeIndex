@@ -306,7 +306,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
-            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
+            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, exact);
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
@@ -2008,7 +2008,7 @@ public static class QueryCommandRunner
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
-            var graphSupportOverride = BuildUnusedEnumMemberGraphSupportOverride(options.Lang, options.Kind);
+            var graphSupportOverride = BuildUnusedEnumMemberGraphSupportOverride(reader, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (options.CountOnly)
             {
                 var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -3117,40 +3117,37 @@ public static class QueryCommandRunner
         DbReader reader,
         string query,
         string? lang,
-        IReadOnlyList<string> pathPatterns,
-        IReadOnlyList<string> excludePaths,
-        bool excludeTests,
         bool exact)
     {
-        var definitions = reader.GetDefinitions(
-            query,
-            32,
-            kind: null,
-            lang: lang,
-            includeBody: false,
-            pathPatterns: pathPatterns,
-            excludePathPatterns: excludePaths,
-            excludeTests: excludeTests,
-            since: null,
-            exact: exact);
-        if (definitions.Count == 0 || !definitions.All(IsCSharpEnumMemberDefinition))
+        if (!exact)
             return null;
 
-        var definition = definitions[0];
+        var unsupportedKinds = reader.GetUnsupportedExactGraphSymbolKinds(query, lang);
+        if (!unsupportedKinds.Contains("enum_member"))
+            return null;
+
         return new GraphSupportOverride(
-            definition.Lang ?? "csharp",
-            ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind),
-            ReferenceExtractor.BuildGraphSupportReason(definition.Lang, false, definition.Kind, definition.ContainerKind)
+            "csharp",
+            GraphSupported: false,
+            ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
                 ?? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet.",
-            ReferenceExtractor.GetUnsupportedSymbolKind(definition.Lang, definition.Kind, definition.ContainerKind),
+            "enum_member",
             GraphDegraded: true);
     }
 
-    private static GraphSupportOverride? BuildUnusedEnumMemberGraphSupportOverride(string? lang, string? kind)
+    private static GraphSupportOverride? BuildUnusedEnumMemberGraphSupportOverride(
+        DbReader reader,
+        string? lang,
+        string? kind,
+        IReadOnlyList<string> pathPatterns,
+        IReadOnlyList<string> excludePaths,
+        bool excludeTests)
     {
         if (!string.Equals(lang, "csharp", StringComparison.Ordinal))
             return null;
         if (kind != null && !string.Equals(kind, "enum", StringComparison.Ordinal))
+            return null;
+        if (!reader.HasFilteredCSharpEnumMembers(kind, lang, pathPatterns, excludePaths, excludeTests))
             return null;
 
         return new GraphSupportOverride(
@@ -3159,13 +3156,6 @@ public static class QueryCommandRunner
             CSharpEnumMemberUnusedGraphReason,
             UnsupportedSymbolKind: "enum_member",
             GraphDegraded: true);
-    }
-
-    private static bool IsCSharpEnumMemberDefinition(DefinitionResult definition)
-    {
-        return string.Equals(definition.Lang, "csharp", StringComparison.Ordinal)
-            && string.Equals(definition.Kind, "enum", StringComparison.Ordinal)
-            && string.Equals(definition.ContainerKind, "enum", StringComparison.Ordinal);
     }
 
     private sealed record GraphSupportOverride(

@@ -568,40 +568,23 @@ public partial class DbReader
             definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
         }
         primaryDefinition ??= definitions.FirstOrDefault();
-        var graphSupportDefinitions = GetDefinitions(
-            query,
-            Math.Max(limit, 32),
-            kind: null,
-            lang: lang,
-            includeBody: false,
-            pathPatterns: pathPatterns,
-            excludePathPatterns: excludePathPatterns,
-            excludeTests: excludeTests,
-            since: null,
-            exact: exact);
+        var unsupportedExactGraphKinds = exact
+            ? GetUnsupportedExactGraphSymbolKinds(query, lang)
+            : [];
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? file?.Lang;
-        var graphSupportDefinition = TryGetEnumMemberGraphSupportDefinition(graphSupportDefinitions);
-        bool? graphSupported = graphSupportDefinition != null
-            ? ReferenceExtractor.SupportsSymbolGraph(graphSupportDefinition.Lang, graphSupportDefinition.Kind, graphSupportDefinition.ContainerKind)
+        var hasUnsupportedEnumMember = unsupportedExactGraphKinds.Contains("enum_member");
+        bool? graphSupported = hasUnsupportedEnumMember
+            ? false
             : graphLanguage == null
                 ? null
                 : ReferenceExtractor.SupportsLanguage(graphLanguage);
-        var graphSupportReason = graphSupportDefinition != null
-            ? ReferenceExtractor.BuildGraphSupportReason(
-                graphSupportDefinition.Lang,
-                graphSupported,
-                graphSupportDefinition.Kind,
-                graphSupportDefinition.ContainerKind)
+        var graphSupportReason = hasUnsupportedEnumMember
+            ? ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
             : BuildGraphSupportReason(graphLanguage, graphSupported);
-        var unsupportedSymbolKind = graphSupportDefinition != null
-            ? ReferenceExtractor.GetUnsupportedSymbolKind(
-                graphSupportDefinition.Lang,
-                graphSupportDefinition.Kind,
-                graphSupportDefinition.ContainerKind)
-            : null;
+        var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
             : (ExactQuerySignal?)null;
@@ -645,22 +628,49 @@ public partial class DbReader
         };
     }
 
-    private static DefinitionResult? TryGetEnumMemberGraphSupportDefinition(IReadOnlyList<DefinitionResult> definitions)
+    public HashSet<string> GetUnsupportedExactGraphSymbolKinds(string query, string? lang)
     {
-        if (definitions.Count == 0)
-            return null;
+        var definitions = GetDefinitions(
+            query,
+            64,
+            kind: null,
+            lang: lang,
+            includeBody: false,
+            pathPatterns: null,
+            excludePathPatterns: null,
+            excludeTests: false,
+            since: null,
+            exact: true);
 
-        var first = definitions[0];
-        return definitions.All(IsCSharpEnumMemberDefinition)
-            ? first
-            : null;
+        return definitions
+            .Select(definition => ReferenceExtractor.GetUnsupportedSymbolKind(definition.Lang, definition.Kind, definition.ContainerKind))
+            .Where(kind => !string.IsNullOrWhiteSpace(kind))
+            .Select(kind => kind!)
+            .ToHashSet(StringComparer.Ordinal);
     }
 
-    private static bool IsCSharpEnumMemberDefinition(DefinitionResult definition)
+    public bool HasFilteredCSharpEnumMembers(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
-        return string.Equals(definition.Lang, "csharp", StringComparison.Ordinal)
-            && string.Equals(definition.Kind, "enum", StringComparison.Ordinal)
-            && string.Equals(definition.ContainerKind, "enum", StringComparison.Ordinal);
+        if (lang != null && !string.Equals(lang, "csharp", StringComparison.Ordinal))
+            return false;
+        if (kind != null && !string.Equals(kind, "enum", StringComparison.Ordinal))
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var sql = @"
+            SELECT 1
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.kind = 'enum'
+              AND " + GetSymbolColumnSql("container_kind", "''") + @" = 'enum'";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+        cmd.CommandText = sql;
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var value = cmd.ExecuteScalar();
+        return value != null && value != DBNull.Value;
     }
 
     private static List<DefinitionResult> BuildAnalysisDefinitions(DefinitionResult? primaryDefinition, List<DefinitionResult> definitions, int limit)
