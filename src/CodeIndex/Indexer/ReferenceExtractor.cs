@@ -132,6 +132,30 @@ public static class ReferenceExtractor
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
 
+    // No-arg C# attribute name (`[Serializable]`, `[assembly: CLSCompliant]`, `[System.Obsolete]`,
+    // `[Required, Key]`). CallRegex only matches identifiers followed by `(`, so no-arg attributes
+    // would otherwise never be indexed. The pattern anchors to `[` / `,` boundaries and refuses to
+    // match when the identifier is followed by `(` (handled by CallRegex + TryClassifyMetadataReference)
+    // or `.` (qualifier continues). A subsequent `IsInsideCSharpAttributeRange` filter keeps the
+    // match from firing on indexer access like `arr[i]`.
+    // 引数なしの C# attribute 名用 regex。`[Serializable]` などは CallRegex では拾えないため専用の
+    // 入口で捕捉する。`[` / `,` 境界にアンカーし、後続が `(`（CallRegex 経路で処理）や `.`（qualifier 継続）
+    // なら採用しない。`arr[i]` のような indexer を排除するため、マッチ後に
+    // `IsInsideCSharpAttributeRange` で範囲内かも確認する。
+    private static readonly Regex CSharpNoArgAttributeRegex = new(
+        @"[\[,]\s*(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\s*(?=[\],])",
+        RegexOptions.Compiled);
+
+    // No-arg Java-family annotation (`@Deprecated`, `@Override`, `@org.junit.Test`, `@field:Deprecated`).
+    // CallRegex only catches `@Name(` forms; this pattern fills the bare `@Name` gap. The leading
+    // lookbehind `(?<![\w)])` prevents Kotlin label references like `return@foo` from matching.
+    // 引数なしの Java 系 annotation 名用 regex。`@Deprecated` のような形は CallRegex では拾えないため
+    // 専用経路で捕捉する。先頭の lookbehind `(?<![\w)])` で Kotlin の `return@foo` のようなラベル参照を
+    // 除外する。
+    private static readonly Regex NoArgAnnotationRegex = new(
+        @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
+        RegexOptions.Compiled);
+
     // Languages whose `@Decorator(args)` / `@Annotation(args)` syntax should produce
     // `annotation` reference rows rather than `call` rows (issue #293).
     // `@Decorator(args)` / `@Annotation(args)` 構文を `call` ではなく `annotation` として
@@ -258,6 +282,39 @@ public static class ReferenceExtractor
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, nameIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, nameIndex, insideCSharpAttributeRange);
                 AddReference(references, seen, fileId, match, metadataKind ?? "call", context, lineNumber, container);
+            }
+
+            // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
+            // it requires `(`. Emit them from dedicated regexes so `[Serializable]` / `@Deprecated`
+            // and their siblings still populate the reference table.
+            // issue #293: 引数なしの属性・アノテーションは `(` が必須な CallRegex では拾えないため、
+            // 専用 regex から `[Serializable]` / `@Deprecated` などの素形を reference テーブルへ反映する。
+            if (language == "csharp" && csharpAttrRangesOnLine != null && csharpAttrRangesOnLine.Count > 0)
+            {
+                foreach (Match match in CSharpNoArgAttributeRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    if (!IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, nameIndex))
+                        continue;
+                    if (IsIgnoredCallName(language, name))
+                        continue;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    AddReference(references, seen, fileId, match, "attribute", context, lineNumber, container);
+                }
+            }
+            else if (AnnotationLanguages.Contains(language))
+            {
+                foreach (Match match in NoArgAnnotationRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    if (IsIgnoredCallName(language, name))
+                        continue;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    AddReference(references, seen, fileId, match, "annotation", context, lineNumber, container);
+                }
             }
         }
 
@@ -566,14 +623,16 @@ public static class ReferenceExtractor
         if (lastMeaningful == ']')
             return lastClosedBracketWasAttribute;
 
-        // Parameter / type-parameter attribute candidates (`(`, `,`, `<`): could be
-        // `void M([Attr] T x)`, `class C<[Attr] T>`, or `Consume([Make()])`. Disambiguate by
-        // scanning forward to the matching `]` and checking whether the next meaningful
-        // token begins a declaration (identifier / `@` / `(` for tuple types / `[` chained).
-        // パラメータ / 型パラメータ属性候補 (`(`, `,`, `<`) は `void M([Attr] T x)` にも
-        // `class C<[Attr] T>` にも `Consume([Make()])` にもなりうる。対応する `]` まで進んで
-        // 次トークンが宣言を開始するか（識別子 / `@` / tuple の `(` / chained `[`）で区別する。
-        if (lastMeaningful is '(' or ',' or '<')
+        // Parameter / type-parameter / lambda attribute candidates (`(`, `,`, `<`, `=`):
+        // `void M([Attr] T x)`, `class C<[Attr] T>`, `var f = [Attr] () => body`, or
+        // `Consume([Make()])`. Disambiguate by scanning forward to the matching `]` and
+        // checking whether the next meaningful token begins a declaration (identifier /
+        // `@` / `(` for tuple types or lambda parameter lists / `[` chained).
+        // パラメータ / 型パラメータ / ラムダ属性候補 (`(`, `,`, `<`, `=`) は
+        // `void M([Attr] T x)`・`class C<[Attr] T>`・`var f = [Attr] () => body`・
+        // `Consume([Make()])` いずれにもなりうる。対応する `]` まで進んで次トークンが
+        // 宣言やラムダを開始するか（識別子 / `@` / tuple・ラムダ仮引数の `(` / chained `[`）で区別する。
+        if (lastMeaningful is '(' or ',' or '<' or '=')
             return IsCSharpAttributeFollowedByDeclaration(preparedLines, startLi, startCi);
 
         return false;

@@ -1649,6 +1649,149 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpLambdaAttribute_ClassifiedAsAttribute()
+    {
+        // Regression: `var f = [Attr("x")] () => 0;` — the `[` is preceded by `=`, and the token
+        // after `]` is `(` (lambda parameter list). The classifier must accept `=` as a valid
+        // attribute-entry context alongside `(`, `,`, `<`.
+        // リグレッション: `var f = [Attr("x")] () => 0;` のように `=` の直後にあるラムダ属性も検出できること。
+        const string content = """
+            public class C
+            {
+                public void M()
+                {
+                    var f = [Attr("x")] () => 0;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293): `[Serializable]`, `[Obsolete]`, `[System.Obsolete]`,
+        // `[assembly: CLSCompliant]`, `[Required, Key]` — bare no-arg attributes were not
+        // indexed at all because CallRegex requires `(`. A dedicated no-arg entry path
+        // must emit them with kind `attribute`.
+        // リグレッション (issue #293): `[Serializable]` などの引数なし属性も `attribute` として
+        // インデックスされること。CallRegex は `(` を要求するため専用の取り込み経路が必要。
+        const string content = """
+            [assembly: CLSCompliant]
+            [Serializable]
+            [Obsolete]
+            [System.Obsolete]
+            [Required, Key]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        Assert.Single(references.Where(r => r.SymbolName == "CLSCompliant" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "Serializable" && r.ReferenceKind == "attribute"));
+        // `[System.Obsolete]` — the qualifier chain is part of the attribute, and the emitted
+        // reference should carry the final segment (`Obsolete`). There are two `Obsolete` rows
+        // (the plain `[Obsolete]` above and the qualified `[System.Obsolete]`), both attribute.
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Obsolete" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "Required" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "Key" && r.ReferenceKind == "attribute"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpIndexerAccess_NotClassifiedAsAttribute()
+    {
+        // Regression (issue #293): `arr[i]` looks like a bare `[name]` token, but it is an
+        // indexer expression, not an attribute. The no-arg attribute path must defer to the
+        // attribute-range pre-pass so indexer access is not misclassified as `attribute`.
+        // リグレッション (issue #293): `arr[i]` のような indexer アクセスは `[name]` 形だが
+        // 属性ではない。属性レンジ pre-pass を経由することで attribute への誤分類を防ぐ。
+        const string content = """
+            public class C
+            {
+                public int M(int[] arr, int i) => arr[i];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void Extract_JavaNoArgAnnotation_ClassifiedAsAnnotation()
+    {
+        // Regression (issue #293): `@Deprecated`, `@Override`, `@org.junit.Test` — bare no-arg
+        // annotations were not indexed because CallRegex requires `(`. A dedicated no-arg
+        // regex must emit them with kind `annotation`.
+        // リグレッション (issue #293): `@Deprecated` などの引数なし Java annotation も
+        // `annotation` として認識されること。
+        const string content = """
+            public class C {
+                @Deprecated
+                @Override
+                @org.junit.Test
+                public void m() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Single(references.Where(r => r.SymbolName == "Deprecated" && r.ReferenceKind == "annotation"));
+        Assert.Single(references.Where(r => r.SymbolName == "Override" && r.ReferenceKind == "annotation"));
+        Assert.Single(references.Where(r => r.SymbolName == "Test" && r.ReferenceKind == "annotation"));
+    }
+
+    [Fact]
+    public void Extract_KotlinNoArgTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Regression (issue #293): `@field:Deprecated` — use-site target without parentheses.
+        // リグレッション (issue #293): `@field:Deprecated` のような use-site target 付き
+        // 引数なしアノテーションも `annotation` 判定になること。
+        const string content = """
+            class C {
+                @field:Deprecated
+                val x: Int = 0
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, []);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinReturnAtLabel_NotClassifiedAsAnnotation()
+    {
+        // Regression (issue #293): `return@foo` is a Kotlin label reference, not an annotation.
+        // The leading lookbehind `(?<![\w)])` in the no-arg annotation regex must prevent a
+        // match where `@` is preceded by an identifier character.
+        // リグレッション (issue #293): `return@foo` は Kotlin のラベル参照で annotation ではない。
+        // 先頭 lookbehind で識別子に続く `@` を除外すること。
+        const string content = """
+            fun outer() {
+                listOf(1).forEach foo@{
+                    return@foo
+                }
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, []);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "foo" && r.ReferenceKind == "annotation");
+    }
+
+    [Fact]
     public void Extract_KotlinQualifiedFieldTargetAnnotation_ClassifiedAsAnnotation()
     {
         // issue #293 follow-up: Kotlin use-site target with a fully-qualified annotation
