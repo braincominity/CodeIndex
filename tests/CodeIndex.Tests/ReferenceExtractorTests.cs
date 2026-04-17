@@ -395,6 +395,90 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultiLineVerbatimString_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #288: call-looking identifiers inside a multi-line
+        // @"..." verbatim string body must not be captured as references.
+        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子は
+        // 参照として抽出してはならない。
+        const string content = """
+            public class FixtureHost
+            {
+                public void M()
+                {
+                    var legacy = @"
+                        SELECT * FROM t
+                        WHERE x = BadCall()
+                    ";
+                    RealCall();
+                }
+
+                private void RealCall() { }
+                private void BadCall() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineRawString_IssueRepro_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #288 exact repro: C# 11 raw strings, interpolated raw
+        // strings, and multi-line verbatim strings must not leak call-looking
+        // identifiers from their content into the reference graph.
+        // issue #288 の repro に対する回帰: C# 11 の raw string、補間付き raw string、
+        // 複数行 verbatim string の本体から呼び出しらしい識別子を参照グラフへ漏らさない。
+        const string content = """"
+            namespace App;
+
+            public class Demo
+            {
+                public void M()
+                {
+                    var sql = """
+                        SELECT * FROM users
+                        WHERE id = EvilCall(42)
+                        AND name = AnotherCall('bob')
+                        """;
+
+                    var id = 42;
+                    var msg = $"""
+                        Query result for id={id}
+                        Hidden: PhantomCall({id})
+                        """;
+
+                    var legacy = @"
+                        SELECT * FROM t
+                        WHERE x = BadCall()
+                    ";
+
+                    RealCall();
+                }
+
+                private void RealCall() { }
+                private int EvilCall(int x) => x;
+                private string AnotherCall(string s) => s;
+                private int PhantomCall(int x) => x;
+                private void BadCall() { }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "EvilCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "AnotherCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored
