@@ -328,6 +328,30 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_CallersCalleesKindDescription_ExcludesMetadataKinds()
+    {
+        // Keep the `kind` schema description honest: the callers/callees handlers reject
+        // metadata kinds (`attribute`, `annotation`) as a usage error, so the schema must
+        // not advertise them as valid filter values.
+        // callers/callees の handler は metadata kinds (`attribute` / `annotation`) を拒否するため、
+        // schema の `kind` description も有効値として列挙しないこと。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        foreach (var name in new[] { "callers", "callees" })
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var kindDescription = tool["inputSchema"]!["properties"]!["kind"]!["description"]!.GetValue<string>();
+
+            Assert.Contains("call-graph", kindDescription);
+            Assert.Contains("call, instantiate, subscribe", kindDescription);
+            Assert.Contains("rejected", kindDescription);
+            Assert.Contains("references", kindDescription);
+        }
+    }
+
+    [Fact]
     public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
