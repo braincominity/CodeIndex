@@ -3684,6 +3684,42 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsCheckedOperators()
+    {
+        // Issue #238: C# 11 user-defined checked operators (unary, binary, and explicit
+        // conversion) must be indexed alongside their unchecked counterparts instead of
+        // being silently dropped, and the `checked` keyword must survive into the symbol
+        // name so AI clients can disambiguate the two overloads.
+        // Issue #238: C# 11 のユーザー定義 `operator checked` (単項 / 二項 / 明示的変換) は
+        // unchecked 版と両方インデックスされ、`checked` の有無がシンボル名に残ることで
+        // AI クライアントがオーバーロードを区別できるようにする。
+        var content = """
+            namespace Demo;
+
+            public struct N
+            {
+                public int V;
+                public static N operator +(N a, N b) => new() { V = a.V + b.V };
+                public static N operator checked +(N a, N b) => checked(new() { V = a.V + b.V });
+                public static N operator -(N a, N b) => new() { V = a.V - b.V };
+                public static N operator checked -(N a, N b) => checked(new() { V = a.V - b.V });
+                public static N operator -(N a) => new() { V = -a.V };
+                public static N operator checked -(N a) => checked(new() { V = -a.V });
+                public static explicit operator int(N n) => n.V;
+                public static explicit operator checked int(N n) => checked((int)n.V);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator -"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator checked -"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked int");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPointerReturnTypes()
     {
         // Issue #234: methods with pointer / function-pointer return types must still be indexed.
