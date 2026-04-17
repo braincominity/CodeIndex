@@ -3241,6 +3241,57 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_LongGenericMultilinePropertyHeader_KeepsReturnTypeAndSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public Dictionary<
+                    string,
+                    List<
+                        int
+                    >>
+                    Count
+                    => new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("Dictionary<string,List<int>>", property.ReturnType);
+        Assert.Equal("public Dictionary< string, List< int >> Count => new();", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Count");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceOnNextLinePropertyHeader_KeepsHeaderSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string SplitName
+                {
+                    get;
+                    set;
+                }
+
+                public int Count
+                { get => 1; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var splitName = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("public string SplitName {", splitName.Signature);
+        Assert.Equal("public int Count {", count.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """

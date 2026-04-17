@@ -2940,6 +2940,112 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CSharpLongGenericMultilinePropertyHeader_KeepsReturnTypeAndSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_long_generic_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public Dictionary<
+                        string,
+                        List<
+                            int
+                        >>
+                        Count
+                        => new();
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal("Dictionary<string,List<int>>", property.GetProperty("return_type").GetString());
+            Assert.Equal("public Dictionary< string, List< int >> Count => new();", property.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpBraceOnNextLinePropertyHeader_KeepsHeaderSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_brace_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public string SplitName
+                    {
+                        get;
+                        set;
+                    }
+
+                    public int Count
+                    { get => 1; }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var splitName = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "SplitName"));
+            var count = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal("public string SplitName {", splitName.GetProperty("signature").GetString());
+            Assert.Equal("public int Count {", count.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_JavaScriptStringBraceKeepsFollowingMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_string_brace");

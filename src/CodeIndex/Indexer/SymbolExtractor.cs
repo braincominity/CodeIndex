@@ -108,7 +108,9 @@ public static class SymbolExtractor
 
     private readonly record struct CSharpPropertyMatchCandidate(
         string MatchLine,
-        int LastConsumedLineIndex);
+        int LastConsumedLineIndex,
+        int SignatureLastLineIndex,
+        int? SignatureLastLineExclusiveEndColumn = null);
 
     private readonly record struct RecordPrimaryComponent(
         string Name,
@@ -708,8 +710,8 @@ public static class SymbolExtractor
             foreach (var pattern in patterns)
             {
                 var csharpPropertyCandidate = lang == "csharp" && pattern.Kind == "property"
-                    ? BuildCSharpPropertyMatchLine(csharpMatchLines!, i)
-                    : new CSharpPropertyMatchCandidate(matchLine, i);
+                    ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
+                    : new CSharpPropertyMatchCandidate(matchLine, i, i);
                 var patternMatchLine = csharpPropertyCandidate.MatchLine;
                 var lineOffset = lang is "javascript" or "typescript"
                     ? FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, 0)
@@ -818,7 +820,12 @@ public static class SymbolExtractor
                     var signature = sameLineEndColumn >= absoluteStartColumn
                         ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
                         : lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i
-                            ? BuildCSharpMultilineSignature(lines, i, absoluteStartColumn, csharpPropertyCandidate.LastConsumedLineIndex)
+                            ? BuildCSharpMultilineSignature(
+                                lines,
+                                i,
+                                absoluteStartColumn,
+                                csharpPropertyCandidate.SignatureLastLineIndex,
+                                csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn)
                             : line[absoluteStartColumn..].Trim();
 
                     AddSymbolRecord(
@@ -5250,33 +5257,55 @@ public static class SymbolExtractor
         return matchLines;
     }
 
-    private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] csharpMatchLines, int startLineIndex)
+    private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
     {
         var matchLine = csharpMatchLines[startLineIndex];
         if (string.IsNullOrWhiteSpace(matchLine)
             || matchLine.Contains("=>", StringComparison.Ordinal)
             || CSharpPropertyAccessorStartRegex.IsMatch(matchLine))
         {
-            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex);
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
         var builder = new StringBuilder(matchLine.TrimEnd());
-        var appendedNonEmptyLines = 0;
+        var openBraceLineIndex = lines[startLineIndex].IndexOf('{') >= 0
+            ? startLineIndex
+            : -1;
+        var openBraceExclusiveEndColumn = openBraceLineIndex == startLineIndex
+            ? lines[startLineIndex].IndexOf('{') + 1
+            : (int?)null;
 
-        for (int i = startLineIndex + 1; i < csharpMatchLines.Length && appendedNonEmptyLines < 4; i++)
+        for (int i = startLineIndex + 1; i < csharpMatchLines.Length; i++)
         {
             var nextLine = csharpMatchLines[i].Trim();
             if (nextLine.Length == 0)
                 continue;
 
             builder.Append(' ').Append(nextLine);
-            appendedNonEmptyLines++;
+            var normalizedCombined = CollapseCSharpGenericTypeWhitespace(builder.ToString());
 
-            var combined = builder.ToString();
-            if (combined.Contains("=>", StringComparison.Ordinal)
-                || CSharpPropertyAccessorStartRegex.IsMatch(combined))
+            if (openBraceLineIndex < 0)
             {
-                return new CSharpPropertyMatchCandidate(combined, i);
+                var braceColumn = lines[i].IndexOf('{');
+                if (braceColumn >= 0)
+                {
+                    openBraceLineIndex = i;
+                    openBraceExclusiveEndColumn = braceColumn + 1;
+                }
+            }
+
+            if (CSharpPropertyAccessorStartRegex.IsMatch(normalizedCombined))
+            {
+                return new CSharpPropertyMatchCandidate(
+                    normalizedCombined,
+                    i,
+                    openBraceLineIndex >= 0 ? openBraceLineIndex : i,
+                    openBraceLineIndex >= 0 ? openBraceExclusiveEndColumn : null);
+            }
+
+            if (normalizedCombined.Contains("=>", StringComparison.Ordinal))
+            {
+                return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
             }
 
             if (nextLine.StartsWith(";", StringComparison.Ordinal)
@@ -5286,17 +5315,25 @@ public static class SymbolExtractor
             }
         }
 
-        return new CSharpPropertyMatchCandidate(matchLine, startLineIndex);
+        return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
     }
 
-    private static string BuildCSharpMultilineSignature(string[] lines, int startLineIndex, int startColumn, int lastConsumedLineIndex)
+    private static string BuildCSharpMultilineSignature(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int signatureLastLineIndex,
+        int? signatureLastLineExclusiveEndColumn = null)
     {
         var builder = new StringBuilder(lines[startLineIndex].Length);
         builder.Append(lines[startLineIndex][startColumn..].TrimEnd());
 
-        for (int i = startLineIndex + 1; i <= lastConsumedLineIndex && i < lines.Length; i++)
+        for (int i = startLineIndex + 1; i <= signatureLastLineIndex && i < lines.Length; i++)
         {
-            var trimmed = lines[i].Trim();
+            var slice = i == signatureLastLineIndex && signatureLastLineExclusiveEndColumn.HasValue
+                ? lines[i][..Math.Min(signatureLastLineExclusiveEndColumn.Value, lines[i].Length)]
+                : lines[i];
+            var trimmed = slice.Trim();
             if (trimmed.Length == 0)
                 continue;
 
