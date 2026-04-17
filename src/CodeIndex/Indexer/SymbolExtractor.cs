@@ -645,6 +645,7 @@ public static class SymbolExtractor
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
+    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial)\s+)*(?:global::)?[\w?.<>\[\],:]+\s*(?:\w+)?\s*$", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -5264,6 +5265,7 @@ public static class SymbolExtractor
     {
         var matchLine = csharpMatchLines[startLineIndex];
         if (string.IsNullOrWhiteSpace(matchLine)
+            || !CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine)
             || HasCSharpPropertyAccessorStart(matchLine))
         {
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
