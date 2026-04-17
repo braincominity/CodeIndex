@@ -1554,7 +1554,15 @@ public static class SymbolExtractor
         // annotation である可能性が高い。line regex を使って明白な enum member を救済する。
         if (parenDepth > 0 || bracketDepth > 0)
         {
-            RecoverJavaEnumMembersByLine(fileId, enumSymbol, rawLines, bodyStartLineIndex, bodyEndLineIndex, symbols);
+            RecoverJavaEnumMembersByLine(
+                fileId,
+                enumSymbol,
+                rawLines,
+                bodyStartLineIndex,
+                bodyStartColumn,
+                bodyEndLineIndex,
+                bodyEndColumnExclusive,
+                symbols);
         }
     }
 
@@ -1563,47 +1571,92 @@ public static class SymbolExtractor
         SymbolRecord enumSymbol,
         string[] rawLines,
         int bodyStartLineIndex,
+        int bodyStartColumn,
         int bodyEndLineIndex,
+        int bodyEndColumnExclusive,
         List<SymbolRecord> symbols)
     {
-        var alreadyEmittedStartLines = new HashSet<int>();
+        // Dedup by member name. The primary scanner stamps StartLine at the first non-whitespace
+        // (often the annotation line), while this fallback stamps the member-name line, so
+        // StartLine-based dedup would miss matches. Java enum member names are unique.
+        // メンバー名で重複排除する。primary scanner と recovery で StartLine 基準が揃わないため。
+        var alreadyEmittedNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var existing in symbols)
         {
             if (existing.FileId == enumSymbol.FileId
                 && existing.ContainerKind == "enum"
                 && existing.ContainerName == enumSymbol.Name)
             {
-                alreadyEmittedStartLines.Add(existing.StartLine);
+                alreadyEmittedNames.Add(existing.Name);
             }
         }
 
+        // Track brace depth across the body so lines inside anonymous member bodies or methods
+        // don't spuriously match the line regex. Depth 0 means "top of the enum body member list."
+        // 匿名メンバー本体やメソッド本体内の行を誤って member として拾わないよう brace 深さを追う。
+        var mode = JavaScanMode.Normal;
+        var braceDepth = 0;
+
         for (int i = bodyStartLineIndex; i <= bodyEndLineIndex && i < rawLines.Length; i++)
         {
-            if (alreadyEmittedStartLines.Contains(i + 1))
-                continue;
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
 
             var line = rawLines[i];
-            var match = JavaEnumMemberLineFallbackRegex.Match(line);
-            if (!match.Success)
-                continue;
+            var lineStartBraceDepth = braceDepth;
+            var lineStartMode = mode;
 
-            symbols.Add(new SymbolRecord
+            // Only try the fallback regex when this line starts at the enum body's top level and
+            // not inside a string / comment / text block carried over from the previous line.
+            // 行頭が enum 本体の top-level で、かつ非コード状態でもないときだけ fallback regex を試す。
+            if (lineStartBraceDepth == 0 && lineStartMode == JavaScanMode.Normal)
             {
-                FileId = fileId,
-                Kind = "function",
-                Name = match.Groups["name"].Value,
-                Line = i + 1,
-                StartLine = i + 1,
-                EndLine = i + 1,
-                Signature = line.Trim(),
-                ContainerKind = "enum",
-                ContainerName = enumSymbol.Name,
-            });
+                var match = JavaEnumMemberLineFallbackRegex.Match(line);
+                if (match.Success)
+                {
+                    var name = match.Groups["name"].Value;
+                    if (!alreadyEmittedNames.Contains(name))
+                    {
+                        symbols.Add(new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "function",
+                            Name = name,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            EndLine = i + 1,
+                            Signature = line.Trim(),
+                            ContainerKind = "enum",
+                            ContainerName = enumSymbol.Name,
+                        });
+                        alreadyEmittedNames.Add(name);
+                    }
+                }
+            }
 
-            // End of member list: `;` terminates recovery.
-            // メンバーリスト終端: `;` で recovery を止める。
-            if (line.TrimEnd().EndsWith(';'))
-                break;
+            // Advance mode / brace depth across this line so subsequent lines see correct state.
+            // A top-level `;` (braceDepth == 0) terminates the member list — stop recovery.
+            // 次行の状態を正しく保つため行内の mode / brace 深さを更新する。top-level の `;` は終端。
+            var startColumn = (i == bodyStartLineIndex) ? bodyStartColumn : 0;
+            var endColumnExclusive = (i == bodyEndLineIndex)
+                ? Math.Min(bodyEndColumnExclusive, line.Length)
+                : line.Length;
+            var column = startColumn;
+            while (column < endColumnExclusive)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '{')
+                    braceDepth++;
+                else if (ch == '}' && braceDepth > 0)
+                    braceDepth--;
+                else if (ch == ';' && braceDepth == 0)
+                    return;
+
+                column++;
+            }
         }
     }
 

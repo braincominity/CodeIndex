@@ -5453,6 +5453,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_RecoveryIgnoresLinesInsideAnonymousMemberBody()
+    {
+        // Malformed input forces the recovery pass; recovery must track brace depth so uppercase
+        // call statements inside an anonymous member body (e.g. `ACTIVATE_HELPER();`) are not
+        // emitted as phantom enum members, and the subsequent real member is still captured.
+        // 不整形入力で recovery が走るとき、匿名メンバー本体内の大文字呼び出しを誤って member にせず、
+        // その後の実メンバーを救済できること。
+        var content = "public enum E {\n    @Bad(\n    RED {\n        void f() { ACTIVATE_HELPER(); }\n    },\n    GREEN;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GREEN" && s.ContainerName == "E" && s.BodyStartLine == null);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "ACTIVATE_HELPER" && s.ContainerName == "E" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_RecoveryDedupsByNameAcrossAnnotationStartLines()
+    {
+        // Primary scanner stamps StartLine at the annotation line; recovery stamps the member-name
+        // line. StartLine-based dedup would double-emit. Name-based dedup must suppress duplicates.
+        // primary scanner と recovery で StartLine 基準が異なるため、名前基準で重複排除されること。
+        var content = "public enum E {\n    @Marker\n    A,\n    @Bad(\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var aMembers = symbols.Where(s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "E" && s.BodyStartLine == null).ToList();
+        Assert.Single(aMembers);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E" && s.BodyStartLine == null);
+    }
+
+    [Fact]
     public void Extract_Java_StopsEnumMembersAtSemicolon()
     {
         // After the first top-level `;` inside the enum body, non-member declarations must not be captured as members.
