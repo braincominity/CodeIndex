@@ -367,7 +367,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions, graphSupportOverride);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
                 }
@@ -382,6 +382,7 @@ public static class QueryCommandRunner
                 }
                 var refFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} references in {refFileCount} files)");
+                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -480,7 +481,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions, graphSupportOverride);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
                 }
@@ -491,6 +492,7 @@ public static class QueryCommandRunner
                     Console.WriteLine($"{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callers in {callerFileCount} files)");
+                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -589,7 +591,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions, graphSupportOverride);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
                 }
@@ -600,6 +602,7 @@ public static class QueryCommandRunner
                     Console.WriteLine($"{r.ReferenceKind,-12} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callees in {calleeFileCount} files)");
+                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -3087,10 +3090,11 @@ public static class QueryCommandRunner
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteGraphJsonResult<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
+    private static void WriteGraphJsonResult<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions, GraphSupportOverride? graphSupportOverride = null)
     {
         var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
         AddExactGraphJsonFields(payload, exactSignal);
+        AddGraphSupportOverrideFields(payload, graphSupportOverride);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
