@@ -4272,6 +4272,48 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_UnsafeExtern_FreeModifierOrder()
+    {
+        // Closes #355: `unsafe` / `extern` modifiers must not force a specific slot in the
+        // modifier sequence. All fixture forms are compiler-legal but previously either dropped
+        // entirely (constructor / static constructor / event) or captured the declaration while
+        // losing `visibility` and polluting `return_type` with the leading modifiers
+        // (property / indexer).
+        // Closes #355: `unsafe` / `extern` 修飾子も修飾子列の特定位置に固定されてはならない。
+        // fixture はすべてコンパイラ上合法だが、以前は constructor / static constructor / event では
+        // そもそも抽出されず、property / indexer では visibility が欠落して return_type に
+        // 先頭修飾子が混入していた。
+        var content = """
+            public unsafe class UnsafeHolder
+            {
+                unsafe public int P1 { get; set; }
+                unsafe public int P2 => 0;
+                unsafe public event System.EventHandler E1;
+                extern public event System.EventHandler E2;
+                unsafe public int this[int* i] => 0;
+                unsafe public UnsafeHolder(int* p) { }
+                extern public UnsafeHolder(int x);
+                unsafe static UnsafeHolder() { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P2" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E1" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E2" && s.Visibility == "public");
+        // Indexer is recorded as `Item` (C# metadata name) after NormalizeCSharpSymbolName.
+        // インデクサは NormalizeCSharpSymbolName で C# メタデータ名 `Item` に正規化される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Visibility == "public" && s.ReturnType == "int");
+        // Constructors are recorded with visibility and the type name as symbol name.
+        // コンストラクタは visibility を保持し、シンボル名は型名になる。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UnsafeHolder" && s.Visibility == "public");
+        // Static constructor has no visibility.
+        // 静的コンストラクタは visibility を持たない。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UnsafeHolder" && string.IsNullOrEmpty(s.Visibility));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
