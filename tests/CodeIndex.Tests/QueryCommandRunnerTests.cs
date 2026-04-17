@@ -9823,4 +9823,84 @@ public class QueryCommandRunnerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void RunSymbolsAndReferences_JsTemplateLiteral_SuppressesPhantomsButKeepsInterpolationCalls()
+    {
+        // Issue #291 CLI integration: a multi-line JS template literal must not
+        // surface phantom function/class symbols for code-shaped body text, while
+        // a real call inside a ${...} interpolation hole must still produce a
+        // reference edge via the call-graph pipeline.
+        // issue #291 の CLI 統合: 複数行 JS テンプレートリテラルはコード風本文から
+        // phantom な function/class を発生させず、${...} ホール内の本物の呼び出しは
+        // 参照グラフに edge として残ること。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_js_template_literal_masking");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.js"),
+                """
+                function caller() {
+                    const src = `
+                function fakeFromTemplate() {}
+                class FakeClassInTemplate {}
+                    ${runTask()} trailing
+                    `;
+                    realCall();
+                }
+
+                function runTask() {}
+                function realCall() {}
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (phantomFnExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["fakeFromTemplate", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+            var (phantomClsExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["FakeClassInTemplate", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+
+            var (refsExit, refsStdout, refsStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["runTask", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            // Phantom symbols must not exist — both queries should return NotFound.
+            // phantom シンボルは存在してはならない — どちらのクエリも NotFound になること。
+            Assert.Equal(CommandExitCodes.NotFound, phantomFnExit);
+            Assert.Equal(CommandExitCodes.NotFound, phantomClsExit);
+
+            // The real call inside the `${...}` interpolation hole must still be visible.
+            // ${...} 補間ホール内の本物の呼び出しは参照として残っていること。
+            Assert.Equal(CommandExitCodes.Success, refsExit);
+            Assert.Equal(string.Empty, refsStderr);
+            var referenceDocuments = ParseJsonLines(refsStdout);
+            try
+            {
+                Assert.Contains(referenceDocuments, doc =>
+                    doc.RootElement.GetProperty("symbol_name").GetString() == "runTask"
+                    && doc.RootElement.GetProperty("reference_kind").GetString() == "call"
+                    && doc.RootElement.GetProperty("container_name").GetString() == "caller");
+            }
+            finally
+            {
+                foreach (var doc in referenceDocuments)
+                {
+                    doc.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
 }

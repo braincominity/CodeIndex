@@ -1114,4 +1114,103 @@ public class ReferenceExtractorTests
         // Comments should not produce references / コメントは参照を生成しないこと
         Assert.DoesNotContain(references, r => r.SymbolName == "fakeCall");
     }
+
+    [Fact]
+    public void Extract_PythonTripleQuotedString_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #291: call-looking identifiers inside a Python
+        // triple-quoted string (""" or ''') must not be captured as references.
+        // issue #291 回帰: Python の三重引用符文字列（""" や '''）の内側にある
+        // 呼び出しらしい識別子は参照として抽出してはならない。
+        const string content = """"
+            def caller():
+                fixture_double = """
+                    run_task()
+                    other_fake()
+                """
+                fixture_single = '''
+                    more_fake()
+                '''
+                raw_fixture = r"""
+                    raw_fake()
+                """
+                real_call()
+
+            def real_call():
+                pass
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "run_task");
+        Assert.DoesNotContain(references, r => r.SymbolName == "other_fake");
+        Assert.DoesNotContain(references, r => r.SymbolName == "more_fake");
+        Assert.DoesNotContain(references, r => r.SymbolName == "raw_fake");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_RustRawString_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #291: call-looking identifiers inside a Rust raw
+        // string (r#"..."#, r##"..."##, …) must not be captured as references.
+        // issue #291 回帰: Rust raw string（r#"..."#, r##"..."##, …）の内側にある
+        // 呼び出しらしい識別子は参照として抽出してはならない。
+        const string content = "fn caller() {\n"
+            + "    let basic = r#\"\n"
+            + "        fake_basic()\n"
+            + "    \"#;\n"
+            + "    let nested = r##\"\n"
+            + "        contains \"# marker\n"
+            + "        fake_nested()\n"
+            + "    \"##;\n"
+            + "    real_call();\n"
+            + "}\n"
+            + "fn real_call() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_basic");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_nested");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateLiteral_DoesNotLeakPhantomCallsButKeepsInterpolationCalls()
+    {
+        // Regression for issue #291: multi-line JS/TS template literal bodies must
+        // not produce phantom references, but ${...} interpolation holes must keep
+        // real call edges.
+        // issue #291 回帰: 複数行 JS/TS テンプレートリテラルの本体は phantom 参照を
+        // 生成しないが、${...} 補間ホール内の本物の呼び出しは参照として残ること。
+        const string content = """
+            function caller() {
+                const src = `
+                multi-line fixture:
+                    fakeInBody()
+                and ${runTask()} mid
+                then ${"fakeInString()"} nope
+                done ${nested(`${deepReal()}`)} end
+                `;
+                realCall();
+            }
+
+            function runTask() {}
+            function realCall() {}
+            function nested(_) {}
+            function deepReal() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "fakeInBody");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fakeInString");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "nested" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "deepReal" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
 }

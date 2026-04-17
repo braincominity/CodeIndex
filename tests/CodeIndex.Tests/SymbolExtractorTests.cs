@@ -5837,4 +5837,104 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ListUsers");
     }
+
+    [Fact]
+    public void Extract_PythonTripleQuotedString_DoesNotLeakPhantomSymbols()
+    {
+        // Regression for issue #291: code-shaped fixture text inside """...""" /
+        // '''...''' / r"""...""" must not produce phantom class/function rows.
+        // issue #291 回帰: """...""" / '''...''' / r"""...""" 内のコード風のフィクスチャ
+        // テキストは、phantom の class/function を生成してはならない。
+        const string content = """"
+            FIXTURE_DOUBLE = """
+            class FakeDouble:
+                def method_in_double(self): pass
+            """
+
+            FIXTURE_SINGLE = '''
+            class FakeSingle:
+                def method_in_single(self): pass
+            '''
+
+            FIXTURE_RAW = r"""
+            def raw_fake():
+                pass
+            """
+
+            class RealClass:
+                def real_method(self):
+                    pass
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "FakeDouble");
+        Assert.DoesNotContain(symbols, s => s.Name == "FakeSingle");
+        Assert.DoesNotContain(symbols, s => s.Name == "method_in_double");
+        Assert.DoesNotContain(symbols, s => s.Name == "method_in_single");
+        Assert.DoesNotContain(symbols, s => s.Name == "raw_fake");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "RealClass");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "real_method");
+    }
+
+    [Fact]
+    public void Extract_RustRawString_DoesNotLeakPhantomSymbols()
+    {
+        // Regression for issue #291: code-shaped fixture text inside r#"..."# /
+        // r##"..."## raw strings must not produce phantom fn/struct rows.
+        // issue #291 回帰: r#"..."# / r##"..."## raw string 内のコード風フィクスチャ
+        // テキストは phantom の fn/struct を生成してはならない。
+        const string content = "const BASIC: &str = r#\"\n"
+            + "fn fake_basic() {}\n"
+            + "struct FakeStructBasic;\n"
+            + "\"#;\n"
+            + "const NESTED: &str = r##\"\n"
+            + "contains \"# marker\n"
+            + "fn fake_nested() {}\n"
+            + "\"##;\n"
+            + "fn real_fn() {}\n"
+            + "struct RealStruct;\n";
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "fake_basic");
+        Assert.DoesNotContain(symbols, s => s.Name == "FakeStructBasic");
+        Assert.DoesNotContain(symbols, s => s.Name == "fake_nested");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "real_fn");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "RealStruct");
+    }
+
+    [Fact]
+    public void Extract_JsTsTemplateLiteral_DoesNotLeakPhantomSymbols()
+    {
+        // Regression for issue #291: code-shaped fixture text inside multi-line
+        // JavaScript/TypeScript `...` template literal bodies must not produce
+        // phantom function/class rows. Interpolation hole contents remain visible
+        // to downstream reference extraction (covered in ReferenceExtractor tests).
+        // issue #291 回帰: 複数行 JavaScript/TypeScript `...` テンプレートリテラル本体の
+        // コード風テキストは phantom の function/class を生成してはならない。
+        const string content = """
+            const src = `
+            function fakeFromTemplate() {
+              return 1;
+            }
+            class FakeClassInTemplate {}
+            `;
+
+            function realFunction() {}
+            class RealClass {}
+            """;
+
+        var jsSymbols = SymbolExtractor.Extract(1, "javascript", content);
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "fakeFromTemplate");
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "FakeClassInTemplate");
+        Assert.Contains(jsSymbols, s => s.Kind == "function" && s.Name == "realFunction");
+        Assert.Contains(jsSymbols, s => s.Kind == "class" && s.Name == "RealClass");
+
+        var tsSymbols = SymbolExtractor.Extract(1, "typescript", content);
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "fakeFromTemplate");
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "FakeClassInTemplate");
+        Assert.Contains(tsSymbols, s => s.Kind == "function" && s.Name == "realFunction");
+        Assert.Contains(tsSymbols, s => s.Kind == "class" && s.Name == "RealClass");
+    }
 }
