@@ -644,8 +644,13 @@ public static class SymbolExtractor
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // Explicit-interface return type: primitives, user-defined types, tuples, plus pointer
+    // suffix (`int*`, `void**`, `Foo*[]`) and the full `delegate*<...>` / `delegate* unmanaged[Cdecl]<...>`
+    // function-pointer form so `int* IFoo.Get()` and `delegate*<int, int> IFoo.Transform()` are indexed.
+    // explicit-interface 戻り値型: プリミティブ・ユーザー定義型・タプルに加え、ポインタ suffix
+    // (`int*` / `void**` / `Foo*[]`) と `delegate*<...>` / `delegate* unmanaged[Cdecl]<...>` を許容する。
     private const string CSharpExplicitInterfaceReturnTypePattern =
-        @"(?:\([^)]+\)|(?:global::)?(?:void|bool|byte|sbyte|short|ushort|int|uint|long|ulong|nint|nuint|float|double|decimal|char|string|object|dynamic|[A-Z_][\w?.<>\[\],:\s]*))";
+        @"(?:\([^)]+\)|delegate\*(?:\s+(?:managed|unmanaged(?:\s*\[[^\]]+\])?))?\s*<[^>]+>|(?:global::)?(?:void|bool|byte|sbyte|short|ushort|int|uint|long|ulong|nint|nuint|float|double|decimal|char|string|object|dynamic|[A-Z_][\w?.<>\[\],:\s]*)(?:\s*\*+(?:\s*\[[\s,]*\])*)?)";
     private const string CSharpExplicitInterfaceQualifierPattern =
         @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)(?:[\w.<>:]*)";
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

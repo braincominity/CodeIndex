@@ -3705,6 +3705,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfacePointerReturnTypes()
+    {
+        // Issue #234: explicit-interface implementations with pointer / function-pointer
+        // return types must still be indexed (e.g. `int* IFoo.Get()`, `delegate*<int, int> IFoo.Transform()`).
+        // Issue #234: explicit-interface 実装のポインタ / 関数ポインタ戻り値型も取りこぼさずに抽出する。
+        var content = """
+            namespace Demo;
+
+            public unsafe interface IFoo
+            {
+                int* Get();
+                delegate*<int, int> Transform();
+                byte** Double();
+                int*[] Arr();
+            }
+
+            public unsafe class Foo : IFoo
+            {
+                int* IFoo.Get() => null;
+                delegate*<int, int> IFoo.Transform() => null;
+                byte** IFoo.Double() => null;
+                int*[] IFoo.Arr() => null!;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Get"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Transform"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Double"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Arr"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPartialMethods()
     {
         // C# 9 extended partial methods / C# 9 拡張 partial メソッド
