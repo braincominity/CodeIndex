@@ -3927,6 +3927,8 @@ public class DbReaderTests : IDisposable
     [InlineData("[JsonPropertyName(\"]\")] public string Name { get; set; } = \"\";")]
     [InlineData("[JsonPropertyName(@\"a[\")] public string Name { get; set; } = \"\";")]
     [InlineData("[JsonPropertyName(\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName($\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName($$\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
     public void GetUnusedSymbols_InlineReflectionAttributeWithBracketInString_IsStillSuspect(string anchor)
     {
         // The inline-declaration line itself must still be recognized as having
@@ -3993,6 +3995,85 @@ public class DbReaderTests : IDisposable
 
         var property = Assert.Single(unused, symbol => symbol.Name == "Name");
         Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_InlineRawInterpolatedAttributeWithBracketInString_DoesNotLeakToAdjacentProperty()
+    {
+        // Regression extension for #375 — raw-interpolated string literals
+        // (`$"""..."""`) inside an inline attribute must not escape bracket-depth
+        // sanitization either, or the adjacent plain property re-inherits the
+        // reflection attribute context.
+        // #375 の追加回帰: raw 補間文字列 (`$"""..."""`) を含むインライン属性でも、
+        // 直下の属性なしプロパティに reflection 属性コンテキストが漏れ出さないこと。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_raw_interpolated_fixture.cs",
+            Lang = "csharp",
+            Size = 340,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = "using System.Text.Json.Serialization;\n\npublic class Target\n{\n    [JsonPropertyName($\"\"\"a[\"\"\")] public string BuggyName { get; set; } = \"\";\n\n    public string PlainName { get; set; } = \"\";\n}\n",
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "BuggyName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "[JsonPropertyName($\"\"\"a[\"\"\")] public string BuggyName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "PlainName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string PlainName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_raw_interpolated_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var buggy = Assert.Single(unused, symbol => symbol.Name == "BuggyName");
+        Assert.Equal("reflection_or_config_suspect", buggy.UnusedBucket);
+
+        var plain = Assert.Single(unused, symbol => symbol.Name == "PlainName");
+        Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
     }
 
     [Fact]

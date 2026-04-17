@@ -2101,6 +2101,95 @@ public partial class DbReader
             return true;
         }
 
+        // Interpolated raw string: $"""..."""  and multi-$ form $$"""..."""  (C# 11)
+        // — N consecutive `$` means N consecutive `{`/`}` are required to open/close
+        // interpolation; fewer are treated as literal.
+        // 補間 raw 文字列: $"""..."""、および multi-$ 形式 $$"""..."""（C# 11）—
+        // `$` の連続数 N に対し、補間を開閉するには `{` / `}` も N 個連続している必要がある。
+        if (ch == '$')
+        {
+            var dollarCount = 0;
+            while (start + dollarCount < line.Length && line[start + dollarCount] == '$')
+                dollarCount++;
+
+            var quoteStart = start + dollarCount;
+            var rawRunLength = 0;
+            while (quoteStart + rawRunLength < line.Length && line[quoteStart + rawRunLength] == '"')
+                rawRunLength++;
+
+            if (dollarCount >= 1 && rawRunLength >= 3)
+            {
+                var i = quoteStart + rawRunLength;
+                var braceDepth = 0;
+                while (i < line.Length)
+                {
+                    if (braceDepth == 0 && line[i] == '"')
+                    {
+                        var closeRun = 0;
+                        while (i + closeRun < line.Length && line[i + closeRun] == '"')
+                            closeRun++;
+                        if (closeRun >= rawRunLength)
+                        {
+                            i += closeRun;
+                            break;
+                        }
+                        i += closeRun;
+                        continue;
+                    }
+                    if (line[i] == '{')
+                    {
+                        if (braceDepth == 0)
+                        {
+                            var openRun = 0;
+                            while (i + openRun < line.Length && line[i + openRun] == '{')
+                                openRun++;
+                            if (openRun >= dollarCount)
+                            {
+                                braceDepth = 1;
+                                i += dollarCount;
+                                continue;
+                            }
+                            // Fewer than $ count — literal in raw interpolated.
+                            // $ の連続数より少ない `{` は raw 補間では literal 扱い。
+                            i += openRun;
+                            continue;
+                        }
+                        braceDepth++;
+                        i++;
+                        continue;
+                    }
+                    if (line[i] == '}')
+                    {
+                        if (braceDepth == 0)
+                        {
+                            i++;
+                            continue;
+                        }
+                        if (braceDepth > 1)
+                        {
+                            braceDepth--;
+                            i++;
+                            continue;
+                        }
+                        var closeRun = 0;
+                        while (i + closeRun < line.Length && line[i + closeRun] == '}')
+                            closeRun++;
+                        if (closeRun >= dollarCount)
+                        {
+                            braceDepth = 0;
+                            i += dollarCount;
+                            continue;
+                        }
+                        i += closeRun;
+                        continue;
+                    }
+                    i++;
+                }
+                cursor = i;
+                return true;
+            }
+        }
+
         // Interpolated string: $"..." — treat braces as skipped so quotes inside
         // `{...}` expressions don't prematurely terminate the string.
         // 補間文字列: $"..." — `{...}` 中のクォートで早期終端しないよう波括弧を追跡する。
