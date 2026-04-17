@@ -5473,8 +5473,7 @@ public static class SymbolExtractor
 
         return insideEnumBody
             && attributeParenDepth == 0
-            && CSharpEnumMemberRegex.IsMatch(line)
-            && line.TrimEnd().EndsWith(",", StringComparison.Ordinal);
+            && CSharpEnumMemberRegex.IsMatch(line);
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
@@ -6002,8 +6001,8 @@ public static class SymbolExtractor
 
         if (candidate.StartLine == container.StartLine)
         {
-            return container.Kind == "class"
-                && candidate.Kind == "function"
+            return ((container.Kind == "class" && candidate.Kind == "function")
+                    || (container.Kind == "enum" && candidate.Kind == "enum"))
                 && container.Signature != null
                 && candidate.Signature != null
                 && container.Signature.Contains(candidate.Signature, StringComparison.Ordinal);

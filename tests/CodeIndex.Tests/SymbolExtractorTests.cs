@@ -3402,12 +3402,18 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsCompactAndZeroIndentEnumMembers()
     {
-        var content = "public enum Compact { A, B = A }\npublic enum Flat\n{\nC,\nD = C\n}";
+        var content = "namespace Demo;\n\npublic enum Compact { A, B = A }\npublic enum Flat\n{\nC,\nD = C\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var compactA = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A"));
+        var compactB = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B"));
 
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Compact");
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
-        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Equal("enum", compactA.ContainerKind);
+        Assert.Equal("Compact", compactA.ContainerName);
+        Assert.Equal("Demo.Compact", compactA.ContainerQualifiedName);
+        Assert.Equal("enum", compactB.ContainerKind);
+        Assert.Equal("Compact", compactB.ContainerName);
+        Assert.Equal("Demo.Compact", compactB.ContainerQualifiedName);
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Flat");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "C");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "D");
@@ -3482,7 +3488,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttribute()
     {
-        var content = "public enum Mode\n{\n    [Attr()\n    A,\n    B,\n}\n\npublic class After\n{\n}";
+        var content = "public enum Mode\n{\n    [Attr()\n    A,\n    B\n}\n\npublic class After\n{\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");

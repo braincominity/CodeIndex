@@ -2680,6 +2680,8 @@ public class QueryCommandRunnerTests
             File.WriteAllText(
                 Path.Combine(projectRoot, "src", "mode.cs"),
                 """
+                namespace Demo;
+
                 public enum Compact { A, B = A }
                 public enum Flat
                 {
@@ -2709,6 +2711,8 @@ public class QueryCommandRunnerTests
             Assert.Single(compactRows);
             Assert.Equal("A", compactRows[0].RootElement.GetProperty("name").GetString());
             Assert.Equal("enum", compactRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("enum", compactRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Compact", compactRows[0].RootElement.GetProperty("container_name").GetString());
             Assert.Equal(CommandExitCodes.Success, flatExitCode);
             Assert.Equal(string.Empty, flatStderr);
             Assert.Single(flatRows);
@@ -2950,7 +2954,7 @@ public class QueryCommandRunnerTests
                 {
                     [Attr()
                     A,
-                    B,
+                    B
                 }
 
                 public class After
@@ -2962,14 +2966,23 @@ public class QueryCommandRunnerTests
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json"],
                 _jsonOptions));
+            var (memberExitCode, memberStdout, memberStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["B", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["After", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
                 _jsonOptions));
 
+            var memberRows = ParseJsonLines(memberStdout);
             var rows = ParseJsonLines(stdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, memberExitCode);
+            Assert.Equal(string.Empty, memberStderr);
+            Assert.Single(memberRows);
+            Assert.Equal("B", memberRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", memberRows[0].RootElement.GetProperty("kind").GetString());
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Single(rows);
