@@ -627,20 +627,7 @@ public static class IndexCommandRunner
             projectRootWritten = true;
         }
 
-        bool CanPreserveReadinessForIgnoreRulesUnavailable(string relPath, string absPath)
-        {
-            try
-            {
-                var (record, _, _, _) = indexer.BuildRecordWithRawBytes(absPath);
-                return writer.HasFileAtPathWithChecksum(relPath, record.Checksum);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors, bool demoteFatalErrors = true)
+        void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
         {
             foreach (var scanError in scanErrors)
             {
@@ -650,8 +637,7 @@ public static class IndexCommandRunner
 
                 if (scanError.IsFatal)
                 {
-                    if (demoteFatalErrors)
-                        DemoteReadinessOnce();
+                    DemoteReadinessOnce();
                     errors++;
                     errorList.Add(new { file = scanError.Path, message = scanError.Message });
                 }
@@ -712,12 +698,7 @@ public static class IndexCommandRunner
                 }
 
                 var pathFilter = indexer.EvaluatePathFilter(absPath);
-                var preserveReadinessForIgnoreRulesUnavailable =
-                    pathFilter.FilterKind == FileIndexer.PathFilterKind.IgnoreRulesUnavailable
-                    && pathFilter.ShouldSkip
-                    && !pathFilter.ShouldDeleteExisting
-                    && CanPreserveReadinessForIgnoreRulesUnavailable(relPath, absPath);
-                RecordScanErrors(pathFilter.Errors, demoteFatalErrors: !preserveReadinessForIgnoreRulesUnavailable);
+                RecordScanErrors(pathFilter.Errors);
                 if (pathFilter.ShouldSkip)
                 {
                     if (!pathFilter.ShouldDeleteExisting)

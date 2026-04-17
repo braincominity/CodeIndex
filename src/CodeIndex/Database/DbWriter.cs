@@ -204,24 +204,6 @@ public class DbWriter
     }
 
     /// <summary>
-    /// Check whether a file row exists and its stored checksum matches the supplied checksum.
-    /// 指定した相対パスの file 行が存在し、保存済み checksum が一致するか確認する。
-    /// </summary>
-    public bool HasFileAtPathWithChecksum(string relativePath, string? checksum)
-    {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT checksum FROM files WHERE path = @path LIMIT 1";
-        cmd.Parameters.AddWithValue("@path", relativePath);
-
-        using var reader = cmd.ExecuteTrackedReader();
-        if (!reader.TrackedRead())
-            return false;
-
-        var existingChecksum = reader.IsDBNull(0) ? null : reader.GetString(0);
-        return string.Equals(existingChecksum, checksum, StringComparison.Ordinal);
-    }
-
-    /// <summary>
     /// Upsert a file record and return its ID.
     /// Uses ON CONFLICT DO UPDATE to preserve the existing file ID (avoids
     /// unnecessary AUTOINCREMENT growth from INSERT OR REPLACE's delete+insert).
