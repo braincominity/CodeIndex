@@ -5391,6 +5391,68 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_HandlesEmptyEnumBody()
+    {
+        // `enum X {}` has no members; the enum itself should still be extracted.
+        // 空本体の enum でも enum 自身は抽出されること。
+        var content = "public enum Empty {}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Empty");
+        Assert.DoesNotContain(symbols, s => s.ContainerKind == "enum" && s.ContainerName == "Empty");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesEnumWithOnlySemicolon()
+    {
+        // `enum X { ; }` declares no members but may still hold methods/fields.
+        // 本体が `;` のみの enum はメンバーを持たない。
+        var content = "public enum NoMembers {\n    ;\n    private int count;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "NoMembers");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.ContainerKind == "enum" && s.ContainerName == "NoMembers" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesTrailingComma()
+    {
+        // `enum X { A, B, }` — trailing comma before closing brace must not emit an empty member.
+        // `,` の直後が body end でも空メンバーを出さないこと。
+        var content = "public enum Trailing {\n    A,\n    B,\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "Trailing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "Trailing");
+        Assert.Equal(2, symbols.Count(s => s.ContainerKind == "enum" && s.ContainerName == "Trailing" && s.BodyStartLine == null));
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesAnonymousMemberBody()
+    {
+        // Anonymous member bodies (`A { void f() {} }`) must not suppress the following member.
+        // 匿名メンバー本体があっても直後のメンバーが消えないこと。
+        var content = "public enum WithBody {\n    A {\n        void f() {}\n    },\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_RecoversMembersWhenAnnotationIsMalformed()
+    {
+        // An unclosed `@Ann(` would otherwise make the primary scanner swallow subsequent member lines.
+        // The per-line fallback rescues obvious uppercase-identifier members.
+        // 未閉鎖の `@Ann(` で primary scanner が後続行を飲み込んでしまう状況を、line fallback で救済する。
+        var content = "public enum E {\n    @Ann(\n    A,\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E");
+    }
+
+    [Fact]
     public void Extract_Java_StopsEnumMembersAtSemicolon()
     {
         // After the first top-level `;` inside the enum body, non-member declarations must not be captured as members.

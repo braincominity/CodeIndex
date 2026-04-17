@@ -1207,6 +1207,14 @@ public static class SymbolExtractor
     // Java identifier start: letter / underscore / dollar. / Java 識別子の先頭: 英字・アンダースコア・ドル。
     private static readonly Regex JavaEnumMemberNameRegex = new(@"(?<name>[A-Za-z_$][A-Za-z0-9_$]*)", RegexOptions.Compiled);
 
+    // Line-based fallback used only when the primary body scanner exits with unbalanced delimiters,
+    // which signals malformed input. Mirrors the pre-body-scope regex so mid-edit states still emit
+    // obvious uppercase-identifier members.
+    // malformed 入力を primary scanner が検知した場合に限って使う line-based fallback。以前の行単位正規表現と同等。
+    private static readonly Regex JavaEnumMemberLineFallbackRegex = new(
+        @"^\s+(?<name>[A-Z]\w*)\s*(?:\([^)]*\))?\s*(?:,|\{|;)\s*$",
+        RegexOptions.Compiled);
+
     private static void ExtractJavaEnumMembers(long fileId, string[] rawLines, List<SymbolRecord> symbols)
     {
         // Snapshot enum declarations first — we mutate the list during iteration.
@@ -1536,6 +1544,67 @@ public static class SymbolExtractor
 
         if (memberStart != null)
             TryAddJavaEnumMemberFromSpan(fileId, enumSymbol, rawLines, memberStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
+
+        // Malformed-input recovery: if the scanner exited with unbalanced paren/bracket depths, the
+        // body almost certainly contains an unterminated annotation. Fall back to the pre-body-scope
+        // line regex so obvious enum members aren't suppressed wholesale by a single syntax error.
+        // Depths > 0 mean the primary scan could not find clean boundaries — well-formed code always
+        // closes back to 0 at the body end.
+        // 入力不整形に対する recovery: primary scan が paren/bracket 深さを 0 に戻せずに終わった場合、未閉鎖の
+        // annotation である可能性が高い。line regex を使って明白な enum member を救済する。
+        if (parenDepth > 0 || bracketDepth > 0)
+        {
+            RecoverJavaEnumMembersByLine(fileId, enumSymbol, rawLines, bodyStartLineIndex, bodyEndLineIndex, symbols);
+        }
+    }
+
+    private static void RecoverJavaEnumMembersByLine(
+        long fileId,
+        SymbolRecord enumSymbol,
+        string[] rawLines,
+        int bodyStartLineIndex,
+        int bodyEndLineIndex,
+        List<SymbolRecord> symbols)
+    {
+        var alreadyEmittedStartLines = new HashSet<int>();
+        foreach (var existing in symbols)
+        {
+            if (existing.FileId == enumSymbol.FileId
+                && existing.ContainerKind == "enum"
+                && existing.ContainerName == enumSymbol.Name)
+            {
+                alreadyEmittedStartLines.Add(existing.StartLine);
+            }
+        }
+
+        for (int i = bodyStartLineIndex; i <= bodyEndLineIndex && i < rawLines.Length; i++)
+        {
+            if (alreadyEmittedStartLines.Contains(i + 1))
+                continue;
+
+            var line = rawLines[i];
+            var match = JavaEnumMemberLineFallbackRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            symbols.Add(new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = match.Groups["name"].Value,
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Signature = line.Trim(),
+                ContainerKind = "enum",
+                ContainerName = enumSymbol.Name,
+            });
+
+            // End of member list: `;` terminates recovery.
+            // メンバーリスト終端: `;` で recovery を止める。
+            if (line.TrimEnd().EndsWith(';'))
+                break;
+        }
     }
 
     private static void TryAddJavaEnumMemberFromSpan(
