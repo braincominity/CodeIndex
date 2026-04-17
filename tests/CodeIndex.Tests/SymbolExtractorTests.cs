@@ -4538,6 +4538,280 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_StaticReadonlyField_FreeModifierOrder()
+    {
+        // Closes #355: C# allows modifiers to appear in any order, so `readonly static`,
+        // `readonly new static`, and `new readonly static` must all be captured as the
+        // kind `function` row (static readonly field), not fall through to the plain-field
+        // (kind `property`) row.
+        // Closes #355: C# の修飾子は任意順で書けるため、`readonly static` /
+        // `readonly new static` / `new readonly static` も kind `function`（static readonly
+        // フィールド）として取り扱い、通常フィールド（kind `property`）に流れ落ちないこと。
+        var content = """
+            public class Svc
+            {
+                public static readonly int A = 1;
+                public readonly static int B = 2;
+                public new static readonly int C = 3;
+                public readonly new static int D = 4;
+                public new readonly static int D2 = 5;
+                readonly public static int E = 6;
+                static readonly new int F = 7;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D2" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "E" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F" && s.ReturnType == "int");
+        // Each static readonly declaration must be captured exactly once — no duplicate `property` row
+        // from the plain-field regex.
+        // それぞれの static readonly 宣言は1回だけ捕捉する — 通常フィールド regex からの重複 `property`
+        // 行を生まないこと。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "A" or "B" or "C" or "D" or "D2" or "E" or "F");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Method_FreeModifierOrder()
+    {
+        // Closes #355: C# allows visibility to appear anywhere in the modifier sequence, so
+        // `static public`, `static internal`, `async public`, `override public` must all be
+        // captured as kind `function` with the correct visibility.
+        // Closes #355: visibility は修飾子シーケンスの任意位置に置けるため、`static public` /
+        // `static internal` / `async public` / `override public` もすべて kind `function` として
+        // 正しい visibility で捕捉されること。
+        var content = """
+            public class Svc
+            {
+                public static int I() => 0;
+                static public int F() => 0;
+                static internal void G() { }
+                async public System.Threading.Tasks.Task H() { return; }
+                override public int J() => 0;
+                virtual public int K() => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "I" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "G" && s.Visibility == "internal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "H" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "J" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "K" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Property_ModifierBeforeVisibility()
+    {
+        // Closes #355: property/indexer/event/delegate/operator rows also accept visibility
+        // that follows a modifier (e.g. `static public int X { get; set; }`).
+        // Closes #355: property / indexer / event / delegate / operator 行も、
+        // `static public int X { get; set; }` のように修飾子の後の visibility を受け付ける。
+        var content = """
+            public class Svc
+            {
+                static public int P1 { get; set; }
+                static public int P2 => 0;
+                virtual public int P3 { get; set; }
+                override public int P4 => 0;
+                static public event System.EventHandler E1;
+                static public delegate int D1(int x);
+                static public int this[int i] => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P2" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P3" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P4" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E1" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "D1" && s.Visibility == "public");
+        // Indexer is recorded as `Item` (C# metadata name) after NormalizeCSharpSymbolName.
+        // インデクサは NormalizeCSharpSymbolName で C# メタデータ名 `Item` に正規化される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_TypeDeclarations_FreeModifierOrder()
+    {
+        // Closes #355: type declarations (class / struct / interface / record) also accept
+        // visibility anywhere in the modifier sequence. All fixture forms are compiler-legal
+        // (`abstract public class X {}`, `readonly public struct Y {}`, `sealed public class Z {}`,
+        // `ref public struct RS {}`, `partial public interface PI {}`) but previously fell
+        // through the type rows because visibility had to come first.
+        // Closes #355: 型宣言（class / struct / interface / record）も visibility を
+        // 修飾子列の任意位置で受け付けること。fixture はすべてコンパイラが通す合法な並びで、
+        // 以前は visibility が先頭必須のため型行をすり抜けていた。
+        var content = """
+            namespace Demo;
+            abstract public class AbstractPublicClass {}
+            sealed public class SealedPublicClass {}
+            readonly public struct ReadonlyPublicStruct {}
+            ref public struct RefPublicStruct {}
+            partial public interface PartialPublicInterface {}
+            abstract public record class AbstractPublicRecordClass {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AbstractPublicClass" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SealedPublicClass" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ReadonlyPublicStruct" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "RefPublicStruct" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "PartialPublicInterface" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AbstractPublicRecordClass" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ConstField_FreeModifierOrder()
+    {
+        // Closes #355: `const` fields also accept free modifier order. `new public const`
+        // is compiler-legal (it hides a same-named base-class const) but was previously
+        // dropped because the const row required visibility to come before `new`.
+        // Closes #355: `const` フィールドも修飾子順序自由。`new public const` は
+        // コンパイラ上合法（同名ベースクラス const の隠蔽）だが、以前は visibility が
+        // `new` より前必須のため落ちていた。
+        var content = """
+            public class Base { public const int BaseConst = 1; }
+            public class Derived : Base
+            {
+                new public const int HiddenConst = 2;
+                public new const int HiddenConst2 = 3;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BaseConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst2" && s.Visibility == "public" && s.ReturnType == "int");
+    }
+
+    [Fact]
+    public void Extract_CSharp_PlainField_FreeModifierOrder()
+    {
+        // Closes #355: plain fields (kind `property`) and multi-line field headers must also
+        // accept visibility anywhere in the modifier sequence. Previously `static public int X;`
+        // captured as a field with empty `visibility` (single-line plain-field regex was
+        // visibility-first), and multi-line declarations whose header line starts with a
+        // non-visibility modifier were dropped entirely because
+        // `CSharpPropertyHeaderPrefixRegex` (the merger trigger) was also visibility-first and
+        // did not accept `const`.
+        // Closes #355: 通常フィールド（kind `property`）と複数行フィールドヘッダも、修飾子列の
+        // 任意位置で visibility を受け付けなければならない。以前は `static public int X;` が
+        // visibility 空のまま captured され（単一行 plain-field 正規表現が visibility-first）、
+        // 非 visibility 修飾子から始まる複数行宣言は結合トリガの `CSharpPropertyHeaderPrefixRegex`
+        // 自体が visibility-first で `const` も受け付けなかったため完全に欠落していた。
+        var content = """
+            using System.Collections.Generic;
+            public class Edge
+            {
+                static public int X;
+                readonly public int Y;
+                new public static int Z = 1;
+                static public Dictionary<string, int>
+                    Map = new();
+                new public const int
+                    C = 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Y" && s.Visibility == "public" && s.ReturnType == "int");
+        // `new public static` is promoted to kind `function` via the static readonly / const row set.
+        // `new public static` は static readonly / const 系の行で kind `function` に昇格する。
+        Assert.Contains(symbols, s => s.Name == "Z" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Map" && s.Visibility == "public" && s.ReturnType != null && s.ReturnType.Contains("Dictionary"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.Visibility == "public" && s.ReturnType == "int");
+    }
+
+    [Fact]
+    public void Extract_CSharp_UnsafeExtern_FreeModifierOrder()
+    {
+        // Closes #355: `unsafe` / `extern` modifiers must not force a specific slot in the
+        // modifier sequence. All fixture forms are compiler-legal but previously either dropped
+        // entirely (constructor / static constructor / event) or captured the declaration while
+        // losing `visibility` and polluting `return_type` with the leading modifiers
+        // (property / indexer).
+        // Closes #355: `unsafe` / `extern` 修飾子も修飾子列の特定位置に固定されてはならない。
+        // fixture はすべてコンパイラ上合法だが、以前は constructor / static constructor / event では
+        // そもそも抽出されず、property / indexer では visibility が欠落して return_type に
+        // 先頭修飾子が混入していた。
+        var content = """
+            public unsafe class UnsafeHolder
+            {
+                unsafe public int P1 { get; set; }
+                unsafe public int P2 => 0;
+                unsafe public event System.EventHandler E1;
+                extern public event System.EventHandler E2;
+                unsafe public int this[int* i] => 0;
+                unsafe public UnsafeHolder(int* p) { }
+                extern public UnsafeHolder(int x);
+                unsafe static UnsafeHolder() { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P2" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E1" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E2" && s.Visibility == "public");
+        // Indexer is recorded as `Item` (C# metadata name) after NormalizeCSharpSymbolName.
+        // インデクサは NormalizeCSharpSymbolName で C# メタデータ名 `Item` に正規化される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Visibility == "public" && s.ReturnType == "int");
+        // Constructors are recorded with visibility and the type name as symbol name.
+        // コンストラクタは visibility を保持し、シンボル名は型名になる。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UnsafeHolder" && s.Visibility == "public");
+        // Static constructor has no visibility.
+        // 静的コンストラクタは visibility を持たない。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UnsafeHolder" && string.IsNullOrEmpty(s.Visibility));
+    }
+
+    [Fact]
+    public void Extract_CSharp_InheritanceAndFile_FreeModifierOrder()
+    {
+        // Closes #355: inheritance modifiers on events (`virtual` / `override` / `abstract` /
+        // `sealed` / `new`) and the `file` modifier on interface / delegate declarations must
+        // be accepted in any position, with visibility still captured when present.
+        // Closes #355: event の継承修飾子 (`virtual` / `override` / `abstract` / `sealed` / `new`) と、
+        // interface / delegate 宣言の `file` 修飾子は任意位置で受理され、visibility が存在する場合は
+        // 併せて拾われる必要がある。
+        var content = """
+            file interface IWidget
+            {
+                int ProvideAnswer();
+            }
+            file delegate int Computer(int x);
+            public abstract class Base
+            {
+                abstract public event System.EventHandler A;
+                virtual public event System.EventHandler B;
+                sealed public override event System.EventHandler C;
+                new public event System.EventHandler D;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // `file interface` should be matched as an interface symbol.
+        // `file interface` は interface シンボルとして抽出される。
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IWidget");
+        // `file delegate` should be matched as a delegate symbol.
+        // `file delegate` は delegate シンボルとして抽出される。
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Computer" && s.ReturnType == "int");
+        // Events with inheritance modifiers must still record visibility = "public".
+        // 継承修飾子付きの event も visibility = "public" を保持する必要がある。
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "A" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "B" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "C" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "D" && s.Visibility == "public");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
