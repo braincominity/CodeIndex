@@ -274,7 +274,8 @@ public static class ReferenceExtractor
             else if (language is "java")
             {
                 EmitJavaCtorChainReferences(
-                    preparedLine, enclosingTypeCandidates, symbols, references, seen, fileId, context, lineNumber, container);
+                    preparedLine, enclosingTypeCandidates, symbols, structuralLines,
+                    references, seen, fileId, context, lineNumber, container);
             }
 
             foreach (Match match in CallRegex.Matches(preparedLine))
@@ -434,6 +435,7 @@ public static class ReferenceExtractor
         string preparedLine,
         IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
         IReadOnlyList<SymbolRecord> symbols,
+        string[] structuralLines,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -483,7 +485,17 @@ public static class ReferenceExtractor
         }
         else
         {
-            target = ParseJavaBaseType(enclosingType.Signature);
+            // Java base-list can span multiple lines (`class Leaf\n    extends Base`).
+            // SymbolRecord.Signature only captures the first declaration line, so reconstruct
+            // the enclosing type header from structural lines (reusing the C# helper — the
+            // scanner stops at `;` / `{`, which also bounds Java class / record / enum headers).
+            // Java の base-list も複数行にまたがる (`class Leaf\n    extends Base`)。
+            // SymbolRecord.Signature は 1 行目しか持たないため、structural lines からヘッダを
+            // 再構築する (C# 用ヘルパーを流用。`;` / `{` 終端は Java にも適用可)。
+            var (_, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
+            target = ParseJavaBaseType(headerText);
+            if (string.IsNullOrWhiteSpace(target))
+                target = ParseJavaBaseType(enclosingType.Signature);
             if (string.IsNullOrWhiteSpace(target))
                 return;
         }

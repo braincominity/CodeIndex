@@ -1530,6 +1530,105 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaSuperCall_MultiLineExtends_AttributesToBaseClass()
+    {
+        // Java multi-line `class Foo\n    extends Base` must still resolve `super(...)`.
+        // SymbolRecord.Signature only captures the first declaration line, so the header has to
+        // be reconstructed from structural lines before ParseJavaBaseType runs.
+        // Java の複数行 `class Foo\n    extends Base` でも `super(...)` の解決先を見失わないこと。
+        // SymbolRecord.Signature は 1 行目しか持たないため、ヘッダを structural lines から再構築する。
+        const string content = """
+            package demo;
+
+            public class Base {
+                public Base(int x) {}
+            }
+
+            class Leaf
+                extends Base {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_MultiLineExtends_NestedGenericOuter_AttributesToTerminalSegment()
+    {
+        // Multi-line `extends` combined with `Outer<Integer>.Base` nested-generic form.
+        // Reconstructed header feeds both multi-line handling and the depth-aware terminal-segment
+        // extractor.
+        // 複数行 `extends` と `Outer<Integer>.Base` ネスト generic 形の複合ケース。再構築した
+        // ヘッダが複数行連結と depth-aware な末尾セグメント抽出の両方を通る。
+        const string content = """
+            package demo;
+
+            public class Outer<T> {
+                public static class Base {
+                    public Base(int x) {}
+                }
+            }
+
+            class Leaf
+                extends Outer<Integer>.Base {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_MultiLineExtends_WithPermitsContinuation_AttributesToBaseClass()
+    {
+        // Java 17+ sealed class with `permits` sitting on a continuation line. The reconstructed
+        // multi-line header must still stop at `permits` via the base-type scanner.
+        // Java 17+ sealed class で `permits` が継続行にある場合でも、再構築したヘッダから
+        // base-type scanner が `permits` を終端として正しく停止すること。
+        const string content = """
+            package demo;
+
+            public sealed class Base permits Leaf {
+                public Base(int x) {}
+            }
+
+            sealed class Leaf
+                extends Base
+                permits None {
+                Leaf() {
+                    super(0);
+                }
+            }
+
+            final class None extends Leaf {
+                None() { super(); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
     public void Extract_CsharpBaseCall_MultiLineBaseList_WithWhereClause_AttributesToParent()
     {
         // Multi-line base-list continuation followed by a `where` constraint must still resolve
