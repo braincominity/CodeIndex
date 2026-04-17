@@ -303,6 +303,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetFileIndexability_RejectsFileSymlinkSoUpdateModeSkipsIt()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var realFile = Path.Combine(tempDir, "real.py");
+            File.WriteAllText(realFile, "x = 1\n");
+            // File symlink pointing at the same-tree real file. The Unix stat() path would follow this
+            // symlink and see it as a regular file, so GetFileIndexability must gate on the reparse-point
+            // check to keep --files / --commits update paths symlink-safe.
+            // 同ツリー内の実ファイルを指すファイル symlink。Unix の stat() は symlink を辿ってしまうため、
+            // GetFileIndexability は reparse-point ガードで弾かないと --files / --commits 経路で
+            // 素通りしてしまう。
+            var linkPath = Path.Combine(tempDir, "alias.py");
+            File.CreateSymbolicLink(linkPath, realFile);
+
+            Assert.True(FileIndexer.CanIndexFile(realFile));
+            Assert.False(FileIndexer.CanIndexFile(linkPath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsDanglingSymlinksWithoutAbortingScan()
     {
         if (OperatingSystem.IsWindows())

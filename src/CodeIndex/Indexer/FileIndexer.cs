@@ -37,7 +37,8 @@ public class FileIndexer
         IReadOnlyList<string> NonIndexablePaths,
         IReadOnlyList<string> ProbeFailedFilePaths,
         IReadOnlyList<string> ListedDirectories,
-        IReadOnlyList<string> FullyScannedDirectories)
+        IReadOnlyList<string> FullyScannedDirectories,
+        IReadOnlyList<string> SymlinkPrunedDirectories)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
     }
@@ -805,6 +806,19 @@ public class FileIndexer
 
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
+        // Reject symlinks/reparse points here so every caller (full scan, --files / --commits update mode,
+        // dry-run) gets the same symlink skip behavior. Using File.GetAttributes uses lstat-like semantics
+        // on .NET (does not follow the symlink target), which is what we need on both Windows and Unix.
+        // The Unix stat() path below follows symlinks, so without this guard a symlink-to-regular-file
+        // would otherwise slip through as Supported.
+        // ここで symlink / reparse point を弾くことで、フルスキャン・--files/--commits の update モード・
+        // dry-run など全呼び出し元に同じ symlink skip 挙動を効かせる。File.GetAttributes は .NET 上で
+        // lstat 相当（symlink target を辿らない）なので、Windows でも Unix でも必要な判定になる。
+        // Unix 側の stat() は symlink を辿るため、このガードが無いと symlink→通常ファイルが
+        // Supported として通過してしまう。
+        if (IsReparsePoint(filePath))
+            return FileProbeStatus.Unsupported;
+
         if (OperatingSystem.IsWindows())
             return FileProbeStatus.Supported;
 
@@ -1038,11 +1052,12 @@ public class FileIndexer
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var symlinkPrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules, isProjectRoot: true);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, preloadResult.Rules, isProjectRoot: true);
         }
         return new ScanFilesResult(
             files,
@@ -1050,7 +1065,8 @@ public class FileIndexer
             nonIndexablePaths.ToList(),
             probeFailedFilePaths.ToList(),
             listedDirectories.ToList(),
-            fullyScannedDirectories.ToList());
+            fullyScannedDirectories.ToList(),
+            symlinkPrunedDirectories.ToList());
     }
 
     private bool ScanDirectory(
@@ -1061,6 +1077,7 @@ public class FileIndexer
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
+        HashSet<string> symlinkPrunedDirectories,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false)
     {
@@ -1074,7 +1091,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, activeIgnoreRules);
     }
 
     private bool EnumerateDirectory(
@@ -1085,6 +1102,7 @@ public class FileIndexer
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
+        HashSet<string> symlinkPrunedDirectories,
         IgnoreRuleSet inheritedIgnoreRules)
     {
         var fullyScanned = true;
@@ -1106,16 +1124,10 @@ public class FileIndexer
                 if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
                     continue;
 
-                // Skip file symlinks/reparse points to avoid double-indexing the same content under a second path.
-                // ファイル symlink / reparse point は二重 index を防ぐためスキップする。
-                if (IsReparsePoint(file))
-                {
-                    nonIndexablePaths.Add(ToRelativePath(file));
-                    continue;
-                }
-
-                // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
-                // Unix では通常ファイルのみをインデックス対象にする。FIFO/socket/device でのブロックを避ける。
+                // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
+                // (--files / --commits) path gets the same skip behavior without a second probe here.
+                // GetFileIndexability もファイル symlink / reparse point を拒否するため、
+                // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
                 var indexability = GetFileIndexability(file);
                 if (indexability == FileProbeStatus.ProbeFailed)
                 {
@@ -1157,18 +1169,24 @@ public class FileIndexer
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
                 // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
-                // and duplicate indexing when a symlink points inside the same tree.
+                // and duplicate indexing when a symlink points inside the same tree. Record the symlink
+                // itself as listed (for the immediate-parent purge path) AND as a prune prefix so the
+                // purge walker can authoritatively drop deep descendants that earlier symlink-following
+                // runs left behind.
                 // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
-                // ツリー内を指す symlink での二重 index を防ぐためスキップする。
+                // ツリー内を指す symlink での二重 index を防ぐためスキップする。symlink 自身を
+                // listed 扱い（immediate parent purge 用）かつ prune prefix として記録することで、
+                // 以前の symlink 追従でできた深い子孫エントリも purge walker が確実に削除できる。
                 if (IsReparsePoint(subDir))
                 {
                     var subRelative = ToRelativePath(subDir);
                     listedDirectories.Add(subRelative);
                     fullyScannedDirectories.Add(subRelative);
+                    symlinkPrunedDirectories.Add(subRelative);
                     continue;
                 }
 
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, activeIgnoreRules);
             }
         }
         catch (UnauthorizedAccessException)
