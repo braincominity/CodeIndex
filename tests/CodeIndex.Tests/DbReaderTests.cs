@@ -250,17 +250,49 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void Search_CjkQueryStillRespectsExactFullToken()
+    public void Search_CjkFullTokenQueryStillFindsExactFullToken()
     {
-        // Prefix-match fallback must not regress the exact full-token case.
-        // The literal '計算する' should still find '計算する', not only broader prefixes.
-        // prefix match フォールバックが exact full token を壊していないことを確認する。
+        // Positive regression: the CJK prefix fallback must not break the case where the
+        // query already IS the full token. Searching '計算する' must still find content
+        // containing '計算する'. This pins the "CJK prefix fallback does not regress exact
+        // matches", NOT "CJK prefix fallback narrows to exact matches" — CJK tokens always
+        // take the prefix path, so '計算する' also matches '計算する追加' (that widening is
+        // intentional; users who want strict equality should use `--exact` / `instr`).
+        // 正の回帰テスト: クエリが既に完全トークンの場合でも CJK prefix fallback が壊していないこと。
+        // 「完全一致を保つ」ではなく「完全一致を取りこぼさない」ことを固定する点に注意 — CJK トークンは
+        // 常に prefix 経路を通るので '計算する' は '計算する追加' にもヒットする（意図的な挙動で、
+        // 厳密一致が必要なら `--exact` / `instr` 経路を使う）。
         InsertIndexedFile("src/cjk_exact.py", "python",
             "def 計算する(値):\n    return 値\n");
 
         var results = _reader.Search("計算する");
 
         Assert.Contains(results, r => r.Path == "src/cjk_exact.py");
+    }
+
+    [Fact]
+    public void Search_CjkFullTokenQueryAlsoWidensToLongerTokens()
+    {
+        // Pins the intentional widening: a CJK query ALWAYS takes the prefix fallback, so
+        // searching '計算する' also returns chunks containing '計算する追加'. This is the
+        // documented semantics — users who need strict equality must use the exact path.
+        // If a future change wants to narrow full-token CJK queries to non-prefix, this
+        // test should be the first to break and force an explicit decision, not a silent
+        // drift. Without this pin, issue #198 could be "fixed" by a revert that re-breaks
+        // the original reproduction (search 計算 → 0 hits) and no test would catch it.
+        // 意図的なワイドニングを固定する: CJK クエリは必ず prefix fallback を通るため、
+        // '計算する' の検索は '計算する追加' を含むチャンクも返す。厳密一致が必要な場合は
+        // exact 経路を使うのが仕様。将来この挙動を変更する場合にこのテストが最初に壊れ、
+        // 静かに #198 の元再現（search 計算 → 0 件）に戻されることを防ぐアンカー。
+        InsertIndexedFile("src/cjk_widen_short.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_widen_long.py", "python",
+            "def 計算する追加(値):\n    return 値 + 1\n");
+
+        var results = _reader.Search("計算する");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_widen_short.py");
+        Assert.Contains(results, r => r.Path == "src/cjk_widen_long.py");
     }
 
     [Fact]
@@ -283,23 +315,66 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void Search_EmojiMixedTokenDoesNotOverMatchAsciiPrefixNeighbors()
+    public void Search_EmojiMixedTokenDoesNotPrefixWidenToAsciiNeighbors()
     {
-        // Regression guard: unicode61 drops emoji codepoints entirely, so promoting 'foo🎉'
-        // to prefix '"foo🎉"*' would be parsed by FTS5 as '"foo"*' and leak into unrelated
-        // ASCII neighbors like 'foobar'. The sanitizer must keep emoji-mixed tokens as
-        // exact phrases so plain ASCII files do not get dragged in.
-        // 回帰テスト: unicode61はemojiコードポイントを破棄するため、'foo🎉' を prefix 化すると
-        // FTS5上で '"foo"*' として解釈され、無関係な 'foobar' までヒットしてしまう。
-        // サニタイザはemoji混在トークンを完全一致として扱い、純ASCIIファイルを巻き込んではならない。
+        // Regression guard for the most damaging over-widening case: if an emoji-mixed
+        // token was auto-upgraded to a prefix phrase (earlier in this fix's iterations it
+        // was), unicode61 would strip the emoji and the query would become a pure ASCII
+        // prefix search ('"foo"*') — sweeping in unrelated neighbors like 'foobar'. The
+        // sanitizer must therefore NOT add a prefix '*' to emoji-mixed tokens. Note: this
+        // only protects against PREFIX widening (neighbors that merely start with the
+        // ASCII fragment). It does NOT and cannot claim "exact-phrase semantics" against
+        // content where unicode61 indexes an identical ASCII token — see the companion
+        // `Search_EmojiMixedTokenFallsBackToAsciiToken_UseExactForStrict` pin.
+        // 最大の over-widening 回帰防止: emoji 混在トークンに prefix '*' が付くと、unicode61 が
+        // emoji を drop するため実質 '"foo"*' となり 'foobar' のような無関係な近傍を拾う。
+        // サニタイザは emoji 混在トークンに prefix を付与してはならない。ただしこれは
+        // 「prefix 拡張を防ぐ」までで、unicode61 が同じ ASCII トークンを indexing した内容に
+        // 対して完全一致を保証するものではない（下記の companion pin を参照）。
         InsertIndexedFile("src/emoji_mixed.py", "python",
             "def foo🎉():\n    return 1\n");
-        InsertIndexedFile("src/ascii_only.py", "python",
+        InsertIndexedFile("src/ascii_prefix_neighbor.py", "python",
             "def foobar():\n    return 2\n");
 
         var results = _reader.Search("foo🎉");
 
-        Assert.DoesNotContain(results, r => r.Path == "src/ascii_only.py");
+        Assert.Contains(results, r => r.Path == "src/emoji_mixed.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/ascii_prefix_neighbor.py");
+    }
+
+    [Fact]
+    public void Search_EmojiMixedTokenFallsBackToAsciiToken_UseExactForStrict()
+    {
+        // Known limitation pin: unicode61 drops emoji codepoints during BOTH indexing and
+        // query tokenization, so 'foo🎉' is indexed as the FTS token 'foo' and a literal
+        // query 'foo🎉' is tokenized as the FTS phrase '"foo"'. The FTS path therefore
+        // cannot distinguish between `def foo():` and `def foo🎉():` — both are FTS-equal.
+        // Users who need strict equality over emoji must route through the exact-substring
+        // path (`--exact` on the CLI, which uses SQLite `instr` against raw content and
+        // bypasses unicode61 tokenization entirely). This test pins that limitation so
+        // documentation and CHANGELOG cannot silently claim "exact-phrase semantics".
+        // 既知の制限の固定: unicode61 は indexing とクエリの両段階で emoji を drop するため、
+        // 'foo🎉' は FTS トークンとしては 'foo' と同じになる。FTS 経路では `def foo():` と
+        // `def foo🎉():` を区別できず、完全一致が必要なら `--exact` 経路（SQLite `instr`）を
+        // 使う必要がある。文書・CHANGELOG がこの制限を見落として「完全一致を保つ」と誤って
+        // 謳わないよう、挙動を明示的に固定する。
+        InsertIndexedFile("src/emoji_mixed_fallback.py", "python",
+            "def foo🎉():\n    return 1\n");
+        InsertIndexedFile("src/ascii_exact_twin.py", "python",
+            "def foo():\n    return 3\n");
+
+        var ftsResults = _reader.Search("foo🎉");
+
+        // FTS path cannot distinguish — both show up because unicode61 drops '🎉' on both sides.
+        // FTS 経路では区別できない — unicode61 が両側で '🎉' を drop するため。
+        Assert.Contains(ftsResults, r => r.Path == "src/emoji_mixed_fallback.py");
+        Assert.Contains(ftsResults, r => r.Path == "src/ascii_exact_twin.py");
+
+        // The exact path DOES distinguish via instr() on raw content.
+        // exact 経路は instr() により区別できる。
+        var exactResults = _reader.Search("foo🎉", exact: true);
+        Assert.Contains(exactResults, r => r.Path == "src/emoji_mixed_fallback.py");
+        Assert.DoesNotContain(exactResults, r => r.Path == "src/ascii_exact_twin.py");
     }
 
     [Fact]

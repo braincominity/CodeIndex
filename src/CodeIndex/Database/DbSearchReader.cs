@@ -82,8 +82,14 @@ public partial class DbReader
         if (value >= 0x31F0 && value <= 0x31FF) return true;
         if (value >= 0x1B000 && value <= 0x1B16F) return true;
 
-        // CJK Unified Ideographs + Extensions A-G, Compatibility Ideographs, Radicals
-        // CJK統合漢字および拡張、互換漢字、部首
+        // CJK Unified Ideographs + Extensions A-G, Compatibility Ideographs.
+        // CJK Radicals Supplement (U+2E80..U+2EFF) and Kangxi Radicals (U+2F00..U+2FDF)
+        // are intentionally excluded: every codepoint in those blocks is Unicode
+        // category OtherSymbol (So) and gets dropped by unicode61 during tokenization,
+        // so prefix fallback cannot help anyway.
+        // CJK統合漢字および拡張、互換漢字。CJK Radicals Supplement と Kangxi Radicals は
+        // Unicodeカテゴリが OtherSymbol (So) で unicode61 が drop するため、prefix fallback を
+        // かけても意味がなく、意図的に除外する。
         if (value >= 0x4E00 && value <= 0x9FFF) return true;
         if (value >= 0x3400 && value <= 0x4DBF) return true;
         if (value >= 0x20000 && value <= 0x2A6DF) return true;
@@ -91,8 +97,6 @@ public partial class DbReader
         if (value >= 0x30000 && value <= 0x3134F) return true;
         if (value >= 0xF900 && value <= 0xFAFF) return true;
         if (value >= 0x2F800 && value <= 0x2FA1F) return true;
-        if (value >= 0x2E80 && value <= 0x2EFF) return true;
-        if (value >= 0x2F00 && value <= 0x2FDF) return true;
 
         // Hangul Syllables, Jamo, Jamo Extended-A/B, Compatibility Jamo
         // ハングル音節およびJamo
