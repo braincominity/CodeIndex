@@ -3316,6 +3316,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PartialPropertyImplementation_WithAccessorAttribute_IsDetected()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial string Name { get; set; }
+            }
+
+            public partial class Model
+            {
+                public partial string Name { [System.Obsolete] get => "x"; set { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.Signature != null && s.Signature.Contains("[System.Obsolete]", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """

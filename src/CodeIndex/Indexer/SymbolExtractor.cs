@@ -294,7 +294,7 @@ public static class SymbolExtractor
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Property with get/set/init — visibility optional
             // プロパティ（get/set/init）— visibility 省略可
-            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate
             // 式本体プロパティ (public int X => ...) — delegate の前に配置
             new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
@@ -645,7 +645,6 @@ public static class SymbolExtractor
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
-    private static readonly Regex CSharpPropertyAccessorStartRegex = new(@"\{\s*(?:get|set|init)\b", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -732,6 +731,9 @@ public static class SymbolExtractor
                     }
 
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i))
+                        break;
+
+                    if (ShouldSkipCSharpBracePropertyCandidate(lang, pattern, patternMatchLine))
                         break;
 
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
@@ -5262,7 +5264,7 @@ public static class SymbolExtractor
     {
         var matchLine = csharpMatchLines[startLineIndex];
         if (string.IsNullOrWhiteSpace(matchLine)
-            || CSharpPropertyAccessorStartRegex.IsMatch(matchLine))
+            || HasCSharpPropertyAccessorStart(matchLine))
         {
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
@@ -5300,7 +5302,7 @@ public static class SymbolExtractor
                 }
             }
 
-            if (CSharpPropertyAccessorStartRegex.IsMatch(normalizedCombined))
+            if (HasCSharpPropertyAccessorStart(normalizedCombined))
             {
                 return new CSharpPropertyMatchCandidate(
                     normalizedCombined,
@@ -5323,6 +5325,91 @@ public static class SymbolExtractor
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+    }
+
+    private static bool HasCSharpPropertyAccessorStart(string text)
+    {
+        var braceIndex = text.IndexOf('{');
+        if (braceIndex < 0)
+            return false;
+
+        var cursor = SkipWhitespace(text, braceIndex + 1);
+        while (TrySkipCSharpAttributeList(text, ref cursor))
+            cursor = SkipWhitespace(text, cursor);
+
+        cursor = SkipWhitespace(text, cursor);
+        if (TrySkipCSharpAccessorAccessibility(text, ref cursor))
+            cursor = SkipWhitespace(text, cursor);
+
+        return StartsWithCSharpAccessorKeyword(text, cursor);
+    }
+
+    private static int SkipWhitespace(string text, int cursor)
+    {
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+
+        return cursor;
+    }
+
+    private static bool TrySkipCSharpAttributeList(string text, ref int cursor)
+    {
+        var start = SkipWhitespace(text, cursor);
+        if (start >= text.Length || text[start] != '[')
+            return false;
+
+        var depth = 0;
+        var current = start;
+        while (current < text.Length)
+        {
+            var ch = text[current++];
+            if (ch == '[')
+            {
+                depth++;
+            }
+            else if (ch == ']')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    cursor = current;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipCSharpAccessorAccessibility(string text, ref int cursor)
+    {
+        foreach (var modifier in new[] { "protected internal", "private protected", "protected", "internal", "private", "public" })
+        {
+            if (StartsWithWord(text, cursor, modifier))
+            {
+                cursor += modifier.Length;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool StartsWithCSharpAccessorKeyword(string text, int cursor) =>
+        StartsWithWord(text, cursor, "get")
+        || StartsWithWord(text, cursor, "set")
+        || StartsWithWord(text, cursor, "init");
+
+    private static bool StartsWithWord(string text, int cursor, string word)
+    {
+        if (cursor < 0 || cursor + word.Length > text.Length)
+            return false;
+
+        if (!text.AsSpan(cursor, word.Length).SequenceEqual(word.AsSpan()))
+            return false;
+
+        var end = cursor + word.Length;
+        return end >= text.Length || !char.IsLetterOrDigit(text[end]) && text[end] != '_';
     }
 
     private static bool TryFindCSharpExpressionArrow(string[] lines, int startLineIndex, int endLineIndex, out int arrowLineIndex, out int arrowColumn)
@@ -5466,6 +5553,15 @@ public static class SymbolExtractor
         && csharpSwitchExpressionLines != null
         && csharpSwitchExpressionLines[lineIndex]
         && matchLine.Contains("=>", StringComparison.Ordinal);
+
+    private static bool ShouldSkipCSharpBracePropertyCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        string matchLine) =>
+        lang == "csharp"
+        && pattern.Kind == "property"
+        && pattern.BodyStyle == BodyStyle.Brace
+        && !HasCSharpPropertyAccessorStart(matchLine);
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
     {
