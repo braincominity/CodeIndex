@@ -3360,6 +3360,354 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedClassHeader_IncludesBaseListAndWhereClauseInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T>
+                : BaseFoo<T>, IBar, IBaz
+                where T : class, new()
+            {
+                public Foo(int x) : base(x) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo<T> : BaseFoo<T>, IBar, IBaz where T : class, new()",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedInterfaceHeader_IncludesBaseListInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public interface IFoo<T>
+                : IBar<T>,
+                  IBaz
+                where T : struct
+            {
+                void Method();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var iface = Assert.Single(symbols.Where(s => s.Kind == "interface" && s.Name == "IFoo"));
+        Assert.Equal(
+            "public interface IFoo<T> : IBar<T>, IBaz where T : struct",
+            iface.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedRecordPrimaryCtorHeader_IncludesCtorParametersAndBaseList()
+    {
+        var content = """
+            namespace Demo;
+
+            public record Point<T>(
+                T X,
+                T Y)
+                : BaseRecord<T>
+                where T : INumber<T>;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var point = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Point"));
+        Assert.Equal(
+            "public record Point<T>( T X, T Y) : BaseRecord<T> where T : INumber<T>",
+            point.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedStructHeader_IncludesBaseListInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public readonly struct Value<T>
+                : IEquatable<Value<T>>
+                where T : IComparable<T>
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var value = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Value"));
+        Assert.Equal(
+            "public readonly struct Value<T> : IEquatable<Value<T>> where T : IComparable<T>",
+            value.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedEnumHeader_IncludesUnderlyingTypeInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public enum Kind
+                : byte
+            {
+                A,
+                B,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var kind = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Kind"));
+        Assert.Equal("public enum Kind : byte", kind.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineClassHeader_SignatureUnchanged()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Foo : Bar, IBaz
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public class Foo : Bar, IBaz", foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedClassHeaderWithLineComment_StripsCommentFromSignature()
+    {
+        // Wrapped type header with a trailing `// comment` on a base-list or `where` line
+        // must not leak comment text into `symbols.signature`. The signature is used by
+        // downstream consumers (planned #257 base resolution, #256 type-position
+        // references, `impact` / `analyze_symbol` heuristics) that need to parse the base
+        // list and `where` clauses; comment bytes in the signature would break them.
+        // Closes #382 codex review blocker.
+        // 折り返された型ヘッダの base リストや `where` 句の行末に `// comment` が
+        // 付いていても、`symbols.signature` にコメント本文が漏れないこと。signature は
+        // 下流（#257 の base 解決、#256 の型位置参照、`impact` / `analyze_symbol`
+        // ヒューリスティクス）で base リストや `where` 句を解釈するために使われるため、
+        // コメントバイトが残ると壊れる。Closes #382 の codex レビュー blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T>
+                : BaseFoo<T>, // primary base
+                  IBar,
+                  IBaz // diagnostics trait
+                where T : class, new() // must be default-constructible
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public sealed class Foo<T> : BaseFoo<T>, IBar, IBaz where T : class, new()", foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedClassHeaderWithBlockComment_StripsCommentFromSignature()
+    {
+        // Same contract as the line-comment variant, for inline `/* ... */` block
+        // comments embedded inside a wrapped type header. Closes #382 codex review blocker.
+        // 行間や途中に挟まる `/* ... */` ブロックコメントについても同じ契約を固定する。
+        // Closes #382 の codex レビュー blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public class Foo /* annotation */
+                : /* base */ Bar,
+                  IBaz
+                where /* generic */ T : class
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public class Foo : Bar, IBaz where T : class", foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // A wrapped primary constructor header that carries a string default with internal
+        // double-space must not collapse the literal into a single space. The signature is
+        // parsed downstream to recover default values, so collapsing `"a  b"` to `"a b"`
+        // would silently rewrite source. Closes #382 codex review iteration 2 blocker.
+        // 折り返された primary constructor header に内部 2 連空白を持つ文字列デフォルトが
+        // ある場合、リテラル内の空白を潰してはいけない。signature は下流で default 値の
+        // 復元に使われるため、`"a  b"` が `"a b"` に潰れると source が書き換わったのと
+        // 同じ結果になる。Closes #382 の codex レビュー iteration 2 blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo(
+                string label = "a  b")
+                : BaseFoo
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string label = \"a  b\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithVerbatimStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // Verbatim string (`@"..."`) defaults may contain runs of internal whitespace that
+        // must survive signature reconstruction verbatim. Closes #382 codex review iteration
+        // 2 blocker.
+        // verbatim 文字列（`@"..."`）のデフォルトは内部の空白列をそのまま残す必要がある。
+        // Closes #382 の codex レビュー iteration 2 blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string path = @"C:\tmp\   spaces")
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string path = @\"C:\\tmp\\   spaces\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithRawStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // Raw string literals (`"""..."""`) in a wrapped primary constructor default must
+        // preserve internal whitespace verbatim. Closes #382 codex review iteration 2
+        // blocker.
+        // raw 文字列リテラル（`"""..."""`）を持つ primary constructor デフォルトについて
+        // も、内部空白を verbatim に保つこと。Closes #382 の codex レビュー iteration 2
+        // blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string tag = """a   b""")
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string tag = \"\"\"a   b\"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithMultilineRawStringDefault_PreservesNewlinesAndIndent()
+    {
+        // A raw string default that spans multiple physical lines must keep its `\n`
+        // characters and the per-line leading indentation verbatim. The previous
+        // line-by-line `Trim()` + `' '` join in BuildCSharpTypeHeaderSignature destroyed
+        // both, collapsing `"""\n    a  \n    b\n    """` into `""" a b """`. Closes #382
+        // codex review iteration 3 blocker.
+        // 折り返された primary constructor のデフォルトに multi-line raw string を置くと、
+        // 改行と各行先頭のインデントを verbatim に保持しなければならない。以前の line-by-line
+        // `Trim()` + ' ' 連結は両方を潰し `"""\n    a  \n    b\n    """` を `""" a b """`
+        // に圧縮していた。Closes #382 の codex レビュー iteration 3 blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string text = """
+                a  b
+                c
+                """)
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string text = \"\"\"\n    a  b\n    c\n    \"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedMultilineRawStringDefault_NormalizesCrlfToLf()
+    {
+        // Content split on '\n' leaves trailing '\r' on every line for CRLF-terminated
+        // sources (Windows CI with autocrlf=true, files saved from VS, etc.). The header
+        // slice builder must strip that trailing '\r' so inter-line separators stay '\n'
+        // regardless of line endings. Without this normalization the signature for a
+        // multi-line raw string default would carry `\r\n` between lines on Windows and
+        // `\n` on Linux / macOS, which breaks signature equality across OSes and broke
+        // the Windows CI run of #382.
+        // `\n` で分割した場合、CRLF 終端のソースでは各行末に '\r' が残る
+        // （autocrlf=true の Windows CI、VS で保存したファイルなど）。header スライス組み
+        // 立て側で末尾 '\r' を落とさないと、行間セパレータが OS に依存して `\r\n` / `\n`
+        // になり、signature の一致判定が崩れる。これは #382 の Windows CI 失敗の原因でも
+        // あった。
+        var content =
+            "namespace Demo;\r\n" +
+            "\r\n" +
+            "public sealed class Foo(\r\n" +
+            "    string text = \"\"\"\r\n" +
+            "    a  b\r\n" +
+            "    c\r\n" +
+            "    \"\"\")\r\n" +
+            "    : BaseFoo\r\n" +
+            "{\r\n" +
+            "}\r\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string text = \"\"\"\n    a  b\n    c\n    \"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedHeaderWithInterpolationHoleContainingNestedVerbatim_PreservesInnerLiteral()
+    {
+        // An interpolation hole in an outer `$"..."` must be classified as Code so the
+        // hole contents are lex-aware — in particular, a nested `@"..."` inside the hole
+        // must stay in Verbatim mode and preserve any internal double-space, while the
+        // outer `$"..."` literal content after the hole is still preserved verbatim.
+        // Previously, once we entered String mode we exited on the first unescaped `"`,
+        // which meant `$"{@"a  b"}  c"` re-entered Code mode at `@"` and collapsed
+        // `a  b` to `a b`. Closes #382 codex review iteration 3 blocker.
+        // 外側 `$"..."` の補間ホールは Code として分類し、ホール内は lex-aware に処理する
+        // 必要がある。ホール内の `@"..."` は Verbatim モードとして扱い、内部の 2 連空白を
+        // 保持することを固定する。以前は String に入った時点で次の `"` で即 Code に戻って
+        // いたため、`$"{@"a  b"}  c"` が `a  b` → `a b` に潰れていた。
+        // Closes #382 の codex レビュー iteration 3 blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo
+                : BaseFoo($"{@"a  b"}  c")
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo : BaseFoo($\"{@\"a  b\"}  c\")",
+            foo.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
     {
         var content = """

@@ -979,16 +979,54 @@ public static class SymbolExtractor
                         && bodyEndLine == startLine
                         ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
                         : -1;
-                    var signature = sameLineEndColumn >= absoluteStartColumn
-                        ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
-                        : lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i
-                            ? BuildCSharpMultilineSignature(
-                                lines,
-                                i,
-                                absoluteStartColumn,
-                                csharpPropertyCandidate.SignatureLastLineIndex,
-                                csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn)
-                            : line[absoluteStartColumn..].Trim();
+                    string signature;
+                    if (sameLineEndColumn >= absoluteStartColumn)
+                    {
+                        signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                    }
+                    else if (lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    {
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            csharpPropertyCandidate.SignatureLastLineIndex,
+                            csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp"
+                        && pattern.Kind is "class" or "struct" or "interface" or "enum"
+                        && TryFindCSharpTypeHeaderExtent(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            out var csharpTypeHeaderLastLineIndex,
+                            out var csharpTypeHeaderLastLineExclusiveEndColumn)
+                        && csharpTypeHeaderLastLineIndex > i)
+                    {
+                        // Wrapped C# type header: base list and `where` clauses often continue
+                        // onto following lines before the body-opening `{` or primary-ctor `;`.
+                        // Join them so consumers like ReferenceExtractor can resolve the base
+                        // type from the stored signature instead of silently treating the class
+                        // as having no base. Uses the comment-stripping variant so trailing or
+                        // interleaved `//` / `/* */` comments do not leak into the signature.
+                        // Closes #382.
+                        // 折り返された C# 型ヘッダ: base リストや `where` 句は本体開きの `{`
+                        // または primary-ctor 終端の `;` までに複数行へまたがることが多い。
+                        // 継続行を連結して保存し、ReferenceExtractor などが保存済み
+                        // シグネチャから base 型を解決できるようにする。末尾や途中に混じる
+                        // `//` / `/* */` コメントを signature から除去する variant を使う。
+                        // Closes #382.
+                        signature = BuildCSharpTypeHeaderSignature(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            csharpTypeHeaderLastLineIndex,
+                            csharpTypeHeaderLastLineExclusiveEndColumn);
+                    }
+                    else
+                    {
+                        signature = line[absoluteStartColumn..].Trim();
+                    }
 
                     var declaratorEntries = lang == "csharp"
                         && pattern.Kind == "property"
@@ -7145,6 +7183,530 @@ public static class SymbolExtractor
         }
 
         return builder.ToString().Trim();
+    }
+
+    // Scan forward from a C# type declaration header (`class` / `struct` / `interface` /
+    // `enum`) and find where the header ends — either at the body-opening `{` or the
+    // primary-constructor / forward-declaration terminator `;`. Returns the line index
+    // and column of that terminator so the signature builder can concatenate the header
+    // lines up to (but not including) the terminator. Respects paren depth for primary
+    // ctors, bracket depth for attributes on type / generic parameters, and uses the
+    // same lexer as the rest of the C# path so that `{` / `;` inside string literals,
+    // comments, or verbatim / raw strings do not short-circuit the scan. A line cap
+    // prevents runaway scans on unterminated input. Closes #382.
+    //
+    // C# 型宣言ヘッダ（`class` / `struct` / `interface` / `enum`）の終端位置を探す。
+    // 本体開きの `{` か、primary ctor / 前方宣言の `;` を終端とする。終端行と列を
+    // 返すので、シグネチャ組立側はその直前までを連結できる。primary ctor 用の
+    // 括弧深度、型 / ジェネリック引数へのアトリビュート用の角括弧深度を追跡し、
+    // 文字列リテラル、コメント、verbatim / raw 文字列の中の `{` / `;` を
+    // 誤検出しないよう、他の C# 経路と同じ lexer を共有する。未終端入力に対する
+    // 暴走防止に行数上限を設ける。Closes #382.
+    private const int CSharpTypeHeaderLookaheadLineLimit = 64;
+
+    private static bool TryFindCSharpTypeHeaderExtent(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out int lastLineIndex,
+        out int? lastLineExclusiveEndColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        var limit = Math.Min(lines.Length, startLineIndex + CSharpTypeHeaderLookaheadLineLimit);
+        for (int i = startLineIndex; i < limit; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex ? startColumn : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                    case ';' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                }
+            }
+        }
+
+        lastLineIndex = -1;
+        lastLineExclusiveEndColumn = null;
+        return false;
+    }
+
+    // Build a multi-line C# type-header signature like BuildCSharpMultilineSignature, but
+    // strip inline `//` and `/* ... */` comments that would otherwise leak into the stored
+    // `symbols.signature` when a base list or `where` clause has a trailing or interleaved
+    // comment. Uses the shared C# lexer so comment boundaries cannot be confused by `//`
+    // or `/*` characters inside string, char, verbatim, or raw string literals. String
+    // content is preserved (primary constructor default arguments, etc.). Closes #382.
+    //
+    // BuildCSharpMultilineSignature と同じく折り返された C# 型ヘッダを連結する。ただし
+    // base リストや `where` 句に混ざる `//` / `/* ... */` コメントを除去し、保存される
+    // `symbols.signature` に漏れないようにする。`//` / `/*` が文字列リテラル・char・
+    // verbatim・raw 文字列内にある場合を誤検出しないよう共有 C# lexer を使う。文字列の
+    // 中身（primary constructor のデフォルト引数など）はそのまま保持する。Closes #382.
+    private static string BuildCSharpTypeHeaderSignature(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int lastLineIndex,
+        int? lastLineExclusiveEndColumn)
+    {
+        // Assemble the raw slice preserving '\n' between physical lines so multi-line raw
+        // and verbatim string literals keep their newlines and leading indentation. The
+        // dedicated sanitizer handles lex mode (Code / String / Verbatim / Raw / Char /
+        // LineComment / BlockComment) and interpolation holes in one pass.
+        // 物理行を跨ぐとき `\n` をそのまま入れてスライスを組み立て、multi-line raw や
+        // verbatim 文字列リテラルの改行と行頭インデントを保持する。専用サニタイザが
+        // lex モード（Code / String / Verbatim / Raw / Char / LineComment / BlockComment）
+        // と補間ホールを 1 パスで処理する。
+        var rawSlice = new StringBuilder();
+        for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
+        {
+            var line = lines[i];
+            // Content was split on '\n', so CRLF lines carry a trailing '\r'. Trim it so the
+            // inter-line separator stays '\n' regardless of source-file line endings.
+            // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。行間を
+            // 必ず '\n' に揃えるため末尾の '\r' を落とす。
+            int length = line.Length;
+            if (length > 0 && line[length - 1] == '\r')
+                length--;
+            int from = i == startLineIndex ? Math.Clamp(startColumn, 0, length) : 0;
+            int to = i == lastLineIndex && lastLineExclusiveEndColumn.HasValue
+                ? Math.Clamp(lastLineExclusiveEndColumn.Value, 0, length)
+                : length;
+            if (to < from) to = from;
+            if (i > startLineIndex)
+                rawSlice.Append('\n');
+            if (from < to)
+                rawSlice.Append(line, from, to - from);
+        }
+
+        return SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
+    }
+
+    private enum CSharpHeaderFrameKind
+    {
+        Code,
+        LineComment,
+        BlockComment,
+        String,
+        Verbatim,
+        Raw,
+        Char,
+    }
+
+    private struct CSharpHeaderFrame
+    {
+        public CSharpHeaderFrameKind Kind;
+        public bool Interpolated;   // String / Verbatim / Raw: true if $-prefixed.
+        public int DollarCount;     // Raw: number of '$' prefixes; also the '{' count needed to open a hole.
+        public int QuoteCount;      // Raw: number of '"' in the opening delimiter; same run closes the string.
+        public int HoleBraceDepth;  // Code frame inside an interpolation hole: counts nested '{' depth. 0 means next unmatched '}' exits the hole.
+        public bool EscapeNext;     // String / Char: true if a preceding backslash awaits its escaped char.
+    }
+
+    // Sanitize a C# type header slice: strip `//` line comments and `/* ... */` block
+    // comments, collapse runs of Code-mode whitespace (including '\n' between lines) to a
+    // single space, preserve all String / Verbatim / Raw / Char literal contents verbatim
+    // (including literal whitespace runs, line breaks inside raw / verbatim strings, and
+    // escape sequences), and keep interpolation holes (`$"{expr}"`, `$@"{expr}"`, raw
+    // `$"""{expr}"""` / `$$"""{{expr}}"""`) correctly classified as Code-mode content so
+    // whitespace inside holes is collapsed while literal content outside holes is not.
+    // Closes #382.
+    //
+    // C# 型ヘッダスライスのサニタイザ: `//` 行コメントと `/* ... */` ブロックコメントを
+    // 除去し、Code モードの空白列（行間の `\n` も含む）を 1 つのスペースに畳み、String /
+    // Verbatim / Raw / Char リテラルの中身（リテラル内の空白、raw / verbatim の行末改行、
+    // エスケープ列）は verbatim に残し、補間ホール（`$"{expr}"`、`$@"{expr}"`、raw
+    // `$"""{expr}"""` / `$$"""{{expr}}"""`）内部は Code モードとして分類してホール内の
+    // 空白だけを畳み、ホール外のリテラル内容は畳まないようにする。Closes #382.
+    private static string SanitizeCSharpTypeHeaderSlice(string input)
+    {
+        if (string.IsNullOrEmpty(input))
+            return string.Empty;
+
+        var output = new StringBuilder(input.Length);
+        var stack = new Stack<CSharpHeaderFrame>();
+        stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+        bool prevWasCodeSpace = false;
+        int i = 0;
+
+        while (i < input.Length)
+        {
+            var frame = stack.Peek();
+            var ch = input[i];
+            var next = i + 1 < input.Length ? input[i + 1] : '\0';
+
+            if (frame.Kind == CSharpHeaderFrameKind.LineComment)
+            {
+                // `//` swallows everything to the next '\n', which then flows through
+                // Code-mode whitespace handling as a single space. `//` は次の '\n' まで
+                // 食いつぶし、'\n' は Code モードで 1 スペースに畳まれる。
+                if (ch == '\n')
+                {
+                    stack.Pop();
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.BlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    stack.Pop();
+                    i += 2;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.String)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (frame.EscapeNext)
+                {
+                    frame.EscapeNext = false;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    frame.EscapeNext = true;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '{' && frame.Interpolated)
+                {
+                    if (next == '{')
+                    {
+                        // `{{` is a literal brace inside an interpolated string.
+                        // `{{` は補間文字列内のリテラル波括弧エスケープ。
+                        output.Append(next);
+                        i += 2;
+                        continue;
+                    }
+                    stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                    i++;
+                    continue;
+                }
+                if (ch == '}' && frame.Interpolated && next == '}')
+                {
+                    output.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Verbatim)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (ch == '"' && next == '"')
+                {
+                    // `""` is a literal '"' escape inside a verbatim string.
+                    // verbatim 文字列内の `""` はリテラル '"' エスケープ。
+                    output.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '{' && frame.Interpolated)
+                {
+                    if (next == '{')
+                    {
+                        output.Append(next);
+                        i += 2;
+                        continue;
+                    }
+                    stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                    i++;
+                    continue;
+                }
+                if (ch == '}' && frame.Interpolated && next == '}')
+                {
+                    output.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Raw)
+            {
+                // In a raw string, a hole opens on a run of '{' at least DollarCount long
+                // (for $$-prefixed raw strings, {{ is literal, only {{{ opens), and the
+                // string closes on a run of '"' at least QuoteCount long.
+                // raw 文字列では、`{` が DollarCount 個以上並んでいればホール開始、
+                // 不足するならリテラルの波括弧。`"` が QuoteCount 個以上並べば文字列終端。
+                if (ch == '{' && frame.Interpolated && frame.DollarCount > 0)
+                {
+                    int runLen = 0;
+                    while (i + runLen < input.Length && input[i + runLen] == '{')
+                        runLen++;
+                    if (runLen >= frame.DollarCount)
+                    {
+                        for (int k = 0; k < frame.DollarCount; k++)
+                            output.Append('{');
+                        i += frame.DollarCount;
+                        stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                        prevWasCodeSpace = false;
+                        continue;
+                    }
+                    for (int k = 0; k < runLen; k++)
+                        output.Append('{');
+                    i += runLen;
+                    prevWasCodeSpace = false;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    int runLen = 0;
+                    while (i + runLen < input.Length && input[i + runLen] == '"')
+                        runLen++;
+                    if (runLen >= frame.QuoteCount)
+                    {
+                        for (int k = 0; k < frame.QuoteCount; k++)
+                            output.Append('"');
+                        i += frame.QuoteCount;
+                        stack.Pop();
+                        prevWasCodeSpace = false;
+                        continue;
+                    }
+                    for (int k = 0; k < runLen; k++)
+                        output.Append('"');
+                    i += runLen;
+                    prevWasCodeSpace = false;
+                    continue;
+                }
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Char)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (frame.EscapeNext)
+                {
+                    frame.EscapeNext = false;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    frame.EscapeNext = true;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\'')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            // Code mode (root code or an open interpolation hole).
+            // Code モード（ルート コード または 開いている補間ホール）。
+            if (ch == '}' && stack.Count > 1 && frame.HoleBraceDepth == 0)
+            {
+                stack.Pop();
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+            if (ch == '{' && stack.Count > 1)
+            {
+                frame.HoleBraceDepth++;
+                stack.Pop();
+                stack.Push(frame);
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+            if (ch == '}' && stack.Count > 1)
+            {
+                frame.HoleBraceDepth--;
+                stack.Pop();
+                stack.Push(frame);
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.LineComment });
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i += 2;
+                continue;
+            }
+            if (ch == '/' && next == '*')
+            {
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.BlockComment });
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i += 2;
+                continue;
+            }
+
+            if (TryReadCSharpRawStringStart(input, i, out var rawPrefixLength, out var rawDelimiterLength))
+            {
+                int total = rawPrefixLength + rawDelimiterLength;
+                for (int k = 0; k < total && i + k < input.Length; k++)
+                    output.Append(input[i + k]);
+                stack.Push(new CSharpHeaderFrame
+                {
+                    Kind = CSharpHeaderFrameKind.Raw,
+                    Interpolated = rawPrefixLength > 0,
+                    DollarCount = rawPrefixLength,
+                    QuoteCount = rawDelimiterLength,
+                });
+                i += total;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '$' && next == '@' && i + 2 < input.Length && input[i + 2] == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                output.Append(input[i + 2]);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = true });
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '@' && next == '$' && i + 2 < input.Length && input[i + 2] == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                output.Append(input[i + 2]);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = true });
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '@' && next == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = false });
+                i += 2;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '$' && next == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.String, Interpolated = true });
+                i += 2;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '"')
+            {
+                output.Append(ch);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.String, Interpolated = false });
+                i++;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '\'')
+            {
+                output.Append(ch);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Char });
+                i++;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i++;
+                continue;
+            }
+
+            output.Append(ch);
+            prevWasCodeSpace = false;
+            i++;
+        }
+
+        return output.ToString();
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)
