@@ -264,10 +264,68 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_CjkPrefixDoesNotMatchUnrelatedCjkTokens()
+    {
+        // The CJK prefix fallback must widen only to tokens that literally start with the
+        // query codepoints. An unrelated CJK word like '検索' must not match '計算' even
+        // though both are CJK single-token runs under unicode61.
+        // CJK prefix fallback はクエリのコードポイントから始まるトークンにのみ拡張されるべき。
+        // '検索' のような無関係なCJK語は、同じくunicode61で単一トークン扱いされても '計算' にマッチしてはならない。
+        InsertIndexedFile("src/cjk_match.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_unrelated.py", "python",
+            "def 検索する(値):\n    return 値\n");
+
+        var results = _reader.Search("計算");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_match.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/cjk_unrelated.py");
+    }
+
+    [Fact]
+    public void Search_EmojiMixedTokenDoesNotOverMatchAsciiPrefixNeighbors()
+    {
+        // Regression guard: unicode61 drops emoji codepoints entirely, so promoting 'foo🎉'
+        // to prefix '"foo🎉"*' would be parsed by FTS5 as '"foo"*' and leak into unrelated
+        // ASCII neighbors like 'foobar'. The sanitizer must keep emoji-mixed tokens as
+        // exact phrases so plain ASCII files do not get dragged in.
+        // 回帰テスト: unicode61はemojiコードポイントを破棄するため、'foo🎉' を prefix 化すると
+        // FTS5上で '"foo"*' として解釈され、無関係な 'foobar' までヒットしてしまう。
+        // サニタイザはemoji混在トークンを完全一致として扱い、純ASCIIファイルを巻き込んではならない。
+        InsertIndexedFile("src/emoji_mixed.py", "python",
+            "def foo🎉():\n    return 1\n");
+        InsertIndexedFile("src/ascii_only.py", "python",
+            "def foobar():\n    return 2\n");
+
+        var results = _reader.Search("foo🎉");
+
+        Assert.DoesNotContain(results, r => r.Path == "src/ascii_only.py");
+    }
+
+    [Fact]
+    public void Search_LatinDiacriticTokenDoesNotWidenToPrefixSearch()
+    {
+        // Latin-diacritic tokens (e.g. 'naïve') are tokenized normally by unicode61,
+        // so the CJK-only prefix fallback must NOT fire. Otherwise a literal 'naïve'
+        // query would silently widen to match 'naïvety', 'naïveness', etc.
+        // Latin系ダイアクリティカル付きトークン（例: 'naïve'）はunicode61で通常トークン化されるため、
+        // CJK限定のprefix fallbackが発動してはならない。発動すると 'naïve' が 'naïvety' 等まで広がる。
+        InsertIndexedFile("src/latin_exact.py", "python",
+            "def naïve():\n    return 1\n");
+        InsertIndexedFile("src/latin_longer.py", "python",
+            "def naïvety():\n    return 2\n");
+
+        var results = _reader.Search("naïve");
+
+        Assert.Contains(results, r => r.Path == "src/latin_exact.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/latin_longer.py");
+    }
+
+    [Fact]
     public void CountSearchResults_IncludesCjkSubstringMatches()
     {
-        // Count path shares the sanitizer, so the non-ASCII prefix fallback must apply there too.
-        // カウント経路も同じサニタイザを共有するため、非ASCIIの prefix フォールバックが効く必要がある。
+        // Count path shares the sanitizer, so the CJK prefix fallback must apply there too.
+        // カウント経路も同じサニタイザを共有するため、CJKの prefix フォールバックが効く必要がある。
         InsertIndexedFile("src/cjk_count.py", "python",
             "def 計算する(値):\n    return 値\n");
 

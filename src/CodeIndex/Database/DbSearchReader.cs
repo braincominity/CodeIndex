@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -26,12 +28,21 @@ public partial class DbReader
     }
 
     /// <summary>
-    /// Build a single FTS5 phrase token. Non-ASCII tokens (CJK, emoji, etc.) get an
-    /// appended '*' prefix-match operator because FTS5's default unicode61 tokenizer
-    /// treats an entire run of non-whitespace-separated codepoints as a single token,
-    /// so a bare '計算' query would never match content containing '計算する'.
-    /// FTS5フレーズトークンを構築。FTS5既定のunicode61トークナイザはCJK/絵文字の連続を単一トークンとして扱うため、
-    /// 非ASCIIトークンには prefix match の '*' を付け、'計算' で '計算する' にマッチさせる。
+    /// Build a single FTS5 phrase token. Tokens that contain CJK script (Han, Hiragana,
+    /// Katakana, Hangul, and their fullwidth/halfwidth variants) get an appended '*'
+    /// prefix-match operator because FTS5's default unicode61 tokenizer treats a run
+    /// of adjacent CJK codepoints as a single token, so a bare '計算' query would never
+    /// match content containing '計算する'.
+    /// FTS5フレーズトークンを構築。FTS5既定のunicode61トークナイザはCJK連続を単一トークンとして扱うため、
+    /// CJK文字を含むトークンには prefix match の '*' を付け、'計算' で '計算する' にマッチさせる。
+    ///
+    /// Non-CJK non-ASCII tokens (Latin-diacritic like 'café', Greek, Cyrillic, emoji, etc.)
+    /// intentionally keep exact-phrase semantics. unicode61 tokenizes Latin-diacritic
+    /// normally, and drops symbol codepoints (emoji) entirely — promoting them to prefix
+    /// would over-widen to unrelated neighbors (e.g. 'foo🎉' → 'foo*' matching 'foobar').
+    /// CJK以外の非ASCII（Latin-diacritic、Greek、Cyrillic、emoji等）は意図的に完全一致のまま。
+    /// unicode61はLatin-diacriticを通常トークン化し、symbol系はドロップするため、prefix化は
+    /// 無関係な近傍（'foo🎉' → 'foo*'で 'foobar' まで拾う）への意味拡張になってしまう。
     /// </summary>
     private static string FormatFtsToken(string token)
     {
@@ -39,16 +50,65 @@ public partial class DbReader
         // '"phrase"*' (no space) is FTS5 prefix-phrase syntax. '"phrase" *' (with space)
         // means "phrase followed by any token", which is not what we want.
         // '"phrase"*'（スペースなし）がFTS5のprefix phrase構文。スペース有りは別意味なので付けない。
-        return ContainsNonAscii(token) ? quoted + "*" : quoted;
+        return ContainsCjk(token) ? quoted + "*" : quoted;
     }
 
-    private static bool ContainsNonAscii(string token)
+    private static bool ContainsCjk(string token)
     {
-        foreach (var c in token)
+        foreach (var rune in token.EnumerateRunes())
         {
-            if (c > 0x7F)
+            if (IsCjkScript(rune))
                 return true;
         }
+        return false;
+    }
+
+    private static bool IsCjkScript(Rune rune)
+    {
+        // Exclude symbol categories up front so emoji / pictographs / currency marks
+        // never trigger CJK prefix fallback even if they live inside CJK-adjacent blocks.
+        // シンボル系カテゴリは先に除外。emoji等がCJK隣接ブロックにあってもprefix fallbackを起こさせない。
+        var category = Rune.GetUnicodeCategory(rune);
+        if (category is UnicodeCategory.OtherSymbol
+                     or UnicodeCategory.MathSymbol
+                     or UnicodeCategory.CurrencySymbol
+                     or UnicodeCategory.ModifierSymbol)
+            return false;
+
+        var value = rune.Value;
+        // Hiragana / Katakana (including Phonetic Extensions and Katakana Phonetic Extensions)
+        // ひらがな・カタカナ（音声拡張を含む）
+        if (value >= 0x3040 && value <= 0x30FF) return true;
+        if (value >= 0x31F0 && value <= 0x31FF) return true;
+        if (value >= 0x1B000 && value <= 0x1B16F) return true;
+
+        // CJK Unified Ideographs + Extensions A-G, Compatibility Ideographs, Radicals
+        // CJK統合漢字および拡張、互換漢字、部首
+        if (value >= 0x4E00 && value <= 0x9FFF) return true;
+        if (value >= 0x3400 && value <= 0x4DBF) return true;
+        if (value >= 0x20000 && value <= 0x2A6DF) return true;
+        if (value >= 0x2A700 && value <= 0x2EBEF) return true;
+        if (value >= 0x30000 && value <= 0x3134F) return true;
+        if (value >= 0xF900 && value <= 0xFAFF) return true;
+        if (value >= 0x2F800 && value <= 0x2FA1F) return true;
+        if (value >= 0x2E80 && value <= 0x2EFF) return true;
+        if (value >= 0x2F00 && value <= 0x2FDF) return true;
+
+        // Hangul Syllables, Jamo, Jamo Extended-A/B, Compatibility Jamo
+        // ハングル音節およびJamo
+        if (value >= 0xAC00 && value <= 0xD7AF) return true;
+        if (value >= 0x1100 && value <= 0x11FF) return true;
+        if (value >= 0x3130 && value <= 0x318F) return true;
+        if (value >= 0xA960 && value <= 0xA97F) return true;
+        if (value >= 0xD7B0 && value <= 0xD7FF) return true;
+
+        // Halfwidth and Fullwidth Forms include halfwidth Katakana and fullwidth CJK punctuation,
+        // but also fullwidth Latin/digits that we do NOT want to prefix-fallback. Narrow to the
+        // halfwidth-katakana sub-range so ascii-like fullwidth forms keep exact-phrase semantics.
+        // Halfwidth/Fullwidthブロックは半角カナや全角CJK記号を含むが、全角Latin/数字まではprefix化したくない。
+        // 半角カナ部分のみ許容し、ASCII相当の全角形は完全一致のまま残す。
+        if (value >= 0xFF65 && value <= 0xFF9F) return true;
+
         return false;
     }
 
