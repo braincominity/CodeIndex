@@ -240,6 +240,69 @@ public class GitHelperTests : IDisposable
         Assert.True(GitHelper.TryIsWorktreeDirty(repoDir));
     }
 
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsTrue()
+    {
+        var repoDir = CreateGitRepo();
+        RunGit(repoDir, "config", "core.ignorecase", "true");
+
+        Assert.True(GitHelper.ResolveIgnoreCase(repoDir));
+    }
+
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsFalse()
+    {
+        var repoDir = CreateGitRepo();
+        RunGit(repoDir, "config", "core.ignorecase", "false");
+
+        Assert.False(GitHelper.ResolveIgnoreCase(repoDir));
+    }
+
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsTrue()
+    {
+        var repoDir = CreateGitRepo();
+        var subDir = Path.Combine(repoDir, "src", "module");
+        Directory.CreateDirectory(subDir);
+        RunGit(repoDir, "config", "core.ignorecase", "true");
+
+        Assert.True(GitHelper.ResolveIgnoreCase(subDir));
+    }
+
+    [Fact]
+    public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsFalse()
+    {
+        var repoDir = CreateGitRepo();
+        var subDir = Path.Combine(repoDir, "src", "module");
+        Directory.CreateDirectory(subDir);
+        RunGit(repoDir, "config", "core.ignorecase", "false");
+
+        Assert.False(GitHelper.ResolveIgnoreCase(subDir));
+    }
+
+    [Fact]
+    public void ResolveIgnoreCase_NonRepoIgnoresGlobalGitConfigAndFallsBackToFileSystemProbe()
+    {
+        var nonRepoDir = Path.Combine(_tempDir, $"non_repo_{Guid.NewGuid():N}");
+        var fakeHome = Path.Combine(_tempDir, $"fake_home_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(nonRepoDir);
+        Directory.CreateDirectory(fakeHome);
+
+        var environment = new Dictionary<string, string?>
+        {
+            ["HOME"] = fakeHome,
+            ["XDG_CONFIG_HOME"] = Path.Combine(fakeHome, ".config"),
+            ["GIT_CONFIG_NOSYSTEM"] = "1",
+        };
+
+        RunGitWithEnvironment(fakeHome, environment, "config", "--global", "core.ignorecase", "false");
+
+        var resolved = GitHelper.ResolveIgnoreCase(nonRepoDir, environment);
+        var expected = ProbeDirectoryIgnoreCaseLikeProduction(nonRepoDir);
+
+        Assert.Equal(expected, resolved);
+    }
+
     private string CreateGitRepo()
     {
         var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
@@ -253,6 +316,9 @@ public class GitHelperTests : IDisposable
     }
 
     private static string RunGit(string workDir, params string[] args)
+        => RunGitWithEnvironment(workDir, environment: null, args);
+
+    private static string RunGitWithEnvironment(string workDir, IReadOnlyDictionary<string, string?>? environment, params string[] args)
     {
         var psi = new ProcessStartInfo
         {
@@ -267,6 +333,17 @@ public class GitHelperTests : IDisposable
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
+        if (environment != null)
+        {
+            foreach (var (key, value) in environment)
+            {
+                if (value == null)
+                    psi.Environment.Remove(key);
+                else
+                    psi.Environment[key] = value;
+            }
+        }
+
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
         var stdout = process.StandardOutput.ReadToEnd();
@@ -277,6 +354,44 @@ public class GitHelperTests : IDisposable
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
 
         return stdout;
+    }
+
+    private static bool ProbeDirectoryIgnoreCaseLikeProduction(string path)
+    {
+        if (TryCreateCaseVariant(path, out var variant))
+            return Directory.Exists(variant);
+
+        var probePath = Path.Combine(path, $".cdidx_case_probe_test_{Guid.NewGuid():N}");
+        File.WriteAllText(probePath, string.Empty);
+        try
+        {
+            return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(probeVariant);
+        }
+        finally
+        {
+            if (File.Exists(probePath))
+                File.Delete(probePath);
+        }
+    }
+
+    private static bool TryCreateCaseVariant(string path, out string variant)
+    {
+        var chars = path.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            var ch = chars[i];
+            if (!char.IsLetter(ch))
+                continue;
+
+            chars[i] = char.IsUpper(ch)
+                ? char.ToLowerInvariant(ch)
+                : char.ToUpperInvariant(ch);
+            variant = new string(chars);
+            return true;
+        }
+
+        variant = path;
+        return false;
     }
 
     private static void DeleteDirectoryRobust(string path)
