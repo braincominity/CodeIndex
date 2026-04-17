@@ -183,15 +183,39 @@ public partial class McpServer
         return arr;
     }
 
-    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported)
+    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported, string? graphSupportReason = null, string? unsupportedSymbolKind = null)
     {
         if (count > 0)
             return $"Found {count} {label}.";
+
+        if (string.Equals(unsupportedSymbolKind, "enum_member", StringComparison.Ordinal))
+            return $"No {label} found. C# enum-member access edges are not indexed yet.";
 
         if (graphSupported == false && lang != null)
             return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
 
         return $"No {label} found.";
+    }
+
+    private static (string? GraphLanguage, bool? GraphSupported, string? GraphSupportReason, string? UnsupportedSymbolKind, bool GraphDegraded)
+        ResolveExactEnumMemberGraphSupport(DbReader reader, bool exact, string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string> excludePaths, bool excludeTests)
+    {
+        var unsupportedKinds = exact
+            ? reader.GetUnsupportedExactGraphSymbolKinds(query, lang, pathPatterns, excludePaths, excludeTests)
+            : [];
+        var hasEnumMemberGap = unsupportedKinds.Contains("enum_member");
+        bool? graphSupported = hasEnumMemberGap
+            ? false
+            : lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+        var graphSupportReason = hasEnumMemberGap
+            ? ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
+            : ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
+        return (
+            GraphLanguage: hasEnumMemberGap ? "csharp" : lang,
+            GraphSupported: graphSupported,
+            GraphSupportReason: graphSupportReason,
+            UnsupportedSymbolKind: hasEnumMemberGap ? "enum_member" : null,
+            GraphDegraded: hasEnumMemberGap);
     }
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
@@ -454,16 +478,7 @@ public partial class McpServer
                 () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
-            var unsupportedKinds = exact
-                ? reader.GetUnsupportedExactGraphSymbolKinds(query, lang, pathPatterns, excludePaths, excludeTests)
-                : [];
-            var hasEnumMemberGap = unsupportedKinds.Contains("enum_member");
-            bool? graphSupported = hasEnumMemberGap
-                ? false
-                : lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
-            var graphSupportReason = hasEnumMemberGap
-                ? ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
-                : ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
+            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -472,13 +487,13 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = hasEnumMemberGap ? "csharp" : lang,
-                ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = graphSupportReason,
+                ["graphLanguage"] = graphSupport.GraphLanguage,
+                ["graphSupported"] = graphSupport.GraphSupported,
+                ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            if (hasEnumMemberGap)
+            if (graphSupport.GraphDegraded)
             {
                 payload["graphDegraded"] = true;
                 payload["unsupportedSymbolKind"] = "enum_member";
@@ -491,7 +506,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("references", results.Count, lang, graphSupported),
+                BuildGraphSummary("references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
                 payload);
         });
     }
@@ -523,7 +538,7 @@ public partial class McpServer
                 () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CalleeName);
-            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -531,12 +546,17 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = lang,
-                ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
+                ["graphLanguage"] = graphSupport.GraphLanguage,
+                ["graphSupported"] = graphSupport.GraphSupported,
+                ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (graphSupport.GraphDegraded)
+            {
+                payload["graphDegraded"] = true;
+                payload["unsupportedSymbolKind"] = "enum_member";
+            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -545,7 +565,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callers", results.Count, lang, graphSupported),
+                BuildGraphSummary("callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
                 payload);
         });
     }
@@ -577,7 +597,7 @@ public partial class McpServer
                 () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CallerName);
-            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -585,12 +605,17 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = lang,
-                ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
+                ["graphLanguage"] = graphSupport.GraphLanguage,
+                ["graphSupported"] = graphSupport.GraphSupported,
+                ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (graphSupport.GraphDegraded)
+            {
+                payload["graphDegraded"] = true;
+                payload["unsupportedSymbolKind"] = "enum_member";
+            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -599,7 +624,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callees", results.Count, lang, graphSupported),
+                BuildGraphSummary("callees", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
                 payload);
         });
     }

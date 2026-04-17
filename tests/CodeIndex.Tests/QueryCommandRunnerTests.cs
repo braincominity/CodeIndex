@@ -4927,6 +4927,100 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_ExactJson_CSharpEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_enum_member_gap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Nested
+                {
+                    A = 1,
+                    B = A
+                }
+
+                public class UsesEnum
+                {
+                    public Nested Value => Nested.A;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_ExactJson_CSharpEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_enum_member_gap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Nested
+                {
+                    A = 1,
+                    B = A
+                }
+
+                public class UsesEnum
+                {
+                    public Nested Value => Nested.A;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ExactJson_MixedCSharpEnumMemberHitsStillMarkGraphAsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_mixed_enum_member_bundle");

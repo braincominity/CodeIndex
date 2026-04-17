@@ -419,6 +419,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
+            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             if (options.CountOnly)
             {
                 var counts = reader.CountCallersTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
@@ -432,11 +433,11 @@ public static class QueryCommandRunner
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, graphSupportOverride);
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, graphSupportOverride: graphSupportOverride);
                 return CommandExitCodes.Success;
             }
 
@@ -452,12 +453,22 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "callers", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
+                    WriteDegradedGraphZeroResult(
+                        reader,
+                        "callers",
+                        json: true,
+                        graphAvailable: false,
+                        jsonOptions,
+                        exact ? exactSignal : (ExactQuerySignal?)null,
+                        payload => AddGraphSupportOverrideFields(payload, graphSupportOverride));
+                else if (options.Json && graphSupportOverride != null)
+                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: true, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -517,6 +528,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
+            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             if (options.CountOnly)
             {
                 var counts = reader.CountCalleesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
@@ -530,11 +542,11 @@ public static class QueryCommandRunner
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, graphSupportOverride);
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, graphSupportOverride: graphSupportOverride);
                 return CommandExitCodes.Success;
             }
 
@@ -550,12 +562,22 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "callees", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
+                    WriteDegradedGraphZeroResult(
+                        reader,
+                        "callees",
+                        json: true,
+                        graphAvailable: false,
+                        jsonOptions,
+                        exact ? exactSignal : (ExactQuerySignal?)null,
+                        payload => AddGraphSupportOverrideFields(payload, graphSupportOverride));
+                else if (options.Json && graphSupportOverride != null)
+                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: true, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callees", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }

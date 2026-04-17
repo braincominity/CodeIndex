@@ -777,6 +777,36 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_ExactEnumMember_UsesSymbolKindGapSummary()
+    {
+        InsertIndexedFile("src/colors.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red,
+                Green
+            }
+
+            public class UsesColor
+            {
+                public Color Shade => Color.Red;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Red","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("No references found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_ReturnsCallerSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -787,6 +817,38 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Nested
+            {
+                A = 1,
+                B = A
+            }
+
+            public class UsesEnum
+            {
+                public Nested Value => Nested.A;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"A","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("No callers found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -811,6 +873,38 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Nested
+            {
+                A = 1,
+                B = A
+            }
+
+            public class UsesEnum
+            {
+                public Nested Value => Nested.A;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"A","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("No callees found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
