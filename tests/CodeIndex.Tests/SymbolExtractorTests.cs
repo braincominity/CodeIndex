@@ -4365,6 +4365,7 @@ public class SymbolExtractorTests
                 public (int, int)[] Fp => new (int, int)[0];
                 public (int, int)[] this[int index] => Ap;
                 (int, int)? ICoord.MaybeFind(string key) => null;
+                (int, int)[] ICoord.FindAll(string key) => System.Array.Empty<(int, int)>();
                 public (int, int) Plain() => (0, 0);
                 public (int, int) PlainProp { get; set; }
             }
@@ -4410,6 +4411,9 @@ public class SymbolExtractorTests
 
         var maybeFindImpl = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MaybeFind" && s.ContainerName == "Svc"));
         Assert.Equal("(int, int)?", maybeFindImpl.ReturnType);
+
+        var findAllImpl = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "FindAll" && s.ContainerName == "Svc"));
+        Assert.Equal("(int, int)[]", findAllImpl.ReturnType);
 
         // Regression: plain tuple without a suffix still captured.
         // 回帰: サフィックスなしの素の tuple も引き続き捕捉される。
