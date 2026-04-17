@@ -4202,6 +4202,17 @@ public static class SymbolExtractor
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
+        // Track () and [] depth so `{` / `}` inside annotation arguments, function-default lambdas,
+        // and similar paren/bracket-delimited contexts do not advance the body brace counter.
+        // Without this, Java headers like `class Leaf extends @Ann({A.class, B.class}) Root {`
+        // count the annotation-arg `{A.class, B.class}` as the body open/close pair, flip
+        // `opened=true` on the inner `{`, close depth to 0 on the inner `}`, and return a 1-line
+        // body range that stops before the real class body opens. Subsequent ctor-chain emission
+        // then loses the enclosing type, silently dropping `super(...)` edges for annotated Java
+        // hierarchies. Same issue applies to Kotlin / Scala default-argument lambdas inside `()`.
+        // アノテーション引数内の `{` / `}` を本物の本体ブレースと誤認しないよう `(` / `[` 深度を追う。
+        int parenDepth = 0;
+        int bracketDepth = 0;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -4213,8 +4224,18 @@ public static class SymbolExtractor
 
             foreach (var c in scanLine)
             {
-                if (c == '{')
+                if (c == '(')
+                    parenDepth++;
+                else if (c == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (c == '[')
+                    bracketDepth++;
+                else if (c == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (c == '{')
                 {
+                    if (parenDepth > 0 || bracketDepth > 0)
+                        continue;
                     depth++;
                     if (!opened)
                     {
@@ -4224,6 +4245,8 @@ public static class SymbolExtractor
                 }
                 else if (c == '}' && opened)
                 {
+                    if (parenDepth > 0 || bracketDepth > 0)
+                        continue;
                     depth--;
                     if (depth == 0)
                         return (i + 1, bodyStartLine, i + 1);

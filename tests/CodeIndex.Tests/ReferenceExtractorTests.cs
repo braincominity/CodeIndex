@@ -2473,6 +2473,68 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaSuperChain_BraceAnnotationArgExtends_AttributesSuperEdgeEndToEnd()
+    {
+        // End-to-end regression for Java type-use annotated `extends` whose annotation argument
+        // itself contains `{...}`, e.g. `extends @Ann({A.class, B.class}) Root`. Before the fix
+        // the SymbolExtractor brace range for `class Leaf` stopped at the annotation-arg `}`
+        // because it did not skip `{` / `}` inside `()`, so `FindInnermostClassLike` could not
+        // recover the enclosing type for the `super(0)` line, and the chain edge was dropped.
+        // ParseJavaBaseType alone already resolves the correct base type (locked in
+        // CollectCSharpRecordHeader_MultiLineExtendsWithBraceAnnotationArg_CollectsThroughRealBase),
+        // so this test locks the extractor-level body range fix so that the full
+        // `super(...)` → enclosing class → base type chain makes it into the reference stream.
+        // annotation 引数内に `{...}` を含む Java `extends` の E2E 回帰。修正前は SymbolExtractor の
+        // brace range が annotation 引数の `}` で閉じてしまい、`super(0)` の外側型が見つからず
+        // 連鎖エッジが完全に落ちていた。本テストは body-range fix を E2E で固定する。
+        const string content = """
+            package demo;
+
+            @interface Ann {
+                Class<?>[] value() default {};
+            }
+
+            class A {}
+            class B {}
+
+            class Root {
+                Root(int value) {}
+            }
+
+            class Leaf extends @Ann({A.class, B.class}) Root {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        // SymbolExtractor regression: the `class Leaf` symbol must span through the real class
+        // body, not collapse onto the declaration line because of the annotation-arg braces.
+        // Without this, the downstream `FindInnermostClassLike` lookup at the super(0) line
+        // returns null and the chain edge is silently dropped.
+        // `class Leaf` の body 範囲が annotation 引数内の `{}` によって 1 行に潰れないことを固定。
+        var leafClass = Assert.Single(symbols, s =>
+            s.Kind == "class" && s.Name == "Leaf");
+        Assert.NotNull(leafClass.BodyStartLine);
+        Assert.NotNull(leafClass.BodyEndLine);
+        Assert.True(leafClass.BodyEndLine!.Value >= 16,
+            $"Leaf class body_end_line must cover the super(0) line, got {leafClass.BodyEndLine}.");
+
+        // The super(0) edge must attribute to `Root` (the real base), with the function-kind
+        // container pointing at the Leaf constructor — not a phantom annotated name, and not
+        // dropped entirely. This is the edge codex round 8 flagged as silently lost.
+        // `super(0)` の連鎖エッジが `Root` に対して Leaf コンストラクタから張られることを E2E で固定。
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf" && r.Line == 16);
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("@"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
     public void CollectCSharpRecordHeader_MultiLineExtendsWithBraceAnnotationArg_CollectsThroughRealBase()
     {
         // Depth-aware header collector regression. Before the fix the collector terminated at
@@ -2480,11 +2542,9 @@ public class ReferenceExtractorTests
         // `@Ann({A.class, B.class})` truncated the header before `Root`. ParseJavaBaseType and
         // the C# record primary-ctor container synthesis both feed off this helper, so any
         // multi-line Java `extends` or C# record base-list that carries a brace-containing
-        // annotation argument must still reach the real base type. (End-to-end super(...)
-        // attribution is currently blocked upstream by SymbolExtractor not computing the right
-        // class body range for Java headers with brace-containing annotation arguments; this is
-        // a pre-existing extractor limitation unrelated to #257, so the regression is locked at
-        // the helper boundary until the extractor can see the full class body.)
+        // annotation argument must still reach the real base type. An end-to-end regression
+        // covering the same brace-annotation shape now lives in
+        // Extract_JavaSuperChain_BraceAnnotationArgExtends_AttributesSuperEdgeEndToEnd.
         // annotation 引数内の `{}` をヘッダ終端と誤認しない depth-aware 収集を直接検証する。
         // ParseJavaBaseType と record primary-ctor container synthesis の両方が依存する。
         var structuralLines = new[]
