@@ -131,6 +131,34 @@ public static class ReferenceExtractor
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
+    // C# compile-time type/member references: `nameof(X.Y)`, `typeof(T)`, `sizeof(T)`, `default(T)`.
+    // Keywords are in SharedIgnoredCallNames so CallRegex skips them, but their arguments have no
+    // trailing `(` and therefore slip through. Captured here as a dedicated "type_reference" kind
+    // so callers/callees (filtered to call/instantiate) stay unaffected while references and
+    // impact see the edge. See issue #253.
+    // C# の nameof/typeof/sizeof/default は、キーワード自体が SharedIgnoredCallNames にあるため
+    // CallRegex では読み飛ばされ、引数の識別子も末尾に `(` が無いため通常経路では捕捉できない。
+    // ここで type_reference として拾い、call/instantiate で絞られる callers/callees に影響せず
+    // references と impact だけに edge を届ける。issue #253 参照。
+    private static readonly Regex CSharpTypeKeywordArgRegex = new(
+        @"(?<![\w$])(?<keyword>nameof|typeof|sizeof|default)\s*\(\s*(?<arg>[A-Za-z_][\w.]*)",
+        RegexOptions.Compiled);
+    // Java compile-time type literal: `T.class`, `T[].class`, `outer.Inner.class` etc.
+    // `.class` itself is a language keyword, but the type chain in front of it is a genuine
+    // reference. Emit each dot-segment as `type_reference`. See issue #253.
+    // Java の `T.class` は型リテラル。`.class` 自体はキーワードだが、前置の型チェーンは
+    // 正当な参照。各 dot-segment を type_reference として拾う。issue #253 参照。
+    private static readonly Regex JavaDotClassArgRegex = new(
+        @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
+        RegexOptions.Compiled);
+
+    // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
+    // Skipped from reference rows because they are language-level keywords, not indexed types.
+    // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
+    private static readonly HashSet<string> JavaPrimitiveTypeNames = new(StringComparer.Ordinal)
+    {
+        "int", "long", "short", "boolean", "byte", "char", "float", "double", "void",
+    };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -259,6 +287,26 @@ public static class ReferenceExtractor
                     AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, container);
             }
 
+            // Compile-time type/member references that CallRegex cannot see because the
+            // argument has no trailing `(` of its own. See issue #253.
+            // 末尾の `(` を持たず CallRegex では取れないコンパイル時の型/メンバ参照。issue #253 参照。
+            if (language is "csharp")
+            {
+                foreach (Match match in CSharpTypeKeywordArgRegex.Matches(preparedLine))
+                {
+                    var argGroup = match.Groups["arg"];
+                    AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
+                }
+            }
+            else if (language is "java")
+            {
+                foreach (Match match in JavaDotClassArgRegex.Matches(preparedLine))
+                {
+                    var argGroup = match.Groups["arg"];
+                    AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
+                }
+            }
+
             foreach (Match match in CallRegex.Matches(preparedLine))
             {
                 var name = match.Groups["name"].Value;
@@ -306,6 +354,64 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    /// <summary>
+    /// Emit one `type_reference` row per dot-segment of a captured argument. Columns are
+    /// computed relative to the original line so tooling can jump to the exact identifier.
+    /// 捕捉した引数の dot-segment ごとに `type_reference` 行を発行する。列位置は元の行基準で計算する。
+    /// </summary>
+    private static void AddTypeReferenceSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string arg,
+        int argStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        int offset = 0;
+        foreach (var segment in arg.Split('.'))
+        {
+            if (segment.Length == 0)
+            {
+                offset += 1; // '.' separator / ドット区切り分
+                continue;
+            }
+
+            if (!IsIgnoredTypeReferenceSegment(language, segment))
+            {
+                int column = argStartInLine + offset + 1; // 1-based / 1始まり
+                var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+                if (seen.Add(dedupeKey))
+                {
+                    references.Add(new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = segment,
+                        ReferenceKind = "type_reference",
+                        Line = lineNumber,
+                        Column = column,
+                        Context = context,
+                        ContainerKind = container?.Kind,
+                        ContainerName = container?.Name,
+                    });
+                }
+            }
+
+            offset += segment.Length + 1; // segment + '.'
+        }
+    }
+
+    private static bool IsIgnoredTypeReferenceSegment(string language, string segment)
+    {
+        if (IsIgnoredCallName(language, segment))
+            return true;
+        if (language == "java" && JavaPrimitiveTypeNames.Contains(segment))
+            return true;
+        return false;
     }
 
     private static SymbolRecord? FindInnermostContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)

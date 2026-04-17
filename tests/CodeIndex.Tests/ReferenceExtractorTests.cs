@@ -1175,4 +1175,159 @@ public class ReferenceExtractorTests
         // Comments should not produce references / コメントは参照を生成しないこと
         Assert.DoesNotContain(references, r => r.SymbolName == "fakeCall");
     }
+
+    [Fact]
+    public void Extract_CsharpNameofTypeofDefault_CapturesArgumentAsTypeReference()
+    {
+        // issue #253: nameof/typeof/sizeof/default arguments are first-class compile-time
+        // references; previously CallRegex dropped them because the argument has no `(`.
+        // issue #253: nameof/typeof/sizeof/default の引数はコンパイル時参照。従来は
+        // 末尾に `(` が無いため CallRegex で取り逃がしていた。
+        const string content = """
+            namespace Demo;
+
+            public class Target
+            {
+                public int Alpha() => 1;
+                public static int Beta() => 2;
+            }
+
+            public class Caller
+            {
+                public void Work()
+                {
+                    var n1 = nameof(Target.Alpha);
+                    var n2 = nameof(Target);
+                    var n3 = nameof(Beta);
+                    var tp = typeof(Target);
+                    Target? def = default(Target);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "Target" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(4, targetRefs.Count); // nameof(Target.Alpha), nameof(Target), typeof(Target), default(Target)
+        Assert.All(targetRefs, r => Assert.Equal("Work", r.ContainerName));
+
+        Assert.Contains(references, r => r.SymbolName == "Alpha" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Beta" && r.ReferenceKind == "type_reference");
+
+        // Keyword itself must never be emitted as a reference.
+        // キーワード自体は参照として出力されない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "nameof");
+        Assert.DoesNotContain(references, r => r.SymbolName == "typeof");
+        Assert.DoesNotContain(references, r => r.SymbolName == "default");
+    }
+
+    [Fact]
+    public void Extract_CsharpTypeof_HandlesGenericAndArrayArguments()
+    {
+        // typeof(List<int>) should capture `List`; typeof(int[]) should capture `int` — both
+        // non-dotted so only the leading segment is emitted.
+        // typeof(List<int>) は `List` を拾い、typeof(int[]) は `int` を拾う。
+        const string content = """
+            using System.Collections.Generic;
+
+            public class Caller
+            {
+                public void Work()
+                {
+                    var t1 = typeof(List<int>);
+                    var t2 = typeof(System.Collections.Generic.Dictionary<string, int>);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        // For dotted args, each segment gets its own row — preserves rename safety.
+        // ドット付き引数は segment ごとに行を出す — rename 追跡のため。
+        Assert.Contains(references, r => r.SymbolName == "System" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Collections" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Generic" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDefaultWithoutParens_IsNotCapturedAsTypeReference()
+    {
+        // `default;` alone (no parens) is a value expression, not a type reference.
+        // The regex requires `default\s*\(...\)`, so bare `default` produces nothing.
+        // `default;` 単体は値式であり型参照ではない。正規表現は `(` を必須にしている。
+        const string content = """
+            public class Caller
+            {
+                public int Work()
+                {
+                    return default;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_JavaDotClass_CapturesTypeChainAsTypeReference()
+    {
+        // issue #253: Java's `T.class` / `T[].class` are compile-time type literals that rename
+        // tools already treat as references; primitive types are skipped.
+        // issue #253: Java の `T.class` はコンパイル時型リテラル。プリミティブは除外する。
+        const string content = """
+            package demo;
+
+            public class Target {
+                public int alpha() { return 1; }
+            }
+
+            public class Caller {
+                public void work() {
+                    Class<?> t1 = Target.class;
+                    Class<?> t2 = Target[].class;
+                    Class<?> t3 = int.class;
+                    Class<?> t4 = demo.Target.class;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        // Plain `Target.class` + `Target[].class` + segment from `demo.Target.class`.
+        // `demo.Target.class` の Target + 素の Target.class + Target[].class = 3 箇所。
+        var targetRefs = references.Where(r => r.SymbolName == "Target" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(3, targetRefs.Count);
+
+        Assert.Contains(references, r => r.SymbolName == "demo" && r.ReferenceKind == "type_reference");
+        // Java primitive type must be skipped / Java プリミティブ型は除外。
+        Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_TypeReferenceSegmentColumnMatchesOriginalLine()
+    {
+        // Column positions must point to the start of each dot-segment in the original line
+        // so tooling can jump directly to the identifier.
+        // 列位置は元行の各 segment 先頭を指す必要がある。
+        const string content = "var s = nameof(Outer.Inner);";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var outer = references.Single(r => r.SymbolName == "Outer" && r.ReferenceKind == "type_reference");
+        var inner = references.Single(r => r.SymbolName == "Inner" && r.ReferenceKind == "type_reference");
+
+        // 1-based: 'O' of Outer at column 16, 'I' of Inner at column 22.
+        // 1 始まり: Outer の 'O' は 16 列目、Inner の 'I' は 22 列目。
+        Assert.Equal(16, outer.Column);
+        Assert.Equal(22, inner.Column);
+    }
 }
