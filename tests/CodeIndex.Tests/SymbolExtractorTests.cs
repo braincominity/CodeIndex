@@ -4336,6 +4336,91 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsTupleReturnTypesWithTrailingSuffix()
+    {
+        // Issue #328: tuple return types with a trailing suffix (`[]`, `?`, `[,]`, `[][]`)
+        // must not be silently dropped. The C# returnType alternation's tuple branch
+        // needs to carry a trailing `(?:\?|\[[\],\s]*\])*` loop so tuple-array and
+        // nullable-tuple members are captured on methods, properties, indexers, and
+        // explicit interface implementations.
+        // Issue #328: 末尾サフィックス（`[]` / `?` / `[,]` / `[][]`）付きの tuple 戻り値型が
+        // サイレントに落ちてはならない。C# の returnType 分岐の tuple 側に
+        // `(?:\?|\[[\],\s]*\])*` のループを持たせ、tuple-array / nullable-tuple を
+        // メソッド・プロパティ・インデクサ・明示的インターフェース実装で捕捉する。
+        var content = """
+            namespace Demo;
+
+            public class Svc
+            {
+                public (int, int)[]        A()  => new (int, int)[0];
+                public (int x, int y)[]    B()  => new (int x, int y)[0];
+                public (int, int)?         C()  => null;
+                public (int x, int y)?     D()  => null;
+                public (int, int)[][]      E()  => new (int, int)[0][];
+                public (int, int)[,]       F()  => new (int, int)[0, 0];
+                public (int, int)?[]       G()  => null!;
+                public (int, int)[]? H()         => null;
+                public (int, int)[] Ap { get; set; } = System.Array.Empty<(int, int)>();
+                public (int, int)? Np { get; set; }
+                public (int, int)[] Fp => new (int, int)[0];
+                public (int, int)[] this[int index] => Ap;
+                (int, int)? ICoord.MaybeFind(string key) => null;
+                public (int, int) Plain() => (0, 0);
+                public (int, int) PlainProp { get; set; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var a = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "A"));
+        Assert.Equal("(int, int)[]", a.ReturnType);
+
+        var b = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "B"));
+        Assert.Equal("(int x, int y)[]", b.ReturnType);
+
+        var c = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "C"));
+        Assert.Equal("(int, int)?", c.ReturnType);
+
+        var d = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "D"));
+        Assert.Equal("(int x, int y)?", d.ReturnType);
+
+        var e = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "E"));
+        Assert.Equal("(int, int)[][]", e.ReturnType);
+
+        var f = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "F"));
+        Assert.Equal("(int, int)[,]", f.ReturnType);
+
+        var g = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "G"));
+        Assert.Equal("(int, int)?[]", g.ReturnType);
+
+        var h = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "H"));
+        Assert.Equal("(int, int)[]?", h.ReturnType);
+
+        var ap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Ap"));
+        Assert.Equal("(int, int)[]", ap.ReturnType);
+
+        var np = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Np"));
+        Assert.Equal("(int, int)?", np.ReturnType);
+
+        var fp = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Fp"));
+        Assert.Equal("(int, int)[]", fp.ReturnType);
+
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item" && s.ContainerName == "Svc"));
+        Assert.Equal("(int, int)[]", indexer.ReturnType);
+
+        var maybeFindImpl = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MaybeFind" && s.ContainerName == "Svc"));
+        Assert.Equal("(int, int)?", maybeFindImpl.ReturnType);
+
+        // Regression: plain tuple without a suffix still captured.
+        // 回帰: サフィックスなしの素の tuple も引き続き捕捉される。
+        var plain = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Plain"));
+        Assert.Equal("(int, int)", plain.ReturnType);
+
+        var plainProp = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "PlainProp"));
+        Assert.Equal("(int, int)", plainProp.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedType()
     {
         // C# 11 file-scoped type / C# 11 のファイルスコープ型

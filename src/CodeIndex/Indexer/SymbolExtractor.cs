@@ -13,8 +13,19 @@ public static class SymbolExtractor
     private const string CSharpVisibilityPattern = @"protected\s+internal|private\s+protected|public|protected|internal|private";
     // Return-type character class includes `*` so pointer and function-pointer returns
     // (`int*`, `void**`, `delegate*<int, int>`, `int*[]`) are not silently dropped.
+    // The trailing `(?:\?|\[[\],\s]*\])*` loop lets a tuple group carry suffixes
+    // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`) so tuple-array and
+    // nullable-tuple return types are captured on methods, properties, indexers, delegates,
+    // events, and explicit interface implementations. The identifier branch already absorbs
+    // these characters via its char class, but keeping the suffix loop outside both branches
+    // is harmless and makes the tuple branch's responsibilities explicit.
     // 戻り値型のクラスに `*` を含め、ポインタ / 関数ポインタ戻り値型（`int*` / `void**` / `delegate*<int, int>` / `int*[]`）を取りこぼさない。
-    private const string CSharpTypePattern = @"(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)";
+    // 末尾の `(?:\?|\[[\],\s]*\])*` ループで tuple 分岐にも `[]` / `?` / `[][]` / `[,]` の
+    // サフィックスを許容し、`(int, int)[]` / `(int, int)?` のような tuple-array や
+    // nullable-tuple 戻り値をメソッド・プロパティ・インデクサ・delegate・event・明示的
+    // インターフェース実装で捕捉できるようにする。識別子側の分岐は文字クラスに `[`/`]`/`?`
+    // を既に含むため無害な冗長だが、tuple 分岐側の責務が明確になる。
+    private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)(?:\?|\[[\],\s]*\])*)";
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
