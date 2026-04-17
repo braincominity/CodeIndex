@@ -713,7 +713,7 @@ public static class SymbolExtractor
     // も accessor と結合できる。末尾 `{` を許さないと、この形が未結合のまま
     // ShouldSkipCSharpBracePropertyCandidate で弾かれてしまう。
     // Closes #233.
-    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
+    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -5494,26 +5494,21 @@ public static class SymbolExtractor
             }
 
             // Plain-field multi-line declaration: the header line holds only the type (e.g.
-            // `private Dictionary<string, int>`) and the next line finishes with the name and
-            // the `;` terminator (possibly with an initializer like `= new();`). Return the
-            // combined candidate so the field regex can match it. Without this return the old
-            // `(` break short-circuits legitimate field initializers such as `= new()`.
-            // 複数行にまたがる通常フィールド宣言: ヘッダ行が型だけ
-            // （例: `private Dictionary<string, int>`）で、次行で名前と `;` 終端まで続く
-            // （`= new();` のような初期化式を含む場合もある）形に対応する。
-            // 結合済み候補を返し、field 用 regex がそれを受けられるようにする。
-            // これを入れないと、`= new()` のような正当な初期化式が `(` break で弾かれる。
+            // `private Dictionary<string, int>`) and the continuation finishes with a
+            // top-level `;`. Track paren/bracket/brace depth so parenthesized initializers
+            // like `= new(\n    () => 42);` walk through the `(` instead of short-circuiting.
+            // 複数行にまたがる通常フィールド宣言: ヘッダ行が型だけで、継続行が
+            // トップレベルの `;` で終わる形に対応する。paren/bracket/brace の深さを
+            // 追うため、`= new(\n    () => 42);` のような括弧付き初期化式でも
+            // `(` で打ち切らず `;` まで読み進められる。
             if (openBraceLineIndex < 0
-                && normalizedCombined.TrimEnd().EndsWith(";", StringComparison.Ordinal))
+                && HasCSharpTopLevelSemicolon(normalizedCombined))
             {
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
             }
 
-            if (nextLine.StartsWith(";", StringComparison.Ordinal)
-                || openBraceLineIndex < 0 && nextLine.Contains("(", StringComparison.Ordinal))
-            {
+            if (nextLine.StartsWith(";", StringComparison.Ordinal))
                 break;
-            }
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
@@ -5950,26 +5945,112 @@ public static class SymbolExtractor
 
     private static int SkipCSharpTopLevelValue(string text, int start)
     {
-        int angle = 0, paren = 0, bracket = 0, brace = 0;
-        for (int i = start; i < text.Length; i++)
+        int paren = 0, bracket = 0, brace = 0;
+        int i = start;
+        while (i < text.Length)
         {
             var ch = text[i];
+            // Distinguish generic `<...>` brackets from comparison operators by
+            // looking ahead for a matching `>` before any char that cannot appear
+            // inside a type expression. Without this guard, `_a = x < y ? 1 : 2, _b;`
+            // inflates angle depth indefinitely and silently drops `_b`.
+            // `<...>` を比較演算子と区別するため、型表現に含まれない文字が現れる前に
+            // 対応する `>` が見つかるかを先読みする。これを入れないと
+            // `_a = x < y ? 1 : 2, _b;` のように比較演算子を含む初期化式で angle 深さが
+            // 0 に戻らず後続 declarator が静かに消える。
+            if (ch == '<')
+            {
+                if (TryMatchCSharpGenericBracket(text, i, out var genericEnd))
+                {
+                    i = genericEnd + 1;
+                    continue;
+                }
+
+                i++;
+                continue;
+            }
+
             switch (ch)
             {
-                case '<': angle++; continue;
-                case '>' when angle > 0: angle--; continue;
+                case '(': paren++; i++; continue;
+                case ')' when paren > 0: paren--; i++; continue;
+                case '[': bracket++; i++; continue;
+                case ']' when bracket > 0: bracket--; i++; continue;
+                case '{': brace++; i++; continue;
+                case '}' when brace > 0: brace--; i++; continue;
+            }
+
+            if ((ch == ',' || ch == ';') && paren == 0 && bracket == 0 && brace == 0)
+                return i;
+
+            i++;
+        }
+        return text.Length;
+    }
+
+    // Look ahead from `<` at `ltIndex` and report the position of the matching `>`
+    // if the span looks like a generic type argument list. Returns false when the
+    // span contains a character that cannot appear inside a type expression, in
+    // which case callers should treat the original `<` as a comparison operator.
+    // `<` の位置から先読みし、型引数リストに見える範囲で対応する `>` の位置を返す。
+    // 型に現れない文字が途中で出てきた時点で false を返し、呼び出し側はその `<` を
+    // 比較演算子として扱う。
+    private static bool TryMatchCSharpGenericBracket(string text, int ltIndex, out int endIndex)
+    {
+        int depth = 1;
+        for (int i = ltIndex + 1; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch == '<')
+            {
+                depth++;
+                continue;
+            }
+            if (ch == '>')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    endIndex = i;
+                    return true;
+                }
+                continue;
+            }
+            if (ch == ';' || ch == '{' || ch == '}' || ch == '=' || ch == '+' || ch == '-'
+                || ch == '/' || ch == '%' || ch == '&' || ch == '|' || ch == '!'
+                || ch == '^' || ch == '~')
+            {
+                endIndex = -1;
+                return false;
+            }
+        }
+        endIndex = -1;
+        return false;
+    }
+
+    // Return true when the accumulated field header text reaches a top-level `;`.
+    // Tracks paren/bracket/brace depth so `;` inside an initializer such as
+    // `for (; ; ) { … }` never falsely marks the declaration as complete.
+    // 累積ヘッダが paren/bracket/brace の深さ 0 にある `;` に到達したら true を返す。
+    // `for (; ; ) { … }` のような初期化式内の `;` を完了と誤認しないよう深さを追跡する。
+    private static bool HasCSharpTopLevelSemicolon(string text)
+    {
+        int paren = 0, bracket = 0, brace = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
                 case '(': paren++; continue;
                 case ')' when paren > 0: paren--; continue;
                 case '[': bracket++; continue;
                 case ']' when bracket > 0: bracket--; continue;
                 case '{': brace++; continue;
                 case '}' when brace > 0: brace--; continue;
+                case ';' when paren == 0 && bracket == 0 && brace == 0:
+                    return true;
             }
-
-            if ((ch == ',' || ch == ';') && angle == 0 && paren == 0 && bracket == 0 && brace == 0)
-                return i;
         }
-        return text.Length;
+        return false;
     }
 
     private static bool ContainsCSharpTopLevelComma(string text)

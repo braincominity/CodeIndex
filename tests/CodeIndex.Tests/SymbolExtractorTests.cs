@@ -5235,6 +5235,105 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsMultiLineFieldWithVolatileAndUnsafeModifiers()
+    {
+        // The multi-line header prefix check must accept field-only modifiers such as
+        // `volatile`, `unsafe`, and `extern`, otherwise the combined match line is
+        // never built and the declaration silently disappears from the index. Closes
+        // #298 follow-up (second codex adversarial review).
+        // multi-line ヘッダ判定は `volatile` / `unsafe` / `extern` のような field 固有の
+        // 修飾子も受け入れないと、結合済みマッチ行が作られず宣言がインデックスから
+        // 黙って消える。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "using System.Collections.Generic;",
+            "namespace Demo;",
+            "public unsafe class Edge",
+            "{",
+            "    private volatile Dictionary<string, int>",
+            "        _map;",
+            "    public unsafe delegate*<int, void>",
+            "        Callback;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_map"
+            && s.Visibility == "private"
+            && s.ReturnType == "Dictionary<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "Callback"
+            && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsMultiLineFieldWithParenthesizedInitializer()
+    {
+        // Multi-line fields whose initializer uses a constructor call or parenthesized
+        // expression (`= new(\n    …);`) — including bodies that contain a lambda —
+        // must still walk through the `(` and merge until the top-level `;`. Without
+        // the depth-aware terminator, the earlier `(` break dropped the symbol.
+        // Closes #298 follow-up (second codex adversarial review).
+        // 複数行フィールドの初期化式がコンストラクタ呼び出しや括弧付き式
+        // （`= new(\n    …);`、ラムダを含む場合も）であっても、`(` で打ち切らず
+        // トップレベル `;` まで結合する。深さ追跡なしの `(` break ではシンボルが
+        // 消えていた。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "using System;",
+            "namespace Demo;",
+            "public class Lazies",
+            "{",
+            "    private Lazy<int>",
+            "        _value = new(",
+            "            () => 42);",
+            "    private Lazy<int>",
+            "        _plain = new(",
+            "            42);",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_value"
+            && s.Visibility == "private"
+            && s.ReturnType == "Lazy<int>");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_plain"
+            && s.Visibility == "private"
+            && s.ReturnType == "Lazy<int>");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DeclaratorListSurvivesComparisonInitializer()
+    {
+        // Declarator tail scanning must distinguish generic `<`/`>` from the comparison
+        // operators inside initializers. Without a token-aware lookahead, expressions
+        // like `_a = x < y ? 1 : 2, _b;` inflate the angle depth forever and drop the
+        // trailing declarators. Closes #298 follow-up (second codex adversarial review).
+        // declarator tail 走査は、初期化式内の比較演算子と generic の `<`/`>` を区別する
+        // 必要がある。先読みなしでは `_a = x < y ? 1 : 2, _b;` のような初期化式で
+        // angle 深さが 0 に戻らず、後続 declarator が消える。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "public class Compare",
+            "{",
+            "    private int x = 1, y = 2;",
+            "    private int _a = x < y ? 1 : 2, _b;",
+            "    private int _c = x > y ? 3 : 4, _d;",
+            "    private int _e = new System.Collections.Generic.Dictionary<int, int>() { [x < y ? 1 : 2] = 0 }.Count, _f;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_a" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_b" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_c" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_d" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_e" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_f" && s.ReturnType == "int" && s.Visibility == "private");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsDeclaratorListFields()
     {
         // `private int _x, _y;` must emit one `property` symbol per declarator. The
