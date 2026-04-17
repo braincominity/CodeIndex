@@ -315,20 +315,35 @@ public static class ReferenceExtractor
                 ? namesOnLine
                 : null;
             var container = FindInnermostContainer(containerCandidates, lineNumber);
-            foreach (var (rangeStart, rangeEnd, syntheticRecordCtor) in recordPrimaryCtorRanges)
+
+            // Per-call-site record primary-ctor override: only calls whose column sits inside the
+            // record header (not in a braced body on the same line) should land on the synthetic
+            // ctor. Overriding `container` for the whole line would steal body-level calls such as
+            // `record Child(int V) : Parent(V) { public int Sum() => Add(V, 1); }` where `Add(...)`
+            // lives past the header-terminating `{` and must stay with its real innermost container.
+            // 同一行 record で `{` より後ろの本体呼び出しまで合成 ctor に奪われないよう、コール単位で
+            // ヘッダ範囲（end line の end column より前）に入っているかを判定して差し替える。
+            SymbolRecord ResolveContainerForCall(int column)
             {
-                if (lineNumber >= rangeStart && lineNumber <= rangeEnd)
+                foreach (var (rangeStart, rangeEnd, rangeEndColumn, syntheticRecordCtor) in recordPrimaryCtorRanges)
                 {
-                    container = syntheticRecordCtor;
-                    break;
+                    if (lineNumber < rangeStart || lineNumber > rangeEnd)
+                        continue;
+                    if (lineNumber == rangeEnd && column >= rangeEndColumn)
+                        continue;
+                    return syntheticRecordCtor;
                 }
+                return container!;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
             if (language is "csharp")
             {
                 foreach (Match match in EventSubscriptionRegex.Matches(preparedLine))
-                    AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, container);
+                {
+                    var eventContainer = ResolveContainerForCall(match.Groups["name"].Index);
+                    AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, eventContainer);
+                }
             }
 
             // Constructor chain-call rewrites: C# `: this(...)` / `: base(...)` and Java `this(...)` / `super(...)`
@@ -349,9 +364,10 @@ public static class ReferenceExtractor
             foreach (Match match in CallRegex.Matches(preparedLine))
             {
                 var name = match.Groups["name"].Value;
+                var callContainer = ResolveContainerForCall(match.Groups["name"].Index);
                 if (IsConstructorCallName(language, preparedLine, match.Groups["name"].Index))
                 {
-                    AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, container);
+                    AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, callContainer);
                     continue;
                 }
                 if (IsIgnoredCallName(language, name))
@@ -359,7 +375,7 @@ public static class ReferenceExtractor
                 if (definitionNames != null && definitionNames.Contains(name))
                     continue;
 
-                AddReference(references, seen, fileId, match, "call", context, lineNumber, container);
+                AddReference(references, seen, fileId, match, "call", context, lineNumber, callContainer);
             }
         }
 
@@ -476,7 +492,7 @@ public static class ReferenceExtractor
                 // `base(...)` は外側クラスのシグネチャから基底型を解析する必要がある。
                 // SymbolRecord.Signature は宣言 1 行目しか持たないので複数行 base-list が欠落する。
                 // structuralLines から最初の `;` / `{` までを連結し直して渡す。
-                var (_, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
+                var (_, _, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
                 target = ParseCSharpBaseType(headerText);
                 if (string.IsNullOrWhiteSpace(target))
                     target = ParseCSharpBaseType(enclosingType.Signature);
@@ -565,7 +581,7 @@ public static class ReferenceExtractor
             // Java の base-list も複数行にまたがる (`class Leaf\n    extends Base`)。
             // SymbolRecord.Signature は 1 行目しか持たないため、structural lines からヘッダを
             // 再構築する (C# 用ヘルパーを流用。`;` / `{` 終端は Java にも適用可)。
-            var (_, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
+            var (_, _, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
             target = ParseJavaBaseType(headerText);
             if (string.IsNullOrWhiteSpace(target))
                 target = ParseJavaBaseType(enclosingType.Signature);
@@ -901,12 +917,12 @@ public static class ReferenceExtractor
     /// 上書きするための (start, end, container) リストを作る。multi-line 宣言でも `Parent(...)` が
     /// header 末尾にあれば拾える。
     /// </summary>
-    private static List<(int StartLine, int EndLine, SymbolRecord Container)> BuildCSharpRecordPrimaryCtorContainers(
+    private static List<(int StartLine, int EndLine, int EndColumn, SymbolRecord Container)> BuildCSharpRecordPrimaryCtorContainers(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines)
     {
-        var ranges = new List<(int, int, SymbolRecord)>();
+        var ranges = new List<(int, int, int, SymbolRecord)>();
         if (language != "csharp")
             return ranges;
 
@@ -926,7 +942,7 @@ public static class ReferenceExtractor
             // 宣言の signature は 1 行目だけしか持たないので、`record` と `(` を別行に分ける
             // 改行スタイルでは先頭行 regex の前段フィルタが空振りする。ここでは structuralLines
             // から `;` / `{` までヘッダーを連結し、連結後のテキストで record 判定を行う。
-            var (headerEndLine, headerText) = CollectCSharpRecordHeader(structuralLines, symbol.StartLine);
+            var (headerEndLine, headerEndColumn, headerText) = CollectCSharpRecordHeader(structuralLines, symbol.StartLine);
             if (!IsCSharpRecordPrimaryCtorHeader(headerText))
                 continue;
             if (!HasCSharpRecordBasePrimaryCtorCall(headerText))
@@ -950,7 +966,7 @@ public static class ReferenceExtractor
                 Visibility = symbol.Visibility,
             };
 
-            ranges.Add((symbol.StartLine, headerEndLine, synthetic));
+            ranges.Add((symbol.StartLine, headerEndLine, headerEndColumn, synthetic));
         }
 
         return ranges;
@@ -965,17 +981,21 @@ public static class ReferenceExtractor
     /// structuralLines を使って、class / struct / record 宣言ヘッダーを最初の `;` / `{` まで連結する。
     /// record primary-ctor のコンテナ合成と、複数行 `: base(...)` 解決の両方で使う。
     /// </summary>
-    internal static (int EndLine, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
+    internal static (int EndLine, int EndColumn, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
     {
         var startIdx = Math.Max(0, startLine - 1);
         if (structuralLines.Length == 0)
-            return (startLine, string.Empty);
+            return (startLine, int.MaxValue, string.Empty);
 
         // Depth-aware termination so that `{` / `;` inside annotation arg lists (e.g. the `{` in
         // `@Ann({A.class, B.class})`), parentheses, or angle brackets does not cut the header
         // off before the real base-list terminator, which would silently drop the base type.
+        // EndColumn tracks the column index of the top-level terminator on the end line, or
+        // int.MaxValue when no terminator was found (end-of-file), so call-site-scoped container
+        // overrides can restrict themselves to the header portion of the end line.
         // アノテーション引数の `{` などを本当のヘッダ終端と誤認しないよう、`()` / `[]` / `<>`
         // の深さを追いながら最初の top-level `;` / `{` でのみ終了する。
+        // EndColumn は end line 上の終端 `;` / `{` の位置を返す（終端が無ければ int.MaxValue）。
         var sb = new System.Text.StringBuilder();
         int parenDepth = 0;
         int bracketDepth = 0;
@@ -1003,14 +1023,14 @@ public static class ReferenceExtractor
             if (terminatorIdx >= 0)
             {
                 sb.Append(line, 0, terminatorIdx);
-                return (i + 1, sb.ToString());
+                return (i + 1, terminatorIdx, sb.ToString());
             }
 
             sb.Append(line);
             sb.Append('\n');
         }
 
-        return (structuralLines.Length, sb.ToString());
+        return (structuralLines.Length, int.MaxValue, sb.ToString());
     }
 
     /// <summary>
@@ -1053,7 +1073,39 @@ public static class ReferenceExtractor
             baseList = baseList.Substring(0, whereMatch.Index);
 
         var firstEntry = TakeFirstBaseEntry(baseList).Trim();
-        return firstEntry.Contains('(');
+        // Only count a `(` that sits at generic / bracket depth 0 — a primary-ctor base call
+        // always puts its argument list directly after the bare type name, whereas generic args
+        // and array ranks can legally contain `(` (tuple syntax `<(int, int)>`, function types
+        // `<Func<(int, int)>>`, or attribute arg brackets). A naive `.Contains('(')` would treat
+        // those as primary-ctor calls and synthesize a phantom record ctor container.
+        // 先頭エントリのうち generic/bracket 深度 0 の `(` だけを primary-ctor 呼び出し扱いにする。
+        // `IBox<(int, int)>` のような tuple を含む interface 実装を連鎖呼び出しと誤認させない。
+        int angleDepth = 0;
+        int squareDepth = 0;
+        for (int i = 0; i < firstEntry.Length; i++)
+        {
+            var c = firstEntry[i];
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '(':
+                    if (angleDepth == 0 && squareDepth == 0)
+                        return true;
+                    break;
+            }
+        }
+        return false;
     }
 
     /// <summary>

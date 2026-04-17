@@ -1337,6 +1337,75 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpRecordChain_SameLineBracedBody_DoesNotStealBodyCallsForSyntheticCtor()
+    {
+        // Legal same-line braced record where the header, base call, and a body method all live
+        // on one line: `record Child(int V) : Parent(V) { public int Sum() => Add(V, 1); }`.
+        // The synthetic function-kind container must cover only the header portion of that line
+        // (before `{`), not the body. Overriding the whole line would steal `Add(...)` from its
+        // real inner container and misattribute it to the synthetic record ctor in callers/impact.
+        // 同一行 record 内の `{` より後ろの本体呼び出しが合成 ctor に奪われないことを固定する。
+        const string content = """
+            namespace Demo;
+
+            public record Parent(int Value);
+
+            public record Child(int Value) : Parent(Value) { public int Sum() => Add(Value, 1); }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
+        Assert.Equal("call", parentRef.ReferenceKind);
+        Assert.Equal("function", parentRef.ContainerKind);
+        Assert.Equal("Child", parentRef.ContainerName);
+
+        // Add(...) sits past the header-terminating `{`, so the synthetic record ctor must NOT
+        // claim it. The exact inner container depends on whether SymbolExtractor produces a Sum
+        // symbol for this layout, but in any case the call must not be attributed to a
+        // `function` kind container named `Child` (that would be the synthetic record ctor).
+        // `Add(...)` が synthetic record ctor に奪われていないことだけを固定（inner 側の
+        // 具体的な container は extractor の挙動に依存するため深追いしない）。
+        var addRef = Assert.Single(references, r => r.SymbolName == "Add");
+        Assert.False(
+            addRef.ContainerKind == "function" && addRef.ContainerName == "Child",
+            $"Add(...) was incorrectly attributed to the synthetic record ctor (container_kind={addRef.ContainerKind}, container_name={addRef.ContainerName}).");
+    }
+
+    [Fact]
+    public void Extract_CsharpRecord_TupleGenericInterfaceBase_DoesNotSynthesizeRecordCtor()
+    {
+        // Interface implementations that use tuple generic type args (e.g. `IBox<(int, int)>`)
+        // contain `(` at generic depth 1, not at depth 0 as a primary-ctor call would. The record
+        // primary-ctor detector must treat this as a non-chain base list and avoid synthesizing a
+        // phantom record-ctor container; otherwise unrelated header calls would be attributed to
+        // a fake function-kind `Pair` caller. The body call `Multiply(A, B)` inside `Combine`
+        // must therefore stay attributed to `Combine`, not to a synthetic record ctor.
+        // tuple を含む interface 実装が primary-ctor 呼び出しと誤判定されて合成 ctor が立たないよう固定。
+        const string content = """
+            namespace Demo;
+
+            public interface IBox<T> { }
+
+            public record Pair(int A, int B) : IBox<(int Left, int Right)>
+            {
+                public int Combine() => Multiply(A, B);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // Multiply must stay attributed to `Combine`, not to a synthetic record ctor.
+        var multiplyRef = Assert.Single(references, r => r.SymbolName == "Multiply");
+        Assert.Equal("call", multiplyRef.ReferenceKind);
+        Assert.False(
+            multiplyRef.ContainerKind == "function" && multiplyRef.ContainerName == "Pair",
+            $"Multiply(...) was incorrectly attributed to a synthetic record ctor (container_kind={multiplyRef.ContainerKind}, container_name={multiplyRef.ContainerName}).");
+    }
+
+    [Fact]
     public void Extract_CsharpRecordChain_SplitLinePrimaryCtorAndBaseCall_AttributesToSyntheticRecordCtor()
     {
         // Legal C# formatter style where the primary-ctor parens and `: Parent(...)` are split
@@ -2269,14 +2338,20 @@ public class ReferenceExtractorTests
             "}",
         };
 
-        var (endLine, text) = ReferenceExtractor.CollectCSharpRecordHeader(structuralLines, startLine: 1);
+        var (endLine, endColumn, text) = ReferenceExtractor.CollectCSharpRecordHeader(structuralLines, startLine: 1);
 
         // Header must reach `Root` (the real base), which means the collector treated the inner
         // `{` as nested rather than the body opener. The terminator `{` is the one right after
-        // `Root`, so endLine points at the second structural line and text ends with `Root `.
+        // `Root`, so endLine points at the second structural line, endColumn points at that `{`,
+        // and text ends with `Root `.
         Assert.Equal(2, endLine);
         Assert.Contains("Root", text);
         Assert.EndsWith("Root ", text);
+        // The terminator `{` sits at the very end of `    extends @Ann({A.class, B.class}) Root {`
+        // (the outer `{` after `Root `). Use the structural line length minus 1 to stay agnostic
+        // to exact column math while still asserting the column points at that `{`.
+        Assert.Equal(structuralLines[1].Length - 1, endColumn);
+        Assert.Equal('{', structuralLines[1][endColumn]);
 
         // ParseJavaBaseType on the collected header must also resolve to `Root`, not a phantom
         // annotated segment. This is the downstream path that super(...) attribution uses.
