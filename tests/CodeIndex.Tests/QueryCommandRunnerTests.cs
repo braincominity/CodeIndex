@@ -2649,6 +2649,67 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameStaleCSharpCanonicalNamesReportDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_stale");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Money.cs",
+                "csharp",
+                """
+                public struct Money
+                {
+                    public Money(decimal amount) { }
+                    public static explicit operator Money(decimal d) => new();
+                    public int this[int index] => index;
+                }
+                """);
+
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countJson.GetProperty("count").GetInt32());
+            Assert.False(countJson.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("csharp_symbol_name_ready=false", countJson.GetProperty("degraded_reason").GetString());
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No symbols found.", stderr);
+            Assert.Contains("WARN: --exact symbol query may return false negatives", stderr);
+            Assert.Contains("csharp_symbol_name_ready=false", stderr);
+            Assert.Contains(Path.GetFullPath(projectRoot), stderr);
+            Assert.Contains(Path.GetFullPath(dbPath), stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_WithPropertyTargetWhitespaceInlineAttribute_ClassifiesPropertyAsReflectionSuspect()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_property_target_inline_attr");

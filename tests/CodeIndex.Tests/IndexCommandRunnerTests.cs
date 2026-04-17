@@ -2194,6 +2194,9 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
             Assert.Contains("WARN    : C# exact-name for operators / conversion operators / indexers is degraded.", output);
+            Assert.Contains("--db", output);
+            Assert.Contains(Path.GetFullPath(projectRoot), output);
+            Assert.Contains(Path.GetFullPath(dbPath), output);
         }
         finally
         {
