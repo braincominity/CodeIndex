@@ -3820,6 +3820,14 @@ public class SymbolExtractorTests
                 ref int IRefBox.GetRef() => ref _value;
                 ref readonly int IRefBox.GetRefReadonly() => ref _value;
             }
+
+            public struct RefReadonlyMembers
+            {
+                private static int _value;
+
+                public readonly ref readonly int PropReadonly => ref _value;
+                public readonly ref readonly int this[int index] => ref _value;
+            }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
@@ -3827,9 +3835,17 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RefReadonlyReturn" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRef" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRefRo" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropReadonly" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetRef" && s.ContainerName == "RefBox" && s.ReturnType == "ref int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetRefReadonly" && s.ContainerName == "RefBox" && s.ReturnType == "ref readonly int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.Signature != null && s.Signature.Contains("public readonly ref readonly int this[int index]"));
+
+        var explicitGetRef = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetRef" && s.ContainerName == "RefBox"));
+        Assert.Equal("int", explicitGetRef.ReturnType);
+        Assert.Contains("ref int IRefBox.GetRef()", explicitGetRef.Signature);
+
+        var explicitGetRefReadonly = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetRefReadonly" && s.ContainerName == "RefBox"));
+        Assert.Equal("int", explicitGetRefReadonly.ReturnType);
+        Assert.Contains("ref readonly int IRefBox.GetRefReadonly()", explicitGetRefReadonly.Signature);
     }
 
     [Fact]
