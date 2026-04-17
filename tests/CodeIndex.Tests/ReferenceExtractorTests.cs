@@ -832,4 +832,227 @@ public class ReferenceExtractorTests
         // Comments should not produce references / コメントは参照を生成しないこと
         Assert.DoesNotContain(references, r => r.SymbolName == "fakeCall");
     }
+
+    [Fact]
+    public void Extract_CsharpCtorChainThis_RewritesToEnclosingClass()
+    {
+        const string content = """
+            namespace Demo;
+
+            public class A
+            {
+                public A(int x) { }
+                public A() : this(0) { }
+                public A(string s) : this(s.Length) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var chainRefs = references.Where(r => r.SymbolName == "A").ToList();
+        Assert.Equal(2, chainRefs.Count);
+        Assert.All(chainRefs, r => Assert.Equal("call", r.ReferenceKind));
+        Assert.All(chainRefs, r => Assert.Equal("function", r.ContainerKind));
+        Assert.All(chainRefs, r => Assert.Equal("A", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "this");
+        Assert.DoesNotContain(references, r => r.SymbolName == "base");
+    }
+
+    [Fact]
+    public void Extract_CsharpCtorChainBase_RewritesToBaseType()
+    {
+        const string content = """
+            namespace Demo;
+
+            public class A
+            {
+                public A(int x) { }
+            }
+
+            public class B : A
+            {
+                public B() : base(42) { }
+                public B(int x, int y) : base(x + y) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var chainRefs = references
+            .Where(r => r.SymbolName == "A" && r.ContainerName == "B")
+            .ToList();
+        Assert.Equal(2, chainRefs.Count);
+        Assert.All(chainRefs, r => Assert.Equal("call", r.ReferenceKind));
+        Assert.DoesNotContain(references, r => r.SymbolName == "base");
+    }
+
+    [Fact]
+    public void Extract_CsharpCtorChainCrossLine_AttributesToConstructor()
+    {
+        const string content = """
+            namespace Demo;
+
+            public class A
+            {
+                public A(int x) { }
+                public A(int x, int y)
+                    : this(x + y)
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var chainRef = Assert.Single(references, r => r.SymbolName == "A");
+        Assert.Equal("call", chainRef.ReferenceKind);
+        Assert.Equal("function", chainRef.ContainerKind);
+        Assert.Equal("A", chainRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpRecordChain_RewritesToBaseType()
+    {
+        const string content = """
+            namespace Demo;
+
+            public record Parent(int Value);
+
+            public record Child(int Value, int Extra) : Parent(Value);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "base");
+        Assert.DoesNotContain(references, r => r.SymbolName == "this");
+    }
+
+    [Fact]
+    public void Extract_CsharpGenericBase_StripsGenericArgs()
+    {
+        const string content = """
+            namespace Demo;
+
+            public class Holder<T>
+            {
+                public Holder(T value) { }
+            }
+
+            public class IntHolder : Holder<int>
+            {
+                public IntHolder() : base(0) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var chainRef = Assert.Single(references, r => r.SymbolName == "Holder");
+        Assert.Equal("call", chainRef.ReferenceKind);
+        Assert.Equal("IntHolder", chainRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpBaseAfterInterfaces_UsesFirstBaseListEntry()
+    {
+        // The C# compiler requires the base class to come first in the base list,
+        // so the first entry is the authoritative target for `base(...)`.
+        // C# の base list では基底クラスが先頭に来る必要があり、そこが base(...) の呼び先となる。
+        const string content = """
+            namespace Demo;
+
+            public interface IMarker {}
+
+            public class Root
+            {
+                public Root(int x) { }
+            }
+
+            public class Leaf : Root, IMarker
+            {
+                public Leaf() : base(42) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var chainRef = Assert.Single(references, r => r.SymbolName == "Root");
+        Assert.Equal("call", chainRef.ReferenceKind);
+        Assert.Equal("Leaf", chainRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaCtorChainSuper_RewritesToBaseClass()
+    {
+        const string content = """
+            package demo;
+
+            public class Root {
+                public Root(int x) {}
+            }
+
+            class Leaf extends Root {
+                public Leaf(int x) {
+                    super(x);
+                }
+                public Leaf() {
+                    this(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var superRef = Assert.Single(references, r => r.SymbolName == "Root");
+        Assert.Equal("call", superRef.ReferenceKind);
+        Assert.Equal("Leaf", superRef.ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+
+        var thisRef = Assert.Single(references, r =>
+            r.SymbolName == "Leaf" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.Equal("call", thisRef.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_OutsideConstructor_IsNotRewritten()
+    {
+        // super.method(...) is a regular method call, not a ctor chain.
+        // Reference extractor must not confuse the two.
+        // super.method(...) は通常のメソッド呼び出し。連鎖呼び出しと混同しない。
+        const string content = """
+            package demo;
+
+            class Base {
+                public void run() {}
+            }
+
+            class Child extends Base {
+                public void run() {
+                    super.run();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Base");
+    }
+
+    [Fact]
+    public void ParseCSharpBaseType_HandlesCommonShapes()
+    {
+        Assert.Equal("A", ReferenceExtractor.ParseCSharpBaseType("public class B : A"));
+        Assert.Equal("A", ReferenceExtractor.ParseCSharpBaseType("class B : A, IFoo"));
+        Assert.Equal("A", ReferenceExtractor.ParseCSharpBaseType("class B<T> : A<T> where T : new()"));
+        Assert.Equal("Base", ReferenceExtractor.ParseCSharpBaseType("record Child(int x) : Base(x);"));
+        Assert.Equal("Exception", ReferenceExtractor.ParseCSharpBaseType("class MyErr : global::System.Exception"));
+        Assert.Null(ReferenceExtractor.ParseCSharpBaseType("public class Solo"));
+    }
 }

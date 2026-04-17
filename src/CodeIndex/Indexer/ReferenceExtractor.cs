@@ -131,6 +131,18 @@ public static class ReferenceExtractor
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
+    // C# constructor chain initializer: `public A() : this(0)` / `public B() : base(42)`
+    // C# コンストラクタ連鎖イニシャライザ
+    private static readonly Regex CSharpCtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
+    // Java constructor chain statement (first statement of a constructor body): `this(0);` / `super(42);`
+    // Java コンストラクタ連鎖文（本体先頭に現れる this(...) / super(...)）
+    private static readonly Regex JavaCtorChainRegex = new(@"^\s*(?<kind>this|super)\s*\(", RegexOptions.Compiled);
+    // Java `extends` clause used to resolve `super(...)` chain targets
+    // Java の extends 節を解析して super(...) の呼び先を決定するために使用
+    private static readonly Regex JavaExtendsRegex = new(@"\bextends\s+(?<base>[\w.$]+)", RegexOptions.Compiled);
+    // Inline `where` constraint in a C# type header; used to trim base-list parsing
+    // C# 型ヘッダーの where 制約句。base-list 解析の終端として使用
+    private static readonly Regex CSharpWhereClauseRegex = new(@"\s+where\s+[\w?.]+\s*:", RegexOptions.Compiled);
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -174,6 +186,15 @@ public static class ReferenceExtractor
                              (symbol.Kind == "function" || symbol.Kind == "class" || symbol.Kind == "namespace"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
+        // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
+        // Ordered innermost-first via ascending body range.
+        // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record。namespace は含めない）。
+        // 内側優先で昇順にソート。
+        var enclosingTypeCandidates = symbols
+            .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
+                             (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface"))
+            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+            .ToList();
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -200,6 +221,20 @@ public static class ReferenceExtractor
             {
                 foreach (Match match in EventSubscriptionRegex.Matches(preparedLine))
                     AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, container);
+            }
+
+            // Constructor chain-call rewrites: C# `: this(...)` / `: base(...)` and Java `this(...)` / `super(...)`
+            // コンストラクタ連鎖呼び出しの書き換え
+            if (language is "csharp")
+            {
+                EmitCSharpCtorChainReferences(
+                    preparedLine, enclosingTypeCandidates, containerCandidates,
+                    references, seen, fileId, context, lineNumber, container);
+            }
+            else if (language is "java")
+            {
+                EmitJavaCtorChainReferences(
+                    preparedLine, enclosingTypeCandidates, references, seen, fileId, context, lineNumber, container);
             }
 
             foreach (Match match in CallRegex.Matches(preparedLine))
@@ -260,6 +295,306 @@ public static class ReferenceExtractor
         }
 
         return null;
+    }
+
+    private static SymbolRecord? FindInnermostClassLike(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Kind != "class" && candidate.Kind != "struct")
+                continue;
+            if (candidate.BodyStartLine!.Value <= lineNumber && candidate.BodyEndLine!.Value >= lineNumber)
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private static void EmitCSharpCtorChainReferences(
+        string preparedLine,
+        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        IReadOnlyList<SymbolRecord> containerCandidates,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var chainMatches = CSharpCtorChainRegex.Matches(preparedLine);
+        if (chainMatches.Count == 0)
+            return;
+
+        var enclosingType = FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        if (enclosingType == null)
+            return;
+
+        // For cross-line initializers such as:
+        //   public A(int x, int y)
+        //       : this(x, 0)
+        //   { }
+        // the chain line precedes the body, so the inner-most "body-covering" container lookup
+        // returns the class rather than the constructor. Fall back to a declaration-to-body-end
+        // lookup so the reference is attributed to the constructor that owns the chain.
+        // クロス行イニシャライザでは body よりも前に連鎖行が現れるため、body 範囲のみで
+        // 判定すると外側クラスが選ばれる。宣言〜body 終端の範囲で探し直す。
+        var chainContainer = container;
+        if (chainContainer == null || chainContainer.Kind != "function")
+        {
+            chainContainer = FindDeclarationRangeFunction(containerCandidates, lineNumber) ?? chainContainer;
+        }
+
+        foreach (Match match in chainMatches)
+        {
+            var kindToken = match.Groups["kind"].Value;
+            string? target;
+            if (kindToken == "this")
+            {
+                target = enclosingType.Name;
+            }
+            else
+            {
+                // `base(...)` needs the base type from the enclosing class's signature.
+                // `base(...)` は外側クラスのシグネチャから基底型を解析する必要がある。
+                target = ParseCSharpBaseType(enclosingType.Signature);
+                if (string.IsNullOrWhiteSpace(target))
+                    continue;
+            }
+
+            AddChainReference(
+                references, seen, fileId, target!, match.Groups["kind"].Index + 1,
+                "call", context, lineNumber, chainContainer);
+        }
+    }
+
+    private static SymbolRecord? FindDeclarationRangeFunction(
+        IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Kind != "function")
+                continue;
+            if (candidate.StartLine <= lineNumber && candidate.BodyEndLine!.Value >= lineNumber)
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private static void EmitJavaCtorChainReferences(
+        string preparedLine,
+        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var match = JavaCtorChainRegex.Match(preparedLine);
+        if (!match.Success)
+            return;
+
+        // Only emit when the enclosing function is a Java constructor (same name as enclosing class).
+        // 外側の関数が Java のコンストラクタ（外側クラスと同名）であるときだけ参照を出す。
+        if (container == null || container.Kind != "function")
+            return;
+
+        var enclosingType = FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        if (enclosingType == null)
+            return;
+        if (!string.Equals(container.Name, enclosingType.Name, StringComparison.Ordinal))
+            return;
+
+        var kindToken = match.Groups["kind"].Value;
+        string? target;
+        if (kindToken == "this")
+        {
+            target = enclosingType.Name;
+        }
+        else
+        {
+            target = ParseJavaBaseType(enclosingType.Signature);
+            if (string.IsNullOrWhiteSpace(target))
+                return;
+        }
+
+        AddChainReference(
+            references, seen, fileId, target!, match.Groups["kind"].Index + 1,
+            "call", context, lineNumber, container);
+    }
+
+    private static void AddChainReference(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string name,
+        int column,
+        string referenceKind,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var dedupeKey = $"{lineNumber}:{column}:{referenceKind}:{name}";
+        if (!seen.Add(dedupeKey))
+            return;
+
+        references.Add(new ReferenceRecord
+        {
+            FileId = fileId,
+            SymbolName = name,
+            ReferenceKind = referenceKind,
+            Line = lineNumber,
+            Column = column,
+            Context = context,
+            ContainerKind = container?.Kind,
+            ContainerName = container?.Name,
+        });
+    }
+
+    /// <summary>
+    /// Parse the first base-class token from a C# class/struct/record signature such as
+    /// `class B : A, IFoo`, `record C(int x) : A(x)`, or `class B<T> : A<T> where T : new()`.
+    /// Returns null when no base list is present or when the signature is empty.
+    /// C# の class/struct/record シグネチャから最初の基底クラストークンを取り出す。
+    /// </summary>
+    internal static string? ParseCSharpBaseType(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+
+        var text = signature.TrimEnd();
+        if (text.EndsWith("{", StringComparison.Ordinal))
+            text = text.Substring(0, text.Length - 1).TrimEnd();
+
+        var colonIndex = FindSignatureColonIndex(text);
+        if (colonIndex < 0)
+            return null;
+
+        var baseList = text.Substring(colonIndex + 1);
+        var whereMatch = CSharpWhereClauseRegex.Match(baseList);
+        if (whereMatch.Success)
+            baseList = baseList.Substring(0, whereMatch.Index);
+
+        var firstEntry = TakeFirstBaseEntry(baseList).Trim();
+        return ExtractBareTypeName(firstEntry);
+    }
+
+    /// <summary>
+    /// Parse the first extends-clause type from a Java class/interface/record signature.
+    /// 例: `class B extends A implements IFoo` → `A`。
+    /// </summary>
+    internal static string? ParseJavaBaseType(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+
+        var match = JavaExtendsRegex.Match(signature);
+        if (!match.Success)
+            return null;
+
+        return ExtractBareTypeName(match.Groups["base"].Value);
+    }
+
+    private static int FindSignatureColonIndex(string text)
+    {
+        var depth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            switch (c)
+            {
+                case '<':
+                case '(':
+                case '[':
+                    depth++;
+                    break;
+                case '>':
+                case ')':
+                case ']':
+                    if (depth > 0) depth--;
+                    break;
+                case ':':
+                    if (depth == 0)
+                    {
+                        // Skip `::` alias qualifier (`global::System.Exception`).
+                        // `::` エイリアス修飾子（`global::System.Exception`）はスキップ。
+                        if (i + 1 < text.Length && text[i + 1] == ':')
+                        {
+                            i++;
+                            continue;
+                        }
+                        return i;
+                    }
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string TakeFirstBaseEntry(string baseList)
+    {
+        var depth = 0;
+        for (int i = 0; i < baseList.Length; i++)
+        {
+            var c = baseList[i];
+            switch (c)
+            {
+                case '<':
+                case '(':
+                case '[':
+                    depth++;
+                    break;
+                case '>':
+                case ')':
+                case ']':
+                    if (depth > 0) depth--;
+                    break;
+                case ',':
+                    if (depth == 0)
+                        return baseList.Substring(0, i);
+                    break;
+            }
+        }
+
+        return baseList;
+    }
+
+    private static string? ExtractBareTypeName(string entry)
+    {
+        var trimmed = entry.Trim();
+        if (trimmed.Length == 0)
+            return null;
+
+        // Strip generic args: `A<int>` → `A`.
+        // ジェネリック引数を剥がす。
+        var ltIndex = trimmed.IndexOf('<');
+        if (ltIndex >= 0)
+            trimmed = trimmed.Substring(0, ltIndex);
+
+        // Strip record primary-ctor args: `A(...)` → `A`.
+        // record のプライマリコンストラクタ引数を剥がす。
+        var lparenIndex = trimmed.IndexOf('(');
+        if (lparenIndex >= 0)
+            trimmed = trimmed.Substring(0, lparenIndex);
+
+        trimmed = trimmed.Trim();
+        if (trimmed.Length == 0)
+            return null;
+
+        // Use the unqualified terminal segment so references align with other call-site names.
+        // 他の呼び出し参照と揃えるため、修飾なしの末尾セグメントだけを使う。
+        var lastDot = trimmed.LastIndexOf('.');
+        if (lastDot >= 0)
+            trimmed = trimmed.Substring(lastDot + 1);
+
+        var lastColon = trimmed.LastIndexOf(':');
+        if (lastColon >= 0)
+            trimmed = trimmed.Substring(lastColon + 1);
+
+        trimmed = trimmed.Trim();
+        return trimmed.Length > 0 ? trimmed : null;
     }
 
     private static string PrepareLine(string lang, string line)
