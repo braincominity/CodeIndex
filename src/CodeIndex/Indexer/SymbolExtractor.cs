@@ -296,11 +296,17 @@ public static class SymbolExtractor
             // Method with return type — visibility optional for explicit interface impl and nested members.
             // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
+            // The `(?!(?:base|this)\b)` guard on the name capture belt-and-suspenders against constructor-chain
+            // initializers (`: base(...)` / `: this(...)`) leaking phantom `function base` / `function this`
+            // symbols if any upstream guard becomes permissive. Closes #331.
             // Note: `new` is NOT excluded because `new void Hidden()` is a valid C# member-hiding declaration.
             // 戻り値型付きメソッド — 明示的インターフェース実装やネストメンバー向けに visibility 省略可。
             // negative lookahead で呼び出し行（await/return/throw/yield/var/typeof 等）と ternary continuation を除外する。
+            // `(?!(?:base|this)\b)` を name キャプチャに付け、上流ガードが緩んだ場合でも
+            // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
+            // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?!\s*(?:(?:{CSharpVisibilityPattern})\s+)?delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?!\s*(?:(?:{CSharpVisibilityPattern})\s+)?delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex($@"^\s*(?<visibility>{CSharpVisibilityPattern})\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),

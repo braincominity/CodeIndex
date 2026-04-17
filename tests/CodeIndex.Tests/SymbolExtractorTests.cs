@@ -3551,6 +3551,56 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedConstructorInitializer_DoesNotLeakBaseOrThisAsPhantoms()
+    {
+        // Wrapped `: base(...)` / `: this(...)` initializers must not surface as phantom
+        // `function base` / `function this` symbols. The C# returnType char class includes `:`
+        // to support alias-qualified type names like `Alias::Type`, so a wrapped initializer line
+        // like `    : base(s, 0)` could otherwise tokenize as returnType=`:` + name=`base` + paren.
+        // Both the first-char `(?![?:])` guard and the name-level `(?!(?:base|this)\b)` guard
+        // must cooperate to block it. Closes #331.
+        // ラップされた `: base(...)` / `: this(...)` 初期化子行が `function base` / `function this`
+        // の phantom として漏れないことを担保する。Closes #331.
+        var content = """
+            namespace CtorChain;
+
+            public class Base
+            {
+                public Base() { }
+                public Base(int x) { }
+                public Base(string s, int n) { }
+            }
+
+            public class Derived : Base
+            {
+                public Derived(int x) : base(x) { }
+
+                public Derived(string s)
+                    : base(s, 0)
+                {
+                }
+
+                public Derived() : this(0) { }
+
+                public Derived(int a, int b)
+                    : this(a)
+                {
+                }
+
+                public Derived(double d) : base((int)d, "d") => System.Console.WriteLine(d);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Base");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "base");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "this");
+        // All five Derived constructors should still be captured / 5 つのコンストラクタは正しく取得できること
+        Assert.Equal(5, symbols.Count(s => s.Kind == "function" && s.Name == "Derived"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
