@@ -39,6 +39,15 @@ internal static class StructuralLineMasker
     private sealed class JsTemplateHoleFrame : ScannerFrame
     {
         public int NestedBraceDepth { get; set; }
+        // Stack entry `true` = nested `{` opened an expression brace (object literal /
+        // arrow-body-with-parens): the matching `}` behaves like `)`/`]` and the next
+        // `/` is division. Entry `false` = nested `{` opened a statement block (e.g.
+        // `if (x) {}`, `() => { ... }`): the matching `}` keeps regex legal for the
+        // next `/`. Using a stack lets us mix both kinds within a single hole.
+        // スタック値 `true` は expression brace (object literal / `() => ({})`)で、
+        // `}` のあとの `/` を division として扱う。`false` は statement block で、
+        // `}` のあとの `/` は regex として扱う。ホール内で両者が混在しても追える。
+        public Stack<bool> InnerBraceIsExpression { get; } = new();
     }
 
     internal static string[] MaskLines(string? lang, string[] originalLines)
@@ -479,6 +488,20 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
+                        if (TryOpenPythonSingleLineString(line, pos, out var nestedSinglePrefixLen, out var nestedSingleQuote, out var nestedSingleRaw, out var nestedSingleFString)
+                            && nestedSingleFString)
+                        {
+                            // Nested single-line f-string inside the outer hole. Mask the
+                            // quote characters (and prefix) so ReferenceExtractor's
+                            // StringLiteralRegex does not swallow the hole expression, but
+                            // preserve the inner `{expr}` contents so references survive.
+                            // 外側ホール内のネストした単行 f-string。PrepareLine の
+                            // StringLiteralRegex に式本体ごと消されないよう quote と prefix を
+                            // マスクし、内側の `{expr}` の内容だけを残す。
+                            pos = MaskNestedPythonFString(line, masked, pos, nestedSinglePrefixLen, nestedSingleQuote, nestedSingleRaw);
+                            continue;
+                        }
+
                         if (line[pos] == '\'' || line[pos] == '"')
                         {
                             pos = SkipPythonSingleLineString(line, pos);
@@ -657,6 +680,123 @@ internal static class StructuralLineMasker
         }
         if (p < line.Length)
             p++;
+        return p;
+    }
+
+    private static bool TryOpenPythonSingleLineString(string line, int startIndex, out int prefixLength, out char quoteChar, out bool isRaw, out bool isFString)
+    {
+        prefixLength = 0;
+        quoteChar = '\0';
+        isRaw = false;
+        isFString = false;
+
+        if (startIndex > 0 && IsIdentifierPart(line[startIndex - 1]))
+            return false;
+
+        var p = startIndex;
+        var seenRaw = false;
+        var seenF = false;
+        var prefixChars = 0;
+        while (p < line.Length && prefixChars < 2 && IsPythonStringPrefixChar(line[p]))
+        {
+            if (line[p] == 'r' || line[p] == 'R')
+                seenRaw = true;
+            else if (line[p] == 'f' || line[p] == 'F')
+                seenF = true;
+            p++;
+            prefixChars++;
+        }
+
+        if (p >= line.Length)
+            return false;
+
+        if (line[p] != '"' && line[p] != '\'')
+            return false;
+
+        // Triple-quoted strings are handled by the dedicated triple scanner; skip here.
+        // 三重引用符は別の scanner が扱うのでここでは対象外。
+        if (p + 2 < line.Length && line[p] == line[p + 1] && line[p] == line[p + 2])
+            return false;
+
+        prefixLength = p - startIndex;
+        quoteChar = line[p];
+        isRaw = seenRaw;
+        isFString = seenF;
+        return true;
+    }
+
+    // Mask a nested single-line Python f-string inside an outer f-string hole so
+    // ReferenceExtractor.PrepareLine does not treat the whole span as a string
+    // literal. Prefix chars and both quote characters become spaces; literal body
+    // chars become spaces; inner `{expr}` bodies stay intact; `{{` / `}}` escape
+    // pairs become spaces. Returns the position just past the closing quote.
+    // 外側 f-string ホール内にあるネスト単行 f-string をマスクするヘルパー。
+    // 参照抽出の PrepareLine が文字列全体を消し去らないよう、prefix と quote、
+    // literal 本体は空白化し、内側の `{expr}` 本体だけを残す。`{{`/`}}` は
+    // escape として空白化する。閉じ quote の直後の位置を返す。
+    private static int MaskNestedPythonFString(string line, char[] masked, int startIndex, int prefixLength, char quoteChar, bool isRaw)
+    {
+        ReplaceWithSpaces(masked, startIndex, prefixLength + 1);
+        var p = startIndex + prefixLength + 1;
+        var innerHoleDepth = 0;
+
+        while (p < line.Length)
+        {
+            if (!isRaw && line[p] == '\\' && p + 1 < line.Length)
+            {
+                ReplaceWithSpaces(masked, p, 2);
+                p += 2;
+                continue;
+            }
+
+            if (line[p] == quoteChar && innerHoleDepth == 0)
+            {
+                masked[p] = ' ';
+                return p + 1;
+            }
+
+            if (p + 1 < line.Length && line[p] == '{' && line[p + 1] == '{')
+            {
+                ReplaceWithSpaces(masked, p, 2);
+                p += 2;
+                continue;
+            }
+
+            if (p + 1 < line.Length && line[p] == '}' && line[p + 1] == '}')
+            {
+                ReplaceWithSpaces(masked, p, 2);
+                p += 2;
+                continue;
+            }
+
+            if (line[p] == '{')
+            {
+                innerHoleDepth++;
+                masked[p] = ' ';
+                p++;
+                continue;
+            }
+
+            if (line[p] == '}')
+            {
+                if (innerHoleDepth > 0)
+                {
+                    innerHoleDepth--;
+                    masked[p] = ' ';
+                }
+                p++;
+                continue;
+            }
+
+            if (innerHoleDepth == 0)
+            {
+                // Literal body outside any inner hole; mask to space.
+                // 内側ホール外の literal 本体は空白化。
+                masked[p] = ' ';
+            }
+            p++;
+        }
+
         return p;
     }
 
@@ -863,7 +1003,7 @@ internal static class StructuralLineMasker
     // flip the following `/` from division to regex literal.
     // 1 行内の JS/TS regex 判定用 state。直前の識別子語も保持し、`return` / `throw` /
     // `typeof` など regex-prefix keyword の後の `/` を division ではなく regex として扱う。
-    private enum JsPrevTokenKind { None, Identifier, Numeric, Literal, CloseParen, CloseBracket, CloseBrace, Other }
+    private enum JsPrevTokenKind { None, Identifier, Numeric, Literal, CloseParen, CloseBracket, CloseBrace, Arrow, Other }
 
     private struct JsLexState
     {
@@ -1008,6 +1148,16 @@ internal static class StructuralLineMasker
                         if (line[pos] == '{')
                         {
                             holeFrame.NestedBraceDepth++;
+                            // Classify the nested `{` as expression brace (object literal
+                            // or `() => ({})` body) vs. statement block (arrow body
+                            // `=> {...}`, or `if (x) {...}` inside arrow body). Block
+                            // braces preserve `}`→regex behavior; expression braces set
+                            // `}`→division so `${({a:1} / 2)}` stays parseable.
+                            // ネスト `{` を expression brace（object literal / `() => ({})`）
+                            // と statement block（arrow body や `if (x) {}`）に分類する。
+                            // block は `}` の次の `/` を regex にし、expression は
+                            // division にする。これで `${({a:1} / 2)}` が壊れない。
+                            holeFrame.InnerBraceIsExpression.Push(IsJsExpressionBraceContext(lexState));
                             pos++;
                             lexState.SetKind(JsPrevTokenKind.Other);
                             continue;
@@ -1030,13 +1180,16 @@ internal static class StructuralLineMasker
 
                             holeFrame.NestedBraceDepth--;
                             pos++;
-                            // Treat nested-hole `}` as closing an expression-context brace
-                            // (object literal / function expression / arrow body); the next
-                            // `/` is division, not a regex opener.
-                            // ホール内のネストした `}` は式コンテキストの括弧を閉じたもの
-                            // （object literal / function expression / arrow body）とみなし、
-                            // 次の `/` を regex ではなく division として扱えるようにする。
-                            lexState.SetKind(JsPrevTokenKind.CloseBrace);
+                            var wasExpression = holeFrame.InnerBraceIsExpression.Count > 0
+                                && holeFrame.InnerBraceIsExpression.Pop();
+                            // Expression brace close → division context (CloseBrace).
+                            // Block brace close → preserve regex-legal state (Other) so
+                            // `if (x) {} /regex/` inside an arrow body is still skipped
+                            // correctly and does not consume backticks as division noise.
+                            // expression brace の閉じは CloseBrace で division 優先。
+                            // block brace の閉じは Other に戻し、arrow body 内の
+                            // `if (x) {} /regex/` でも regex を正しく取り込めるようにする。
+                            lexState.SetKind(wasExpression ? JsPrevTokenKind.CloseBrace : JsPrevTokenKind.Other);
                             continue;
                         }
 
@@ -1121,17 +1274,30 @@ internal static class StructuralLineMasker
             case ']':
                 lexState.SetKind(JsPrevTokenKind.CloseBracket);
                 break;
-            case '}':
-                // `}` outside a template hole most often closes an object literal or
-                // function expression body in expression context within this masker's
-                // reach (hole bodies have already been handled separately). Division is
-                // the realistic successor; statement-level `} /regex/` would be invalid
-                // without a statement separator anyway.
-                // テンプレートホール外の `}` は object literal や関数式本体を閉じるケースが
-                // 支配的で、直後の `/` は division とみなすのが安全。statement 後の
-                // `} /regex/` は文区切りなしでは無効なので無視できる。
-                lexState.SetKind(JsPrevTokenKind.CloseBrace);
+            case '>':
+                // `=>` is the only 2-char JS token we need to distinguish here: `{`
+                // following `=>` opens an arrow-function body (a statement block, so
+                // the next `/` inside is regex), while `{` following most other tokens
+                // opens an object literal / expression brace.
+                // `=>` は 2 文字 token のうち本マスカーで必要な唯一のケース。続く `{`
+                // が arrow body（statement block）か object literal / expression
+                // brace かを分けるフラグとして使う。
+                if (pos > 0 && line[pos - 1] == '=')
+                    lexState.SetKind(JsPrevTokenKind.Arrow);
+                else
+                    lexState.SetKind(JsPrevTokenKind.Other);
                 break;
+            // `}` in normal JS / TS code is context-dependent: after a statement block
+            // (`if (x) {}`) a `/` legitimately starts a regex; after an object literal
+            // in expression position a `/` is division. We classify as `Other` so the
+            // regex scanner still runs — that lets us correctly skip `/regex/` literals
+            // that may contain backticks or braces which would otherwise open a phantom
+            // template literal. Inside template-literal holes the closing brace is
+            // handled separately (see `JsPrevTokenKind.CloseBrace` path below).
+            // 通常コードの `}` は文脈依存で、`if (x) {}` のあとは regex、object literal
+            // のあとは division。ここでは `Other` として regex scanner に任せ、中に
+            // backtick や brace を含む `/regex/` を取りこぼして phantom template を
+            // 開かないようにする。テンプレート hole 内のブレース close は別扱い。
             default:
                 lexState.SetKind(JsPrevTokenKind.Other);
                 break;
@@ -1171,7 +1337,35 @@ internal static class StructuralLineMasker
                 return false;
             case JsPrevTokenKind.Identifier:
                 return IsJsRegexPrefixKeyword(lexState.PrevIdentifier);
+            case JsPrevTokenKind.Arrow:
             case JsPrevTokenKind.Other:
+            default:
+                return true;
+        }
+    }
+
+    // Classify a nested `{` opened inside a template-literal hole as an expression
+    // brace (object literal or `() => ({})` body, follows `=`, `(`, `[`, `,`, `:`,
+    // `?`, operator, regex-prefix keyword) vs. a statement block (arrow-function
+    // body, `if`/`while`/`for`/`function` block body — typically follows `)` or
+    // `=>`). Expression braces classify the matching `}` as division-context; block
+    // braces keep regex-legal classification so `{} /regex/` still parses.
+    // テンプレートホール内でネストした `{` が expression brace（object literal /
+    // `() => ({})` 本体）か statement block（arrow body / `if/while/for/function`
+    // ブロック）かを判定する。expression は `=`、`(`、`[`、`,`、`:`、`?`、演算子、
+    // regex-prefix keyword の直後。block は `)` や `=>` の直後。
+    private static bool IsJsExpressionBraceContext(JsLexState lexState)
+    {
+        switch (lexState.PrevTokenKind)
+        {
+            case JsPrevTokenKind.CloseParen:
+            case JsPrevTokenKind.Arrow:
+                return false;
+            case JsPrevTokenKind.Identifier:
+                // Keywords that open a statement block follow the same rule as `)`.
+                // `else { ... }`, `do { ... }`, `try { ... }`, `finally { ... }`.
+                // block を開く keyword は `)` と同じ扱い。
+                return lexState.PrevIdentifier is not ("else" or "do" or "try" or "finally");
             default:
                 return true;
         }

@@ -1474,6 +1474,86 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonFStringHole_NestedSingleLineFStringPreservesInnerCall()
+    {
+        // Regression for issue #291 follow-up: a nested single-line f-string inside an
+        // outer f-string hole, e.g. `f"{format(f"{real_call()}")}"`, must preserve the
+        // inner call edge. The masker must actively blank the inner quotes so that
+        // ReferenceExtractor's single-line StringLiteralRegex does not strip the hole
+        // expression along with the string literal.
+        // issue #291 続編: 外側 f-string ホール内のネスト単行 f-string
+        // (`f"{format(f"{real_call()}")}"`) で、内側ホールの call edge を残すこと。
+        // PrepareLine が単行文字列全体を消し去らないよう、masker 側で quote を
+        // 空白化する必要がある。
+        const string content = "def caller():\n"
+            + "    msg = f\"\"\"\n"
+            + "    {format(f\"{real_call()}\")}\n"
+            + "    \"\"\"\n"
+            + "    tail()\n"
+            + "\n"
+            + "def real_call():\n"
+            + "    pass\n"
+            + "\n"
+            + "def tail():\n"
+            + "    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsBlockCloseThenRegexLiteral_DoesNotMaskFollowingCode()
+    {
+        // Regression for issue #291 follow-up: after a top-level block `{}` close,
+        // `}` must remain regex-legal so that a following `/.../ .test(...)` is parsed
+        // as a regex literal rather than division. Otherwise the masker mistakes the
+        // trailing `/` for the start of a division operand, swallows the backtick
+        // following it, and erases the actual method invocation.
+        // issue #291 続編: トップレベルのブロック `{}` 直後の `}` を regex-legal に
+        // 残し、`/.../` が regex literal として解釈されること。division 扱いされると
+        // バッククォートを template literal 開始と誤認して後続コードを潰す。
+        const string content = "function main(value) {\n"
+            + "    if (value) { }\n"
+            + "    /`/.test(value);\n"
+            + "    realCall(value);\n"
+            + "}\n"
+            + "function realCall(x) { return x; }\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "main");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleArrowBodyBlockCloseThenRegex_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: inside a template literal hole, an
+        // arrow function body's inner `{}` must not flip subsequent `/.../` into
+        // division. The closing `}` of an arrow-body block is a statement-list close,
+        // so the following `/regex/` is a regex literal — treating it as division
+        // causes the scanner to absorb the backtick after `.test(value)` and erase
+        // the real code that follows.
+        // issue #291 続編: テンプレートリテラルホール内で arrow function 本体の
+        // ブロック `{}` 直後の `/.../` を regex literal として扱うこと。arrow body の
+        // `}` はステートメント閉じなので、続く `/` は regex の開始であり division
+        // ではない。division 扱いすると後続コードを潰してしまう。
+        const string content = "function main(value) {\n"
+            + "    const s = `pre ${(() => { if (value) { } /`/.test(value); realInner(value); return 1; })()} post`;\n"
+            + "    return s;\n"
+            + "}\n"
+            + "function realInner(x) { return x; }\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "realInner" && r.ContainerName == "main");
+    }
+
+    [Fact]
     public void Extract_PythonFStringHole_StringLiteralWithBraceDoesNotCloseHole()
     {
         // Regression for issue #291 follow-up: inside an f-string `{expr}` hole,
