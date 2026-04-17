@@ -992,12 +992,16 @@ public static class SymbolExtractor
                         // onto following lines before the body-opening `{` or primary-ctor `;`.
                         // Join them so consumers like ReferenceExtractor can resolve the base
                         // type from the stored signature instead of silently treating the class
-                        // as having no base. Closes #382.
+                        // as having no base. Uses the comment-stripping variant so trailing or
+                        // interleaved `//` / `/* */` comments do not leak into the signature.
+                        // Closes #382.
                         // 折り返された C# 型ヘッダ: base リストや `where` 句は本体開きの `{`
                         // または primary-ctor 終端の `;` までに複数行へまたがることが多い。
                         // 継続行を連結して保存し、ReferenceExtractor などが保存済み
-                        // シグネチャから base 型を解決できるようにする。Closes #382.
-                        signature = BuildCSharpMultilineSignature(
+                        // シグネチャから base 型を解決できるようにする。末尾や途中に混じる
+                        // `//` / `/* */` コメントを signature から除去する variant を使う。
+                        // Closes #382.
+                        signature = BuildCSharpTypeHeaderSignature(
                             lines,
                             i,
                             absoluteStartColumn,
@@ -6511,6 +6515,302 @@ public static class SymbolExtractor
         lastLineIndex = -1;
         lastLineExclusiveEndColumn = null;
         return false;
+    }
+
+    // Build a multi-line C# type-header signature like BuildCSharpMultilineSignature, but
+    // strip inline `//` and `/* ... */` comments that would otherwise leak into the stored
+    // `symbols.signature` when a base list or `where` clause has a trailing or interleaved
+    // comment. Uses the shared C# lexer so comment boundaries cannot be confused by `//`
+    // or `/*` characters inside string, char, verbatim, or raw string literals. String
+    // content is preserved (primary constructor default arguments, etc.). Closes #382.
+    //
+    // BuildCSharpMultilineSignature と同じく折り返された C# 型ヘッダを連結する。ただし
+    // base リストや `where` 句に混ざる `//` / `/* ... */` コメントを除去し、保存される
+    // `symbols.signature` に漏れないようにする。`//` / `/*` が文字列リテラル・char・
+    // verbatim・raw 文字列内にある場合を誤検出しないよう共有 C# lexer を使う。文字列の
+    // 中身（primary constructor のデフォルト引数など）はそのまま保持する。Closes #382.
+    private static string BuildCSharpTypeHeaderSignature(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int lastLineIndex,
+        int? lastLineExclusiveEndColumn)
+    {
+        var builder = new StringBuilder();
+        var state = new CSharpLexState();
+
+        for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
+        {
+            var stripped = StripCSharpComments(lines[i], ref state);
+            int from = i == startLineIndex ? startColumn : 0;
+            int to = i == lastLineIndex && lastLineExclusiveEndColumn.HasValue
+                ? Math.Min(lastLineExclusiveEndColumn.Value, stripped.Length)
+                : stripped.Length;
+
+            if (from >= to)
+                continue;
+
+            // Strip-and-collapse: comments were replaced by runs of spaces in
+            // `StripCSharpComments`, so collapse consecutive whitespace into a single
+            // space to keep the signature readable. String / char literal content is
+            // preserved; we only see runs here when a block comment was expanded.
+            // Closes #382.
+            // strip-and-collapse: StripCSharpComments はコメントをスペース列に置換する
+            // ので、連続する空白を 1 つにまとめて signature を読みやすくする。
+            // 文字列・char リテラルの中身はそのまま残され、ここで空白列になるのは
+            // ブロックコメントが展開されたときだけ。Closes #382.
+            var collapsed = CollapseWhitespaceRuns(stripped[from..to]).Trim();
+            if (collapsed.Length == 0)
+                continue;
+
+            if (builder.Length > 0)
+                builder.Append(' ');
+            builder.Append(collapsed);
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string CollapseWhitespaceRuns(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        var builder = new StringBuilder(text.Length);
+        var prevWasSpace = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!prevWasSpace)
+                {
+                    builder.Append(' ');
+                    prevWasSpace = true;
+                }
+                continue;
+            }
+
+            builder.Append(ch);
+            prevWasSpace = false;
+        }
+
+        return builder.ToString();
+    }
+
+    // Return the C# line with only `//` line comments and `/* ... */` block comments
+    // replaced by spaces; string, char, verbatim, and raw string literal contents are
+    // preserved as raw characters so that signatures can safely concatenate slices that
+    // include string defaults (e.g. `record Foo(string X = "abc")`). State is threaded
+    // across lines so block comments and verbatim / raw strings that span line breaks
+    // are handled correctly. Closes #382.
+    //
+    // C# 行から `//` 行コメントと `/* ... */` ブロックコメントだけをスペースに置換し、
+    // 文字列・char・verbatim・raw 文字列の中身は raw のまま残す。シグネチャ連結時に
+    // `record Foo(string X = "abc")` のような文字列デフォルトを安全に残せるようにする。
+    // 行を跨ぐブロックコメントや verbatim / raw 文字列に備えて state は呼び出し間で
+    // 引き継がれる。Closes #382.
+    private static string StripCSharpComments(string line, ref CSharpLexState state)
+    {
+        if (string.IsNullOrEmpty(line))
+            return line;
+
+        var output = new char[line.Length];
+        var i = 0;
+
+        while (i < line.Length)
+        {
+            var ch = line[i];
+            var next = i + 1 < line.Length ? line[i + 1] : '\0';
+
+            if (state.Mode == CSharpLexMode.BlockComment)
+            {
+                output[i] = ' ';
+                if (ch == '*' && next == '/')
+                {
+                    output[i + 1] = ' ';
+                    state = state with { Mode = CSharpLexMode.Code };
+                    i += 2;
+                    continue;
+                }
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.String)
+            {
+                output[i] = ch;
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.Char)
+            {
+                output[i] = ch;
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.VerbatimString)
+            {
+                output[i] = ch;
+                if (ch == '"' && next == '"')
+                {
+                    output[i + 1] = '"';
+                    i += 2;
+                    continue;
+                }
+
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.RawString)
+            {
+                output[i] = ch;
+                if (ch == '"' && HasCSharpQuoteRun(line, i, state.RawDelimiterLength))
+                {
+                    var quoteRunLength = GetCSharpQuoteRunLength(line, i);
+                    for (var j = 1; j < quoteRunLength && i + j < line.Length; j++)
+                        output[i + j] = line[i + j];
+
+                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
+                    i += quoteRunLength;
+                    continue;
+                }
+
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                while (i < line.Length)
+                {
+                    output[i] = ' ';
+                    i++;
+                }
+
+                break;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                output[i] = ' ';
+                output[i + 1] = ' ';
+                state = state with { Mode = CSharpLexMode.BlockComment };
+                i += 2;
+                continue;
+            }
+
+            if (TryReadCSharpRawStringStart(line, i, out var rawPrefixLength, out var rawDelimiterLength))
+            {
+                for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < line.Length; j++)
+                    output[i + j] = line[i + j];
+
+                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
+                i += rawPrefixLength + rawDelimiterLength;
+                continue;
+            }
+
+            if (ch == '@' && next == '"')
+            {
+                output[i] = '@';
+                output[i + 1] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 2;
+                continue;
+            }
+
+            if (ch == '$' && next == '@' && i + 2 < line.Length && line[i + 2] == '"')
+            {
+                output[i] = '$';
+                output[i + 1] = '@';
+                output[i + 2] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                continue;
+            }
+
+            if (ch == '@' && next == '$' && i + 2 < line.Length && line[i + 2] == '"')
+            {
+                output[i] = '@';
+                output[i + 1] = '$';
+                output[i + 2] = '"';
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                continue;
+            }
+
+            if (ch == '$' && next == '"')
+            {
+                output[i] = '$';
+                output[i + 1] = '"';
+                state = state with { Mode = CSharpLexMode.String };
+                i += 2;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                output[i] = '"';
+                state = state with { Mode = CSharpLexMode.String };
+                i++;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                output[i] = '\'';
+                state = state with { Mode = CSharpLexMode.Char };
+                i++;
+                continue;
+            }
+
+            output[i] = ch;
+            i++;
+        }
+
+        return new string(output);
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)

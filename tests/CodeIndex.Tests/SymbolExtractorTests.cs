@@ -3478,6 +3478,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedClassHeaderWithLineComment_StripsCommentFromSignature()
+    {
+        // Wrapped type header with a trailing `// comment` on a base-list or `where` line
+        // must not leak comment text into `symbols.signature`. The signature is used by
+        // downstream consumers (planned #257 base resolution, #256 type-position
+        // references, `impact` / `analyze_symbol` heuristics) that need to parse the base
+        // list and `where` clauses; comment bytes in the signature would break them.
+        // Closes #382 codex review blocker.
+        // 折り返された型ヘッダの base リストや `where` 句の行末に `// comment` が
+        // 付いていても、`symbols.signature` にコメント本文が漏れないこと。signature は
+        // 下流（#257 の base 解決、#256 の型位置参照、`impact` / `analyze_symbol`
+        // ヒューリスティクス）で base リストや `where` 句を解釈するために使われるため、
+        // コメントバイトが残ると壊れる。Closes #382 の codex レビュー blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T>
+                : BaseFoo<T>, // primary base
+                  IBar,
+                  IBaz // diagnostics trait
+                where T : class, new() // must be default-constructible
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public sealed class Foo<T> : BaseFoo<T>, IBar, IBaz where T : class, new()", foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedClassHeaderWithBlockComment_StripsCommentFromSignature()
+    {
+        // Same contract as the line-comment variant, for inline `/* ... */` block
+        // comments embedded inside a wrapped type header. Closes #382 codex review blocker.
+        // 行間や途中に挟まる `/* ... */` ブロックコメントについても同じ契約を固定する。
+        // Closes #382 の codex レビュー blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public class Foo /* annotation */
+                : /* base */ Bar,
+                  IBaz
+                where /* generic */ T : class
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public class Foo : Bar, IBaz where T : class", foo.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
     {
         var content = """
