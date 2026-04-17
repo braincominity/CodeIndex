@@ -3029,6 +3029,381 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutlineAndDefinition_CSharpMultilineExpressionBodiedPartialProperty_PreservesRangeAndContent()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_partial_property_range");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial int Count
+                        => 42;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Count", "--db", dbPath, "--json", "--exact-name", "--body"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var definitionJson = definitionDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, property.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, definitionJson.GetProperty("end_line").GetInt32());
+            Assert.Contains("=> 42;", definitionJson.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpSplitPropertyHeader_DoesNotEmitPhantomFunctionAndKeepsSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_split_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public string
+                        SplitName
+                        => "x";
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var splitNameSymbols = outlineJson.GetProperty("symbols").EnumerateArray()
+                .Where(symbol => symbol.GetProperty("name").GetString() == "SplitName")
+                .ToArray();
+            var property = Assert.Single(splitNameSymbols.Where(symbol => symbol.GetProperty("kind").GetString() == "property"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Single(splitNameSymbols);
+            Assert.Equal("public string SplitName => \"x\";", property.GetProperty("signature").GetString());
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(7, property.GetProperty("end_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpLongGenericMultilinePropertyHeader_KeepsReturnTypeAndSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_long_generic_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public Dictionary<
+                        string,
+                        List<
+                            int
+                        >>
+                        Count
+                        => new();
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal("Dictionary<string,List<int>>", property.GetProperty("return_type").GetString());
+            Assert.Equal("public Dictionary< string, List< int >> Count => new();", property.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpBraceOnNextLinePropertyHeader_KeepsHeaderSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_brace_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public string SplitName
+                    {
+                        get;
+                        set;
+                    }
+
+                    public int Count
+                    { get => 1; }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var splitName = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "SplitName"));
+            var count = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal("public string SplitName {", splitName.GetProperty("signature").GetString());
+            Assert.Equal("public int Count {", count.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutlineAndDefinition_CSharpMultilineSwitchExpressionProperty_PreservesFullBodyRange()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_switch_expression_property");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial int Count
+                        => DateTime.Now.Day switch
+                        {
+                            > 15 => 2,
+                            _ => 1
+                        };
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Count", "--db", dbPath, "--json", "--exact-name", "--body"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var definitionJson = definitionDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(10, property.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
+            Assert.Equal(10, definitionJson.GetProperty("end_line").GetInt32());
+            Assert.Contains("> 15 => 2,", definitionJson.GetProperty("content").GetString());
+            Assert.Contains("_ => 1", definitionJson.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpPartialPropertyImplementation_WithAccessorAttribute_IsDetected()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_accessor_attribute_property");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial string Name { get; set; }
+                }
+
+                public partial class Model
+                {
+                    public partial string Name { [System.Obsolete] get => "x"; set { } }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var names = outlineJson.GetProperty("symbols").EnumerateArray()
+                .Where(symbol => symbol.GetProperty("kind").GetString() == "property"
+                    && symbol.GetProperty("name").GetString() == "Name")
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(2, names.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpPartialPropertyImplementation_WithMultilineAccessorAttribute_IsDetected()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_multiline_accessor_attribute_property");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial string Name
+                    {
+                        [System.Obsolete(
+                            "x"
+                        )]
+                        get => "x";
+                        set { }
+                    }
+
+                    public int Other => 1;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var symbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "property" && symbol.GetProperty("name").GetString() == "Name");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "property" && symbol.GetProperty("name").GetString() == "Other");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_JavaScriptStringBraceKeepsFollowingMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_string_brace");

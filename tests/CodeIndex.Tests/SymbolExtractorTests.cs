@@ -3159,6 +3159,211 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPartialProperties()
+    {
+        var content = """
+            namespace Demo;
+
+            public abstract partial class BaseModel
+            {
+                public abstract string Description { get; }
+            }
+
+            public partial class Model : BaseModel
+            {
+                public partial string Name
+                {
+                    get;
+                    set;
+                }
+
+                public partial int Count
+                {
+                    get;
+                }
+
+                public string NotPartial { get; set; } = string.Empty;
+            }
+
+            public partial class Model
+            {
+                private string _name = string.Empty;
+
+                public partial string Name
+                {
+                    get => _name;
+                    set => _name = value;
+                }
+
+                public partial int Count
+                    => 42;
+
+                public partial override string Description
+                    => "demo";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Name") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Count") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Description") >= 2);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NotPartial");
+
+        var countImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.Line == 34));
+        Assert.Equal(34, countImplementation.StartLine);
+        Assert.Equal(35, countImplementation.EndLine);
+
+        var descriptionImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Description" && s.Line == 37));
+        Assert.Equal(37, descriptionImplementation.StartLine);
+        Assert.Equal(38, descriptionImplementation.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string
+                    SplitName
+                    => "x";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        Assert.Equal(5, property.StartLine);
+        Assert.Equal(7, property.EndLine);
+        Assert.Equal("public string SplitName => \"x\";", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "SplitName");
+    }
+
+    [Fact]
+    public void Extract_CSharp_LongGenericMultilinePropertyHeader_KeepsReturnTypeAndSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public Dictionary<
+                    string,
+                    List<
+                        int
+                    >>
+                    Count
+                    => new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("Dictionary<string,List<int>>", property.ReturnType);
+        Assert.Equal("public Dictionary< string, List< int >> Count => new();", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Count");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceOnNextLinePropertyHeader_KeepsHeaderSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string SplitName
+                {
+                    get;
+                    set;
+                }
+
+                public int Count
+                { get => 1; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var splitName = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("public string SplitName {", splitName.Signature);
+        Assert.Equal("public int Count {", count.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial int Count
+                    => DateTime.Now.Day switch
+                    {
+                        > 15 => 2,
+                        _ => 1
+                    };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal(5, count.StartLine);
+        Assert.Equal(10, count.EndLine);
+        Assert.Equal("public partial int Count => DateTime.Now.Day switch", count.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_PartialPropertyImplementation_WithAccessorAttribute_IsDetected()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial string Name { get; set; }
+            }
+
+            public partial class Model
+            {
+                public partial string Name { [System.Obsolete] get => "x"; set { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.Signature != null && s.Signature.Contains("[System.Obsolete]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_PartialPropertyImplementation_WithMultilineAccessorAttribute_IsDetected()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial string Name
+                {
+                    [System.Obsolete(
+                        "x"
+                    )]
+                    get => "x";
+                    set { }
+                }
+
+                public int Other => 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Other");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """
