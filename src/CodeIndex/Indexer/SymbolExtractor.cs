@@ -170,7 +170,7 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
-    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -289,9 +289,13 @@ public static class SymbolExtractor
             // using エイリアス — 一般 using より前に配置しエイリアス名を取得
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
-            // Const field — must come before class/method patterns to avoid misclassification
-            // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Const field — must come before class/method patterns to avoid misclassification.
+            // Modifier order is free: visibility may appear anywhere in the modifier sequence,
+            // so `new public const` and `public new const` are both captured. Closes #355.
+            // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ。
+            // 修飾子順序は自由で、visibility は修飾子列の任意位置に現れてよい（例: `new public const` /
+            // `public new const`）。Closes #355.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
@@ -334,16 +338,26 @@ public static class SymbolExtractor
               + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
                 RegexOptions.Compiled),
                 BodyStyle.None, "visibility", "returnType"),
-            // Interface — visibility optional / インターフェース — visibility 省略可
-            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:partial|unsafe)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Interface — visibility optional; modifier order is free, so visibility may appear
+            // anywhere in the modifier sequence (e.g. `partial public interface`). Closes #355.
+            // インターフェース — visibility 省略可。修飾子順序は自由（例: `partial public interface`）。Closes #355.
+            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
             new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
-            // Struct (including record struct, ref struct, readonly struct) — visibility optional
-            // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可
-            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Class (including record, record class) — visibility optional (defaults to internal for top-level)
-            // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）
-            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Struct (including record struct, ref struct, readonly struct) — visibility optional;
+            // modifier order is free, so visibility may appear anywhere in the modifier sequence
+            // (e.g. `readonly public struct`, `ref public struct`). Closes #355.
+            // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可。
+            // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `readonly public struct`、
+            // `ref public struct`）。Closes #355.
+            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Class (including record, record class) — visibility optional (defaults to internal
+            // for top-level); modifier order is free, so visibility may appear anywhere in the
+            // modifier sequence (e.g. `abstract public class`, `sealed public class`). Closes #355.
+            // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）。
+            // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `abstract public class`、
+            // `sealed public class`）。Closes #355.
+            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
             // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置。

@@ -4218,6 +4218,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_TypeDeclarations_FreeModifierOrder()
+    {
+        // Closes #355: type declarations (class / struct / interface / record) also accept
+        // visibility anywhere in the modifier sequence. All fixture forms are compiler-legal
+        // (`abstract public class X {}`, `readonly public struct Y {}`, `sealed public class Z {}`,
+        // `ref public struct RS {}`, `partial public interface PI {}`) but previously fell
+        // through the type rows because visibility had to come first.
+        // Closes #355: 型宣言（class / struct / interface / record）も visibility を
+        // 修飾子列の任意位置で受け付けること。fixture はすべてコンパイラが通す合法な並びで、
+        // 以前は visibility が先頭必須のため型行をすり抜けていた。
+        var content = """
+            namespace Demo;
+            abstract public class AbstractPublicClass {}
+            sealed public class SealedPublicClass {}
+            readonly public struct ReadonlyPublicStruct {}
+            ref public struct RefPublicStruct {}
+            partial public interface PartialPublicInterface {}
+            abstract public record class AbstractPublicRecordClass {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AbstractPublicClass" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SealedPublicClass" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ReadonlyPublicStruct" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "RefPublicStruct" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "PartialPublicInterface" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AbstractPublicRecordClass" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ConstField_FreeModifierOrder()
+    {
+        // Closes #355: `const` fields also accept free modifier order. `new public const`
+        // is compiler-legal (it hides a same-named base-class const) but was previously
+        // dropped because the const row required visibility to come before `new`.
+        // Closes #355: `const` フィールドも修飾子順序自由。`new public const` は
+        // コンパイラ上合法（同名ベースクラス const の隠蔽）だが、以前は visibility が
+        // `new` より前必須のため落ちていた。
+        var content = """
+            public class Base { public const int BaseConst = 1; }
+            public class Derived : Base
+            {
+                new public const int HiddenConst = 2;
+                public new const int HiddenConst2 = 3;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BaseConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst2" && s.Visibility == "public" && s.ReturnType == "int");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
