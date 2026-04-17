@@ -4191,6 +4191,66 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfacePropertyImpl()
+    {
+        // Issue #333: explicit-interface property implementations must be indexed just like
+        // their method counterparts, in both brace-body and expression-body forms, including
+        // generic interface qualifiers and alias-qualified / generic return types.
+        // Issue #333: explicit-interface プロパティ実装も、メソッド側と同じく brace body / expression body
+        // の両形式、generic interface 修飾子、alias-qualified / generic な戻り値型でインデックスされること。
+        var content = """
+            using System.Collections.Generic;
+            namespace Demo;
+
+            public interface IThing
+            {
+                int Value { get; set; }
+                string Name { get; }
+            }
+
+            public interface IBucket<T>
+            {
+                IReadOnlyList<T> Items { get; }
+            }
+
+            public class Svc : IThing, IBucket<int>
+            {
+                int IThing.Value { get; set; }
+                string IThing.Name => "x";
+                IReadOnlyList<int> IBucket<int>.Items => new List<int>();
+                ref readonly int IThing.Ref => ref _field;
+                private int _field;
+
+                public int Ordinary { get; set; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var svcProps = symbols.Where(s => s.Kind == "property" && s.ContainerName == "Svc").ToList();
+
+        var value = Assert.Single(svcProps, s => s.Name == "Value");
+        Assert.Equal("int", value.ReturnType);
+
+        var name = Assert.Single(svcProps, s => s.Name == "Name");
+        Assert.Equal("string", name.ReturnType);
+
+        var items = Assert.Single(svcProps, s => s.Name == "Items");
+        Assert.Equal("IReadOnlyList<int>", items.ReturnType);
+
+        var refProp = Assert.Single(svcProps, s => s.Name == "Ref");
+        Assert.Equal("int", refProp.ReturnType);
+
+        // Sanity: the ordinary property still lands exactly once, and the interface-side property
+        // declarations remain present in the symbol set (two entries each for Value / Items — the
+        // interface member and its explicit impl).
+        // Sanity: 通常 property も 1 件のまま、interface 側の property 宣言も引き続き抽出される
+        // （Value / Items は interface メンバー分と explicit 実装分の 2 件ずつが残る）。
+        Assert.Single(svcProps, s => s.Name == "Ordinary");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "Value"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "Items"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsIndexer()
     {
         var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
