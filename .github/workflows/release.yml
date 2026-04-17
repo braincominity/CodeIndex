@@ -38,20 +38,35 @@ jobs:
 
       # Same mitigation as .github/workflows/dotnet.yml for issue #394:
       # Windows Defender real-time scanning of the test suite's temp files
-      # dominates the Windows lane. Exclude workspace/temp/process paths so
-      # the release workflow's Windows test step does not pay 9x overhead.
+      # dominates the Windows lane. Exclude workspace/temp paths so the
+      # release workflow's Windows test step does not pay 9x overhead.
+      # -ExclusionProcess expects full image paths, so it is omitted here;
+      # -ErrorAction Stop plus a final Get-MpPreference verification make
+      # the step fail loudly instead of silently degrading.
       # dotnet.yml と同じ issue #394 対策。release workflow の Windows
-      # test step にも同じ exclusion を適用する。
+      # test step にも同じ exclusion を適用する。-ExclusionProcess は
+      # フルパス仕様のため使わず、-ErrorAction Stop と Get-MpPreference
+      # 検証で silent degradation を防ぐ。
       - name: Exclude workspace and temp paths from Windows Defender (Windows only)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess 'dotnet.exe' -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess 'git.exe' -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess 'testhost.exe' -ErrorAction SilentlyContinue
+          $paths = @(
+            "${{ github.workspace }}",
+            $env:RUNNER_TEMP,
+            $env:TEMP
+          ) | Where-Object { $_ } | Select-Object -Unique
+
+          foreach ($path in $paths) {
+            Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+          }
+
+          $prefs = Get-MpPreference
+          foreach ($path in $paths) {
+            if ($prefs.ExclusionPath -notcontains $path) {
+              throw "Windows Defender exclusion was not applied: $path"
+            }
+          }
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4

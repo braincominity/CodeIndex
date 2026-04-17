@@ -33,22 +33,41 @@ jobs:
       # Windows Defender real-time scanning of every temp file created by the
       # test suite (temp projects, SQLite DBs, .cdidx directories, synthetic
       # source files) dominates the Windows lane of this matrix; see issue #394.
-      # Excluding the workspace, runner temp, and the test process paths before
+      # Excluding the workspace, runner temp, and the user temp path before
       # build/test brings the Windows runtime back in line with macOS/Ubuntu.
+      # We rely on -ExclusionPath only: -ExclusionProcess expects full image
+      # paths, so bare filenames like 'dotnet.exe' would silently fail to take
+      # effect. Every Add-MpPreference call uses -ErrorAction Stop, and a
+      # final Get-MpPreference verification throws if any exclusion did not
+      # register so the step fails loudly instead of degrading silently.
       # テストスイートが大量に作る一時ファイル（temp project / SQLite DB /
       # .cdidx / 合成ソース）を Windows Defender が都度スキャンする影響で
       # Windows lane だけ極端に遅くなる（issue #394）。build/test 前に
-      # workspace と temp とテストプロセスを除外して macOS/Ubuntu と同等に戻す。
+      # workspace と temp を除外して macOS/Ubuntu と同等に戻す。
+      # -ExclusionProcess はフルパスを要求する仕様のため、bare filename では
+      # 黙って no-op になる。ここでは -ExclusionPath だけに寄せ、各呼び出しを
+      # -ErrorAction Stop で明示失敗させ、最後に Get-MpPreference で登録を
+      # 検証し、silent degradation を起こさないようにする。
       - name: Exclude workspace and temp paths from Windows Defender (Windows only)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess 'dotnet.exe' -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess 'git.exe' -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess 'testhost.exe' -ErrorAction SilentlyContinue
+          $paths = @(
+            "${{ github.workspace }}",
+            $env:RUNNER_TEMP,
+            $env:TEMP
+          ) | Where-Object { $_ } | Select-Object -Unique
+
+          foreach ($path in $paths) {
+            Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+          }
+
+          $prefs = Get-MpPreference
+          foreach ($path in $paths) {
+            if ($prefs.ExclusionPath -notcontains $path) {
+              throw "Windows Defender exclusion was not applied: $path"
+            }
+          }
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
