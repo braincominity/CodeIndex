@@ -3643,6 +3643,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedMultilineRawStringDefault_NormalizesCrlfToLf()
+    {
+        // Content split on '\n' leaves trailing '\r' on every line for CRLF-terminated
+        // sources (Windows CI with autocrlf=true, files saved from VS, etc.). The header
+        // slice builder must strip that trailing '\r' so inter-line separators stay '\n'
+        // regardless of line endings. Without this normalization the signature for a
+        // multi-line raw string default would carry `\r\n` between lines on Windows and
+        // `\n` on Linux / macOS, which breaks signature equality across OSes and broke
+        // the Windows CI run of #382.
+        // `\n` で分割した場合、CRLF 終端のソースでは各行末に '\r' が残る
+        // （autocrlf=true の Windows CI、VS で保存したファイルなど）。header スライス組み
+        // 立て側で末尾 '\r' を落とさないと、行間セパレータが OS に依存して `\r\n` / `\n`
+        // になり、signature の一致判定が崩れる。これは #382 の Windows CI 失敗の原因でも
+        // あった。
+        var content =
+            "namespace Demo;\r\n" +
+            "\r\n" +
+            "public sealed class Foo(\r\n" +
+            "    string text = \"\"\"\r\n" +
+            "    a  b\r\n" +
+            "    c\r\n" +
+            "    \"\"\")\r\n" +
+            "    : BaseFoo\r\n" +
+            "{\r\n" +
+            "}\r\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string text = \"\"\"\n    a  b\n    c\n    \"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_WrappedHeaderWithInterpolationHoleContainingNestedVerbatim_PreservesInnerLiteral()
     {
         // An interpolation hole in an outer `$"..."` must be classified as Code so the

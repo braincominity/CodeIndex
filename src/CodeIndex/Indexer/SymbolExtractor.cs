@@ -7288,10 +7288,17 @@ public static class SymbolExtractor
         for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
         {
             var line = lines[i];
-            int from = i == startLineIndex ? Math.Clamp(startColumn, 0, line.Length) : 0;
+            // Content was split on '\n', so CRLF lines carry a trailing '\r'. Trim it so the
+            // inter-line separator stays '\n' regardless of source-file line endings.
+            // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。行間を
+            // 必ず '\n' に揃えるため末尾の '\r' を落とす。
+            int length = line.Length;
+            if (length > 0 && line[length - 1] == '\r')
+                length--;
+            int from = i == startLineIndex ? Math.Clamp(startColumn, 0, length) : 0;
             int to = i == lastLineIndex && lastLineExclusiveEndColumn.HasValue
-                ? Math.Clamp(lastLineExclusiveEndColumn.Value, 0, line.Length)
-                : line.Length;
+                ? Math.Clamp(lastLineExclusiveEndColumn.Value, 0, length)
+                : length;
             if (to < from) to = from;
             if (i > startLineIndex)
                 rawSlice.Append('\n');
