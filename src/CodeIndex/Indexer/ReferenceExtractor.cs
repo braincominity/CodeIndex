@@ -137,20 +137,71 @@ public static class ReferenceExtractor
     public static bool SupportsLanguage(string? lang) =>
         lang != null && SupportedLanguages.Contains(lang);
 
+    public static bool? SupportsSymbolGraph(string? lang, string? kind, string? containerKind)
+    {
+        if (lang == null)
+            return null;
+
+        if (!SupportsLanguage(lang))
+            return false;
+
+        return IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind)
+            ? false
+            : true;
+    }
+
+    public static string? GetUnsupportedSymbolKind(string? lang, string? kind, string? containerKind)
+    {
+        return IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind)
+            ? "enum_member"
+            : null;
+    }
+
     /// <summary>
     /// Build a human-readable reason explaining graph-support status for the given language.
     /// Returns null when neither language nor support status is known.
     /// 指定言語の graph 対応状況を人間向けに説明する文字列を返す。言語も対応状況も不明なら null。
     /// </summary>
-    public static string? BuildGraphSupportReason(string? lang, bool? graphSupported)
+    public static string? BuildGraphSupportReason(string? lang, bool? graphSupported, string? kind = null, string? containerKind = null)
     {
         if (lang == null || graphSupported == null)
             return null;
+
+        if (IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind))
+            return "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet.";
 
         if (graphSupported.Value)
             return $"Call-graph extraction is indexed for '{lang}'.";
 
         return $"Call-graph extraction is not indexed for '{lang}'. Use search, definition, excerpt, or files instead.";
+    }
+
+    public static string? BuildGraphSupportReasonWithUnsupportedEnumMemberGap(string? lang, bool? graphSupported, bool hasUnsupportedEnumMember, bool hasSupportedGraphDefinition)
+    {
+        var baseReason = BuildGraphSupportReason(lang, graphSupported);
+        if (!hasUnsupportedEnumMember)
+            return baseReason;
+
+        var enumGapReason = hasSupportedGraphDefinition
+            ? "Exact results also include C# enum members whose access edges are not indexed yet."
+            : BuildGraphSupportReason("csharp", true, "enum", "enum");
+
+        if (!hasSupportedGraphDefinition)
+            return enumGapReason;
+
+        if (string.IsNullOrWhiteSpace(baseReason))
+            return enumGapReason;
+        if (string.IsNullOrWhiteSpace(enumGapReason) || string.Equals(baseReason, enumGapReason, StringComparison.Ordinal))
+            return baseReason;
+
+        return $"{baseReason} {enumGapReason}";
+    }
+
+    private static bool IsUnsupportedCSharpEnumMemberSymbol(string? lang, string? kind, string? containerKind)
+    {
+        return string.Equals(lang, "csharp", StringComparison.Ordinal)
+            && string.Equals(kind, "enum", StringComparison.Ordinal)
+            && string.Equals(containerKind, "enum", StringComparison.Ordinal);
     }
 
     /// <summary>
