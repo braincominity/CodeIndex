@@ -37,6 +37,7 @@ public partial class DbReader
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
+    internal readonly bool _csharpSymbolNameContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
     // globally disabling families for unrelated marker types.
@@ -152,6 +153,10 @@ public partial class DbReader
         _foldReady = foldBitSet
             && storedFoldVersion == NameFold.Version
             && string.Equals(storedFoldFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal);
+        _csharpSymbolNameContractCurrent = string.Equals(
+            TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
+            DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
         _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
@@ -348,6 +353,50 @@ public partial class DbReader
         return new(false, HasMissingIndex: true, HasMissingTable: false, BuildExactGraphIndexReason(missingIndexes));
     }
 
+    private ExactQuerySignal? GetCSharpCanonicalNameExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        DateTime? since = null)
+    {
+        if (_csharpSymbolNameContractCurrent)
+            return null;
+
+        if (!ScopeMayIncludeCSharpFiles(lang, pathPatterns, excludePathPatterns, excludeTests, since))
+            return null;
+
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: false,
+            HasMissingTable: false,
+            DegradedReason: "csharp_symbol_name_ready=false (canonical C# operator / conversion operator / indexer names are stale in this DB)");
+    }
+
+    private bool ScopeMayIncludeCSharpFiles(
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        DateTime? since)
+    {
+        if (lang != null && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var sql = "SELECT 1 FROM files f WHERE f.lang = 'csharp'";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        if (since != null && _fileColumns.Contains("modified"))
+            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return cmd.ExecuteScalar() != null;
+    }
+
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
     {
         var participating = signals.Where(signal => signal.HasValue).Select(signal => signal!.Value).ToList();
@@ -370,29 +419,64 @@ public partial class DbReader
             DegradedReason: reasons.Count == 0 ? null : string.Join("; ", reasons));
     }
 
-    public ExactQuerySignal GetSymbolsExactQuerySignal() =>
-        BuildExactSymbolSignal(SymbolNameExactIndexAvailable,
-            _foldReady ? "idx_symbols_name_folded" : "idx_symbols_name_nocase");
+    public ExactQuerySignal GetSymbolsExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        DateTime? since = null)
+        => CombineExactSignals(
+            BuildExactSymbolSignal(SymbolNameExactIndexAvailable,
+                _foldReady ? "idx_symbols_name_folded" : "idx_symbols_name_nocase"),
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests, since));
 
-    public ExactQuerySignal GetDefinitionExactQuerySignal() =>
-        GetSymbolsExactQuerySignal();
+    public ExactQuerySignal GetDefinitionExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        DateTime? since = null)
+        => GetSymbolsExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests, since);
 
-    public ExactQuerySignal GetReferencesExactQuerySignal() =>
-        BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
-            _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+    public ExactQuerySignal GetReferencesExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+        => CombineExactSignals(
+            BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
+                _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
-    public ExactQuerySignal GetCallersExactQuerySignal() =>
-        BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
-            _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+    public ExactQuerySignal GetCallersExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+        => CombineExactSignals(
+            BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
+                _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
-    public ExactQuerySignal GetCalleesExactQuerySignal() =>
-        BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
-            _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
+    public ExactQuerySignal GetCalleesExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+        => CombineExactSignals(
+            BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
+                _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
-    public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(bool includeGraphSignal = true)
+    public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
+        bool includeGraphSignal = true,
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
     {
         return CombineExactSignals(
-            GetDefinitionExactQuerySignal(),
+            GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
     }
 
@@ -2056,6 +2140,8 @@ public partial class DbReader
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
         var references = _hasReferencesTable ? ExecuteScalar("SELECT COUNT(*) FROM symbol_references") : 0L;
         var freshness = GetWorkspaceFreshness();
+        var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
+        var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -2076,6 +2162,7 @@ public partial class DbReader
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesTable,
+            CSharpSymbolNameReady = csharpSymbolNameReady,
             FoldReady = _foldReady,
         };
     }

@@ -3159,6 +3159,211 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPartialProperties()
+    {
+        var content = """
+            namespace Demo;
+
+            public abstract partial class BaseModel
+            {
+                public abstract string Description { get; }
+            }
+
+            public partial class Model : BaseModel
+            {
+                public partial string Name
+                {
+                    get;
+                    set;
+                }
+
+                public partial int Count
+                {
+                    get;
+                }
+
+                public string NotPartial { get; set; } = string.Empty;
+            }
+
+            public partial class Model
+            {
+                private string _name = string.Empty;
+
+                public partial string Name
+                {
+                    get => _name;
+                    set => _name = value;
+                }
+
+                public partial int Count
+                    => 42;
+
+                public partial override string Description
+                    => "demo";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Name") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Count") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Description") >= 2);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NotPartial");
+
+        var countImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.Line == 34));
+        Assert.Equal(34, countImplementation.StartLine);
+        Assert.Equal(35, countImplementation.EndLine);
+
+        var descriptionImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Description" && s.Line == 37));
+        Assert.Equal(37, descriptionImplementation.StartLine);
+        Assert.Equal(38, descriptionImplementation.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string
+                    SplitName
+                    => "x";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        Assert.Equal(5, property.StartLine);
+        Assert.Equal(7, property.EndLine);
+        Assert.Equal("public string SplitName => \"x\";", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "SplitName");
+    }
+
+    [Fact]
+    public void Extract_CSharp_LongGenericMultilinePropertyHeader_KeepsReturnTypeAndSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public Dictionary<
+                    string,
+                    List<
+                        int
+                    >>
+                    Count
+                    => new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("Dictionary<string,List<int>>", property.ReturnType);
+        Assert.Equal("public Dictionary< string, List< int >> Count => new();", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Count");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceOnNextLinePropertyHeader_KeepsHeaderSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string SplitName
+                {
+                    get;
+                    set;
+                }
+
+                public int Count
+                { get => 1; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var splitName = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("public string SplitName {", splitName.Signature);
+        Assert.Equal("public int Count {", count.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial int Count
+                    => DateTime.Now.Day switch
+                    {
+                        > 15 => 2,
+                        _ => 1
+                    };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal(5, count.StartLine);
+        Assert.Equal(10, count.EndLine);
+        Assert.Equal("public partial int Count => DateTime.Now.Day switch", count.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_PartialPropertyImplementation_WithAccessorAttribute_IsDetected()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial string Name { get; set; }
+            }
+
+            public partial class Model
+            {
+                public partial string Name { [System.Obsolete] get => "x"; set { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.Signature != null && s.Signature.Contains("[System.Obsolete]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_PartialPropertyImplementation_WithMultilineAccessorAttribute_IsDetected()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial string Name
+                {
+                    [System.Obsolete(
+                        "x"
+                    )]
+                    get => "x";
+                    set { }
+                }
+
+                public int Other => 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Other");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """
@@ -3883,7 +4088,7 @@ public class SymbolExtractorTests
         var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var indexer = symbols.FirstOrDefault(s => s.Name == "this");
+        var indexer = symbols.FirstOrDefault(s => s.Name == "Item");
         Assert.NotNull(indexer);
         Assert.Equal("function", indexer.Kind);
         Assert.Equal("string", indexer.ReturnType);
@@ -3892,14 +4097,104 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsOperatorOverloads()
     {
-        var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
+        var content = "using System.Collections.Generic;\npublic unsafe struct Money\n{\n    public static (int whole, int cents) operator +(Money a, Money b) => (0, 0);\n    public static Dictionary<string, int> operator -(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static checked Money operator checked +(Money a, Money b) => new();\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n    public static explicit operator checked byte(Money m) => 0;\n    public static explicit operator Dictionary<string,int>(Money m) => new();\n    public static explicit operator (int whole,int cents)(Money m) => (0, 0);\n    public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;\n    public static explicit operator (int[] items, int count)(Money m) => ([], 0);\n    public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);\n    public static unsafe explicit operator int*(Money m) => (int*)0;\n    public static unsafe explicit operator delegate* unmanaged[Cdecl]<int, void>(Money m) => (delegate* unmanaged[Cdecl]<int, void>)0;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator -");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator ==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator decimal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Money");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked byte");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Dictionary<string, int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int whole, int cents)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (Dictionary<string, int> map, int count)?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int[] items, int count)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator ((int a, int b) pair, int count)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator delegate* unmanaged[Cdecl]<int, void>");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsPointerReturnTypes()
+    {
+        // Issue #234: methods with pointer / function-pointer return types must still be indexed.
+        // Issue #234: ポインタ / 関数ポインタ戻り値型のメソッドも取りこぼさずインデックスする。
+        var content = "namespace Demo;\n\npublic unsafe class FP\n{\n    public int* Get(int[] a) { fixed (int* p = a) { return p; } }\n    public void** Double() => null;\n    public byte* Get1() => null;\n    public delegate*<int, int> Transform() => null;\n    public static unsafe int*[] Arr() => null!;\n    public unsafe void Modify(int* p, int v) { *p = v; }\n    public static unsafe int Deref(int* p) => *p;\n    public int* P { get; set; }\n    public byte* Q => null;\n    public int* this[int i] => null;\n}\n\npublic unsafe delegate int* PointerDelegate(int x);\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Double" && s.ReturnType == "void**");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get1" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Transform" && s.ReturnType == "delegate*<int, int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Arr" && s.ReturnType == "int*[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Modify");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Deref");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Q" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PointerDelegate" && s.ReturnType == "int*");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfacePointerReturnTypes()
+    {
+        // Issue #234: explicit-interface implementations with pointer / function-pointer
+        // return types must still be indexed, including nested generics inside the
+        // function-pointer payload and `delegate* unmanaged[Cdecl]<...>` calling conventions.
+        // Issue #234: explicit-interface 実装のポインタ / 関数ポインタ戻り値型も取りこぼさず、
+        // function-pointer 内部に入れ子の generic がある場合や `delegate* unmanaged[Cdecl]<...>` でも動くこと。
+        var content = """
+            namespace Demo;
+
+            public unsafe interface IFoo
+            {
+                int* Get();
+                delegate*<int, int> Transform();
+                delegate*<System.Collections.Generic.List<int>, int> TransformNested();
+                delegate*<delegate*<int, void>, int> TransformFp();
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> TransformUnmanaged();
+                byte** Double();
+                int*[] Arr();
+            }
+
+            public unsafe class Foo : IFoo
+            {
+                int* IFoo.Get() => null;
+                delegate*<int, int> IFoo.Transform() => null;
+                delegate*<System.Collections.Generic.List<int>, int> IFoo.TransformNested() => null;
+                delegate*<delegate*<int, void>, int> IFoo.TransformFp() => null;
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> IFoo.TransformUnmanaged() => null;
+                byte** IFoo.Double() => null;
+                int*[] IFoo.Arr() => null!;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Get"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Transform"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformNested"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformFp"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformUnmanaged"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Double"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Arr"));
+
+        var impls = symbols.Where(s => s.Kind == "function" && s.ContainerName == "Foo").ToList();
+        Assert.Equal("int*", impls.Single(s => s.Name == "Get").ReturnType);
+        Assert.Equal("delegate*<int, int>", impls.Single(s => s.Name == "Transform").ReturnType);
+        Assert.Equal("delegate*<System.Collections.Generic.List<int>, int>", impls.Single(s => s.Name == "TransformNested").ReturnType);
+        Assert.Equal("delegate*<delegate*<int, void>, int>", impls.Single(s => s.Name == "TransformFp").ReturnType);
+        // Spaces inside `unmanaged[...]<...>` payload are collapsed by CollapseCSharpGenericTypeWhitespace
+        // because the outer `<` has `]` as predecessor (a recognized generic-angle start); non-unmanaged
+        // `delegate*<...>` keeps payload spaces because the outer `<` has `*` as predecessor.
+        // `unmanaged[...]<...>` の payload 内のスペースは CollapseCSharpGenericTypeWhitespace で除去される
+        // （outer `<` の直前が `]` で generic angle start と認識されるため）。通常の `delegate*<...>` は
+        // outer `<` の直前が `*` で認識されないため payload 内スペースは保持される。
+        Assert.Equal("delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>,int>", impls.Single(s => s.Name == "TransformUnmanaged").ReturnType);
+        Assert.Equal("byte**", impls.Single(s => s.Name == "Double").ReturnType);
+        Assert.Equal("int*[]", impls.Single(s => s.Name == "Arr").ReturnType);
     }
 
     [Fact]
@@ -3996,7 +4291,7 @@ public class SymbolExtractorTests
         Assert.Equal("Dictionary<string,int>", lookup.ReturnType);
         Assert.Equal("Holder", lookup.ContainerName);
 
-        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "this"));
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item"));
         Assert.Equal("Dictionary<string,int>", indexer.ReturnType);
         Assert.Equal("Holder", indexer.ContainerName);
 
@@ -4065,8 +4360,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRef" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRefRo" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropReadonly" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.Signature != null && s.Signature.Contains("public readonly ref readonly int this[int index]"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Signature != null && s.Signature.Contains("public readonly ref readonly int this[int index]"));
 
         var explicitGetRef = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetRef" && s.ContainerName == "RefBox"));
         Assert.Equal("int", explicitGetRef.ReturnType);

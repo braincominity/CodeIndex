@@ -2928,6 +2928,147 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesUnchangedCSharpFilesWhenCanonicalNameContractChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "money.cs"),
+                """
+                public struct Money
+                {
+                    public static explicit operator Money(decimal d) => new();
+                }
+
+                public class Bag
+                {
+                    public string this[int index] => "";
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.True(json.GetProperty("csharp_symbol_name_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var exactNameCmd = verify.CreateCommand();
+            exactNameCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'explicit operator Money'";
+            Assert.Equal(1L, (long)exactNameCmd.ExecuteScalar()!);
+
+            using var itemCmd = verify.CreateCommand();
+            itemCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'Item'";
+            Assert.Equal(1L, (long)itemCmd.ExecuteScalar()!);
+
+            using var legacyNameCmd = verify.CreateCommand();
+            legacyNameCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name IN ('explicit', 'this')";
+            Assert.Equal(0L, (long)legacyNameCmd.ExecuteScalar()!);
+
+            using var contractCmd = verify.CreateCommand();
+            contractCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version'";
+            Assert.Equal(
+                DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                contractCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_JsonReportsDegradedCSharpCanonicalNameTrust()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "money.cs"),
+                """
+                public struct Money
+                {
+                    public static explicit operator Money(decimal d) => new();
+                }
+
+                public class Bag
+                {
+                    public string this[int index] => "";
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+
+            int humanExitCode;
+            string output;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    humanExitCode = QueryCommandRunner.RunStatus(["--db", dbPath], _jsonOptions);
+                    output = writer.ToString();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("WARN    : C# exact-name for operators / conversion operators / indexers is degraded.", output);
+            Assert.Contains("--db", output);
+            Assert.Contains(Path.GetFullPath(projectRoot), output);
+            Assert.Contains(Path.GetFullPath(dbPath), output);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {
         var projectRoot = CreateTempProject();
@@ -3693,7 +3834,6 @@ public class IndexCommandRunnerTests
                 {
                     public void Run()
                     {
-                        Run(1);
                     }
                 }
                 """);
@@ -3706,6 +3846,18 @@ public class IndexCommandRunnerTests
                     public void Run(int value) { }
                 }
                 """);
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Caller.cs"),
+                """
+                namespace Shared;
+
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                    }
+                }
+                """);
 
             File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part1.cs"),
                 """
@@ -3715,7 +3867,6 @@ public class IndexCommandRunnerTests
                 {
                     public void Run()
                     {
-                        Run(1);
                     }
                 }
                 """);
@@ -3728,6 +3879,18 @@ public class IndexCommandRunnerTests
                     public void Run(int value) { }
                 }
                 """);
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Caller.cs"),
+                """
+                namespace Shared;
+
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                    }
+                }
+                """);
 
             var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -3736,20 +3899,10 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
 
-            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.Equal(CommandExitCodes.NotFound, hotspotsExitCode);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
-
-            var runRows = hotspotsJson.GetProperty("hotspots")
-                .EnumerateArray()
-                .Where(item => item.GetProperty("name").GetString() == "Run")
-                .OrderBy(item => item.GetProperty("path").GetString(), StringComparer.Ordinal)
-                .ToList();
-
-            Assert.Equal(2, runRows.Count);
-            Assert.StartsWith("projA/src/Api.Part", runRows[0].GetProperty("path").GetString(), StringComparison.Ordinal);
-            Assert.Equal(1, runRows[0].GetProperty("reference_count").GetInt32());
-            Assert.StartsWith("projB/src/Api.Part", runRows[1].GetProperty("path").GetString(), StringComparison.Ordinal);
-            Assert.Equal(1, runRows[1].GetProperty("reference_count").GetInt32());
+            Assert.Equal(0, hotspotsJson.GetProperty("count").GetInt32());
+            Assert.Empty(hotspotsJson.GetProperty("hotspots").EnumerateArray());
         }
         finally
         {

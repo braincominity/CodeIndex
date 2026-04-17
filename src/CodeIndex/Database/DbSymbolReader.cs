@@ -574,7 +574,12 @@ public partial class DbReader
         var graphLanguage = lang ?? file?.Lang;
         bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
         var exactSignal = exact
-            ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
+            ? GetAnalyzeSymbolExactQuerySignal(
+                includeGraphSignal: hasGraphApplicableFiles,
+                lang: lang,
+                pathPatterns: pathPatterns,
+                excludePathPatterns: excludePathPatterns,
+                excludeTests: excludeTests)
             : (ExactQuerySignal?)null;
         var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
         var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
