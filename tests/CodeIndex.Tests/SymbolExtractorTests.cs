@@ -4183,11 +4183,21 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsExplicitInterfaceImpl()
     {
-        var content = "public class MyClass : IDisposable, IComparable<MyClass>\n{\n    void IDisposable.Dispose()\n    {\n    }\n    int IComparable<MyClass>.CompareTo(MyClass other) => 0;\n}";
+        // Issue #333: the qualifier-pattern widening that unblocked explicit-interface
+        // property extraction also fixes the pre-existing method row for multi-argument
+        // generic qualifiers (e.g. `IMap<string, int>.GetCount`) and qualifiers that embed
+        // nullable / array type arguments.
+        // Issue #333: explicit-interface プロパティ抽出のために広げた qualifier パターンは、
+        // 既存のメソッド行にも波及し、`IMap<string, int>.GetCount` のような多引数 generic
+        // 修飾子や、nullable / array を含む型引数を正しく拾えるようになる。
+        var content = "public class MyClass : IDisposable, IComparable<MyClass>\n{\n    void IDisposable.Dispose()\n    {\n    }\n    int IComparable<MyClass>.CompareTo(MyClass other) => 0;\n    int IMap<string, int>.GetCount() => 0;\n    string IFoo<string?>.NullableArg() => \"n\";\n    string IFoo<int[]>.ArrayArg() => \"a\";\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CompareTo" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetCount" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NullableArg" && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ArrayArg" && s.ReturnType == "string");
     }
 
     [Fact]
@@ -4219,6 +4229,9 @@ public class SymbolExtractorTests
                 string IThing.Name => "x";
                 IReadOnlyList<int> IBucket<int>.Items => new List<int>();
                 ref readonly int IThing.Ref => ref _field;
+                int IMap<string, int>.PairCount => 2;
+                string IFoo<string?>.Nullable => "n";
+                string IFoo<int[]>.ArrayArg => "a";
                 private int _field;
 
                 public int Ordinary { get; set; }
@@ -4239,6 +4252,20 @@ public class SymbolExtractorTests
 
         var refProp = Assert.Single(svcProps, s => s.Name == "Ref");
         Assert.Equal("int", refProp.ReturnType);
+
+        // Multi-argument generic qualifier (`IMap<string, int>.PairCount`) and single-arg
+        // generic qualifiers that embed nullable / array types — all three were silently
+        // dropped before the qualifier pattern was widened.
+        // 複数型引数の generic qualifier (`IMap<string, int>.PairCount`) と、単一型引数でも
+        // nullable / array を内包する qualifier は、qualifier パターン拡張前は黙って消えていた。
+        var pairCount = Assert.Single(svcProps, s => s.Name == "PairCount");
+        Assert.Equal("int", pairCount.ReturnType);
+
+        var nullable = Assert.Single(svcProps, s => s.Name == "Nullable");
+        Assert.Equal("string", nullable.ReturnType);
+
+        var arrayArg = Assert.Single(svcProps, s => s.Name == "ArrayArg");
+        Assert.Equal("string", arrayArg.ReturnType);
 
         // Sanity: the ordinary property still lands exactly once, and the interface-side property
         // declarations remain present in the symbol set (two entries each for Value / Items — the

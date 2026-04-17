@@ -689,11 +689,19 @@ public static class SymbolExtractor
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     // Explicit-interface implementations reuse CSharpTypePattern for the return type so nested
     // generics and function pointers (`delegate*<List<int>, int>`, `delegate*<delegate*<int, void>, int>`)
-    // are handled uniformly with the regular method / property / indexer / delegate paths.
+    // are handled uniformly with the regular method / property / indexer / delegate paths. The
+    // qualifier itself also has to span multi-argument generics (`IMap<string, int>.Prop`),
+    // nullable / array / pointer type arguments (`IFoo<string?>.X`, `IFoo<int[]>.X`, `IFoo<int*>.X`),
+    // and nested type paths (`Outer.Inner<T>.Bar`). The shape mirrors CSharpTypePattern's token set
+    // so comma + whitespace combinations inside generic argument lists are not dropped.
     // 明示的インターフェース実装の戻り値型は CSharpTypePattern を共有するため、入れ子の generic や
     // `delegate*<...>` / `delegate* unmanaged[Cdecl]<...>` も通常メソッドと同じ経路で扱える。
+    // qualifier 側も複数型引数 generic (`IMap<string, int>.Prop`)、nullable / array / pointer 型引数
+    // (`IFoo<string?>.X` / `IFoo<int[]>.X` / `IFoo<int*>.X`)、入れ子型パス (`Outer.Inner<T>.Bar`)
+    // を通せるように CSharpTypePattern と同じトークン集合へ揃え、generic 引数リスト内の
+    // `,` + 空白の組み合わせを落とさないようにする。
     private const string CSharpExplicitInterfaceQualifierPattern =
-        @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)(?:[\w.<>:]*)";
+        @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)[\w?.<>\[\],:*]*(?:\s+[\w?.<>\[\],:*]+)*";
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
     // Accepts `Type Name`, `Type`, and `Type Name {` (bare brace at end of declaration
