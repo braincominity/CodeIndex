@@ -1337,6 +1337,37 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpRecordChain_SplitLinePrimaryCtorAndBaseCall_AttributesToSyntheticRecordCtor()
+    {
+        // Legal C# formatter style where the primary-ctor parens and `: Parent(...)` are split
+        // across multiple lines: `record Child` / `(` / `  int Value` / `)` / `  : Parent(Value);`.
+        // The joined-header record detector must still pick this up so the base call is attributed
+        // to the synthetic function-kind container named after the record, not to class/null.
+        // record 名と `(` を別行に分け、base 呼び出しもさらに別行に置く合法な改行スタイル。
+        // 連結済みヘッダーベースの record 判定で拾い、`Parent(...)` を record の合成 function
+        // コンテナに紐付ける必要がある。
+        const string content = """
+            namespace Demo;
+
+            public record Parent(int Value);
+
+            public record Child
+            (
+                int Value
+            )
+                : Parent(Value);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
+        Assert.Equal("call", parentRef.ReferenceKind);
+        Assert.Equal("function", parentRef.ContainerKind);
+        Assert.Equal("Child", parentRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpGenericBase_StripsGenericArgs()
     {
         const string content = """

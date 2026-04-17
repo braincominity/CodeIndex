@@ -167,6 +167,14 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpRecordPrimaryCtorSignatureRegex = new(
         @"\brecord\s+(?:class\s+|struct\s+)?\w+(?:<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
+    // Same intent as CSharpRecordPrimaryCtorSignatureRegex but applied to the joined multi-line
+    // header produced by CollectCSharpRecordHeader, so split-line forms like
+    // `public record Child\n(\n    int Value\n)\n    : Parent(Value);` still match.
+    // CollectCSharpRecordHeader で連結された複数行ヘッダーに対しても当てるため、`record` と
+    // `(` が別行に分かれる書式でも primary-ctor record と判定できるようにする。
+    private static readonly Regex CSharpRecordPrimaryCtorHeaderRegex = new(
+        @"\brecord\s+(?:class\s+|struct\s+)?\w+(?:\s*<[^>]+>)?\s*\(",
+        RegexOptions.Compiled);
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -909,17 +917,18 @@ public static class ReferenceExtractor
             var signature = symbol.Signature;
             if (string.IsNullOrWhiteSpace(signature))
                 continue;
-            // Quick filter: only bother for declarations that look like a record primary-ctor opener.
-            // 前段フィルタ: record のプライマリコンストラクタ宣言に見える場合だけ続行する。
-            if (!CSharpRecordPrimaryCtorSignatureRegex.IsMatch(signature))
-                continue;
 
-            // Signature stored on the SymbolRecord is only the first declaration line, so for
-            // multi-line forms it may not contain `: Parent(...)`. Walk the structural-masked lines
-            // from StartLine until we hit `;` or `{` and examine the joined header text.
-            // 宣言の signature は 1 行目だけなので、複数行宣言では `: Parent(...)` が含まれていない
-            // ことがある。structuralLines を使って `;` / `{` までヘッダーを連結してから判定する。
+            // SymbolRecord.Signature only captures the first declaration line, so the first-line
+            // regex filter misses split-line primary-ctor forms such as
+            // `public record Child\n(\n    int Value\n)\n    : Parent(Value);`. Walk the
+            // structural-masked lines from StartLine until we hit `;` / `{` and run the record
+            // detection on the joined header text instead.
+            // 宣言の signature は 1 行目だけしか持たないので、`record` と `(` を別行に分ける
+            // 改行スタイルでは先頭行 regex の前段フィルタが空振りする。ここでは structuralLines
+            // から `;` / `{` までヘッダーを連結し、連結後のテキストで record 判定を行う。
             var (headerEndLine, headerText) = CollectCSharpRecordHeader(structuralLines, symbol.StartLine);
+            if (!IsCSharpRecordPrimaryCtorHeader(headerText))
+                continue;
             if (!HasCSharpRecordBasePrimaryCtorCall(headerText))
                 continue;
 
@@ -1010,6 +1019,22 @@ public static class ReferenceExtractor
     /// <see cref="CollectCSharpRecordHeader"/>.
     /// C# 型ヘッダー（複数行連結後でも可）の base-list 先頭エントリが `(` を含むかを判定する。
     /// </summary>
+    /// <summary>
+    /// Return true when a joined C# type-declaration header (possibly spanning multiple lines,
+    /// including line-broken primary-ctor parens) looks like a record declaration that carries a
+    /// primary constructor parameter list. Accepts `record Child(...)`, `record class Child(...)`,
+    /// `record struct Child(...)`, generic arity such as `record Child<T>(...)`, and the
+    /// split-line form where `record Child\n(\n ... )` places the `(` on a continuation line.
+    /// 連結済みの C# 宣言ヘッダーが record primary-ctor ヘッダーかを判定する。`record` と `(` が
+    /// 別行に分かれる改行スタイルでも拾う。
+    /// </summary>
+    private static bool IsCSharpRecordPrimaryCtorHeader(string headerText)
+    {
+        if (string.IsNullOrWhiteSpace(headerText))
+            return false;
+        return CSharpRecordPrimaryCtorHeaderRegex.IsMatch(headerText);
+    }
+
     private static bool HasCSharpRecordBasePrimaryCtorCall(string headerText)
     {
         var text = headerText.TrimEnd();
