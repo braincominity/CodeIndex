@@ -3630,6 +3630,53 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_BlockBodiedProperty_AllmanStyle_IsExtracted()
+    {
+        // issue #233 review follow-up: Allman-style block-bodied properties (with `{` on
+        // the next line) were not matched by the property regex, so `callers` would
+        // attribute accessor-internal references to the enclosing class. The widened
+        // regex plus `ShouldSkipCSharpHeaderOnlyPropertyCandidate` verification must
+        // still recognize them as properties with proper body ranges.
+        // issue #233 のレビュー指摘: Allman スタイル（次行に `{`）の block-bodied property が
+        // property regex でマッチしておらず、accessor 内の参照がクラスに帰属していた。
+        // widened regex と `ShouldSkipCSharpHeaderOnlyPropertyCandidate` の組み合わせで
+        // 正しく property として認識され、本体範囲も持つ必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    {\n        get { return Compute(); }\n    }\n    public string Name\n    {\n        get;\n        set;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(5, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Equal(8, name.StartLine);
+        Assert.Equal(12, name.EndLine);
+        Assert.Equal(9, name.BodyStartLine);
+        Assert.Equal(12, name.BodyEndLine);
+        Assert.Equal("string", name.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_HeaderOnlyNonProperty_IsNotMisclassified()
+    {
+        // issue #233 review follow-up: the header-only property alternation must not
+        // swallow keyword lines such as `public class X` or `return Foo` even if they
+        // happen to look like `Type Name` before a newline.
+        // issue #233 のレビュー指摘: header-only の alternation が `public class X` や
+        // `return Foo` のようなキーワード行を property と誤分類しないことを担保する。
+        var content = "public class Thing\n{\n    public int Method()\n    {\n        return Thing;\n    }\n}\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Method");
+    }
+
+    [Fact]
     public void Extract_CSharp_SwitchExpressionArms_DoNotProducePhantomProperties()
     {
         var content = """

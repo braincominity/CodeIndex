@@ -285,9 +285,19 @@ public static class SymbolExtractor
             // Constructor (no return type, name followed by parenthesis) — needs visibility
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Property with get/set/init — visibility optional
-            // プロパティ（get/set/init）— visibility 省略可
-            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Property with get/set/init — visibility optional. Matches both same-line
+            // `{ get|set|init` (K&R style) and header-only lines whose `{` lives on a
+            // following line (Allman style). Allman-style matches are then verified by
+            // `ShouldSkipCSharpHeaderOnlyPropertyCandidate` to confirm the next non-blank
+            // line begins with `{`; the negative lookahead on returnType prevents keyword
+            // lines like `public class X` / `return Foo` from being misclassified.
+            // プロパティ（get/set/init）— visibility 省略可。同一行で `{ get|set|init` が
+            // 続く K&R スタイルと、`{` が次行にある Allman スタイルの両方にマッチする。
+            // Allman スタイルのマッチは `ShouldSkipCSharpHeaderOnlyPropertyCandidate` で
+            // 次の空白以外の行が `{` で始まることを確認してから採用する。returnType 前の
+            // negative lookahead が `public class X` / `return Foo` のようなキーワード行を
+            // property に誤分類するのを防ぐ。
+            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*(?:\{\s*(?:get|set|init)|$)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate.
             // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns the
             // declaration line as the body range, enabling caller attribution through
@@ -721,6 +731,9 @@ public static class SymbolExtractor
                     }
 
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
+                        break;
+
+                    if (ShouldSkipCSharpHeaderOnlyPropertyCandidate(lang, pattern, match, lines, i))
                         break;
 
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssQualifiedRuleAncestors, i))
@@ -5306,6 +5319,48 @@ public static class SymbolExtractor
         && csharpSwitchExpressionLines != null
         && csharpSwitchExpressionLines[lineIndex]
         && matchLine.Contains("=>", StringComparison.Ordinal);
+
+    // Verify an Allman-style property candidate (header line matched without `{` on the
+    // same line) is actually followed by a block body. Without this guard, any bare
+    // `Type Name` line could be misclassified as a property when the widened regex
+    // alternation (`$`) matches end-of-line.
+    // Allman スタイルで property として候補になった行（同一行に `{` を持たない）が
+    // 実際に次行にブロック本体を持つかを確認する。このガードがないと、regex の
+    // 選択肢（`$`）に引っかかった `Type Name` だけの行が property と誤認される。
+    private static bool ShouldSkipCSharpHeaderOnlyPropertyCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        Match match,
+        string[] lines,
+        int lineIndex)
+    {
+        if (lang != "csharp" || pattern.Kind != "property")
+            return false;
+
+        // Same-line accessor block present (contains `{`) — no follow-up verification needed.
+        // 同一行に accessor block (`{`) があるケースはこのチェック不要。
+        if (match.Value.Contains('{', StringComparison.Ordinal))
+            return false;
+
+        // Expression-bodied property (`=> expr`) — verified by FindCSharpBraceRange.
+        // 式本体プロパティ（`=> expr`）は FindCSharpBraceRange が別途扱う。
+        if (match.Value.Contains("=>", StringComparison.Ordinal))
+            return false;
+
+        for (int j = lineIndex + 1; j < lines.Length; j++)
+        {
+            var candidate = lines[j].TrimStart();
+            if (candidate.Length == 0)
+                continue;
+            if (candidate.StartsWith("//", StringComparison.Ordinal)
+                || candidate.StartsWith("/*", StringComparison.Ordinal)
+                || candidate.StartsWith('*'))
+                continue;
+            return !candidate.StartsWith('{');
+        }
+
+        return true;
+    }
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
     {

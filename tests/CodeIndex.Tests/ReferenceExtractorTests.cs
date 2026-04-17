@@ -80,6 +80,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpBlockBodiedPropertyAccessor_AttributesToProperty()
+    {
+        // issue #233 review follow-up: Allman-style block-bodied properties (with `{`
+        // on the next line) must have accessor-internal calls attributed to the property,
+        // not the enclosing class.
+        // issue #233 のレビュー指摘: Allman スタイル（次行に `{`）の block-bodied property は、
+        // accessor 内部の呼び出しが外側クラスではなく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap
+                {
+                    get { return Compute(); }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpDefinitionLine_DoesNotBecomeReference()
     {
         const string content = """
