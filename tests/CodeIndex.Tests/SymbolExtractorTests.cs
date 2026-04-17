@@ -3668,6 +3668,82 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsSpacedAndNestedGenericReturnTypeMethods()
+    {
+        var content = """
+            public class App
+            {
+                public Task<Result<string, Error>> WithSpace() => null!;
+                public Task<Result<string,Error>> NoSpace() => null!;
+                public Dictionary<string, List<int>> Map() => new();
+                public Tuple<int, int, int, int> Quad() => new(1, 2, 3, 4);
+                public Func<int, int, int> Make() => null!;
+                public Task<List<Tuple<int, int, int>>> Deep() => null!;
+                public (int Left, string Right) Pair() => default;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var withSpace = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WithSpace"));
+        Assert.Equal("Task<Result<string,Error>>", withSpace.ReturnType);
+
+        var noSpace = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "NoSpace"));
+        Assert.Equal("Task<Result<string,Error>>", noSpace.ReturnType);
+
+        var map = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Map"));
+        Assert.Equal("Dictionary<string,List<int>>", map.ReturnType);
+
+        var quad = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Quad"));
+        Assert.Equal("Tuple<int,int,int,int>", quad.ReturnType);
+
+        var make = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Make"));
+        Assert.Equal("Func<int,int,int>", make.ReturnType);
+
+        var deep = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Deep"));
+        Assert.Equal("Task<List<Tuple<int,int,int>>>", deep.ReturnType);
+
+        var pair = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Pair"));
+        Assert.Equal("(int Left, string Right)", pair.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSpacedGenericTypeMembersBeyondMethods()
+    {
+        var content = """
+            public delegate Dictionary<string, int> Factory();
+
+            public interface IFoo
+            {
+                Dictionary<string, int> Get();
+            }
+
+            public class Holder : IFoo
+            {
+                public Dictionary<string, int> Lookup { get; set; } = new();
+                public event Action<string, int> OnLog;
+
+                Dictionary<string, int> IFoo.Get() => Lookup;
+                public Dictionary<string, int> this[int index] => Lookup;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Factory");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnLog" && s.ContainerName == "Holder");
+
+        var lookup = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Lookup"));
+        Assert.Equal("Dictionary<string,int>", lookup.ReturnType);
+        Assert.Equal("Holder", lookup.ContainerName);
+
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "this"));
+        Assert.Equal("Dictionary<string,int>", indexer.ReturnType);
+        Assert.Equal("Holder", indexer.ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.Line == 5 && s.ReturnType == "Dictionary<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ContainerName == "Holder" && s.ReturnType == "Dictionary<string,int>");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedType()
     {
         // C# 11 file-scoped type / C# 11 のファイルスコープ型
