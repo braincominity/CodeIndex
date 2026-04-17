@@ -3467,6 +3467,90 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiSectionAttribute_DoesNotLeakTrailingAttributeNamesAsPhantoms()
+    {
+        // [A, B(args)] multi-section attributes must not leak B/C as phantom `function` symbols.
+        // The attribute-stripper must blank out the whole bracket group even when it consumes the entire line,
+        // otherwise the method regex latches onto the content after the comma.
+        // xUnit/MSTest/ASP.NET/EF attribute conventions rely heavily on this shape.
+        // 複数セクション属性 [A, B(args)] の 2つ目以降の属性名が phantom function として漏れないこと。
+        var content = """
+            using System;
+            using System.Diagnostics;
+
+            namespace MultiSectionAttr;
+
+            public class Svc
+            {
+                [Obsolete, Conditional("DEBUG")]
+                public void A() {}
+
+                [Obsolete][Conditional("DEBUG")]
+                public void B() {}
+
+                [Obsolete] [Conditional("DEBUG")]
+                public void C() {}
+
+                [Obsolete, Conditional("DEBUG")]
+                [System.ComponentModel.Description("x")]
+                public void D() {}
+
+                [Obsolete, Conditional("DEBUG"), System.ComponentModel.Description("y")]
+                public void E() {}
+
+                [Fact, Trait("cat", "io")]
+                public void F() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Conditional");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Description");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Trait");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Obsolete");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiSectionAttributeOnClassOrProperty_DoesNotLeakPhantoms()
+    {
+        // Comma-separated attribute sections on types and properties (EF/ASP.NET/DataAnnotations shape)
+        // must stay clean as well — [Required, StringLength(50), Column("name")] etc.
+        // 型・プロパティに付く [Required, StringLength(50), Column("name")] 形でも phantom が出ないこと。
+        var content = """
+            using System.ComponentModel.DataAnnotations;
+            using System.ComponentModel.DataAnnotations.Schema;
+
+            namespace Data;
+
+            [Serializable, ApiController]
+            public class User
+            {
+                [Required, StringLength(50), Column("name")]
+                public string Name { get; set; } = "";
+
+                [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+                public int Id { get; set; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Id");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringLength");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Column");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "DatabaseGenerated");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "ApiController");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
@@ -3780,6 +3864,30 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Json");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Math");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Logging");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsExternAlias()
+    {
+        // extern alias is a file-prelude declaration used for assembly-alias reconciliation.
+        // It must precede using directives per the C# spec.
+        // Closes #326.
+        var content = "extern alias CoreV1;\nextern alias CoreV2;\n    extern alias Indented;\n\nglobal using System;\nusing static System.Math;\n\nnamespace Demo;\n\npublic class Box\n{\n    public int Calc() => Max(1, 2);\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // All three extern alias lines should be captured as import kind
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "CoreV1");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "CoreV2");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Indented");
+
+        // Existing using forms must still capture alongside extern alias (no reshuffling)
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Math");
+
+        // The namespace/class/method should still be captured correctly
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Calc");
     }
 
     [Fact]
@@ -4504,9 +4612,216 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Red");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Green");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Blue");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Green");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Blue");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCompactAndZeroIndentEnumMembers()
+    {
+        var content = "namespace Demo;\n\npublic enum Compact { A, B = A }\npublic enum Flat\n{\nC,\nD = C\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var compactA = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A"));
+        var compactB = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Compact");
+        Assert.Equal("enum", compactA.ContainerKind);
+        Assert.Equal("Compact", compactA.ContainerName);
+        Assert.Equal("Demo.Compact", compactA.ContainerQualifiedName);
+        Assert.Equal("enum", compactB.ContainerKind);
+        Assert.Equal("Compact", compactB.ContainerName);
+        Assert.Equal("Demo.Compact", compactB.ContainerQualifiedName);
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Flat");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "D");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSameLineSiblingEnums()
+    {
+        var content = "namespace Demo;\n\npublic enum InlineA { A1 } public enum InlineB { B1 }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var a1 = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A1"));
+        var b1 = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B1"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "InlineA");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "InlineB");
+        Assert.Equal("InlineA", a1.ContainerName);
+        Assert.Equal("Demo.InlineA", a1.ContainerQualifiedName);
+        Assert.Equal("InlineB", b1.ContainerName);
+        Assert.Equal("Demo.InlineB", b1.ContainerQualifiedName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCompactEnumMembersWithAttributesAndCastValues()
+    {
+        var content = "public enum Mode { [Obsolete] A = (int)B, [EnumMember(Value = \"b\")] B = (MyFlags)(A | C), C = 1 }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "C");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEnumMembersAcrossDirectiveLines()
+    {
+        var content = "public enum Mode\n{\n#if DEBUG\n    A,\n#endif\n#region values\n    B,\n#endregion\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var memberA = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A"));
+        var memberB = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Equal("enum", memberA.ContainerKind);
+        Assert.Equal("Mode", memberA.ContainerName);
+        Assert.Equal("enum", memberB.ContainerKind);
+        Assert.Equal("Mode", memberB.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_TrimsClosingBraceFromFinalEnumMemberSpan()
+    {
+        var content = "public enum Status\n{\n    Ready,\n    Busy\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var busy = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Busy"));
+
+        Assert.Equal("Busy", busy.Signature);
+        Assert.Equal(4, busy.EndLine);
+        Assert.DoesNotContain("}", busy.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsLowercaseAndUnicodeEnumMembers()
+    {
+        var content = "public enum Status\n{\n    active,\n    inactive,\n    Δelta = active,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "active");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "inactive");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Δelta");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEnumMembersWhenAttributeSharesDeclarationLine()
+    {
+        var content = "[Flags] public enum Mode\n{\n    A,\n    B = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEnumMembersWhenMemberAttributesShareLine()
+    {
+        var content = "public enum Mode\n{\n    [Obsolete] A,\n    [EnumMember(Value = \"a\")] B = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotTreatMultilineEnumMemberAttributeArgumentsAsMembers()
+    {
+        var content = "using System.Runtime.Serialization;\n\npublic enum Mode\n{\n    [EnumMember(\n        Value = Alias,\n        Other = 1)]\n    A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Value");
+        Assert.DoesNotContain(symbols, s => s.Name == "Other");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsTabIndentedEnumMembers()
+    {
+        var content = "public enum Mode\n{\n\tA,\n\tB = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumDeclarationAttribute()
+    {
+        var content = "[Attr(\npublic enum Mode\n{\n    A,\n}\n\npublic class After\n{\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "After");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttribute()
+    {
+        var content = "public enum Mode\n{\n    [Attr()\n    A,\n    B\n}\n\npublic class After\n{\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "After");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttributeMissingParen()
+    {
+        var content = "public enum BrokenAttr\n{\n    [Attr(\n    X,\n    Y\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var memberY = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Y"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "BrokenAttr");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "X");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Y");
+        Assert.Equal("Y", memberY.Signature);
+        Assert.Equal(5, memberY.EndLine);
+        Assert.DoesNotContain("}", memberY.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversModifierlessMembersAfterIncompleteAttribute()
+    {
+        var content = "public class C\n{\n    [Attr(\n    void M() {}\n    string Name { get; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversBracketTypedMembersAfterIncompleteAttribute()
+    {
+        var content = "public class C\n{\n    [Attr(\n    int[] Values { get; }\n    int[] Build() => [];\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Values");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Build");
+    }
+
+    [Fact]
+    public void Extract_CSharp_EnumMembersTrackOwningEnum()
+    {
+        var content = "namespace Demo;\n\npublic enum First\n{\n    None,\n}\n\npublic enum Second\n{\n    None,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var noneMembers = symbols
+            .Where(s => s.Kind == "enum" && s.Name == "None")
+            .OrderBy(s => s.Line)
+            .ToList();
+
+        Assert.Equal(2, noneMembers.Count);
+        Assert.Equal("enum", noneMembers[0].ContainerKind);
+        Assert.Equal("First", noneMembers[0].ContainerName);
+        Assert.Equal("Demo.First", noneMembers[0].ContainerQualifiedName);
+        Assert.Equal("enum", noneMembers[1].ContainerKind);
+        Assert.Equal("Second", noneMembers[1].ContainerName);
+        Assert.Equal("Demo.Second", noneMembers[1].ContainerQualifiedName);
     }
 
     [Fact]
@@ -4517,8 +4832,9 @@ public class SymbolExtractorTests
         var content = "var user = new User\n{\n    Name = \"Alice\",\n    Age = 30,\n    Email = GetEmail(),\n};";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
-        Assert.DoesNotContain(symbols, s => s.Name == "Email" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "Name");
+        Assert.DoesNotContain(symbols, s => s.Name == "Age");
+        Assert.DoesNotContain(symbols, s => s.Name == "Email");
     }
 
     [Fact]
@@ -5756,6 +6072,8 @@ public class SymbolExtractorTests
               src: url("data:application/font-woff2;charset=utf-8;base64,font-family:bogus");
               font-family: "Real Font";
             }
+            @font-face { src: url(data:text/plain;charset=utf-8;foo=1;font-family:bogus); font-family: Real Data Font; }
+            @font-face { src: url(data:image/svg+xml,<svg>{}</svg>); font-family: Svg Data Font; }
             @font-face { src: url("no-family.woff2"); }
             @font-face {
               font-family:
@@ -5771,8 +6089,11 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Comment Gap");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Commented Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real Data Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Svg Data Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
+        Assert.DoesNotContain(symbols, s => s.Name == "bogus)");
     }
 
     [Fact]
@@ -5798,6 +6119,19 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".media-class");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".inline-media");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".nested-child");
+    }
+
+    [Fact]
+    public void Extract_CSS_DoesNotLeakNestedSelectorsAfterSameLineGroupingAndQualifiedRule()
+    {
+        var content = """
+            @media screen { .outer {
+              .inner { color: red; }
+            } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".inner");
     }
 
     [Fact]
