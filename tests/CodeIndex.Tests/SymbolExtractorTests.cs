@@ -3360,6 +3360,124 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedClassHeader_IncludesBaseListAndWhereClauseInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T>
+                : BaseFoo<T>, IBar, IBaz
+                where T : class, new()
+            {
+                public Foo(int x) : base(x) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo<T> : BaseFoo<T>, IBar, IBaz where T : class, new()",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedInterfaceHeader_IncludesBaseListInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public interface IFoo<T>
+                : IBar<T>,
+                  IBaz
+                where T : struct
+            {
+                void Method();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var iface = Assert.Single(symbols.Where(s => s.Kind == "interface" && s.Name == "IFoo"));
+        Assert.Equal(
+            "public interface IFoo<T> : IBar<T>, IBaz where T : struct",
+            iface.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedRecordPrimaryCtorHeader_IncludesCtorParametersAndBaseList()
+    {
+        var content = """
+            namespace Demo;
+
+            public record Point<T>(
+                T X,
+                T Y)
+                : BaseRecord<T>
+                where T : INumber<T>;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var point = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Point"));
+        Assert.Equal(
+            "public record Point<T>( T X, T Y) : BaseRecord<T> where T : INumber<T>",
+            point.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedStructHeader_IncludesBaseListInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public readonly struct Value<T>
+                : IEquatable<Value<T>>
+                where T : IComparable<T>
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var value = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Value"));
+        Assert.Equal(
+            "public readonly struct Value<T> : IEquatable<Value<T>> where T : IComparable<T>",
+            value.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedEnumHeader_IncludesUnderlyingTypeInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public enum Kind
+                : byte
+            {
+                A,
+                B,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var kind = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Kind"));
+        Assert.Equal("public enum Kind : byte", kind.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineClassHeader_SignatureUnchanged()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Foo : Bar, IBaz
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public class Foo : Bar, IBaz", foo.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
     {
         var content = """

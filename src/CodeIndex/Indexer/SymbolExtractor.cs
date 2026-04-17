@@ -964,16 +964,50 @@ public static class SymbolExtractor
                         && bodyEndLine == startLine
                         ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
                         : -1;
-                    var signature = sameLineEndColumn >= absoluteStartColumn
-                        ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
-                        : lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i
-                            ? BuildCSharpMultilineSignature(
-                                lines,
-                                i,
-                                absoluteStartColumn,
-                                csharpPropertyCandidate.SignatureLastLineIndex,
-                                csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn)
-                            : line[absoluteStartColumn..].Trim();
+                    string signature;
+                    if (sameLineEndColumn >= absoluteStartColumn)
+                    {
+                        signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                    }
+                    else if (lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    {
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            csharpPropertyCandidate.SignatureLastLineIndex,
+                            csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp"
+                        && pattern.Kind is "class" or "struct" or "interface" or "enum"
+                        && TryFindCSharpTypeHeaderExtent(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            out var csharpTypeHeaderLastLineIndex,
+                            out var csharpTypeHeaderLastLineExclusiveEndColumn)
+                        && csharpTypeHeaderLastLineIndex > i)
+                    {
+                        // Wrapped C# type header: base list and `where` clauses often continue
+                        // onto following lines before the body-opening `{` or primary-ctor `;`.
+                        // Join them so consumers like ReferenceExtractor can resolve the base
+                        // type from the stored signature instead of silently treating the class
+                        // as having no base. Closes #382.
+                        // 折り返された C# 型ヘッダ: base リストや `where` 句は本体開きの `{`
+                        // または primary-ctor 終端の `;` までに複数行へまたがることが多い。
+                        // 継続行を連結して保存し、ReferenceExtractor などが保存済み
+                        // シグネチャから base 型を解決できるようにする。Closes #382.
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            csharpTypeHeaderLastLineIndex,
+                            csharpTypeHeaderLastLineExclusiveEndColumn);
+                    }
+                    else
+                    {
+                        signature = line[absoluteStartColumn..].Trim();
+                    }
 
                     var declaratorEntries = lang == "csharp"
                         && pattern.Kind == "property"
@@ -6405,6 +6439,78 @@ public static class SymbolExtractor
         }
 
         return builder.ToString().Trim();
+    }
+
+    // Scan forward from a C# type declaration header (`class` / `struct` / `interface` /
+    // `enum`) and find where the header ends — either at the body-opening `{` or the
+    // primary-constructor / forward-declaration terminator `;`. Returns the line index
+    // and column of that terminator so the signature builder can concatenate the header
+    // lines up to (but not including) the terminator. Respects paren depth for primary
+    // ctors, bracket depth for attributes on type / generic parameters, and uses the
+    // same lexer as the rest of the C# path so that `{` / `;` inside string literals,
+    // comments, or verbatim / raw strings do not short-circuit the scan. A line cap
+    // prevents runaway scans on unterminated input. Closes #382.
+    //
+    // C# 型宣言ヘッダ（`class` / `struct` / `interface` / `enum`）の終端位置を探す。
+    // 本体開きの `{` か、primary ctor / 前方宣言の `;` を終端とする。終端行と列を
+    // 返すので、シグネチャ組立側はその直前までを連結できる。primary ctor 用の
+    // 括弧深度、型 / ジェネリック引数へのアトリビュート用の角括弧深度を追跡し、
+    // 文字列リテラル、コメント、verbatim / raw 文字列の中の `{` / `;` を
+    // 誤検出しないよう、他の C# 経路と同じ lexer を共有する。未終端入力に対する
+    // 暴走防止に行数上限を設ける。Closes #382.
+    private const int CSharpTypeHeaderLookaheadLineLimit = 64;
+
+    private static bool TryFindCSharpTypeHeaderExtent(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out int lastLineIndex,
+        out int? lastLineExclusiveEndColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        var limit = Math.Min(lines.Length, startLineIndex + CSharpTypeHeaderLookaheadLineLimit);
+        for (int i = startLineIndex; i < limit; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex ? startColumn : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                    case ';' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                }
+            }
+        }
+
+        lastLineIndex = -1;
+        lastLineExclusiveEndColumn = null;
+        return false;
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)
