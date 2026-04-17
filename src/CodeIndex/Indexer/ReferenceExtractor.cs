@@ -148,6 +148,14 @@ public static class ReferenceExtractor
         "java", "kotlin", "scala", "typescript",
     };
 
+    // Kotlin use-site target prefixes for annotations (e.g. `@field:Deprecated("msg")`,
+    // `@file:JvmName("Foo")`). Keep aligned with the Kotlin language spec use-site targets.
+    // Kotlin の use-site target 付き注釈用の接頭辞。
+    private static readonly HashSet<string> KotlinAnnotationTargets = new(StringComparer.Ordinal)
+    {
+        "field", "get", "set", "param", "setparam", "property", "receiver", "file", "delegate", "all",
+    };
+
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
     public static bool SupportsLanguage(string? lang) =>
@@ -429,8 +437,12 @@ public static class ReferenceExtractor
     private static bool IsCSharpAttributeContext(string line, int probe)
     {
         // Direct form: `[Foo(...)`. 直接形 `[Foo(...)`。
+        // Must verify that this `[` sits at a declaration position, not inside a C# 12
+        // collection expression such as `var xs = [Make(), Make()]`.
+        // この `[` が宣言位置（`var xs = [...]` のような C# 12 collection expression ではない）
+        // であることを必ず確認する必要がある。
         if (line[probe] == '[')
-            return true;
+            return IsCSharpAttributeOpenBracket(line, probe);
 
         // Targeted form: `[target: Foo(...)]` — peek past the `target:` prefix.
         // ターゲット指定形式 `[target: Foo(...)]` — `target:` 部分をスキップして `[` を探す。
@@ -448,7 +460,7 @@ public static class ReferenceExtractor
                     var k = j;
                     while (k >= 0 && char.IsWhiteSpace(line[k]))
                         k--;
-                    if (k >= 0 && line[k] == '[')
+                    if (k >= 0 && line[k] == '[' && IsCSharpAttributeOpenBracket(line, k))
                         return true;
                 }
             }
@@ -463,6 +475,25 @@ public static class ReferenceExtractor
             return ScanLeftForAttributeOpen(line, probe - 1);
 
         return false;
+    }
+
+    /// <summary>
+    /// Return true when the `[` at <paramref name="bracketIndex"/> is at a C# declaration
+    /// position rather than an expression position. Attribute `[` must be preceded on the
+    /// same line only by whitespace, another attribute list's closing `]`, or a scope/
+    /// statement boundary (`{`, `}`, `;`). Any expression-context token (identifier, digit,
+    /// `=`, `,`, `(`, `:`, etc.) means this is a collection expression or indexer.
+    /// `[` が C# の宣言位置にあるか（collection expression や indexer ではないか）を判定する。
+    /// </summary>
+    private static bool IsCSharpAttributeOpenBracket(string line, int bracketIndex)
+    {
+        var i = bracketIndex - 1;
+        while (i >= 0 && char.IsWhiteSpace(line[i]))
+            i--;
+        if (i < 0)
+            return true;
+        var c = line[i];
+        return c == ']' || c == '{' || c == '}' || c == ';';
     }
 
     private static bool ScanLeftForAttributeOpen(string line, int start)
@@ -486,7 +517,7 @@ public static class ReferenceExtractor
             if (parenDepth > 0)
                 continue;
             if (c == '[')
-                return true;
+                return IsCSharpAttributeOpenBracket(line, i);
             if (c == ']' || c == ';' || c == '{' || c == '}')
                 return false;
         }
@@ -498,6 +529,31 @@ public static class ReferenceExtractor
         // `@Annotation(args)` — direct marker. 直接 `@Annotation(args)` の場合。
         if (line[probe] == '@')
             return true;
+
+        // Kotlin use-site target: `@field:Deprecated("msg")` — skip the `target:` prefix
+        // and confirm an `@` marker precedes it.
+        // Kotlin の use-site target 付き注釈 `@field:Deprecated("msg")` では、`target:` を
+        // 読み飛ばして `@` を探す。
+        if (line[probe] == ':')
+        {
+            var j = probe - 1;
+            var idEnd = j;
+            while (j >= 0 && IsIdentifierChar(line[j]))
+                j--;
+            if (j + 1 <= idEnd)
+            {
+                var target = line[(j + 1)..(idEnd + 1)];
+                if (KotlinAnnotationTargets.Contains(target))
+                {
+                    var k = j;
+                    while (k >= 0 && char.IsWhiteSpace(line[k]))
+                        k--;
+                    if (k >= 0 && line[k] == '@')
+                        return true;
+                }
+            }
+            return false;
+        }
 
         // `@module.Annotation(args)` — walk past the dotted qualifier chain to the `@`.
         // `@module.Annotation(args)` のようにドット区切り修飾子がある場合は、`.` と識別子を

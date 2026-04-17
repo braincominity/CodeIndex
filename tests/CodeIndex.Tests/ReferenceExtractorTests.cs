@@ -1212,4 +1212,136 @@ public class ReferenceExtractorTests
         var compute = Assert.Single(references.Where(r => r.SymbolName == "compute"));
         Assert.Equal("call", compute.ReferenceKind);
     }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpression_StaysCall()
+    {
+        // issue #293 regression: C# 12 collection expressions `var xs = [Make(), Make()]`
+        // share the `[...]` syntax with attributes but must NOT be classified as `attribute`.
+        // issue #293 回帰防止: C# 12 collection expression `var xs = [Make(), Make()]` は
+        // 属性と同じ `[...]` 構文を共有するが `attribute` に誤分類してはならない。
+        const string content = """
+            public class C
+            {
+                public int Make() => 42;
+                public void Run()
+                {
+                    var xs = [Make(), Make()];
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var makeRefs = references.Where(r => r.SymbolName == "Make").ToList();
+        Assert.Equal(2, makeRefs.Count);
+        Assert.All(makeRefs, r => Assert.Equal("call", r.ReferenceKind));
+        Assert.All(makeRefs, r => Assert.Equal("Run", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionInArgument_StaysCall()
+    {
+        // Collection expressions appearing as arguments, nested in other expressions, or
+        // after `return` must still classify inner calls as `call`, not `attribute`.
+        // 引数やネストされた式、`return` 後の collection expression 内の呼び出しは `call` のまま。
+        const string content = """
+            public class C
+            {
+                public int Make() => 42;
+                public int[] Wrap() => [Make(), Make()];
+                public void Consume(int[] xs) { }
+                public void Run()
+                {
+                    Consume([Make(), Make()]);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var makeRefs = references.Where(r => r.SymbolName == "Make").ToList();
+        Assert.Equal(4, makeRefs.Count);
+        Assert.All(makeRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpIndexerAccess_StaysCall()
+    {
+        // `arr[Compute()]` — `[` is preceded by an identifier, so it is an indexer, not an
+        // attribute, and the inner call must stay `call`.
+        // `arr[Compute()]` は indexer で、`[` の直前が識別子のため attribute 扱いにはしない。
+        const string content = """
+            public class C
+            {
+                public int Compute() => 0;
+                public int Read(int[] arr) => arr[Compute()];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var compute = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("call", compute.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinFieldTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Kotlin use-site target `@field:Deprecated("msg")` must be
+        // classified as `annotation`, not `call`.
+        // issue #293 補足: Kotlin の use-site target `@field:Deprecated("msg")` も `annotation`。
+        const string content = """
+            class Example {
+                @field:Deprecated("msg")
+                val value: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinGetTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Kotlin `@get:JsonName("x")` property getter target annotation.
+        // Kotlin の `@get:JsonName("x")` プロパティ getter 向け注釈も `annotation`。
+        const string content = """
+            class K {
+                @get:JsonName("x")
+                val x: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var jsonName = Assert.Single(references.Where(r => r.SymbolName == "JsonName"));
+        Assert.Equal("annotation", jsonName.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinFileTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Kotlin `@file:JvmName("Foo")` file-level target annotation.
+        // Kotlin の `@file:JvmName("Foo")` ファイル単位注釈も `annotation`。
+        const string content = """
+            @file:JvmName("Foo")
+
+            package example
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var jvmName = Assert.Single(references.Where(r => r.SymbolName == "JvmName"));
+        Assert.Equal("annotation", jvmName.ReferenceKind);
+    }
 }
