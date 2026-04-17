@@ -1273,4 +1273,146 @@ public class ReferenceExtractorTests
         Assert.Equal("Exception", ReferenceExtractor.ParseCSharpBaseType("class MyErr : global::System.Exception"));
         Assert.Null(ReferenceExtractor.ParseCSharpBaseType("public class Solo"));
     }
+
+    [Fact]
+    public void ParseCSharpBaseType_NestedTypeUnderGenericOuter_KeepsTerminalSegment()
+    {
+        // `Outer<int>.Base` must resolve to `Base`, not `Outer`. Naive slicing at the first `<`
+        // drops the terminal segment and misattributes `callers` / `callees` / `impact`.
+        // `Outer<int>.Base` のような generic な外側型の内部型は末尾セグメントを返す必要がある。
+        Assert.Equal("Base", ReferenceExtractor.ParseCSharpBaseType("class Leaf : Outer<int>.Base"));
+        Assert.Equal("Base", ReferenceExtractor.ParseCSharpBaseType("class Leaf : Outer<int>.Base, IFoo"));
+        Assert.Equal("Inner", ReferenceExtractor.ParseCSharpBaseType("class Leaf : global::Ns.Outer<T>.Inner"));
+        Assert.Equal("Inner", ReferenceExtractor.ParseCSharpBaseType("class Leaf : Outer<A, B<C>>.Inner"));
+    }
+
+    [Fact]
+    public void ParseJavaBaseType_NestedTypeUnderGenericOuter_KeepsTerminalSegment()
+    {
+        // `Outer<Integer>.Base` must resolve to `Base`, mirroring the C# behavior.
+        // Java でも `Outer<Integer>.Base` 形は末尾セグメント `Base` を返す。
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("class Leaf extends Outer<Integer>.Base {"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("class Leaf extends Outer<Integer>.Base implements Foo {"));
+        Assert.Equal("Inner", ReferenceExtractor.ParseJavaBaseType("class Leaf extends a.b.Outer<A, B<C>>.Inner {"));
+        Assert.Equal("A", ReferenceExtractor.ParseJavaBaseType("class B extends A implements IFoo"));
+    }
+
+    [Fact]
+    public void Extract_CsharpBaseCall_NestedTypeUnderGenericOuter_AttributesToTerminalSegment()
+    {
+        // End-to-end C# regression for the `Outer<int>.Base` attribution bug.
+        // `Outer<int>.Base` が `Base` へ張られることの E2E 回帰テスト。
+        const string content = """
+            namespace Demo;
+
+            public class Outer<T>
+            {
+                public class Base
+                {
+                    public Base(int x) {}
+                }
+            }
+
+            public class Leaf : Outer<int>.Base
+            {
+                public Leaf() : base(0) {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName == "base");
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_NestedTypeUnderGenericOuter_AttributesToTerminalSegment()
+    {
+        // End-to-end Java regression for the `Outer<Integer>.Base` attribution bug.
+        // `Outer<Integer>.Base` が `Base` へ張られることの E2E 回帰テスト。
+        const string content = """
+            package demo;
+
+            public class Outer<T> {
+                public static class Base {
+                    public Base(int x) {}
+                }
+            }
+
+            class Leaf extends Outer<Integer>.Base {
+                Leaf(){super(0);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaCtorChain_SameLineBody_WithQualifiedAnnotation_RewritesToBaseClass()
+    {
+        // Annotations on same-line ctors can be fully qualified (`@demo.Ann`) or carry
+        // nested-paren argument lists. The synthesis scanner must strip both before locating
+        // the ctor name.
+        // 同一行 ctor 本体のアノテーションは `@demo.Ann` のような FQCN や、入れ子の括弧付き
+        // 引数を持つこともある。合成コンテナ生成は両方を剥がして ctor 名へ辿り着く必要がある。
+        const string content = """
+            package demo;
+
+            public class Root {
+                public Root(int x) {}
+            }
+
+            @interface Ann {}
+
+            class Leaf extends Root {
+                @demo.Ann Leaf(int x){super(x);}
+                @SuppressWarnings({"unused", "unchecked"}) Leaf(long x){super((int) x);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var rootRefs = references.Where(r =>
+            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
+        Assert.Equal(2, rootRefs.Count);
+        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_JavaCtorChain_SameLineBody_WithNestedGenericBound_RewritesToBaseClass()
+    {
+        // Generic type parameters can carry nested `<...>` bounds such as
+        // `<T extends Comparable<Integer>>`. A flat regex cannot balance the nested `>`; the
+        // synthesis scanner must handle it.
+        // `<T extends Comparable<Integer>>` のような入れ子 `<...>` を伴う generic 境界も
+        // 合成コンテナ生成で取りこぼしてはならない。
+        const string content = """
+            package demo;
+
+            public class Root {
+                public Root(int x) {}
+            }
+
+            class Leaf extends Root {
+                public <T extends Comparable<Integer>> Leaf(T x){super(0);}
+                <U extends java.util.List<? extends Number>> Leaf(U xs, int y){super(y);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var rootRefs = references.Where(r =>
+            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
+        Assert.Equal(2, rootRefs.Count);
+        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
 }

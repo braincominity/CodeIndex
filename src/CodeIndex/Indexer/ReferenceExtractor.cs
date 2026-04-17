@@ -142,20 +142,19 @@ public static class ReferenceExtractor
     // Java コンストラクタ連鎖文。`Leaf(int x){super(x);}` のように `{` 直後に連鎖文が続く
     // single-line body 形式にも対応する。
     private static readonly Regex JavaCtorChainRegex = new(@"(?:^\s*|\{\s*)(?<kind>this|super)\s*\(", RegexOptions.Compiled);
-    // Java `extends` clause used to resolve `super(...)` chain targets
-    // Java の extends 節を解析して super(...) の呼び先を決定するために使用
-    private static readonly Regex JavaExtendsRegex = new(@"\bextends\s+(?<base>[\w.$]+)", RegexOptions.Compiled);
-    // Same-line Java constructor declaration used to synthesize a container for chain rewrites
-    // when SymbolExtractor does not emit a function symbol (the enum-member regex requires the
-    // line to end with `,`, `{`, or `;`, so `Leaf(int x){super(x);}` is skipped). The pattern
-    // also accepts leading annotations (with optional argument lists) and generic type
-    // parameters (`<T>`, `<T extends Foo>`) that precede the constructor name.
-    // SymbolExtractor が function 化しない same-line ctor body を、chain 書き換えの container
-    // として合成するための正規表現。先頭アノテーション列と、名前直前の generic 型パラメータ
-    // （`<T>` / `<T extends Foo>`）にも対応する。
-    private static readonly Regex JavaSameLineCtorRegex = new(
-        @"^\s*(?:@\w+(?:\s*\([^)]*\))?\s+)*(?:(?:public|private|protected|static|final|synchronized|strictfp|abstract|native|default)\s+)*(?:<[^>{};]+>\s*)?(?<name>\w+)\s*\([^)]*\)(?:\s*throws\s+[\w.,\s]+?)?\s*\{",
-        RegexOptions.Compiled);
+    // Java `extends` keyword anchor used to locate the start of the base-type expression.
+    // The base type itself is scanned manually in ParseJavaBaseType so that nested generic
+    // arguments like `Outer<Integer>.Base` are captured instead of being clipped at the `<`.
+    // `extends` キーワードの位置だけ正規表現で拾い、基底型本体は generic のネストを壊さない
+    // よう ParseJavaBaseType 側で手動スキャンする。
+    private static readonly Regex JavaExtendsRegex = new(@"\bextends\s+", RegexOptions.Compiled);
+    // Java access/method modifier set used by the same-line ctor scanner.
+    // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
+    private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
+    {
+        "public", "private", "protected", "static", "final", "synchronized",
+        "strictfp", "abstract", "native", "default"
+    };
     // Inline `where` constraint in a C# type header; used to trim base-list parsing
     // C# 型ヘッダーの where 制約句。base-list 解析の終端として使用
     private static readonly Regex CSharpWhereClauseRegex = new(@"\s+where\s+[\w?.]+\s*:", RegexOptions.Compiled);
@@ -572,10 +571,10 @@ public static class ReferenceExtractor
         SymbolRecord enclosingType,
         int lineNumber)
     {
-        var match = JavaSameLineCtorRegex.Match(preparedLine);
-        if (!match.Success)
+        var name = TryExtractJavaCtorNameFromLine(preparedLine);
+        if (name is null)
             return null;
-        if (!string.Equals(match.Groups["name"].Value, enclosingType.Name, StringComparison.Ordinal))
+        if (!string.Equals(name, enclosingType.Name, StringComparison.Ordinal))
             return null;
 
         return new SymbolRecord
@@ -592,6 +591,171 @@ public static class ReferenceExtractor
             ContainerQualifiedName = enclosingType.ContainerQualifiedName,
             Visibility = enclosingType.Visibility,
         };
+    }
+
+    /// <summary>
+    /// Depth-aware scanner for `@Annot ... <T extends Comparable<Integer>> Ctor(...) { ... }`
+    /// style declarations. Returns the constructor name when the line opens a ctor body, or
+    /// null otherwise. Handles qualified annotations (`@demo.Ann`), annotation argument lists
+    /// with nested parens, and nested generic bounds that a flat regex cannot balance.
+    /// 修飾付きアノテーション・引数付きアノテーション・入れ子の generic 境界を含む
+    /// same-line ctor 宣言を depth-aware にスキャンして ctor 名を返すヘルパー。
+    /// </summary>
+    internal static string? TryExtractJavaCtorNameFromLine(string line)
+    {
+        int i = 0;
+        int n = line.Length;
+
+        SkipWhitespace(line, ref i);
+
+        while (i < n && line[i] == '@')
+        {
+            i++;
+            if (!ConsumeQualifiedIdentifier(line, ref i))
+                return null;
+            SkipWhitespace(line, ref i);
+            if (i < n && line[i] == '(')
+            {
+                if (!SkipBalancedParens(line, ref i))
+                    return null;
+            }
+            SkipWhitespace(line, ref i);
+        }
+
+        while (true)
+        {
+            int wordStart = i;
+            while (i < n && (char.IsLetter(line[i])))
+                i++;
+            if (i == wordStart)
+                break;
+            var word = line.Substring(wordStart, i - wordStart);
+            if (!JavaCtorModifiers.Contains(word))
+            {
+                i = wordStart;
+                break;
+            }
+            SkipWhitespace(line, ref i);
+        }
+
+        if (i < n && line[i] == '<')
+        {
+            if (!SkipBalancedAngles(line, ref i))
+                return null;
+            SkipWhitespace(line, ref i);
+        }
+
+        int nameStart = i;
+        if (!ConsumeIdentifier(line, ref i))
+            return null;
+        var name = line.Substring(nameStart, i - nameStart);
+
+        SkipWhitespace(line, ref i);
+        if (i >= n || line[i] != '(')
+            return null;
+        if (!SkipBalancedParens(line, ref i))
+            return null;
+        SkipWhitespace(line, ref i);
+
+        if (i + 6 <= n && string.CompareOrdinal(line, i, "throws", 0, 6) == 0 &&
+            (i + 6 == n || char.IsWhiteSpace(line[i + 6])))
+        {
+            i += 6;
+            while (i < n && line[i] != '{')
+                i++;
+        }
+
+        SkipWhitespace(line, ref i);
+        return i < n && line[i] == '{' ? name : null;
+    }
+
+    private static void SkipWhitespace(string text, ref int i)
+    {
+        while (i < text.Length && char.IsWhiteSpace(text[i]))
+            i++;
+    }
+
+    private static bool ConsumeIdentifier(string text, ref int i)
+    {
+        if (i >= text.Length)
+            return false;
+        var c = text[i];
+        if (!(char.IsLetter(c) || c == '_' || c == '$'))
+            return false;
+        i++;
+        while (i < text.Length)
+        {
+            c = text[i];
+            if (char.IsLetterOrDigit(c) || c == '_' || c == '$')
+                i++;
+            else
+                break;
+        }
+        return true;
+    }
+
+    private static bool ConsumeQualifiedIdentifier(string text, ref int i)
+    {
+        if (!ConsumeIdentifier(text, ref i))
+            return false;
+        while (i < text.Length && text[i] == '.')
+        {
+            int save = i;
+            i++;
+            if (!ConsumeIdentifier(text, ref i))
+            {
+                i = save;
+                break;
+            }
+        }
+        return true;
+    }
+
+    private static bool SkipBalancedParens(string text, ref int i)
+    {
+        if (i >= text.Length || text[i] != '(')
+            return false;
+        int depth = 0;
+        for (; i < text.Length; i++)
+        {
+            if (text[i] == '(') depth++;
+            else if (text[i] == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    i++;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static bool SkipBalancedAngles(string text, ref int i)
+    {
+        if (i >= text.Length || text[i] != '<')
+            return false;
+        int depth = 0;
+        for (; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '<') depth++;
+            else if (c == '>')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    i++;
+                    return true;
+                }
+            }
+            else if (c == '{' || c == ';')
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static void AddChainReference(
@@ -787,7 +951,8 @@ public static class ReferenceExtractor
 
     /// <summary>
     /// Parse the first extends-clause type from a Java class/interface/record signature.
-    /// 例: `class B extends A implements IFoo` → `A`。
+    /// 例: `class B extends A implements IFoo` → `A`、
+    /// `class Leaf extends Outer<Integer>.Base {` → `Base`。
     /// </summary>
     internal static string? ParseJavaBaseType(string? signature)
     {
@@ -798,8 +963,45 @@ public static class ReferenceExtractor
         if (!match.Success)
             return null;
 
-        return ExtractBareTypeName(match.Groups["base"].Value);
+        int start = match.Index + match.Length;
+        int i = start;
+        int angleDepth = 0;
+        const string implementsKeyword = "implements";
+        while (i < signature.Length)
+        {
+            char c = signature[i];
+            if (c == '<')
+            {
+                angleDepth++;
+            }
+            else if (c == '>')
+            {
+                if (angleDepth > 0) angleDepth--;
+            }
+            else if (angleDepth == 0)
+            {
+                if (c == '{' || c == ',' || c == ';')
+                    break;
+                // Stop at a word-boundary `implements`.
+                if ((c == 'i') &&
+                    (i == start || !IsJavaIdentifierPart(signature[i - 1])) &&
+                    i + implementsKeyword.Length <= signature.Length &&
+                    string.CompareOrdinal(signature, i, implementsKeyword, 0, implementsKeyword.Length) == 0 &&
+                    (i + implementsKeyword.Length == signature.Length ||
+                     !IsJavaIdentifierPart(signature[i + implementsKeyword.Length])))
+                {
+                    break;
+                }
+            }
+            i++;
+        }
+
+        var segment = signature.Substring(start, i - start).Trim();
+        return segment.Length == 0 ? null : ExtractBareTypeName(segment);
     }
+
+    private static bool IsJavaIdentifierPart(char c) =>
+        char.IsLetterOrDigit(c) || c == '_' || c == '$';
 
     private static int FindSignatureColonIndex(string text)
     {
@@ -872,34 +1074,53 @@ public static class ReferenceExtractor
         if (trimmed.Length == 0)
             return null;
 
-        // Strip generic args: `A<int>` → `A`.
-        // ジェネリック引数を剥がす。
-        var ltIndex = trimmed.IndexOf('<');
+        // Split on `.` / `::` at generic depth 0, then return the last segment with generic
+        // args stripped. Naive "first `<`, then last `.`" slicing loses nested types such as
+        // `Outer<int>.Base`, `Outer<Integer>.Base`, or `global::Ns.Outer<T>.Inner`.
+        // 最初の `<` で切ってから末尾 `.` を探す素朴な方法では `Outer<int>.Base` のような
+        // ネスト型を取り違えるため、generic 深度 0 の `.` / `::` でセグメント分割して末尾だけ返す。
+        int lastSegmentStart = 0;
+        int angleDepth = 0;
+        int endIndex = trimmed.Length;
+        for (int i = 0; i < trimmed.Length; i++)
+        {
+            var c = trimmed[i];
+            if (c == '<')
+            {
+                angleDepth++;
+            }
+            else if (c == '>')
+            {
+                if (angleDepth > 0) angleDepth--;
+            }
+            else if (angleDepth == 0)
+            {
+                if (c == '(')
+                {
+                    // Strip record primary-ctor args at top level: `A(...)` → `A`.
+                    // record のプライマリコンストラクタ引数を剥がす。
+                    endIndex = i;
+                    break;
+                }
+                if (c == '.')
+                {
+                    lastSegmentStart = i + 1;
+                }
+                else if (c == ':' && i + 1 < trimmed.Length && trimmed[i + 1] == ':')
+                {
+                    lastSegmentStart = i + 2;
+                    i++;
+                }
+            }
+        }
+
+        var segment = trimmed.Substring(lastSegmentStart, endIndex - lastSegmentStart).Trim();
+        var ltIndex = segment.IndexOf('<');
         if (ltIndex >= 0)
-            trimmed = trimmed.Substring(0, ltIndex);
+            segment = segment.Substring(0, ltIndex);
 
-        // Strip record primary-ctor args: `A(...)` → `A`.
-        // record のプライマリコンストラクタ引数を剥がす。
-        var lparenIndex = trimmed.IndexOf('(');
-        if (lparenIndex >= 0)
-            trimmed = trimmed.Substring(0, lparenIndex);
-
-        trimmed = trimmed.Trim();
-        if (trimmed.Length == 0)
-            return null;
-
-        // Use the unqualified terminal segment so references align with other call-site names.
-        // 他の呼び出し参照と揃えるため、修飾なしの末尾セグメントだけを使う。
-        var lastDot = trimmed.LastIndexOf('.');
-        if (lastDot >= 0)
-            trimmed = trimmed.Substring(lastDot + 1);
-
-        var lastColon = trimmed.LastIndexOf(':');
-        if (lastColon >= 0)
-            trimmed = trimmed.Substring(lastColon + 1);
-
-        trimmed = trimmed.Trim();
-        return trimmed.Length > 0 ? trimmed : null;
+        segment = segment.Trim();
+        return segment.Length > 0 ? segment : null;
     }
 
     private static string PrepareLine(string lang, string line)
