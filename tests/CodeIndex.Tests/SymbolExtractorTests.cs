@@ -3935,6 +3935,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsExternAlias()
+    {
+        // extern alias is a file-prelude declaration used for assembly-alias reconciliation.
+        // It must precede using directives per the C# spec.
+        // Closes #326.
+        var content = "extern alias CoreV1;\nextern alias CoreV2;\n    extern alias Indented;\n\nglobal using System;\nusing static System.Math;\n\nnamespace Demo;\n\npublic class Box\n{\n    public int Calc() => Max(1, 2);\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // All three extern alias lines should be captured as import kind
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "CoreV1");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "CoreV2");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Indented");
+
+        // Existing using forms must still capture alongside extern alias (no reshuffling)
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Math");
+
+        // The namespace/class/method should still be captured correctly
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Calc");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsConstAndStaticReadonly()
     {
         var content = "public class Config\n{\n    public const string Version = \"1.0\";\n    private const int MaxRetries = 3;\n    internal static readonly Dictionary<string, string> Map = new();\n    public string MutableField;\n}";
