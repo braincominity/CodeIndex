@@ -679,9 +679,13 @@ public static class SymbolExtractor
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
+        var csharpSuppressedContinuationUntil = -1;
 
         for (int i = 0; i < lines.Length; i++)
         {
+            if (lang == "csharp" && i <= csharpSuppressedContinuationUntil)
+                continue;
+
             var line = lines[i];
             var structuralLine = structuralLines[i];
             var cssScannerLine = cssScannerLines?[i];
@@ -811,6 +815,11 @@ public static class SymbolExtractor
                         && bodyEndLine == startLine
                         ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
                         : -1;
+                    var signature = sameLineEndColumn >= absoluteStartColumn
+                        ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
+                        : lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i
+                            ? BuildCSharpMultilineSignature(lines, i, absoluteStartColumn, csharpPropertyCandidate.LastConsumedLineIndex)
+                            : line[absoluteStartColumn..].Trim();
 
                     AddSymbolRecord(
                         symbols,
@@ -826,12 +835,17 @@ public static class SymbolExtractor
                             EndLine = Math.Max(startLine, endLine),
                             BodyStartLine = bodyStartLine,
                             BodyEndLine = bodyEndLine,
-                            Signature = sameLineEndColumn >= absoluteStartColumn
-                                ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
-                                : line[absoluteStartColumn..].Trim(),
+                            Signature = signature,
                             Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                             ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
                         });
+
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    {
+                        csharpSuppressedContinuationUntil = Math.Max(csharpSuppressedContinuationUntil, csharpPropertyCandidate.LastConsumedLineIndex);
+                    }
 
                     CollectRecordPrimaryComponentSymbols(
                         fileId,
@@ -5273,6 +5287,25 @@ public static class SymbolExtractor
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex);
+    }
+
+    private static string BuildCSharpMultilineSignature(string[] lines, int startLineIndex, int startColumn, int lastConsumedLineIndex)
+    {
+        var builder = new StringBuilder(lines[startLineIndex].Length);
+        builder.Append(lines[startLineIndex][startColumn..].TrimEnd());
+
+        for (int i = startLineIndex + 1; i <= lastConsumedLineIndex && i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            if (builder.Length > 0)
+                builder.Append(' ');
+            builder.Append(trimmed);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)

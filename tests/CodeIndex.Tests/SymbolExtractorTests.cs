@@ -3219,6 +3219,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string
+                    SplitName
+                    => "x";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        Assert.Equal(5, property.StartLine);
+        Assert.Equal(7, property.EndLine);
+        Assert.Equal("public string SplitName => \"x\";", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "SplitName");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """

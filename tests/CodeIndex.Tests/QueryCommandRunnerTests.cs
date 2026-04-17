@@ -2890,6 +2890,56 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CSharpSplitPropertyHeader_DoesNotEmitPhantomFunctionAndKeepsSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_split_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public string
+                        SplitName
+                        => "x";
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var splitNameSymbols = outlineJson.GetProperty("symbols").EnumerateArray()
+                .Where(symbol => symbol.GetProperty("name").GetString() == "SplitName")
+                .ToArray();
+            var property = Assert.Single(splitNameSymbols.Where(symbol => symbol.GetProperty("kind").GetString() == "property"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Single(splitNameSymbols);
+            Assert.Equal("public string SplitName => \"x\";", property.GetProperty("signature").GetString());
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(7, property.GetProperty("end_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_JavaScriptStringBraceKeepsFollowingMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_string_brace");
