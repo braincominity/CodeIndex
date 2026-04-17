@@ -730,7 +730,7 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, csharpSwitchExpressionLines, i))
+                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, lines, csharpSwitchExpressionLines, i))
                         break;
 
                     if (ShouldSkipCSharpHeaderOnlyPropertyCandidate(lang, pattern, match, lines, i))
@@ -5312,13 +5312,47 @@ public static class SymbolExtractor
         string? lang,
         SymbolPattern pattern,
         string matchLine,
+        string[] lines,
         bool[]? csharpSwitchExpressionLines,
-        int lineIndex) =>
-        lang == "csharp"
-        && pattern.Kind == "property"
-        && csharpSwitchExpressionLines != null
-        && csharpSwitchExpressionLines[lineIndex]
-        && matchLine.Contains("=>", StringComparison.Ordinal);
+        int lineIndex)
+    {
+        if (lang != "csharp"
+            || pattern.Kind != "property"
+            || csharpSwitchExpressionLines == null
+            || !csharpSwitchExpressionLines[lineIndex])
+            return false;
+
+        // Same-line `=>` arm (`string text => text.Trim()`).
+        // 同一行 `=>` の arm。
+        if (matchLine.Contains("=>", StringComparison.Ordinal))
+            return true;
+
+        // Multi-line arm where the `=>` is placed on a following continuation line:
+        // `string text`
+        // `    => text.Trim()`
+        // Without this branch the `ShouldSkipCSharpHeaderOnlyPropertyCandidate` hook
+        // would accept the continuation `=>` as a property expression body and emit a
+        // phantom property for every switch arm pattern variable.
+        // 次の有意行に `=>` が置かれる multi-line arm:
+        // `string text`
+        // `    => text.Trim()`
+        // ここで弾かないと header-only property ガードが continuation の `=>` を
+        // 式本体プロパティとして受け入れてしまい、switch arm のパターン変数ごとに
+        // phantom property を生成してしまう。
+        for (int j = lineIndex + 1; j < lines.Length; j++)
+        {
+            var candidate = lines[j].TrimStart();
+            if (candidate.Length == 0)
+                continue;
+            if (candidate.StartsWith("//", StringComparison.Ordinal)
+                || candidate.StartsWith("/*", StringComparison.Ordinal)
+                || candidate.StartsWith('*'))
+                continue;
+            return candidate.StartsWith("=>", StringComparison.Ordinal);
+        }
+
+        return false;
+    }
 
     // Verify an Allman-style property candidate (header line matched without `{` on the
     // same line) is actually followed by a block body. Without this guard, any bare

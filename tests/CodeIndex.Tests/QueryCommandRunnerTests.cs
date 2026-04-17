@@ -2049,6 +2049,66 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_ExactJson_MultiLineSwitchArm_AttributesToEnclosingFunction()
+    {
+        // issue #233 third review follow-up: inside a switch expression whose `=>` is
+        // placed on a continuation line, calls from the arm body must still attribute to
+        // the enclosing function. If the switch-expression guard does not cover the
+        // continuation `=>`, the pattern variable is emitted as a phantom property and
+        // `callers Trim` would return caller_kind=property, caller_name=text.
+        // issue #233 第3次レビュー指摘: switch expression arm の `=>` が継続行にある場合でも、
+        // arm 本体の呼び出しは外側関数に帰属しなければならない。継続 `=>` まで switch-expression
+        // ガードを広げないと、パターン変数が phantom property になり、`callers Trim` が
+        // caller_kind=property, caller_name=text を返してしまう。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_switch_arm");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "sample.cs"),
+                """
+                class C
+                {
+                    string M(object o)
+                    {
+                        return o switch
+                        {
+                            string text
+                                => text.Trim(),
+                            _ => ""
+                        };
+                    }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Trim", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/sample.cs", json.GetProperty("path").GetString());
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("M", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Trim", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallees_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callees_zero_json_missing_graph");

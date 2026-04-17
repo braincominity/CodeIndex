@@ -3736,6 +3736,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiLineSwitchExpressionArms_DoNotProducePhantomProperties()
+    {
+        // issue #233 third review follow-up: switch-expression arms whose `=>` is placed
+        // on a continuation line must not be misclassified as multi-line expression-bodied
+        // properties. Without switch-expression guard coverage on the continuation `=>`,
+        // each pattern variable (e.g. `text`, `neg`) would be emitted as a phantom property
+        // and `callers` / `impact` would misattribute calls inside the arm to it.
+        // issue #233 第3次レビュー指摘: switch expression arm の `=>` が継続行にある
+        // multi-line 形を、multi-line 式本体プロパティと誤認しないこと。continuation `=>`
+        // まで switch-expression ガードが及ばないと、`text` や `neg` のようなパターン変数が
+        // phantom property として抽出され、arm 内の呼び出しが phantom に誤帰属する。
+        var content = """
+            public class Matcher
+            {
+                public string Describe(object x) => x switch
+                {
+                    string text
+                        => text.Trim(),
+                    int neg
+                        => "non-pos",
+                    _
+                        => "other",
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Matcher");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Describe");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.DoesNotContain(symbols, s => s.Name == "text");
+        Assert.DoesNotContain(symbols, s => s.Name == "neg");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExplicitInterfaceImpl()
     {
         var content = "public class MyClass : IDisposable, IComparable<MyClass>\n{\n    void IDisposable.Dispose()\n    {\n    }\n    int IComparable<MyClass>.CompareTo(MyClass other) => 0;\n}";
