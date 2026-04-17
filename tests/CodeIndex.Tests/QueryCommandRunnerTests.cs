@@ -602,6 +602,59 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain("database not found", stderr);
     }
 
+    // Regression lock for #161: valid integers that fail the positive / non-negative
+    // range check used to be swallowed silently, leaving the command to run with the
+    // default value and write real results to stdout with exit 0. Every case below
+    // MUST abort with UsageError and leak NO stdout output.
+    // #161 の回帰ロック: 数値として parse できるが positive / non-negative 制約を満たさない値は、
+    // かつて parseError を立てずにデフォルトへ差し替えられ、本物の結果を stdout に出して exit 0 にしていた。
+    // 各ケースは UsageError で停止し、stdout に 1 バイトも漏らしてはならない。
+    [Theory]
+    [InlineData("symbols", "0", "--limit", "--limit requires a positive integer")]
+    [InlineData("symbols", "-5", "--limit", "--limit requires a positive integer")]
+    [InlineData("search", "0", "--limit", "--limit requires a positive integer")]
+    [InlineData("search", "-5", "--limit", "--limit requires a positive integer")]
+    [InlineData("search", "0", "--snippet-lines", "--snippet-lines requires a positive integer")]
+    [InlineData("impact", "-1", "--depth", "--depth requires a non-negative integer")]
+    [InlineData("excerpt", "0", "--start", "--start requires a positive integer")]
+    [InlineData("excerpt", "-5", "--start", "--start requires a positive integer")]
+    [InlineData("excerpt", "0", "--end", "--end requires a positive integer")]
+    [InlineData("excerpt", "-1", "--before", "--before requires a non-negative integer")]
+    [InlineData("excerpt", "-1", "--after", "--after requires a non-negative integer")]
+    public void QueryEntrypoints_OutOfRangeNumericOptionsFailClosed_Issue161(string command, string value, string option, string expectedErrorFragment)
+    {
+        string[] args = command switch
+        {
+            "symbols" => ["Foo", option, value],
+            "search" => ["Foo", option, value],
+            "impact" => ["Foo", option, value],
+            "excerpt" when option == "--start" => ["path.cs", option, value],
+            "excerpt" => ["path.cs", "--start", "1", option, value],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+            "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
+        // stdout must stay empty so callers that branch on exit code alone cannot consume
+        // silently-defaulted output as if it were valid data.
+        // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
+        // 正当な結果として消費しないよう、stdout は空でなければならない。
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(expectedErrorFragment, stderr);
+        Assert.Contains($"got '{value}'", stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+    }
+
     [Fact]
     public void RunValidate_KindFilterNarrowsIssues()
     {
