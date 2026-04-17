@@ -997,6 +997,7 @@ public static class ReferenceExtractor
         int start = match.Index + match.Length;
         int i = start;
         int angleDepth = 0;
+        int parenDepth = 0;
         while (i < signature.Length)
         {
             char c = signature[i];
@@ -1008,7 +1009,24 @@ public static class ReferenceExtractor
             {
                 if (angleDepth > 0) angleDepth--;
             }
-            else if (angleDepth == 0)
+            else if (c == '(')
+            {
+                // Track `(...)` depth so that commas inside annotation arguments such as
+                // `@Ann(a = 1, b = 2) Root` or `@Ann({A.class, B.class}) Root` are not mistaken
+                // for top-level base-list separators. Without this the scanner breaks at the
+                // inner `,`, feeds a truncated segment to the annotation stripper, and the
+                // super(...) edge gets misattributed or dropped entirely.
+                // annotation 引数内のカンマ（`@Ann(a = 1, b = 2) Root` や
+                // `@Ann({A.class, B.class}) Root`）が base-list 区切りと誤認されないよう `(...)` の
+                // 深さも追跡する。これをやらないと内側の `,` で走査が切れ、annotation stripper に
+                // 壊れたセグメントが渡って super(...) の連鎖エッジが落ちる。
+                parenDepth++;
+            }
+            else if (c == ')')
+            {
+                if (parenDepth > 0) parenDepth--;
+            }
+            else if (angleDepth == 0 && parenDepth == 0)
             {
                 if (c == '{' || c == ',' || c == ';')
                     break;

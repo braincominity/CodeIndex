@@ -1678,6 +1678,70 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void ParseJavaBaseType_TypeUseAnnotationWithMultipleArgs_Stripped()
+    {
+        // Annotation arguments can contain commas (`@Ann(a = 1, b = 2)`) or brace-wrapped arrays
+        // (`@Ann({A.class, B.class})`). The base-type scanner must track `(...)` depth so those
+        // commas do not prematurely end the base-list walk — otherwise the annotation is not
+        // fully consumed, `StripJavaTypeAnnotations` never sees the closing `)`, and the super(...)
+        // edge resolves to a phantom type / annotation name instead of the real base.
+        // annotation 引数は `@Ann(a = 1, b = 2)` や `@Ann({A.class, B.class})` のようにカンマや
+        // 波括弧配列を含む。base-type scanner が `(...)` の深さを追わないと、内側の `,` で走査が
+        // 切れて annotation を剥がし切れず、super(...) が幽霊型・annotation 名に張られる。
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann(a = 1, b = 2) Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann(a=1, b=2) Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann({A.class, B.class}) Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @pkg.Ann(value = {1, 2, 3}) Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann(a=1, b=2) Root implements Foo {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann(a=1, b=2) Root permits A, B {"));
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_TypeUseAnnotationWithMultipleArgs_AttributesToRealBase()
+    {
+        // E2E regression for the multi-arg annotation case. Before the fix the scanner broke at
+        // the `,` inside `@Ann(a = 1, b = 2)`, returned a truncated segment, and the super(...)
+        // edge either pointed at a phantom annotated type or was dropped entirely.
+        // 複数引数 annotation の E2E 回帰。修正前は `@Ann(a = 1, b = 2)` 内の `,` で走査が切れて
+        // super(...) が幽霊型名に張られるか完全に落ちていた。
+        const string content = """
+            package demo;
+
+            @interface Ann {
+                int a();
+                int b();
+            }
+
+            class Root {
+                Root(int value) {}
+            }
+
+            class Leaf extends @Ann(a = 1, b = 2) Root {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        // The chain edge must attribute to `Root` (the real base), not to a phantom annotated
+        // type name. The class-header line still picks up `Ann(...)` as a regular call from the
+        // annotation site — that is the existing CallRegex behavior for any parenthesized name
+        // and is unrelated to the base-list scanner fix; only the chain-line `super(0)` edge is
+        // what we care about here.
+        // 連鎖エッジは本当の基底 `Root` に張られ、annotation 由来の幽霊型名にはならないこと。
+        // ヘッダ行の `@Ann(...)` は汎用 CallRegex が `Ann(...)` として通常の call を拾う既存挙動で、
+        // 本修正のスコープ外。ここでは chain 行 `super(0)` のエッジだけを検証する。
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf" && r.Line == 14);
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("@"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
     public void Extract_JavaSuperCall_TypeUseAnnotatedExtends_AttributesToRealBase()
     {
         // End-to-end regression for Java type-use annotated `extends`. Before the fix the base
