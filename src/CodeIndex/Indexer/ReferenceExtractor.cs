@@ -162,13 +162,20 @@ public static class ReferenceExtractor
         @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
         RegexOptions.Compiled);
 
-    // Languages whose `@Decorator(args)` / `@Annotation(args)` syntax should produce
-    // `annotation` reference rows rather than `call` rows (issue #293).
-    // `@Decorator(args)` / `@Annotation(args)` 構文を `call` ではなく `annotation` として
-    // 記録すべき言語 (issue #293)。
+    // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
+    // should produce `annotation` reference rows rather than `call` rows (issue #293).
+    // Swift uses `@available(...)`, `@objc`, `@MainActor`, etc. as compile-time metadata;
+    // Gradle/Groovy uses `@CompileStatic`, `@TaskAction`, etc. the same way. Without this
+    // reclassification, `callers` / `callees` / `hotspots` / `impact` on those languages
+    // get polluted with metadata edges.
+    // `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` を `call` ではなく
+    // `annotation` として記録すべき言語 (issue #293)。Swift の `@available(...)` / `@objc` /
+    // `@MainActor` や、Gradle/Groovy の `@CompileStatic` / `@TaskAction` も compile-time
+    // metadata なので同じ扱いにする。再分類しないと `callers` / `callees` / `hotspots` /
+    // `impact` に metadata edge が混入する。
     private static readonly HashSet<string> AnnotationLanguages = new(StringComparer.Ordinal)
     {
-        "java", "kotlin", "scala", "typescript", "javascript",
+        "java", "kotlin", "scala", "typescript", "javascript", "swift", "gradle",
     };
 
     // Kotlin use-site target prefixes for annotations (e.g. `@field:Deprecated("msg")`,

@@ -2250,6 +2250,68 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_ExcludesMetadataOnlyReferences()
+    {
+        // issue #293 follow-up: `[JsonConverter(typeof(User))]` touches `User` only as
+        // compile-time metadata and must NOT create a dependency edge from the annotated
+        // file to `User.cs`. Before the fix, `GetFileDependencies` filtered by graph-supported
+        // language but not by `reference_kind`, so metadata-only references (attribute/annotation)
+        // leaked into `cdidx deps` output.
+        // issue #293 補足: `[JsonConverter(typeof(User))]` は compile-time metadata として
+        // `User` に触れるだけなので、注釈ファイルから `User.cs` への依存 edge を作ってはいけない。
+        // 修正前は `GetFileDependencies` が graph-supported 言語しか絞っておらず
+        // `reference_kind` で絞っていなかったため、metadata-only 参照 (attribute/annotation) が
+        // `cdidx deps` 出力に漏れていた。
+        InsertIndexedFile("src/User.cs", "csharp",
+            """
+            public class User
+            {
+                public string Name { get; set; } = "";
+            }
+            """);
+        // Metadata-only usage — attribute typeof(User), no real runtime dependency.
+        // metadata-only の利用 (attribute typeof(User))。実行時の依存関係は無い。
+        InsertIndexedFile("src/Serializer.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public class JsonConverterAttribute : Attribute
+            {
+                public Type ConverterType { get; }
+                public JsonConverterAttribute(Type converterType) => ConverterType = converterType;
+            }
+
+            [JsonConverter(typeof(User))]
+            public class SerializerConfig
+            {
+            }
+            """);
+        // Real runtime dependency — `new User()` is a `call`/`instantiate` kind edge.
+        // 実際の実行時依存 — `new User()` は `call`/`instantiate` 種別の edge。
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Do()
+                {
+                    var u = new User();
+                    System.Console.WriteLine(u.Name);
+                }
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Only Caller.cs → User.cs via `new User()` should remain.
+        // `new User()` 経由の Caller.cs → User.cs のみが残る。
+        Assert.Single(dependencies);
+        Assert.Equal("src/Caller.cs", dependencies[0].SourcePath);
+        Assert.Equal("src/User.cs", dependencies[0].TargetPath);
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Serializer.cs");
+    }
+
+    [Fact]
     public void GetGroupedSymbolHotspots_CollapsesDuplicateNamesWithoutBareJoinInflation()
     {
         InsertIndexedFile("src/Alpha.cs", "csharp",
@@ -2517,6 +2579,69 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/App.cs", edge.SourcePath);
         Assert.Equal("src/FolderDiffService.cs", edge.TargetPath);
         Assert.Contains("ExecuteFolderDiffAsync", edge.Symbols);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_ExcludesMetadataOnlyReferencesFromHeuristicHints()
+    {
+        // issue #293 follow-up: when `impact` falls back to file-dependency hints
+        // (heuristic mode), metadata-only references must not produce phantom edges.
+        // `[JsonConverter(typeof(User))]` touches `User` only as attribute metadata
+        // and must not make the annotated file show up as a file-level impact of `User`.
+        // Before the fix, `GetFileDependencyHintsToResolvedType` did not filter by
+        // `reference_kind` so attribute/annotation rows leaked into the hint output.
+        // issue #293 補足: `impact` が file-dependency hints にフォールバックする heuristic mode でも
+        // metadata-only 参照は phantom edge を作ってはいけない。`[JsonConverter(typeof(User))]` は
+        // attribute metadata として `User` に触れるだけで、注釈ファイルを `User` の file-level
+        // impact として表示してはいけない。修正前は `GetFileDependencyHintsToResolvedType` が
+        // `reference_kind` で絞っておらず attribute/annotation 行が hint 出力に漏れていた。
+        InsertIndexedFile("src/MetadataUser.cs", "csharp",
+            """
+            public class MetadataUser
+            {
+                public string Name { get; set; } = "";
+            }
+            """);
+        // Attribute uses MetadataUser via typeof — metadata only, no runtime dep.
+        // No other file references MetadataUser, so there are no call-graph callers and
+        // the impact analysis falls through to the heuristic file-dependency-hint mode.
+        // Before the fix, the attribute-only reference would leak into that hint output;
+        // after the fix, it must be filtered out and hint count must be 0.
+        // 属性が typeof で MetadataUser に触れるだけ。実行時の依存は無い。他のファイルからは
+        // 参照していないため call-graph caller は 0 件となり、impact 分析は heuristic な
+        // file-dependency-hint モードに落ちる。修正前はこの hint に attribute-only 参照が
+        // 漏れていたが、修正後はフィルタで除外され hint 件数は 0 になる。
+        InsertIndexedFile("src/AttributeConsumer.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public class MetadataAttribute : Attribute
+            {
+                public Type T { get; }
+                public MetadataAttribute(Type t) => T = t;
+            }
+
+            [Metadata(typeof(MetadataUser))]
+            public class AttributeConsumer
+            {
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("MetadataUser", maxDepth: 3, limit: 10);
+
+        // With no real runtime caller and the attribute-only reference filtered out by the
+        // call-graph reference_kind predicate, there are 0 callers AND 0 heuristic file
+        // hints. Before the fix, the attribute row would leak into the hint output and the
+        // attribute-only consumer file would show up as a phantom dependency.
+        // 実行時 caller が無く、attribute-only 参照も call-graph reference_kind 述語で
+        // 除外されるため、caller は 0 件 / heuristic file hint も 0 件。修正前は attribute
+        // 行が hint 出力に漏れ、attribute-only consumer が phantom 依存として出ていた。
+        Assert.True(analysis.HasClassLikeDefinitions);
+        Assert.Empty(analysis.Callers);
+        Assert.DoesNotContain(analysis.FileImpacts, e => e.SourcePath == "src/AttributeConsumer.cs");
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal(0, analysis.HintCount);
     }
 
     [Fact]

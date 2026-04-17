@@ -1857,6 +1857,49 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("callers", "attribute")]
+    [InlineData("callers", "annotation")]
+    [InlineData("callees", "attribute")]
+    [InlineData("callees", "annotation")]
+    public void RunCallersCallees_RejectMetadataKind_WithUsageError(string command, string kind)
+    {
+        // issue #293 follow-up: `callers` / `callees` must reject `--kind attribute` and
+        // `--kind annotation` at the CLI boundary. Metadata references are attributed to the
+        // enclosing body-range symbol rather than the annotated target, so `callers Obsolete
+        // --kind attribute` would return `[Obsolete] void M()` under the enclosing class
+        // instead of `M`, and file-level targets like `[assembly: Foo]` drop entirely because
+        // `container_name` is NULL. The correct path for metadata enumeration is
+        // `references <name> --kind attribute|annotation`.
+        // issue #293 補足: `callers` / `callees` は CLI 境界で `--kind attribute` /
+        // `--kind annotation` を必ず弾かなければならない。metadata 参照は注釈対象ではなく
+        // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
+        // `[Obsolete] void M()` が `M` ではなく外側クラスに寄り、`[assembly: Foo]` のような
+        // file-level target は `container_name = NULL` で完全に脱落する。metadata 列挙の
+        // 正しい経路は `references <name> --kind attribute|annotation`。
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
+
+            var (exitCode, _, stderr) = command switch
+            {
+                "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
+                "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
+                _ => throw new InvalidOperationException($"Unexpected command: {command}")
+            };
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
+            Assert.Contains($"references <name> --kind {kind}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunCallers_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {

@@ -1195,6 +1195,77 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftAttributeWithArgs_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Swift `@available(...)` / `@objc` / `@MainActor` are
+        // compile-time metadata, not runtime calls. Before the fix they were recorded
+        // as `call` references (polluting `callers`/`callees`/`hotspots`/`impact`) and
+        // `@objc` / `@MainActor` no-arg attributes dropped entirely from the index.
+        // After the fix they must all classify as `annotation`.
+        // issue #293 補足: Swift の `@available(...)` / `@objc` / `@MainActor` は compile-time
+        // metadata であり runtime の call ではない。修正前は `call` として記録され
+        // (`callers`/`callees`/`hotspots`/`impact` が汚染)、`@objc` / `@MainActor` の no-arg
+        // 版はインデックスから完全に脱落していた。修正後はすべて `annotation` として分類される。
+        const string content = """
+            import Foundation
+
+            @available(iOS 13.0, *)
+            class NetworkClient {
+                @objc func fetch() {}
+
+                @MainActor
+                func process() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        var available = Assert.Single(references.Where(r => r.SymbolName == "available"));
+        Assert.Equal("annotation", available.ReferenceKind);
+
+        var objc = Assert.Single(references.Where(r => r.SymbolName == "objc"));
+        Assert.Equal("annotation", objc.ReferenceKind);
+
+        var mainActor = Assert.Single(references.Where(r => r.SymbolName == "MainActor"));
+        Assert.Equal("annotation", mainActor.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_GradleAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Gradle/Groovy `@CompileStatic` / `@TaskAction` and similar
+        // transform/task annotations are compile-time metadata. Before the fix they were
+        // recorded as `call` references (or dropped for the no-arg form), which made
+        // `callers TaskAction` / `callees` pick up fake graph edges in build scripts.
+        // After the fix they must all classify as `annotation`.
+        // issue #293 補足: Gradle/Groovy の `@CompileStatic` / `@TaskAction` なども compile-time
+        // metadata。修正前は `call` として記録されるか no-arg 版が脱落し、ビルドスクリプトで
+        // `callers TaskAction` / `callees` に偽のグラフエッジが混入していた。修正後はすべて
+        // `annotation` として分類される。
+        const string content = """
+            import groovy.transform.CompileStatic
+
+            @CompileStatic
+            class BuildConfig {
+                @TaskAction
+                void run() {
+                    println "built"
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "gradle", content);
+        var references = ReferenceExtractor.Extract(1, "gradle", content, symbols);
+
+        var compileStatic = Assert.Single(references.Where(r => r.SymbolName == "CompileStatic"));
+        Assert.Equal("annotation", compileStatic.ReferenceKind);
+
+        var taskAction = Assert.Single(references.Where(r => r.SymbolName == "TaskAction"));
+        Assert.Equal("annotation", taskAction.ReferenceKind);
+    }
+
+    [Fact]
     public void Extract_JavaMethodBodyCall_StaysCall()
     {
         // Regression guard: ordinary Java method call remains `call`, not `annotation`.

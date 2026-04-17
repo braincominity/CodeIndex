@@ -790,6 +790,36 @@ public class McpServerTests : IDisposable
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("callers", "attribute")]
+    [InlineData("callers", "annotation")]
+    [InlineData("callees", "attribute")]
+    [InlineData("callees", "annotation")]
+    public void ToolsCall_CallersOrCallees_MetadataKindReturnsToolError(string tool, string kind)
+    {
+        // issue #293 follow-up: the MCP `callers` / `callees` tools must reject `kind:
+        // attribute` / `kind: annotation` because metadata rows are attributed to the
+        // enclosing body-range symbol (so `callers Obsolete kind=attribute` reports the
+        // enclosing class instead of the annotated method, and file-level targets drop
+        // entirely). AI clients should be redirected to the `references` tool for metadata
+        // enumeration.
+        // issue #293 補足: MCP の `callers` / `callees` ツールは `kind: attribute` /
+        // `kind: annotation` を必ず弾くこと。metadata 行は body-range の外側シンボルに帰属する
+        // ため、`callers Obsolete kind=attribute` は注釈対象のメソッドではなく外側クラスを返し、
+        // file-level target は完全に脱落する。AI クライアントは metadata 列挙のために
+        // `references` ツールに誘導する。
+        var requestJson = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+            + "\"params\":{\"name\":\"" + tool + "\","
+            + "\"arguments\":{\"query\":\"SomeSymbol\",\"kind\":\"" + kind + "\"}}}";
+        var request = JsonNode.Parse(requestJson)!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"'kind: {kind}' is not supported on '{tool}'", text);
+        Assert.Contains("'references' tool", text);
+    }
+
     [Fact]
     public void ToolsCall_ImpactAnalysis_ClassSymbolReturnsHeuristicFileDependencyHints()
     {

@@ -1666,7 +1666,16 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                WHERE src.path != @impactTargetPath";
+                WHERE src.path != @impactTargetPath
+                  AND r.reference_kind IN " + CallGraphReferenceKindsSql;
+        // Metadata reference kinds (`attribute`, `annotation`) only touch a type/symbol
+        // as compile-time metadata and should NOT form a logical file dependency edge
+        // (e.g. `[JsonConverter(typeof(User))]` or `@Inject(User.class)` must not make
+        // the annotated file depend on `User`). Restrict to call-graph kinds.
+        // `attribute` / `annotation` は compile-time metadata で型や記号に触れるだけなので、
+        // ファイル間の論理的な依存 edge として扱ってはいけない（例:
+        // `[JsonConverter(typeof(User))]` / `@Inject(User.class)` で annotated ファイルが
+        // `User` に依存しているかのように見える）。call-graph kind に絞る。
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
@@ -2317,7 +2326,13 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                WHERE 1 = 1";
+                WHERE 1 = 1
+                  AND r.reference_kind IN " + CallGraphReferenceKindsSql;
+        // Same rationale as GetFileDependencyHintsToResolvedType: metadata kinds
+        // (`attribute` / `annotation`) must not form dependency edges because they
+        // only record compile-time metadata usage, not logical runtime dependencies.
+        // `GetFileDependencyHintsToResolvedType` と同じ理由で、`attribute` / `annotation`
+        // は実行時の論理依存ではないため、file-level dependency edge を作らない。
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
             sql += " AND src.lang = @lang";
