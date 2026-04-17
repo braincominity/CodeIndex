@@ -2627,6 +2627,48 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CssFamilyLessFontFaceSameLineStillFindsFollowingRule()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_css_familyless_fontface_inline");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "styles.css"),
+                """
+                @font-face { src: url("no-family.woff2"); } .after { color: red; }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/styles.css", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Contains(".after", names);
+            Assert.DoesNotContain("@font-face", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CSharpExactNameFindsLowercaseEnumMembers()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_exact_name");

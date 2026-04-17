@@ -3895,6 +3895,44 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_ZeroHitEnumGapMentionsDegradedSummary()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_zero_hit_enum_gap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+                """);
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp"}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.True(structured["graph_degraded"]!.GetValue<bool>());
+            Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
+            Assert.Contains("excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
+            Assert.Contains(
+                "No unused symbols found, but C# enum declarations and enum members are excluded from unused until enum-member access edges are indexed.",
+                response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_ClassifiesReflectionAttributedPropertyAsSuspect()
     {
         var writer = new DbWriter(_db.Connection);

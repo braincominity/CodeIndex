@@ -691,7 +691,7 @@ public static class SymbolExtractor
                     var match = pattern.Regex.Match(matchLine[lineOffset..]);
                     if (!match.Success)
                     {
-                        if (lang is "javascript" or "typescript" or "csharp")
+                        if (lang is "javascript" or "typescript" or "csharp" or "css")
                         {
                             lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                             continue;
@@ -761,13 +761,17 @@ public static class SymbolExtractor
                         kind = "property";
 
                     if (lang == "css")
-                        name = ResolveCssSymbolName(matchLine, name, lines, i, endLine);
+                        name = ResolveCssSymbolName(matchLine[absoluteStartColumn..], name, lines, i, endLine);
 
                     if (lang == "css" && string.IsNullOrWhiteSpace(name))
                     {
-                        if (lang is "javascript" or "typescript")
+                        var skippedEndColumn = pattern.BodyStyle == BodyStyle.Brace
+                            && bodyEndLine == startLine
+                            ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
+                            : -1;
+                        if (skippedEndColumn >= absoluteStartColumn)
                         {
-                            lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length));
+                            lineOffset = FindNextSameLineBraceStatementStart(matchLine, skippedEndColumn + 1, lang);
                             continue;
                         }
 
@@ -5733,7 +5737,7 @@ public static class SymbolExtractor
         if (bodyStyle != BodyStyle.Brace || endLine != startLine || sameLineEndColumn < absoluteStartColumn)
             return false;
 
-        return lang is "javascript" or "typescript"
+        return lang is "javascript" or "typescript" or "css"
             || (lang == "csharp" && CanContinueScanningSameLineCSharpBraceBody(kind));
     }
 
@@ -5773,9 +5777,35 @@ public static class SymbolExtractor
         return lang switch
         {
             "javascript" or "typescript" => FindJavaScriptTypeScriptSameLineBraceEndColumn(line, startColumn, lang),
+            "css" => FindCssSameLineBraceEndColumn(line, startColumn),
             "csharp" => FindCSharpSameLineBraceEndColumn(line, startColumn),
             _ => -1,
         };
+    }
+
+    private static int FindCssSameLineBraceEndColumn(string line, int startColumn)
+    {
+        var maskedLine = MaskCssScannerLines([line])[0];
+        var depth = 0;
+        var opened = false;
+
+        for (var index = Math.Max(0, startColumn); index < maskedLine.Length; index++)
+        {
+            var ch = maskedLine[index];
+            if (ch == '{')
+            {
+                depth++;
+                opened = true;
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return index;
+            }
+        }
+
+        return -1;
     }
 
     private static bool CanContinueScanningSameLineCSharpBraceBody(string kind)
