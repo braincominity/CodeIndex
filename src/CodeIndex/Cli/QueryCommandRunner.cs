@@ -21,7 +21,7 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
-    private const string CSharpEnumMemberUnusedGraphReason = "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum declarations and enum members are excluded from unused until those edges exist.";
+    private const string CSharpEnumMemberUnusedGraphReason = "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused, and enum declarations may still be false positives until those edges exist.";
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -339,17 +339,8 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(
-                        reader,
-                        "references",
-                        json: true,
-                        graphAvailable: false,
-                        jsonOptions,
-                        exact ? exactSignal : (ExactQuerySignal?)null,
-                        payload => AddGraphSupportOverrideFields(payload, graphSupportOverride));
-                else if (options.Json && graphSupportOverride != null)
-                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: true, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
+                if (options.Json && (exact || !reader._hasReferencesTable || graphSupportOverride != null))
+                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
@@ -453,17 +444,8 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(
-                        reader,
-                        "callers",
-                        json: true,
-                        graphAvailable: false,
-                        jsonOptions,
-                        exact ? exactSignal : (ExactQuerySignal?)null,
-                        payload => AddGraphSupportOverrideFields(payload, graphSupportOverride));
-                else if (options.Json && graphSupportOverride != null)
-                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: true, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
+                if (options.Json && (exact || !reader._hasReferencesTable || graphSupportOverride != null))
+                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
@@ -563,17 +545,8 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
             if (results.Count == 0)
             {
-                if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(
-                        reader,
-                        "callees",
-                        json: true,
-                        graphAvailable: false,
-                        jsonOptions,
-                        exact ? exactSignal : (ExactQuerySignal?)null,
-                        payload => AddGraphSupportOverrideFields(payload, graphSupportOverride));
-                else if (options.Json && graphSupportOverride != null)
-                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: true, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
+                if (options.Json && (exact || !reader._hasReferencesTable || graphSupportOverride != null))
+                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
@@ -3082,6 +3055,11 @@ public static class QueryCommandRunner
         ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null, GraphSupportOverride? graphSupportOverride = null)
     {
         var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: graphAvailable);
+        if (!graphAvailable)
+        {
+            payload["degraded"] = true;
+            payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+        }
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
         if (exactSignal != null)
             AddExactGraphJsonFields(payload, exactSignal.Value);
@@ -3157,12 +3135,10 @@ public static class QueryCommandRunner
         if (!reader.HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePaths, excludeTests))
             return null;
 
-        var hasSupportedGraphDefinition = reader.HasExactGraphSupportedDefinition(query, lang, pathPatterns, excludePaths, excludeTests);
-        var baseGraphSupported = lang == null
-            ? (bool?)null
-            : ReferenceExtractor.SupportsLanguage(lang);
-        var graphLanguage = hasSupportedGraphDefinition ? lang : "csharp";
-        var graphSupported = hasSupportedGraphDefinition ? baseGraphSupported : false;
+        var supportedGraphLanguage = reader.GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePaths, excludeTests);
+        var hasSupportedGraphDefinition = supportedGraphLanguage != null;
+        var graphLanguage = supportedGraphLanguage ?? "csharp";
+        var graphSupported = hasSupportedGraphDefinition ? true : false;
         var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
             graphLanguage,
             graphSupported,

@@ -405,7 +405,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
-For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope includes those enum-member candidates, `inspect` keeps `graph_supported` aligned with any callable candidates while exposing `graph_degraded=true` / `unsupported_symbol_kind=enum_member`, exact `references` / `callers` / `callees` surface the same gap on zero/count payloads plus successful JSON rows, and `unused` marks the active scope as degraded whenever it excludes C# enum declarations and enum members for that reason.
+For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope includes those enum-member candidates, `inspect` keeps `graph_supported` aligned with any callable candidates while exposing `graph_degraded=true` / `unsupported_symbol_kind=enum_member`, exact `references` / `callers` / `callees` surface the same gap on zero/count payloads plus successful JSON rows, and `unused` marks the active scope as degraded because C# enum members are excluded while enum declarations may still be false positives until those edges exist.
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
@@ -1423,7 +1423,7 @@ LIMIT 20;
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
-C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope にその enum member 候補が含まれる場合、`inspect` は callable 候補があれば `graph_supported` を維持したまま `graph_degraded=true` / `unsupported_symbol_kind=enum_member` を返し、exact `references` / `callers` / `callees` も zero/count payload と成功した JSON row の両方で同じ制約を示します。`unused` もその理由で C# enum declaration と enum member を除外した active scope を degraded として扱います。
+C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope にその enum member 候補が含まれる場合、`inspect` は callable 候補があれば `graph_supported` を維持したまま `graph_degraded=true` / `unsupported_symbol_kind=enum_member` を返し、exact `references` / `callers` / `callees` も zero/count payload と成功した JSON row の両方で同じ制約を示します。`unused` もその理由で active scope を degraded として扱い、C# enum member は除外しつつ enum declaration は偽陽性になりうるものとして残します。
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 

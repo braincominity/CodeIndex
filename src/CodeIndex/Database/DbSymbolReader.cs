@@ -674,16 +674,42 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
+        return GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePathPatterns, excludeTests) != null;
+    }
+
+    public string? GetExactGraphSupportedDefinitionLanguage(
+        string query,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "supportedGraphLang");
-        return HasExactDefinitionMatch(
-            query,
-            lang,
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests,
-            $"{supportedLangFilter} AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND {GetSymbolColumnSql("container_kind", "''")} = 'enum')",
-            cmd);
+        var nameCondition = _foldReady
+            ? "s.name_folded = @query"
+            : "s.name = @query COLLATE NOCASE";
+
+        var sql = @"
+            SELECT f.lang
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE " + nameCondition + @"
+              AND " + supportedLangFilter + @"
+              AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND " + GetSymbolColumnSql("container_kind", "''") + @" = 'enum')";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@query", _foldReady ? NameFold.Fold(query) ?? query : query);
+        if (lang != null)
+            cmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var value = cmd.ExecuteScalar();
+        return value == null || value == DBNull.Value ? null : (string?)value;
     }
 
     private bool HasExactDefinitionMatch(
@@ -1467,7 +1493,7 @@ public partial class DbReader
         var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
         const string pathSql = "lower(f.path)";
         var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
-        var isCSharpEnumSql = "(f.lang = 'csharp' AND s.kind = 'enum')";
+        var isCSharpEnumMemberSql = "(f.lang = 'csharp' AND s.kind = 'enum' AND " + GetSymbolColumnSql("container_kind", "''") + " = 'enum')";
         var hasConfigContextSql = $@"(
                 {pathSql} LIKE 'config/%'
                 OR {pathSql} LIKE '%/config/%'
@@ -1509,7 +1535,7 @@ public partial class DbReader
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')
-                  AND NOT {isCSharpEnumSql}
+                  AND NOT {isCSharpEnumMemberSql}
                   AND NOT EXISTS (
                       SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
                   )";
@@ -1628,14 +1654,14 @@ public partial class DbReader
             return (0, 0);
 
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
-        var isCSharpEnumSql = "(f.lang = 'csharp' AND s.kind = 'enum')";
+        var isCSharpEnumMemberSql = "(f.lang = 'csharp' AND s.kind = 'enum' AND " + GetSymbolColumnSql("container_kind", "''") + " = 'enum')";
         using var cmd = _conn.CreateCommand();
         var sql = @"
             SELECT COUNT(*), COUNT(DISTINCT f.path)
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
-              AND NOT " + isCSharpEnumSql + @"
+              AND NOT " + isCSharpEnumMemberSql + @"
               AND NOT EXISTS (
                   SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
               )";

@@ -202,13 +202,16 @@ public partial class McpServer
     {
         var hasEnumMemberGap = exact
             && reader.HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePaths, excludeTests);
-        var hasSupportedGraphDefinition = hasEnumMemberGap
-            && reader.HasExactGraphSupportedDefinition(query, lang, pathPatterns, excludePaths, excludeTests);
-        var baseGraphSupported = lang == null ? (bool?)null : ReferenceExtractor.SupportsLanguage(lang);
-        bool? graphSupported = hasEnumMemberGap && !hasSupportedGraphDefinition
-            ? false
-            : baseGraphSupported;
-        var graphLanguage = hasEnumMemberGap && !hasSupportedGraphDefinition ? "csharp" : lang;
+        var supportedGraphLanguage = hasEnumMemberGap
+            ? reader.GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePaths, excludeTests)
+            : null;
+        var hasSupportedGraphDefinition = supportedGraphLanguage != null;
+        bool? graphSupported = hasEnumMemberGap
+            ? hasSupportedGraphDefinition
+            : (lang == null ? (bool?)null : ReferenceExtractor.SupportsLanguage(lang));
+        var graphLanguage = hasEnumMemberGap
+            ? supportedGraphLanguage ?? "csharp"
+            : lang;
         var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
             graphLanguage,
             graphSupported,
@@ -1296,7 +1299,7 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["graph_supported"] = hasEnumMemberGap ? true : graphSupported,
                 ["graph_support_reason"] = hasEnumMemberGap
-                    ? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum declarations and enum members are excluded from unused until those edges exist."
+                    ? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused, and enum declarations may still be false positives until those edges exist."
                     : graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
@@ -1310,7 +1313,7 @@ public partial class McpServer
             var summary = results.Count > 0
                 ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : hasEnumMemberGap
-                    ? "No unused symbols found, but C# enum declarations and enum members are excluded from unused until enum-member access edges are indexed."
+                    ? "No unused symbols found, but C# enum members are excluded from unused and enum declarations may still be false positives until enum-member access edges are indexed."
                     : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
