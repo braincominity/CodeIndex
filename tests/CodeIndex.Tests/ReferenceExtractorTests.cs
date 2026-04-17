@@ -2299,6 +2299,59 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void ParseJavaBaseType_BoundedTypeParameter_IgnoresBoundExtends()
+    {
+        // Bounded type parameters (`<T extends Number>`) contain their own `extends` keyword
+        // inside the angle-bracket block. The base resolver must locate the class-level
+        // `extends` at angle/paren depth 0 — not the first textual `extends` — otherwise the
+        // subclass's super(...) edge is attributed to the bound (`Number`) instead of the real
+        // base (`Root`).
+        // 境界付き型パラメータ（`<T extends Number>`）は山括弧内に自前の `extends` を含むため、
+        // 基底型解決では angle / paren 深度 0 の `extends` を拾う必要がある。先頭一致だと境界型
+        // `Number` が基底として返り、サブクラスの super(...) が誤った型に張られる。
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf<T extends Number> extends Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf<T extends Number> extends Root implements Foo {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf<A extends Number, B extends CharSequence> extends Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf<T extends Number & Comparable<T>> extends Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf<T extends List<? extends Number>> extends Root {"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("class Leaf<T extends Number> extends Outer<Integer>.Base {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("public abstract class Leaf<T extends Number> extends Root permits A, B {"));
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_BoundedTypeParameter_AttributesToRealBase()
+    {
+        // End-to-end regression for bounded type parameter + class-level `extends`. Before the
+        // fix the base resolver grabbed the first textual `extends` (inside `<T extends Number>`)
+        // and super(0) was recorded against `Number` instead of the real base `Root`.
+        // 境界付き型パラメータとクラスレベル `extends` が共存する場合の E2E 回帰。修正前は最初の
+        // テキスト一致 `extends`（`<T extends Number>` 側）を拾い、super(0) が実基底 `Root` ではなく
+        // 境界型 `Number` に張られていた。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int value) {}
+            }
+
+            class Leaf<T extends Number> extends Root {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Number");
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
     public void Extract_JavaSuperCall_TypeUseAnnotationWithMultipleArgs_AttributesToRealBase()
     {
         // E2E regression for the multi-arg annotation case. Before the fix the scanner broke at

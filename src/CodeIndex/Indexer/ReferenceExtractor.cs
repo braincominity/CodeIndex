@@ -142,12 +142,6 @@ public static class ReferenceExtractor
     // Java コンストラクタ連鎖文。`Leaf(int x){super(x);}` のように `{` 直後に連鎖文が続く
     // single-line body 形式にも対応する。
     private static readonly Regex JavaCtorChainRegex = new(@"(?:^\s*|\{\s*)(?<kind>this|super)\s*\(", RegexOptions.Compiled);
-    // Java `extends` keyword anchor used to locate the start of the base-type expression.
-    // The base type itself is scanned manually in ParseJavaBaseType so that nested generic
-    // arguments like `Outer<Integer>.Base` are captured instead of being clipped at the `<`.
-    // `extends` キーワードの位置だけ正規表現で拾い、基底型本体は generic のネストを壊さない
-    // よう ParseJavaBaseType 側で手動スキャンする。
-    private static readonly Regex JavaExtendsRegex = new(@"\bextends\s+", RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -1463,11 +1457,16 @@ public static class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(signature))
             return null;
 
-        var match = JavaExtendsRegex.Match(signature);
-        if (!match.Success)
+        // Locate `extends` at angle/paren depth 0 so bounded type parameters like
+        // `class Leaf<T extends Number> extends Root {` do not resolve to the
+        // parameter bound (`Number`) instead of the real base (`Root`).
+        // 境界付き型パラメータ（`class Leaf<T extends Number> extends Root {`）で
+        // 型パラメータ境界の `extends` を先に拾わないよう、angle / paren 深度 0 の
+        // `extends` のみを検出する。
+        int start = FindTopLevelExtendsEnd(signature!);
+        if (start < 0)
             return null;
 
-        int start = match.Index + match.Length;
         int i = start;
         int angleDepth = 0;
         int parenDepth = 0;
@@ -1527,6 +1526,65 @@ public static class ReferenceExtractor
         // 先に除去しないと `@Ann Root` のような幽霊シンボルへ参照が張られてしまう。
         segment = StripJavaTypeAnnotations(segment);
         return segment.Length == 0 ? null : ExtractBareTypeName(segment);
+    }
+
+    /// <summary>
+    /// Return the index past the first `extends` keyword that appears at angle/paren depth 0,
+    /// or -1 when no such occurrence exists. Matches the semantics of the old `\bextends\s+`
+    /// regex entrypoint but skips `extends` inside `<...>` (bounded type parameters) and
+    /// `(...)` (annotation argument lists).
+    /// </summary>
+    private static int FindTopLevelExtendsEnd(string signature)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        for (int i = 0; i < signature.Length; i++)
+        {
+            char c = signature[i];
+            if (c == '<')
+            {
+                angleDepth++;
+            }
+            else if (c == '>')
+            {
+                if (angleDepth > 0) angleDepth--;
+            }
+            else if (c == '(')
+            {
+                parenDepth++;
+            }
+            else if (c == ')')
+            {
+                if (parenDepth > 0) parenDepth--;
+            }
+            else if (angleDepth == 0 && parenDepth == 0 && IsExtendsKeywordAt(signature, i))
+            {
+                int end = i + 7; // "extends".Length
+                while (end < signature.Length && char.IsWhiteSpace(signature[end]))
+                    end++;
+                return end;
+            }
+        }
+        return -1;
+    }
+
+    private static bool IsExtendsKeywordAt(string signature, int i)
+    {
+        const string Keyword = "extends";
+        if (i + Keyword.Length > signature.Length)
+            return false;
+        if (i > 0 && IsJavaIdentifierPart(signature[i - 1]))
+            return false;
+        if (string.CompareOrdinal(signature, i, Keyword, 0, Keyword.Length) != 0)
+            return false;
+        int after = i + Keyword.Length;
+        // `\bextends\s+` equivalence: must be followed by whitespace so that names like
+        // `extendsFoo` or identifiers containing `extends` do not match.
+        // `\bextends\s+` 相当: `extendsFoo` のような識別子や合成語を誤認しないよう、
+        // 直後に空白が続くものだけを `extends` キーワードとして扱う。
+        if (after >= signature.Length)
+            return false;
+        return char.IsWhiteSpace(signature[after]);
     }
 
     private static string StripJavaTypeAnnotations(string text)
