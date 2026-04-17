@@ -602,6 +602,116 @@ public class QueryCommandRunnerTests
         Assert.DoesNotContain("database not found", stderr);
     }
 
+    // Regression lock for #161: valid integers that fail the positive / non-negative
+    // range check used to be swallowed silently, leaving the command to run with the
+    // default value and write real results to stdout with exit 0. Every case below
+    // MUST abort with UsageError and leak NO stdout output.
+    // Uses a real indexed DB + real file on disk so that if ParseArgs ever regresses to
+    // "swallow invalid value and continue with default", the stdout-empty invariant has
+    // real teeth — the command could actually produce results, and the test would catch
+    // them. Without a real fixture the invariant could be preserved by accident (missing
+    // DB / missing file making the command fail at a later stage).
+    // #161 の回帰ロック: 数値として parse できるが positive / non-negative 制約を満たさない値は、
+    // かつて parseError を立てずにデフォルトへ差し替えられ、本物の結果を stdout に出して exit 0 にしていた。
+    // 各ケースは UsageError で停止し、stdout に 1 バイトも漏らしてはならない。
+    // 実在の index 済み DB と実在ファイルを用意することで、ParseArgs が「不正値を既定値に差し替えて続行」へ
+    // 退行した場合に本当に stdout へ結果が漏れる経路を作り、stdout 空のアサーションが偶然通ってしまう逃げ道を塞ぐ。
+    [Theory]
+    [InlineData("symbols", "0", "--limit", "--limit requires a positive integer")]
+    [InlineData("symbols", "-5", "--limit", "--limit requires a positive integer")]
+    [InlineData("symbols", "0", "--top", "--limit requires a positive integer")]
+    [InlineData("symbols", "-5", "--top", "--limit requires a positive integer")]
+    [InlineData("search", "0", "--limit", "--limit requires a positive integer")]
+    [InlineData("search", "-5", "--limit", "--limit requires a positive integer")]
+    [InlineData("search", "0", "--top", "--limit requires a positive integer")]
+    [InlineData("search", "-5", "--top", "--limit requires a positive integer")]
+    [InlineData("search", "0", "--snippet-lines", "--snippet-lines requires a positive integer")]
+    [InlineData("impact", "-1", "--depth", "--depth requires a non-negative integer")]
+    [InlineData("excerpt", "0", "--start", "--start requires a positive integer")]
+    [InlineData("excerpt", "-5", "--start", "--start requires a positive integer")]
+    [InlineData("excerpt", "0", "--end", "--end requires a positive integer")]
+    [InlineData("excerpt", "-1", "--before", "--before requires a non-negative integer")]
+    [InlineData("excerpt", "-1", "--after", "--after requires a non-negative integer")]
+    public void QueryEntrypoints_OutOfRangeNumericOptionsFailClosed_Issue161(string command, string value, string option, string expectedErrorFragment)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(
+            $"cdidx_issue161_{command}_{option.Trim('-')}_{value.Replace('-', 'n')}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            // Seed indexed content so `search "Issue161"`, `symbols "Issue161"`, and
+            // `impact "Issue161Callee"` would all return real matches if ParseArgs regressed.
+            // Issue161Caller.Run calls Issue161Target.Issue161Callee, giving `impact` a live edge.
+            // `search "Issue161"` / `symbols "Issue161"` が本物の結果を返せるよう、index 済み内容をシードする。
+            // Issue161Caller.Run が Issue161Target.Issue161Callee を呼ぶことで `impact` のエッジも張る。
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue161Target.cs",
+                "csharp",
+                """
+                namespace Issue161;
+                public class Issue161Target
+                {
+                    public void Issue161Callee() { }
+                }
+                public class Issue161Caller
+                {
+                    public void Run()
+                    {
+                        var target = new Issue161Target();
+                        target.Issue161Callee();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            // Real file on disk so `excerpt` would actually read and print content
+            // if any of its numeric options regressed to their defaults.
+            // `excerpt` が既定値退行時に本当にファイル内容を読んで出力できるよう、実在ファイルも用意する。
+            var excerptDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(excerptDir);
+            var excerptFilePath = Path.Combine(excerptDir, "Issue161Excerpt.cs");
+            File.WriteAllText(
+                excerptFilePath,
+                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+            string[] args = command switch
+            {
+                "symbols" => ["Issue161", "--db", dbPath, "--json", option, value],
+                "search" => ["Issue161", "--db", dbPath, "--json", option, value],
+                "impact" => ["Issue161Callee", "--db", dbPath, "--json", option, value],
+                "excerpt" when option == "--start" => [excerptFilePath, "--json", option, value],
+                "excerpt" => [excerptFilePath, "--json", "--start", "1", option, value],
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+            {
+                "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+                "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            });
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
+            // stdout must stay empty so callers that branch on exit code alone cannot consume
+            // silently-defaulted output as if it were valid data.
+            // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
+            // 正当な結果として消費しないよう、stdout は空でなければならない。
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(expectedErrorFragment, stderr);
+            Assert.Contains($"got '{value}'", stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunValidate_KindFilterNarrowsIssues()
     {
@@ -2981,6 +3091,78 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, constructorStderr);
             Assert.Equal("Money", constructorSymbol.GetProperty("name").GetString());
             Assert.Contains("public Money(decimal amount)", constructorSymbol.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpPlainFieldEdgeCasesExposeAllDeclarators()
+    {
+        // End-to-end coverage for the three plain-field shapes the codex adversarial
+        // review flagged: (1) multi-line field where the type wraps onto its own line,
+        // (2) declarator list where one statement declares several fields, and
+        // (3) delegate*<...> function-pointer field. Each name must round-trip through
+        // the real extractor, database write, and CLI `symbols` read path.
+        // Closes #298 follow-up (codex adversarial review).
+        // 以下 3 つの通常フィールド形状が extractor → DB 書き込み → CLI `symbols`
+        // までを通ることを end-to-end で検証する: (1) 型宣言が改行される multi-line
+        // field、(2) 1 文で複数 field を宣言する declarator list、
+        // (3) `delegate*<...>` function-pointer field。Closes #298 follow-up。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_field_edge");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Edge.cs",
+                "csharp",
+                """
+                using System;
+                using System.Collections.Generic;
+                namespace Demo;
+                public unsafe class Edge
+                {
+                    public int SingleLine;
+
+                    private Dictionary<string, int>
+                        _map = new();
+
+                    private int _x, _y;
+
+                    public delegate*<int, void> Callback;
+                }
+                """);
+
+            var (mapExitCode, mapStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_map", "--exact-name"],
+                _jsonOptions));
+            using var mapDocument = ParseJsonOutput(mapStdout);
+            Assert.Equal(CommandExitCodes.Success, mapExitCode);
+            Assert.Equal("_map", mapDocument.RootElement.GetProperty("name").GetString());
+
+            var (xExitCode, xStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_x", "--exact-name"],
+                _jsonOptions));
+            using var xDocument = ParseJsonOutput(xStdout);
+            Assert.Equal(CommandExitCodes.Success, xExitCode);
+            Assert.Equal("_x", xDocument.RootElement.GetProperty("name").GetString());
+
+            var (yExitCode, yStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_y", "--exact-name"],
+                _jsonOptions));
+            using var yDocument = ParseJsonOutput(yStdout);
+            Assert.Equal(CommandExitCodes.Success, yExitCode);
+            Assert.Equal("_y", yDocument.RootElement.GetProperty("name").GetString());
+
+            var (callbackExitCode, callbackStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "Callback", "--exact-name"],
+                _jsonOptions));
+            using var callbackDocument = ParseJsonOutput(callbackStdout);
+            Assert.Equal(CommandExitCodes.Success, callbackExitCode);
+            Assert.Equal("Callback", callbackDocument.RootElement.GetProperty("name").GetString());
         }
         finally
         {
@@ -6974,7 +7156,7 @@ public class QueryCommandRunnerTests
 
                 public static class Values
                 {
-                    public static int A = 1;
+                    public static int Alpha = 1;
                 }
 
                 public class UsesValues

@@ -611,7 +611,8 @@ public static class ReferenceExtractor
         else
         {
             ctorContainer = FindEnclosingJavaConstructor(symbols, enclosingType, lineNumber)
-                ?? TrySynthesizeSameLineJavaCtor(preparedLine, enclosingType, lineNumber);
+                ?? TrySynthesizeSameLineJavaCtor(preparedLine, enclosingType, lineNumber)
+                ?? FindEnclosingJavaConstructorFromStructure(structuralLines, enclosingType, lineNumber);
         }
 
         if (ctorContainer == null)
@@ -716,6 +717,94 @@ public static class ReferenceExtractor
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// Walk structural lines within the enclosing type body to recover a Java constructor
+    /// whose header does not match SymbolExtractor's return-type-required method regex. Java
+    /// constructors have no return type, so plain forms like `Leaf() {` / `Shade(int code) {`
+    /// are not emitted as function symbols; this fallback parses them directly so chain calls
+    /// can still be attributed to the owning ctor. Handles multi-line bodies via
+    /// <see cref="SymbolExtractor.FindJavaBraceRange"/> (string/comment/text-block aware) and
+    /// same-line bodies via the opening brace on the declaration line.
+    /// 外側型の body 内を走査して、return 型を持たない Java コンストラクタ
+    /// （`Leaf() {` / `Shade(int code) {` など）を復元する。SymbolExtractor のメソッド regex は
+    /// 戻り値型を必須とするため function シンボルが作られない。FindJavaBraceRange を使って
+    /// 複数行 body にも対応し、chain call を正しいコンストラクタに帰属させる。
+    /// </summary>
+    private static SymbolRecord? FindEnclosingJavaConstructorFromStructure(
+        string[] structuralLines,
+        SymbolRecord enclosingType,
+        int lineNumber)
+    {
+        var classBodyStart = enclosingType.BodyStartLine ?? enclosingType.StartLine;
+        var classBodyEnd = enclosingType.BodyEndLine ?? enclosingType.EndLine;
+        if (classBodyStart <= 0 || classBodyEnd < classBodyStart)
+            return null;
+        if (lineNumber < classBodyStart || lineNumber > classBodyEnd)
+            return null;
+
+        int i = classBodyStart - 1; // 0-based
+        var lastIndex = Math.Min(structuralLines.Length - 1, classBodyEnd - 1);
+        while (i <= lastIndex)
+        {
+            var line = structuralLines[i];
+            var span = TryExtractJavaSameLineCtorSpan(line);
+            if (span is null)
+            {
+                i++;
+                continue;
+            }
+
+            if (!string.Equals(span.Value.Name, enclosingType.Name, StringComparison.Ordinal))
+            {
+                i++;
+                continue;
+            }
+
+            int declStart = i + 1; // 1-based
+            int bodyEnd;
+            if (span.Value.CloseBraceIndex >= 0)
+            {
+                // Same-line body: declaration and body end on the same line.
+                // 同一行 body: 宣言と body の終端が同じ行。
+                bodyEnd = declStart;
+            }
+            else
+            {
+                // Multi-line body: reuse SymbolExtractor's Java-aware brace scanner so
+                // strings / char literals / text blocks / comments do not mislead the
+                // depth counter. startColumn is set to the `{` column so we open on it.
+                // 複数行 body: SymbolExtractor の Java 用 brace scanner に委譲する。
+                var (endLine, _, bodyEndLine) = SymbolExtractor.FindJavaBraceRange(
+                    structuralLines, i, span.Value.OpenBraceIndex);
+                bodyEnd = bodyEndLine ?? endLine;
+            }
+
+            if (lineNumber >= declStart && lineNumber <= bodyEnd)
+            {
+                return new SymbolRecord
+                {
+                    Kind = "function",
+                    Name = enclosingType.Name,
+                    Line = declStart,
+                    StartLine = declStart,
+                    EndLine = bodyEnd,
+                    BodyStartLine = declStart,
+                    BodyEndLine = bodyEnd,
+                    ContainerKind = enclosingType.Kind,
+                    ContainerName = enclosingType.Name,
+                    ContainerQualifiedName = enclosingType.ContainerQualifiedName,
+                    Visibility = enclosingType.Visibility,
+                };
+            }
+
+            // Skip past this ctor's body to avoid re-parsing nested declarations inside it.
+            // この ctor の body 以降に飛ばし、内部の宣言を誤って拾わないようにする。
+            i = Math.Max(i + 1, bodyEnd);
+        }
+
+        return null;
     }
 
     /// <summary>
