@@ -493,7 +493,58 @@ public static class ReferenceExtractor
         if (i < 0)
             return true;
         var c = line[i];
-        return c == ']' || c == '{' || c == '}' || c == ';';
+        if (c == '{' || c == '}' || c == ';')
+            return true;
+        // A preceding `]` only indicates attribute-list chaining (`[A][B]`) when that `]`
+        // actually closed an attribute section. For `arr[i][Compute()]` the preceding `]`
+        // closes an indexer, so we must walk back to the matching `[` and re-check that
+        // opening bracket's declaration position.
+        // 直前の `]` が attribute list のチェーン (`[A][B]`) を意味するのは、その `]` が
+        // 実際に attribute section を閉じていたときだけ。`arr[i][Compute()]` のように
+        // indexer を閉じた `]` の場合は、対応する `[` まで戻ってそこが宣言位置かを再判定する。
+        if (c == ']')
+            return IsCSharpAttributeSectionClose(line, i);
+        return false;
+    }
+
+    /// <summary>
+    /// Walk left from a `]` to its matching `[`, skipping balanced parens, and return true
+    /// when that opening bracket itself was at a C# declaration position.
+    /// `]` から対応する `[` まで左方向に遡り、その開き bracket 自体が宣言位置だった場合のみ true を返す。
+    /// </summary>
+    private static bool IsCSharpAttributeSectionClose(string line, int closeBracketIndex)
+    {
+        var bracketDepth = 1;
+        var parenDepth = 0;
+        for (var i = closeBracketIndex - 1; i >= 0; i--)
+        {
+            var c = line[i];
+            if (c == ')')
+            {
+                parenDepth++;
+                continue;
+            }
+            if (c == '(')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+                continue;
+            }
+            if (parenDepth > 0)
+                continue;
+            if (c == ']')
+            {
+                bracketDepth++;
+                continue;
+            }
+            if (c == '[')
+            {
+                bracketDepth--;
+                if (bracketDepth == 0)
+                    return IsCSharpAttributeOpenBracket(line, i);
+            }
+        }
+        return false;
     }
 
     private static bool ScanLeftForAttributeOpen(string line, int start)
@@ -530,10 +581,33 @@ public static class ReferenceExtractor
         if (line[probe] == '@')
             return true;
 
-        // Kotlin use-site target: `@field:Deprecated("msg")` — skip the `target:` prefix
-        // and confirm an `@` marker precedes it.
-        // Kotlin の use-site target 付き注釈 `@field:Deprecated("msg")` では、`target:` を
-        // 読み飛ばして `@` を探す。
+        // `@module.Annotation(args)` — walk past the dotted qualifier chain first so that
+        // both `@module.Annotation` and `@field:com.example.Annotation` land the probe on
+        // either `@` or the Kotlin use-site target `:`.
+        // `@module.Annotation(args)` や `@field:com.example.Annotation(args)` のように修飾子が
+        // 付く場合も対応するため、先にドット区切り修飾子チェーンを剥がしてから `@` または
+        // Kotlin の use-site target `:` を判定する。
+        while (probe >= 0 && line[probe] == '.')
+        {
+            probe--;
+            while (probe >= 0 && IsIdentifierChar(line[probe]))
+                probe--;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+        }
+
+        if (probe < 0)
+            return false;
+
+        if (line[probe] == '@')
+            return true;
+
+        // Kotlin use-site target: `@field:Deprecated("msg")` or
+        // `@field:com.example.Deprecated("msg")`. After unwinding the dotted qualifier, the
+        // probe lands on `:`; walk past the target identifier and confirm `@`.
+        // Kotlin の use-site target `@field:Deprecated("msg")` や
+        // `@field:com.example.Deprecated("msg")` では、ドット修飾子を剥がしたあと probe が `:`
+        // に着地するため、target 識別子を読み飛ばして `@` を確認する。
         if (line[probe] == ':')
         {
             var j = probe - 1;
@@ -552,21 +626,9 @@ public static class ReferenceExtractor
                         return true;
                 }
             }
-            return false;
         }
 
-        // `@module.Annotation(args)` — walk past the dotted qualifier chain to the `@`.
-        // `@module.Annotation(args)` のようにドット区切り修飾子がある場合は、`.` と識別子を
-        // 順に遡って `@` を探す。
-        while (probe >= 0 && line[probe] == '.')
-        {
-            probe--;
-            while (probe >= 0 && IsIdentifierChar(line[probe]))
-                probe--;
-            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
-                probe--;
-        }
-        return probe >= 0 && line[probe] == '@';
+        return false;
     }
 
     private static bool UsesHashComments(string lang) =>

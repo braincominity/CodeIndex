@@ -1344,4 +1344,139 @@ public class ReferenceExtractorTests
         var jvmName = Assert.Single(references.Where(r => r.SymbolName == "JvmName"));
         Assert.Equal("annotation", jvmName.ReferenceKind);
     }
+
+    [Fact]
+    public void Extract_CsharpChainedIndexerCalls_StayCall()
+    {
+        // issue #293 follow-up: `arr[Compute()][Compute()]` — the second `[` is preceded by
+        // an indexer-closing `]`, not an attribute-section `]`. Walking back to the matching
+        // `[` must find an expression-position bracket so both inner calls remain `call`.
+        // issue #293 補足: `arr[Compute()][Compute()]` の 2 個目の `[` は indexer の `]` に
+        // 続くだけで attribute section の終端ではないため、対応する `[` まで戻って宣言位置で
+        // ないことを確認し、両方の呼び出しを `call` のまま残す。
+        const string content = """
+            public class C
+            {
+                public int Compute() => 0;
+                public int Read(int[][] arr) => arr[Compute()][Compute()];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRefs = references.Where(r => r.SymbolName == "Compute").ToList();
+        Assert.Equal(2, computeRefs.Count);
+        Assert.All(computeRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpMatrixIndexerCalls_StayCall()
+    {
+        // Two consecutive indexer accesses on a matrix — `matrix[Row()][Col()]` — must keep
+        // both inner calls as `call`.
+        // 連続 indexer `matrix[Row()][Col()]` でも、両方の呼び出しが `call` のまま残ること。
+        const string content = """
+            public class M
+            {
+                public int Row() => 0;
+                public int Col() => 0;
+                public int Read(int[,] matrix) => matrix[Row(), Col()];
+                public int Read2(int[][] grid) => grid[Row()][Col()];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var row = references.Where(r => r.SymbolName == "Row").ToList();
+        var col = references.Where(r => r.SymbolName == "Col").ToList();
+        Assert.Equal(2, row.Count);
+        Assert.Equal(2, col.Count);
+        Assert.All(row, r => Assert.Equal("call", r.ReferenceKind));
+        Assert.All(col, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpChainedAttributeLists_StayAttribute()
+    {
+        // `[A(...)][B(...)]` on a declaration — the chained attribute-list form must still
+        // classify both entries as `attribute` after the indexer-safety walk-back.
+        // `[A(...)][B(...)]` の連続 attribute list は、indexer との区別が入ったあとも両方 `attribute`。
+        const string content = """
+            [A("x")][B("y")]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var a = Assert.Single(references.Where(r => r.SymbolName == "A"));
+        var b = Assert.Single(references.Where(r => r.SymbolName == "B"));
+        Assert.Equal("attribute", a.ReferenceKind);
+        Assert.Equal("attribute", b.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinQualifiedFieldTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Kotlin use-site target with a fully-qualified annotation
+        // name, e.g. `@field:com.example.Deprecated("msg")`, must be classified as
+        // `annotation` — the dotted qualifier chain plus the `target:` prefix must both
+        // resolve back to `@`.
+        // issue #293 補足: Kotlin の `@field:com.example.Deprecated("msg")` のように use-site
+        // target と修飾付き注釈名が組み合わさった場合も `annotation` 判定になること。
+        const string content = """
+            class Example {
+                @field:com.example.Deprecated("msg")
+                val value: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinQualifiedGetTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Kotlin `@get:com.fasterxml.jackson.annotation.JsonProperty("x")` — use-site target
+        // combined with a long qualifier chain must still be `annotation`.
+        // Kotlin の `@get:com.fasterxml.jackson.annotation.JsonProperty("x")` も `annotation`。
+        const string content = """
+            class K {
+                @get:com.fasterxml.jackson.annotation.JsonProperty("x")
+                val x: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var jsonProperty = Assert.Single(references.Where(r => r.SymbolName == "JsonProperty"));
+        Assert.Equal("annotation", jsonProperty.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinQualifiedAnnotationWithoutTarget_ClassifiedAsAnnotation()
+    {
+        // Regression guard: fully-qualified annotation name without a use-site target, e.g.
+        // `@org.junit.Test(...)`, must still be `annotation`.
+        // 退行防止: use-site target のない `@org.junit.Test(...)` も引き続き `annotation`。
+        const string content = """
+            class K {
+                @org.junit.Test(expected = Exception::class)
+                fun run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
+        Assert.Equal("annotation", test.ReferenceKind);
+    }
 }
