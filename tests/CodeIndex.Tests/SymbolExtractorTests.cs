@@ -3463,6 +3463,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_TrimsClosingBraceFromFinalEnumMemberSpan()
+    {
+        var content = "public enum Status\n{\n    Ready,\n    Busy\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var busy = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Busy"));
+
+        Assert.Equal("Busy", busy.Signature);
+        Assert.Equal(4, busy.EndLine);
+        Assert.DoesNotContain("}", busy.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsLowercaseAndUnicodeEnumMembers()
     {
         var content = "public enum Status\n{\n    active,\n    inactive,\n    Δelta = active,\n}";
@@ -3544,10 +3556,14 @@ public class SymbolExtractorTests
     {
         var content = "public enum BrokenAttr\n{\n    [Attr(\n    X,\n    Y\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var memberY = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Y"));
 
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "BrokenAttr");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "X");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Y");
+        Assert.Equal("Y", memberY.Signature);
+        Assert.Equal(5, memberY.EndLine);
+        Assert.DoesNotContain("}", memberY.Signature);
     }
 
     [Fact]

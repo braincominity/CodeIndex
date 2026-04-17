@@ -200,18 +200,19 @@ public partial class McpServer
     private static (string? GraphLanguage, bool? GraphSupported, string? GraphSupportReason, string? UnsupportedSymbolKind, bool GraphDegraded)
         ResolveExactEnumMemberGraphSupport(DbReader reader, bool exact, string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string> excludePaths, bool excludeTests)
     {
-        var unsupportedKinds = exact
-            ? reader.GetUnsupportedExactGraphSymbolKinds(query, lang, pathPatterns, excludePaths, excludeTests)
-            : [];
-        var hasEnumMemberGap = unsupportedKinds.Contains("enum_member");
-        bool? graphSupported = hasEnumMemberGap
+        var hasEnumMemberGap = exact
+            && reader.HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePaths, excludeTests);
+        var hasSupportedGraphDefinition = hasEnumMemberGap
+            && reader.HasExactGraphSupportedDefinition(query, lang, pathPatterns, excludePaths, excludeTests);
+        var baseGraphSupported = lang == null ? (bool?)null : ReferenceExtractor.SupportsLanguage(lang);
+        bool? graphSupported = hasEnumMemberGap && !hasSupportedGraphDefinition
             ? false
-            : lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            : baseGraphSupported;
         var graphSupportReason = hasEnumMemberGap
             ? ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
             : ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
         return (
-            GraphLanguage: hasEnumMemberGap ? "csharp" : lang,
+            GraphLanguage: hasEnumMemberGap && !hasSupportedGraphDefinition ? "csharp" : lang,
             GraphSupported: graphSupported,
             GraphSupportReason: graphSupportReason,
             UnsupportedSymbolKind: hasEnumMemberGap ? "enum_member" : null,

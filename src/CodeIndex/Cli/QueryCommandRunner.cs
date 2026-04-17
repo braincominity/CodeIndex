@@ -3122,9 +3122,12 @@ public static class QueryCommandRunner
         if (graphSupportOverride == null)
             return;
 
-        payload["graph_language"] = graphSupportOverride.GraphLanguage;
-        payload["graph_supported"] = graphSupportOverride.GraphSupported;
-        payload["graph_support_reason"] = graphSupportOverride.GraphSupportReason;
+        if (graphSupportOverride.GraphLanguage != null)
+            payload["graph_language"] = graphSupportOverride.GraphLanguage;
+        if (graphSupportOverride.GraphSupported.HasValue)
+            payload["graph_supported"] = graphSupportOverride.GraphSupported.Value;
+        if (graphSupportOverride.GraphSupportReason != null)
+            payload["graph_support_reason"] = graphSupportOverride.GraphSupportReason;
         if (graphSupportOverride.GraphDegraded)
             payload["graph_degraded"] = true;
         if (graphSupportOverride.UnsupportedSymbolKind != null)
@@ -3151,13 +3154,17 @@ public static class QueryCommandRunner
         if (!exact)
             return null;
 
-        var unsupportedKinds = reader.GetUnsupportedExactGraphSymbolKinds(query, lang, pathPatterns, excludePaths, excludeTests);
-        if (!unsupportedKinds.Contains("enum_member"))
+        if (!reader.HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePaths, excludeTests))
             return null;
 
+        var hasSupportedGraphDefinition = reader.HasExactGraphSupportedDefinition(query, lang, pathPatterns, excludePaths, excludeTests);
+        var baseGraphSupported = lang == null
+            ? (bool?)null
+            : ReferenceExtractor.SupportsLanguage(lang);
+
         return new GraphSupportOverride(
-            "csharp",
-            GraphSupported: false,
+            hasSupportedGraphDefinition ? lang : "csharp",
+            GraphSupported: hasSupportedGraphDefinition ? baseGraphSupported : false,
             ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
                 ?? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet.",
             "enum_member",
@@ -3188,7 +3195,7 @@ public static class QueryCommandRunner
     }
 
     private sealed record GraphSupportOverride(
-        string GraphLanguage,
+        string? GraphLanguage,
         bool? GraphSupported,
         string GraphSupportReason,
         string? UnsupportedSymbolKind,

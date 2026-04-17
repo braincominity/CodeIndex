@@ -5159,6 +5159,7 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
             Assert.True(json.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
             Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
@@ -5206,6 +5207,7 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
             Assert.True(json.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
             Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
@@ -5300,9 +5302,54 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
             Assert.True(json.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
             Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CrossLanguageMixedHitDoesNotForceCSharpGraphLanguage()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_cross_language_mixed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                export function Ready() {}
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.False(json.TryGetProperty("graph_language", out _));
+            Assert.False(json.TryGetProperty("graph_supported", out _));
         }
         finally
         {

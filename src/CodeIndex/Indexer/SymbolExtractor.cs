@@ -1237,6 +1237,7 @@ public static class SymbolExtractor
         (int LineIndex, int Column) endExclusive,
         List<SymbolRecord> symbols)
     {
+        endExclusive = TrimTrailingCSharpEnumMemberSpan(rawLines, start, endExclusive);
         var maskedSnippet = GetSourceSpanText(csharpMatchLines, start, endExclusive);
         if (string.IsNullOrWhiteSpace(maskedSnippet))
             return;
@@ -1261,6 +1262,37 @@ public static class SymbolExtractor
             ContainerKind = "enum",
             ContainerName = enumSymbol.Name,
         });
+    }
+
+    private static (int LineIndex, int Column) TrimTrailingCSharpEnumMemberSpan(
+        string[] rawLines,
+        (int LineIndex, int Column) start,
+        (int LineIndex, int Column) endExclusive)
+    {
+        var lineIndex = Math.Min(endExclusive.LineIndex, rawLines.Length - 1);
+        var column = lineIndex >= 0
+            ? Math.Min(endExclusive.Column, rawLines[lineIndex].Length)
+            : 0;
+
+        while (lineIndex > start.LineIndex || (lineIndex == start.LineIndex && column > start.Column))
+        {
+            if (column == 0)
+            {
+                lineIndex--;
+                if (lineIndex < 0)
+                    break;
+                column = rawLines[lineIndex].Length;
+                continue;
+            }
+
+            var previous = rawLines[lineIndex][column - 1];
+            if (!char.IsWhiteSpace(previous) && previous != '}')
+                break;
+
+            column--;
+        }
+
+        return (lineIndex, column);
     }
 
     private static string GetSourceSpanText(
