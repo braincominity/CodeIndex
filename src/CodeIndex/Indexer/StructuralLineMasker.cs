@@ -393,11 +393,17 @@ internal static class StructuralLineMasker
     }
 
     // Python triple-quoted strings: """...""" and '''...''' (with optional r/b/u/f prefixes).
+    // f-string interpolation holes `{expr}` preserve expression contents so downstream
+    // reference extraction still sees real call edges; `{{` / `}}` are escape sequences.
     // Python の三重引用符文字列: """...""" と '''...'''（r/b/u/f 接頭辞対応）。
+    // f-string の補間ホール `{expr}` は内容を残し、real call を参照抽出に見せる。
+    // `{{` / `}}` は literal 用のエスケープ。
     private static void MaskPythonTripleStringContents(string[] lines)
     {
         char tripleChar = '\0';
         bool isRaw = false;
+        bool isFString = false;
+        int holeBraceDepth = -1; // -1 when not inside an f-string hole, >=0 otherwise.
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -412,6 +418,43 @@ internal static class StructuralLineMasker
             {
                 if (tripleChar != '\0')
                 {
+                    if (holeBraceDepth >= 0)
+                    {
+                        // Inside an f-string `{expr}` hole: preserve chars so downstream
+                        // regex extraction still sees real calls. Track nested braces so
+                        // dict / set / nested f-string literal braces do not terminate early.
+                        // f-string `{expr}` ホール内: 文字を残して real call を抽出に見せる。
+                        // dict/set/ネスト f-string のために brace 深度を追う。
+                        if (line[pos] == '{')
+                        {
+                            holeBraceDepth++;
+                            pos++;
+                            continue;
+                        }
+
+                        if (line[pos] == '}')
+                        {
+                            if (holeBraceDepth == 0)
+                            {
+                                // Mask the closing `}` so it still looks like string
+                                // delimiter noise to regex extraction.
+                                // 閉じ `}` は文字列境界としてマスクし、regex 抽出に
+                                // ホール本体と混在させない。
+                                masked[pos] = ' ';
+                                holeBraceDepth = -1;
+                                pos++;
+                                continue;
+                            }
+
+                            holeBraceDepth--;
+                            pos++;
+                            continue;
+                        }
+
+                        pos++;
+                        continue;
+                    }
+
                     if (!isRaw && line[pos] == '\\' && pos + 1 < line.Length)
                     {
                         ReplaceWithSpaces(masked, pos, 2);
@@ -428,7 +471,38 @@ internal static class StructuralLineMasker
                         pos += 3;
                         tripleChar = '\0';
                         isRaw = false;
+                        isFString = false;
                         continue;
+                    }
+
+                    if (isFString)
+                    {
+                        // `{{` / `}}` are escapes for literal braces — mask both as spaces.
+                        // `{{` / `}}` は literal brace のエスケープ。両方マスク。
+                        if (pos + 1 < line.Length && line[pos] == '{' && line[pos + 1] == '{')
+                        {
+                            ReplaceWithSpaces(masked, pos, 2);
+                            pos += 2;
+                            continue;
+                        }
+
+                        if (pos + 1 < line.Length && line[pos] == '}' && line[pos + 1] == '}')
+                        {
+                            ReplaceWithSpaces(masked, pos, 2);
+                            pos += 2;
+                            continue;
+                        }
+
+                        if (line[pos] == '{')
+                        {
+                            // Mask the opening `{` so brace balance matches the closing
+                            // `}` we also mask; the expression contents are left alone.
+                            // 開き `{` をマスクしつつ、式本体は残す。
+                            masked[pos] = ' ';
+                            holeBraceDepth = 0;
+                            pos++;
+                            continue;
+                        }
                     }
 
                     masked[pos] = ' ';
@@ -441,12 +515,13 @@ internal static class StructuralLineMasker
                 if (line[pos] == '#')
                     break;
 
-                if (TryOpenPythonTripleString(line, pos, out var prefixLen, out var openingChar, out var rawFlag))
+                if (TryOpenPythonTripleString(line, pos, out var prefixLen, out var openingChar, out var rawFlag, out var fFlag))
                 {
                     ReplaceWithSpaces(masked, pos, prefixLen + 3);
                     pos += prefixLen + 3;
                     tripleChar = openingChar;
                     isRaw = rawFlag;
+                    isFString = fFlag;
                     continue;
                 }
 
@@ -463,22 +538,26 @@ internal static class StructuralLineMasker
         }
     }
 
-    private static bool TryOpenPythonTripleString(string line, int startIndex, out int prefixLength, out char tripleChar, out bool isRaw)
+    private static bool TryOpenPythonTripleString(string line, int startIndex, out int prefixLength, out char tripleChar, out bool isRaw, out bool isFString)
     {
         prefixLength = 0;
         tripleChar = '\0';
         isRaw = false;
+        isFString = false;
 
         if (startIndex > 0 && IsIdentifierPart(line[startIndex - 1]))
             return false;
 
         var p = startIndex;
         var seenRaw = false;
+        var seenF = false;
         var prefixChars = 0;
         while (p < line.Length && prefixChars < 2 && IsPythonStringPrefixChar(line[p]))
         {
             if (line[p] == 'r' || line[p] == 'R')
                 seenRaw = true;
+            else if (line[p] == 'f' || line[p] == 'F')
+                seenF = true;
             p++;
             prefixChars++;
         }
@@ -488,6 +567,7 @@ internal static class StructuralLineMasker
             prefixLength = p - startIndex;
             tripleChar = line[p];
             isRaw = seenRaw;
+            isFString = seenF;
             return true;
         }
 
@@ -636,8 +716,12 @@ internal static class StructuralLineMasker
 
     // JavaScript/TypeScript template literals: `...` with ${expr} interpolation holes.
     // Interpolation hole contents are preserved (not masked) so the call-graph keeps real call edges.
+    // Regex literals are skipped at the outer and hole scopes so a backtick inside a regex
+    // does not start a phantom template and a `}` inside a regex does not close a hole early.
     // JavaScript/TypeScript のテンプレートリテラル `...` と ${expr} 補間ホール。
     // ホール内の本物のコードは参照抽出に見せるためマスクしない。
+    // regex literal は外側と hole 内の両方でスキップし、regex 中の backtick が template を
+    // 誤って開始したり `}` が hole を早く閉じたりするのを避ける。
     private static void MaskJsTsTemplateLiteralContents(string[] lines)
     {
         var frames = new Stack<ScannerFrame>();
@@ -650,6 +734,7 @@ internal static class StructuralLineMasker
 
             var masked = line.ToCharArray();
             var pos = 0;
+            char prevSignificantChar = '\0';
 
             while (pos < line.Length)
             {
@@ -682,6 +767,7 @@ internal static class StructuralLineMasker
                             ReplaceWithSpaces(masked, pos, 2);
                             pos += 2;
                             frames.Push(new JsTemplateHoleFrame());
+                            prevSignificantChar = '\0';
                             continue;
                         }
 
@@ -690,6 +776,7 @@ internal static class StructuralLineMasker
                             masked[pos] = ' ';
                             pos++;
                             frames.Pop();
+                            prevSignificantChar = '`';
                             continue;
                         }
 
@@ -710,16 +797,25 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
+                        if (line[pos] == '/' && CanStartJsRegexLiteral(prevSignificantChar))
+                        {
+                            pos = SkipJsRegexLiteral(line, pos);
+                            prevSignificantChar = 'a'; // Treat as postfix so a following `/` is division.
+                            continue;
+                        }
+
                         if (line[pos] == '`')
                         {
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame());
+                            prevSignificantChar = '`';
                             continue;
                         }
 
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
                             pos = SkipJsSingleLineString(line, pos);
+                            prevSignificantChar = '"';
                             continue;
                         }
 
@@ -727,6 +823,7 @@ internal static class StructuralLineMasker
                         {
                             holeFrame.NestedBraceDepth++;
                             pos++;
+                            prevSignificantChar = '{';
                             continue;
                         }
 
@@ -741,14 +838,18 @@ internal static class StructuralLineMasker
                                 masked[pos] = ' ';
                                 frames.Pop();
                                 pos++;
+                                prevSignificantChar = '}';
                                 continue;
                             }
 
                             holeFrame.NestedBraceDepth--;
                             pos++;
+                            prevSignificantChar = '}';
                             continue;
                         }
 
+                        if (!char.IsWhiteSpace(line[pos]))
+                            prevSignificantChar = line[pos];
                         pos++;
                         continue;
                     }
@@ -764,25 +865,101 @@ internal static class StructuralLineMasker
                     continue;
                 }
 
+                if (line[pos] == '/' && CanStartJsRegexLiteral(prevSignificantChar))
+                {
+                    pos = SkipJsRegexLiteral(line, pos);
+                    prevSignificantChar = 'a'; // Treat as postfix so a following `/` is division.
+                    continue;
+                }
+
                 if (line[pos] == '`')
                 {
                     masked[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame());
+                    prevSignificantChar = '`';
                     continue;
                 }
 
                 if (line[pos] == '"' || line[pos] == '\'')
                 {
                     pos = SkipJsSingleLineString(line, pos);
+                    prevSignificantChar = '"';
                     continue;
                 }
 
+                if (!char.IsWhiteSpace(line[pos]))
+                    prevSignificantChar = line[pos];
                 pos++;
             }
 
             lines[i] = new string(masked);
         }
+    }
+
+    // Decide whether `/` at current scan position is the start of a regex literal
+    // rather than a division operator. Division follows identifiers, numbers, `)`, `]`;
+    // everything else (operators, `{`, `(`, `[`, `,`, `;`, `=`, `?`, `:`, `\0` at start)
+    // puts us in an expression-prefix context where `/` begins a regex.
+    // `/` が division ではなく regex literal の開始かを判定する。division は識別子、数値、
+    // `)`、`]` の直後。それ以外（演算子や `(` / `[` / `=` / `?` / `:` / `,` / `;` / 先頭 `\0`）は
+    // 式の先頭コンテキストで `/` は regex となる。
+    private static bool CanStartJsRegexLiteral(char prevSignificantChar)
+    {
+        if (prevSignificantChar == '\0')
+            return true;
+        if (prevSignificantChar == ')' || prevSignificantChar == ']')
+            return false;
+        if (IsIdentifierPart(prevSignificantChar))
+            return false;
+        return true;
+    }
+
+    private static int SkipJsRegexLiteral(string line, int startIndex)
+    {
+        var p = startIndex + 1;
+        var inCharClass = false;
+
+        while (p < line.Length)
+        {
+            var ch = line[p];
+            if (ch == '\\')
+            {
+                if (p + 1 < line.Length)
+                {
+                    p += 2;
+                    continue;
+                }
+
+                return line.Length;
+            }
+
+            if (ch == '[')
+            {
+                inCharClass = true;
+                p++;
+                continue;
+            }
+
+            if (ch == ']' && inCharClass)
+            {
+                inCharClass = false;
+                p++;
+                continue;
+            }
+
+            if (ch == '/' && !inCharClass)
+            {
+                p++;
+                while (p < line.Length && char.IsLetter(line[p]))
+                    p++;
+                return p;
+            }
+
+            p++;
+        }
+
+        return line.Length;
     }
 
     private static int SkipJsSingleLineString(string line, int startIndex)

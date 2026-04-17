@@ -1213,4 +1213,70 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "deepReal" && r.ContainerName == "caller");
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
+
+    [Fact]
+    public void Extract_PythonFStringHoleKeepsRealCallReference()
+    {
+        // Regression for issue #291 follow-up: `f"""..."""` interpolation holes must
+        // preserve call identifiers so the real call edge is not silently dropped.
+        // `{{` / `}}` remain escaped literal braces and must not open a hole.
+        // issue #291 続編: `f"""..."""` の補間ホール内は call 識別子を残し、
+        // real call エッジを黙って落とさないこと。`{{` / `}}` は escape で、
+        // ホールを開かないこと。
+        const string content = """"
+            def caller():
+                msg = f"""
+                literal {{ not a hole
+                value: {real_call()} trailing
+                done
+                """
+                tail()
+
+            def real_call():
+                pass
+
+            def tail():
+                pass
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateLiteral_RegexLiteralDoesNotBreakMaskerScan()
+    {
+        // Regression for issue #291 follow-up: a JS regex literal whose body contains
+        // backticks or `}` must not confuse the template-literal / hole scanners.
+        // The outer `/`/` regex must not open a phantom template (so `caller` and
+        // `realCall` stay visible), and `${/}/.test(value) ? runTask() : fallback()}`
+        // must not end the interpolation hole at the `}` that lives inside the regex,
+        // which would otherwise drop `runTask` / `fallback` from the reference graph.
+        // issue #291 続編: backtick や `}` を含む regex literal が template / hole の
+        // scanner を誤作動させず、`/`/` で phantom テンプレートが開いたり regex 中の
+        // `}` で hole が閉じたりしないこと。
+        const string content = """
+            function caller(value) {
+                const tickMatch = /`/.test(value);
+                const branch = `result: ${/}/.test(value) ? runTask() : fallback()}`;
+                realCall();
+                return tickMatch || branch;
+            }
+
+            function runTask() {}
+            function fallback() {}
+            function realCall() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "fallback" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
 }
