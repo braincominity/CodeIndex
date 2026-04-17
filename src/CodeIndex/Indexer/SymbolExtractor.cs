@@ -4638,6 +4638,7 @@ public static class SymbolExtractor
         {
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
             BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
+            BodyStyle.Brace when lang == "java" => FindJavaBraceRange(lines, startIndex, startColumn),
             BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
@@ -4908,6 +4909,59 @@ public static class SymbolExtractor
             }
 
             if (!opened && scanLine.TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
+
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
+    }
+
+    // Java-aware variant of FindBraceRange. Tracks strings, char literals, comments, and text blocks
+    // via the same lexer state machine used by the enum member extractor, so a `}` inside a text
+    // block or quoted string does not prematurely close the containing brace range.
+    // Java 用の FindBraceRange。文字列 / char / コメント / text block を enum member 抽出と同じ
+    // lexer で追跡し、text block や文字列内の `}` で本体範囲が早期終了しないようにする。
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    {
+        var depth = 0;
+        var opened = false;
+        int? bodyStartLine = null;
+        var mode = JavaScanMode.Normal;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = lines[i];
+            var column = i == startIndex ? Math.Min(startColumn, line.Length) : 0;
+
+            while (column < line.Length)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '{')
+                {
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLine = i + 1;
+                    }
+                }
+                else if (ch == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                }
+                column++;
+            }
+
+            if (!opened && mode == JavaScanMode.Normal && line.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
 

@@ -5415,6 +5415,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_HandlesTextBlockContainingBrace()
+    {
+        // A `}` inside a Java text block (""") must not close the enum body prematurely, which
+        // would otherwise drop every member after the text block. Regression for FindJavaBraceRange.
+        // Java text block 内の `}` で enum 本体範囲を誤って閉じず、後続メンバーが落ちないこと。
+        var content = "public enum TxtBlock {\n  FIRST(\"\"\"\n    end }\n    more ;\n    \"\"\"),\n  SECOND;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FIRST" && s.ContainerName == "TxtBlock");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "SECOND" && s.ContainerName == "TxtBlock");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesStringContainingBrace()
+    {
+        // A `}` inside a regular string literal must not close the enum body prematurely either.
+        // 文字列リテラル内の `}` でも enum 本体範囲を閉じないこと。
+        var content = "public enum QuotedBrace {\n    A(\"text with } inside\"),\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "QuotedBrace");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "QuotedBrace");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsUnicodeEnumMembers()
     {
         var content = "public enum Localized {\n    RÉSUMÉ,\n    NAÏVE;\n}";
