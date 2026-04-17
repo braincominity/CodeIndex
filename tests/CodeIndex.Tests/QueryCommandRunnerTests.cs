@@ -2989,6 +2989,78 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpPlainFieldEdgeCasesExposeAllDeclarators()
+    {
+        // End-to-end coverage for the three plain-field shapes the codex adversarial
+        // review flagged: (1) multi-line field where the type wraps onto its own line,
+        // (2) declarator list where one statement declares several fields, and
+        // (3) delegate*<...> function-pointer field. Each name must round-trip through
+        // the real extractor, database write, and CLI `symbols` read path.
+        // Closes #298 follow-up (codex adversarial review).
+        // 以下 3 つの通常フィールド形状が extractor → DB 書き込み → CLI `symbols`
+        // までを通ることを end-to-end で検証する: (1) 型宣言が改行される multi-line
+        // field、(2) 1 文で複数 field を宣言する declarator list、
+        // (3) `delegate*<...>` function-pointer field。Closes #298 follow-up。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_field_edge");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Edge.cs",
+                "csharp",
+                """
+                using System;
+                using System.Collections.Generic;
+                namespace Demo;
+                public unsafe class Edge
+                {
+                    public int SingleLine;
+
+                    private Dictionary<string, int>
+                        _map = new();
+
+                    private int _x, _y;
+
+                    public delegate*<int, void> Callback;
+                }
+                """);
+
+            var (mapExitCode, mapStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_map", "--exact-name"],
+                _jsonOptions));
+            using var mapDocument = ParseJsonOutput(mapStdout);
+            Assert.Equal(CommandExitCodes.Success, mapExitCode);
+            Assert.Equal("_map", mapDocument.RootElement.GetProperty("name").GetString());
+
+            var (xExitCode, xStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_x", "--exact-name"],
+                _jsonOptions));
+            using var xDocument = ParseJsonOutput(xStdout);
+            Assert.Equal(CommandExitCodes.Success, xExitCode);
+            Assert.Equal("_x", xDocument.RootElement.GetProperty("name").GetString());
+
+            var (yExitCode, yStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_y", "--exact-name"],
+                _jsonOptions));
+            using var yDocument = ParseJsonOutput(yStdout);
+            Assert.Equal(CommandExitCodes.Success, yExitCode);
+            Assert.Equal("_y", yDocument.RootElement.GetProperty("name").GetString());
+
+            var (callbackExitCode, callbackStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "Callback", "--exact-name"],
+                _jsonOptions));
+            using var callbackDocument = ParseJsonOutput(callbackStdout);
+            Assert.Equal(CommandExitCodes.Success, callbackExitCode);
+            Assert.Equal("Callback", callbackDocument.RootElement.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CssExactNameSeparatesLiteralSelectors()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_css_exact_name");
@@ -6974,7 +7046,7 @@ public class QueryCommandRunnerTests
 
                 public static class Values
                 {
-                    public static int A = 1;
+                    public static int Alpha = 1;
                 }
 
                 public class UsesValues
