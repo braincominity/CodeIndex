@@ -3400,6 +3400,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsCompactAndZeroIndentEnumMembers()
+    {
+        var content = "public enum Compact { A, B = A }\npublic enum Flat\n{\nC,\nD = C\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Compact");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Flat");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "D");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsLowercaseAndUnicodeEnumMembers()
     {
         var content = "public enum Status\n{\n    active,\n    inactive,\n    Δelta = active,\n}";
@@ -3484,6 +3498,16 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversBracketTypedMembersAfterIncompleteAttribute()
+    {
+        var content = "public class C\n{\n    [Attr(\n    int[] Values { get; }\n    int[] Build() => [];\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Values");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Build");
     }
 
     [Fact]
