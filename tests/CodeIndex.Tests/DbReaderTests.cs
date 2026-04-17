@@ -3998,6 +3998,92 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_StandaloneAttributeWithBracketInString_DoesNotLeakToAdjacentDeclaration()
+    {
+        // Regression extension for #375 — when a standalone attribute line
+        // (attribute on its own line, declaration on the next line) contains `[`
+        // or `]` inside a string literal, the upward scan must not treat that as
+        // an extra bracket and swallow the previous member's attribute block.
+        // #375 の追加回帰: 属性単独行 (属性と宣言が別行) の文字列リテラル内の `[` / `]` が
+        // 上方スキャンで bracket depth として誤算されると、直前メンバーの属性ブロックまで
+        // 吸い込まれて無関係なシンボルに属性が漏れ出す。これを防ぐ。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_standalone_bracket_fixture.cs",
+            Lang = "csharp",
+            Size = 400,
+            Lines = 14,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 12,
+                Content = "using System;\nusing System.Text.Json.Serialization;\n\npublic class Target\n{\n    [JsonPropertyName(\"name\")]\n    public string A { get; set; } = \"\";\n\n    [Obsolete(\"]\")]\n    public string B { get; set; } = \"\";\n}\n",
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 11,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "A",
+                Line = 7,
+                StartLine = 6,
+                EndLine = 7,
+                Signature = "public string A { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "B",
+                Line = 10,
+                StartLine = 9,
+                EndLine = 10,
+                Signature = "public string B { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_standalone_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        // A sits under a real reflection attribute → suspect.
+        // B sits under [Obsolete("]")], which is NOT a reflection attribute, so B
+        // must not inherit A's reflection attribute through the bracket-leak path.
+        // A は本物の reflection 属性の下なので suspect。
+        // B は reflection 属性ではない `[Obsolete("]")]` の下なので、bracket leak で
+        // A の reflection 属性を継承してはならない。
+        var a = Assert.Single(unused, symbol => symbol.Name == "A");
+        Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
+
+        var b = Assert.Single(unused, symbol => symbol.Name == "B");
+        Assert.Equal("public_or_exported_no_refs", b.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_InlineRawInterpolatedAttributeWithBracketInString_DoesNotLeakToAdjacentProperty()
     {
         // Regression extension for #375 — raw-interpolated string literals

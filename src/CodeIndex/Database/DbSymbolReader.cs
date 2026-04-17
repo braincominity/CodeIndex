@@ -1792,13 +1792,40 @@ public partial class DbReader
             }
 
             block.Add(trimmed);
-            bracketDepth += CountChar(trimmed, ']') - CountChar(trimmed, '[');
+            bracketDepth += CountBracketDeltaOutsideStrings(trimmed);
             if (bracketDepth < 0)
                 bracketDepth = 0;
         }
 
         block.Reverse();
         return block;
+    }
+
+    // Count `] - [` on a C# line while skipping characters that appear inside
+    // string or char literals, so standalone attribute rows like `[Obsolete("]")]`
+    // do not leave one bracket of residual depth and swallow an unrelated
+    // attribute block above them.
+    // C# の 1 行について、文字列 / 文字リテラル内の文字を除外した上で `] - [` を数える。
+    // `[Obsolete("]")]` のような standalone 属性行が 1 つ分の bracket depth を残して
+    // 上の無関係な属性ブロックまで吸い込むのを防ぐ。
+    private static int CountBracketDeltaOutsideStrings(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+            return 0;
+
+        var delta = 0;
+        var cursor = 0;
+        while (cursor < line.Length)
+        {
+            if (TrySkipCSharpStringOrCharLiteral(line, ref cursor))
+                continue;
+            var ch = line[cursor++];
+            if (ch == '[')
+                delta--;
+            else if (ch == ']')
+                delta++;
+        }
+        return delta;
     }
 
     private static bool LineContainsInlineAttributeAndDeclaration(string line)
