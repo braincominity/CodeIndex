@@ -3611,6 +3611,69 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithMultilineRawStringDefault_PreservesNewlinesAndIndent()
+    {
+        // A raw string default that spans multiple physical lines must keep its `\n`
+        // characters and the per-line leading indentation verbatim. The previous
+        // line-by-line `Trim()` + `' '` join in BuildCSharpTypeHeaderSignature destroyed
+        // both, collapsing `"""\n    a  \n    b\n    """` into `""" a b """`. Closes #382
+        // codex review iteration 3 blocker.
+        // 折り返された primary constructor のデフォルトに multi-line raw string を置くと、
+        // 改行と各行先頭のインデントを verbatim に保持しなければならない。以前の line-by-line
+        // `Trim()` + ' ' 連結は両方を潰し `"""\n    a  \n    b\n    """` を `""" a b """`
+        // に圧縮していた。Closes #382 の codex レビュー iteration 3 blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string text = """
+                a  b
+                c
+                """)
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string text = \"\"\"\n    a  b\n    c\n    \"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedHeaderWithInterpolationHoleContainingNestedVerbatim_PreservesInnerLiteral()
+    {
+        // An interpolation hole in an outer `$"..."` must be classified as Code so the
+        // hole contents are lex-aware — in particular, a nested `@"..."` inside the hole
+        // must stay in Verbatim mode and preserve any internal double-space, while the
+        // outer `$"..."` literal content after the hole is still preserved verbatim.
+        // Previously, once we entered String mode we exited on the first unescaped `"`,
+        // which meant `$"{@"a  b"}  c"` re-entered Code mode at `@"` and collapsed
+        // `a  b` to `a b`. Closes #382 codex review iteration 3 blocker.
+        // 外側 `$"..."` の補間ホールは Code として分類し、ホール内は lex-aware に処理する
+        // 必要がある。ホール内の `@"..."` は Verbatim モードとして扱い、内部の 2 連空白を
+        // 保持することを固定する。以前は String に入った時点で次の `"` で即 Code に戻って
+        // いたため、`$"{@"a  b"}  c"` が `a  b` → `a b` に潰れていた。
+        // Closes #382 の codex レビュー iteration 3 blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo
+                : BaseFoo($"{@"a  b"}  c")
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo : BaseFoo($\"{@\"a  b\"}  c\")",
+            foo.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
     {
         var content = """

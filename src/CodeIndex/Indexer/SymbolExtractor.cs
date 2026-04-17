@@ -6536,231 +6536,408 @@ public static class SymbolExtractor
         int lastLineIndex,
         int? lastLineExclusiveEndColumn)
     {
-        var builder = new StringBuilder();
-        var stripState = new CSharpLexState();
-        var collapseState = new CSharpLexState();
-
+        // Assemble the raw slice preserving '\n' between physical lines so multi-line raw
+        // and verbatim string literals keep their newlines and leading indentation. The
+        // dedicated sanitizer handles lex mode (Code / String / Verbatim / Raw / Char /
+        // LineComment / BlockComment) and interpolation holes in one pass.
+        // 物理行を跨ぐとき `\n` をそのまま入れてスライスを組み立て、multi-line raw や
+        // verbatim 文字列リテラルの改行と行頭インデントを保持する。専用サニタイザが
+        // lex モード（Code / String / Verbatim / Raw / Char / LineComment / BlockComment）
+        // と補間ホールを 1 パスで処理する。
+        var rawSlice = new StringBuilder();
         for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
         {
-            var stripped = StripCSharpComments(lines[i], ref stripState);
-            int from = i == startLineIndex ? startColumn : 0;
+            var line = lines[i];
+            int from = i == startLineIndex ? Math.Clamp(startColumn, 0, line.Length) : 0;
             int to = i == lastLineIndex && lastLineExclusiveEndColumn.HasValue
-                ? Math.Min(lastLineExclusiveEndColumn.Value, stripped.Length)
-                : stripped.Length;
-
-            // Advance collapseState through stripped[0..from] silently so that lex mode
-            // (String / Char / VerbatimString / RawString) is accurate when we start
-            // collapsing at column `from`. collapseState は stripped[0..from] を空出力
-            // で前進させ、collapse 開始列の lex モードを正しく保つ。
-            if (from > 0)
-            {
-                var prefix = stripped[0..Math.Min(from, stripped.Length)];
-                CollapseCodeWhitespaceRuns(prefix, ref collapseState, emitToBuilder: null);
-            }
-
-            if (from >= to)
-                continue;
-
-            // Only Code-mode whitespace runs (including comment-replaced spaces) are
-            // collapsed to a single space; String / Char / VerbatimString / RawString
-            // contents are preserved exactly, so declarations like
-            // `record Foo(string S = "a  b")` keep the literal double-space in the
-            // signature instead of collapsing to `"a b"`. Closes #382.
-            // Code モードの空白列（コメント由来の空白を含む）だけを 1 つにまとめ、
-            // String / Char / VerbatimString / RawString の中身はそのまま残す。
-            // `record Foo(string S = "a  b")` のような宣言でリテラル内の 2 連続空白を
-            // 保持し、`"a b"` に潰れないようにする。Closes #382.
-            var segment = new StringBuilder(to - from);
-            CollapseCodeWhitespaceRuns(stripped[from..to], ref collapseState, emitToBuilder: segment);
-            var collapsed = segment.ToString().Trim();
-            if (collapsed.Length == 0)
-                continue;
-
-            if (builder.Length > 0)
-                builder.Append(' ');
-            builder.Append(collapsed);
+                ? Math.Clamp(lastLineExclusiveEndColumn.Value, 0, line.Length)
+                : line.Length;
+            if (to < from) to = from;
+            if (i > startLineIndex)
+                rawSlice.Append('\n');
+            if (from < to)
+                rawSlice.Append(line, from, to - from);
         }
 
-        return builder.ToString().Trim();
+        return SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
     }
 
-    // Walk `text` with lex-state tracking, collapsing consecutive whitespace into a
-    // single space only when in Code mode. In String / Char / VerbatimString /
-    // RawString modes, characters are emitted raw (including any whitespace inside
-    // those literals). State is threaded across calls so multi-line string literals
-    // remain in their respective modes. If `emitToBuilder` is null, the walk is
-    // state-only and produces no output. Closes #382.
-    //
-    // `text` を lex state を追いながら走査し、Code モードのときだけ連続空白を 1 つに
-    // 畳む。String / Char / VerbatimString / RawString モードでは raw のまま出力し、
-    // リテラル内の空白を保持する。state は呼び出し間で引き継がれるので、複数行に
-    // 跨る文字列リテラルも正しく追跡できる。`emitToBuilder` が null なら出力を行わず
-    // state 前進のみ行う。Closes #382.
-    private static void CollapseCodeWhitespaceRuns(
-        string text,
-        ref CSharpLexState state,
-        StringBuilder? emitToBuilder)
+    private enum CSharpHeaderFrameKind
     {
-        if (string.IsNullOrEmpty(text))
-            return;
+        Code,
+        LineComment,
+        BlockComment,
+        String,
+        Verbatim,
+        Raw,
+        Char,
+    }
 
-        bool prevWasCodeSpace = emitToBuilder is { Length: > 0 }
-            && char.IsWhiteSpace(emitToBuilder[^1]);
+    private struct CSharpHeaderFrame
+    {
+        public CSharpHeaderFrameKind Kind;
+        public bool Interpolated;   // String / Verbatim / Raw: true if $-prefixed.
+        public int DollarCount;     // Raw: number of '$' prefixes; also the '{' count needed to open a hole.
+        public int QuoteCount;      // Raw: number of '"' in the opening delimiter; same run closes the string.
+        public int HoleBraceDepth;  // Code frame inside an interpolation hole: counts nested '{' depth. 0 means next unmatched '}' exits the hole.
+        public bool EscapeNext;     // String / Char: true if a preceding backslash awaits its escaped char.
+    }
 
+    // Sanitize a C# type header slice: strip `//` line comments and `/* ... */` block
+    // comments, collapse runs of Code-mode whitespace (including '\n' between lines) to a
+    // single space, preserve all String / Verbatim / Raw / Char literal contents verbatim
+    // (including literal whitespace runs, line breaks inside raw / verbatim strings, and
+    // escape sequences), and keep interpolation holes (`$"{expr}"`, `$@"{expr}"`, raw
+    // `$"""{expr}"""` / `$$"""{{expr}}"""`) correctly classified as Code-mode content so
+    // whitespace inside holes is collapsed while literal content outside holes is not.
+    // Closes #382.
+    //
+    // C# 型ヘッダスライスのサニタイザ: `//` 行コメントと `/* ... */` ブロックコメントを
+    // 除去し、Code モードの空白列（行間の `\n` も含む）を 1 つのスペースに畳み、String /
+    // Verbatim / Raw / Char リテラルの中身（リテラル内の空白、raw / verbatim の行末改行、
+    // エスケープ列）は verbatim に残し、補間ホール（`$"{expr}"`、`$@"{expr}"`、raw
+    // `$"""{expr}"""` / `$$"""{{expr}}"""`）内部は Code モードとして分類してホール内の
+    // 空白だけを畳み、ホール外のリテラル内容は畳まないようにする。Closes #382.
+    private static string SanitizeCSharpTypeHeaderSlice(string input)
+    {
+        if (string.IsNullOrEmpty(input))
+            return string.Empty;
+
+        var output = new StringBuilder(input.Length);
+        var stack = new Stack<CSharpHeaderFrame>();
+        stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+        bool prevWasCodeSpace = false;
         int i = 0;
-        while (i < text.Length)
+
+        while (i < input.Length)
         {
-            var ch = text[i];
-            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+            var frame = stack.Peek();
+            var ch = input[i];
+            var next = i + 1 < input.Length ? input[i + 1] : '\0';
 
-            if (state.Mode == CSharpLexMode.String)
+            if (frame.Kind == CSharpHeaderFrameKind.LineComment)
             {
-                emitToBuilder?.Append(ch);
-                prevWasCodeSpace = false;
-                if (state.EscapeNext)
+                // `//` swallows everything to the next '\n', which then flows through
+                // Code-mode whitespace handling as a single space. `//` は次の '\n' まで
+                // 食いつぶし、'\n' は Code モードで 1 スペースに畳まれる。
+                if (ch == '\n')
                 {
-                    state = state with { EscapeNext = false };
+                    stack.Pop();
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.BlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    stack.Pop();
+                    i += 2;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.String)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (frame.EscapeNext)
+                {
+                    frame.EscapeNext = false;
+                    stack.Pop();
+                    stack.Push(frame);
                     i++;
                     continue;
                 }
                 if (ch == '\\')
                 {
-                    state = state with { EscapeNext = true };
+                    frame.EscapeNext = true;
+                    stack.Pop();
+                    stack.Push(frame);
                     i++;
                     continue;
                 }
-                if (ch == '"')
-                    state = state with { Mode = CSharpLexMode.Code };
-                i++;
-                continue;
-            }
-
-            if (state.Mode == CSharpLexMode.Char)
-            {
-                emitToBuilder?.Append(ch);
-                prevWasCodeSpace = false;
-                if (state.EscapeNext)
+                if (ch == '{' && frame.Interpolated)
                 {
-                    state = state with { EscapeNext = false };
+                    if (next == '{')
+                    {
+                        // `{{` is a literal brace inside an interpolated string.
+                        // `{{` は補間文字列内のリテラル波括弧エスケープ。
+                        output.Append(next);
+                        i += 2;
+                        continue;
+                    }
+                    stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
                     i++;
                     continue;
                 }
-                if (ch == '\\')
+                if (ch == '}' && frame.Interpolated && next == '}')
                 {
-                    state = state with { EscapeNext = true };
-                    i++;
-                    continue;
-                }
-                if (ch == '\'')
-                    state = state with { Mode = CSharpLexMode.Code };
-                i++;
-                continue;
-            }
-
-            if (state.Mode == CSharpLexMode.VerbatimString)
-            {
-                emitToBuilder?.Append(ch);
-                prevWasCodeSpace = false;
-                if (ch == '"' && next == '"')
-                {
-                    emitToBuilder?.Append(next);
+                    output.Append(next);
                     i += 2;
                     continue;
                 }
                 if (ch == '"')
-                    state = state with { Mode = CSharpLexMode.Code };
-                i++;
-                continue;
-            }
-
-            if (state.Mode == CSharpLexMode.RawString)
-            {
-                emitToBuilder?.Append(ch);
-                prevWasCodeSpace = false;
-                if (ch == '"' && HasCSharpQuoteRun(text, i, state.RawDelimiterLength))
                 {
-                    var quoteRunLength = GetCSharpQuoteRunLength(text, i);
-                    for (var j = 1; j < quoteRunLength && i + j < text.Length; j++)
-                        emitToBuilder?.Append(text[i + j]);
-                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
-                    i += quoteRunLength;
+                    stack.Pop();
+                    i++;
                     continue;
                 }
                 i++;
                 continue;
             }
 
-            // Code mode. Comments are already stripped to spaces by StripCSharpComments,
-            // so we only need to detect string / char / verbatim / raw-string starts and
-            // collapse whitespace runs. BlockComment mode should not be re-entered here.
-            if (TryReadCSharpRawStringStart(text, i, out var rawPrefixLength, out var rawDelimiterLength))
+            if (frame.Kind == CSharpHeaderFrameKind.Verbatim)
             {
-                if (emitToBuilder != null)
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (ch == '"' && next == '"')
                 {
-                    for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < text.Length; j++)
-                        emitToBuilder.Append(text[i + j]);
+                    // `""` is a literal '"' escape inside a verbatim string.
+                    // verbatim 文字列内の `""` はリテラル '"' エスケープ。
+                    output.Append(next);
+                    i += 2;
+                    continue;
                 }
-                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
-                i += rawPrefixLength + rawDelimiterLength;
+                if (ch == '{' && frame.Interpolated)
+                {
+                    if (next == '{')
+                    {
+                        output.Append(next);
+                        i += 2;
+                        continue;
+                    }
+                    stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                    i++;
+                    continue;
+                }
+                if (ch == '}' && frame.Interpolated && next == '}')
+                {
+                    output.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Raw)
+            {
+                // In a raw string, a hole opens on a run of '{' at least DollarCount long
+                // (for $$-prefixed raw strings, {{ is literal, only {{{ opens), and the
+                // string closes on a run of '"' at least QuoteCount long.
+                // raw 文字列では、`{` が DollarCount 個以上並んでいればホール開始、
+                // 不足するならリテラルの波括弧。`"` が QuoteCount 個以上並べば文字列終端。
+                if (ch == '{' && frame.Interpolated && frame.DollarCount > 0)
+                {
+                    int runLen = 0;
+                    while (i + runLen < input.Length && input[i + runLen] == '{')
+                        runLen++;
+                    if (runLen >= frame.DollarCount)
+                    {
+                        for (int k = 0; k < frame.DollarCount; k++)
+                            output.Append('{');
+                        i += frame.DollarCount;
+                        stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                        prevWasCodeSpace = false;
+                        continue;
+                    }
+                    for (int k = 0; k < runLen; k++)
+                        output.Append('{');
+                    i += runLen;
+                    prevWasCodeSpace = false;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    int runLen = 0;
+                    while (i + runLen < input.Length && input[i + runLen] == '"')
+                        runLen++;
+                    if (runLen >= frame.QuoteCount)
+                    {
+                        for (int k = 0; k < frame.QuoteCount; k++)
+                            output.Append('"');
+                        i += frame.QuoteCount;
+                        stack.Pop();
+                        prevWasCodeSpace = false;
+                        continue;
+                    }
+                    for (int k = 0; k < runLen; k++)
+                        output.Append('"');
+                    i += runLen;
+                    prevWasCodeSpace = false;
+                    continue;
+                }
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Char)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (frame.EscapeNext)
+                {
+                    frame.EscapeNext = false;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    frame.EscapeNext = true;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\'')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            // Code mode (root code or an open interpolation hole).
+            // Code モード（ルート コード または 開いている補間ホール）。
+            if (ch == '}' && stack.Count > 1 && frame.HoleBraceDepth == 0)
+            {
+                stack.Pop();
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+            if (ch == '{' && stack.Count > 1)
+            {
+                frame.HoleBraceDepth++;
+                stack.Pop();
+                stack.Push(frame);
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+            if (ch == '}' && stack.Count > 1)
+            {
+                frame.HoleBraceDepth--;
+                stack.Pop();
+                stack.Push(frame);
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.LineComment });
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i += 2;
+                continue;
+            }
+            if (ch == '/' && next == '*')
+            {
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.BlockComment });
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i += 2;
+                continue;
+            }
+
+            if (TryReadCSharpRawStringStart(input, i, out var rawPrefixLength, out var rawDelimiterLength))
+            {
+                int total = rawPrefixLength + rawDelimiterLength;
+                for (int k = 0; k < total && i + k < input.Length; k++)
+                    output.Append(input[i + k]);
+                stack.Push(new CSharpHeaderFrame
+                {
+                    Kind = CSharpHeaderFrameKind.Raw,
+                    Interpolated = rawPrefixLength > 0,
+                    DollarCount = rawPrefixLength,
+                    QuoteCount = rawDelimiterLength,
+                });
+                i += total;
                 prevWasCodeSpace = false;
                 continue;
             }
 
+            if (ch == '$' && next == '@' && i + 2 < input.Length && input[i + 2] == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                output.Append(input[i + 2]);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = true });
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '@' && next == '$' && i + 2 < input.Length && input[i + 2] == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                output.Append(input[i + 2]);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = true });
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
             if (ch == '@' && next == '"')
             {
-                emitToBuilder?.Append(ch);
-                emitToBuilder?.Append(next);
-                state = state with { Mode = CSharpLexMode.VerbatimString };
+                output.Append(ch);
+                output.Append(next);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = false });
                 i += 2;
                 prevWasCodeSpace = false;
                 continue;
             }
-
-            if (ch == '$' && next == '@' && i + 2 < text.Length && text[i + 2] == '"')
-            {
-                emitToBuilder?.Append(ch);
-                emitToBuilder?.Append(next);
-                emitToBuilder?.Append(text[i + 2]);
-                state = state with { Mode = CSharpLexMode.VerbatimString };
-                i += 3;
-                prevWasCodeSpace = false;
-                continue;
-            }
-
-            if (ch == '@' && next == '$' && i + 2 < text.Length && text[i + 2] == '"')
-            {
-                emitToBuilder?.Append(ch);
-                emitToBuilder?.Append(next);
-                emitToBuilder?.Append(text[i + 2]);
-                state = state with { Mode = CSharpLexMode.VerbatimString };
-                i += 3;
-                prevWasCodeSpace = false;
-                continue;
-            }
-
             if (ch == '$' && next == '"')
             {
-                emitToBuilder?.Append(ch);
-                emitToBuilder?.Append(next);
-                state = state with { Mode = CSharpLexMode.String };
+                output.Append(ch);
+                output.Append(next);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.String, Interpolated = true });
                 i += 2;
                 prevWasCodeSpace = false;
                 continue;
             }
-
             if (ch == '"')
             {
-                emitToBuilder?.Append(ch);
-                state = state with { Mode = CSharpLexMode.String };
+                output.Append(ch);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.String, Interpolated = false });
                 i++;
                 prevWasCodeSpace = false;
                 continue;
             }
-
             if (ch == '\'')
             {
-                emitToBuilder?.Append(ch);
-                state = state with { Mode = CSharpLexMode.Char };
+                output.Append(ch);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Char });
                 i++;
                 prevWasCodeSpace = false;
                 continue;
@@ -6770,231 +6947,19 @@ public static class SymbolExtractor
             {
                 if (!prevWasCodeSpace)
                 {
-                    emitToBuilder?.Append(' ');
+                    output.Append(' ');
                     prevWasCodeSpace = true;
                 }
                 i++;
                 continue;
             }
 
-            emitToBuilder?.Append(ch);
+            output.Append(ch);
             prevWasCodeSpace = false;
             i++;
         }
-    }
 
-    // Return the C# line with only `//` line comments and `/* ... */` block comments
-    // replaced by spaces; string, char, verbatim, and raw string literal contents are
-    // preserved as raw characters so that signatures can safely concatenate slices that
-    // include string defaults (e.g. `record Foo(string X = "abc")`). State is threaded
-    // across lines so block comments and verbatim / raw strings that span line breaks
-    // are handled correctly. Closes #382.
-    //
-    // C# 行から `//` 行コメントと `/* ... */` ブロックコメントだけをスペースに置換し、
-    // 文字列・char・verbatim・raw 文字列の中身は raw のまま残す。シグネチャ連結時に
-    // `record Foo(string X = "abc")` のような文字列デフォルトを安全に残せるようにする。
-    // 行を跨ぐブロックコメントや verbatim / raw 文字列に備えて state は呼び出し間で
-    // 引き継がれる。Closes #382.
-    private static string StripCSharpComments(string line, ref CSharpLexState state)
-    {
-        if (string.IsNullOrEmpty(line))
-            return line;
-
-        var output = new char[line.Length];
-        var i = 0;
-
-        while (i < line.Length)
-        {
-            var ch = line[i];
-            var next = i + 1 < line.Length ? line[i + 1] : '\0';
-
-            if (state.Mode == CSharpLexMode.BlockComment)
-            {
-                output[i] = ' ';
-                if (ch == '*' && next == '/')
-                {
-                    output[i + 1] = ' ';
-                    state = state with { Mode = CSharpLexMode.Code };
-                    i += 2;
-                    continue;
-                }
-
-                i++;
-                continue;
-            }
-
-            if (state.Mode == CSharpLexMode.String)
-            {
-                output[i] = ch;
-                if (state.EscapeNext)
-                {
-                    state = state with { EscapeNext = false };
-                    i++;
-                    continue;
-                }
-
-                if (ch == '\\')
-                {
-                    state = state with { EscapeNext = true };
-                    i++;
-                    continue;
-                }
-
-                if (ch == '"')
-                    state = state with { Mode = CSharpLexMode.Code };
-
-                i++;
-                continue;
-            }
-
-            if (state.Mode == CSharpLexMode.Char)
-            {
-                output[i] = ch;
-                if (state.EscapeNext)
-                {
-                    state = state with { EscapeNext = false };
-                    i++;
-                    continue;
-                }
-
-                if (ch == '\\')
-                {
-                    state = state with { EscapeNext = true };
-                    i++;
-                    continue;
-                }
-
-                if (ch == '\'')
-                    state = state with { Mode = CSharpLexMode.Code };
-
-                i++;
-                continue;
-            }
-
-            if (state.Mode == CSharpLexMode.VerbatimString)
-            {
-                output[i] = ch;
-                if (ch == '"' && next == '"')
-                {
-                    output[i + 1] = '"';
-                    i += 2;
-                    continue;
-                }
-
-                if (ch == '"')
-                    state = state with { Mode = CSharpLexMode.Code };
-
-                i++;
-                continue;
-            }
-
-            if (state.Mode == CSharpLexMode.RawString)
-            {
-                output[i] = ch;
-                if (ch == '"' && HasCSharpQuoteRun(line, i, state.RawDelimiterLength))
-                {
-                    var quoteRunLength = GetCSharpQuoteRunLength(line, i);
-                    for (var j = 1; j < quoteRunLength && i + j < line.Length; j++)
-                        output[i + j] = line[i + j];
-
-                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
-                    i += quoteRunLength;
-                    continue;
-                }
-
-                i++;
-                continue;
-            }
-
-            if (ch == '/' && next == '/')
-            {
-                while (i < line.Length)
-                {
-                    output[i] = ' ';
-                    i++;
-                }
-
-                break;
-            }
-
-            if (ch == '/' && next == '*')
-            {
-                output[i] = ' ';
-                output[i + 1] = ' ';
-                state = state with { Mode = CSharpLexMode.BlockComment };
-                i += 2;
-                continue;
-            }
-
-            if (TryReadCSharpRawStringStart(line, i, out var rawPrefixLength, out var rawDelimiterLength))
-            {
-                for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < line.Length; j++)
-                    output[i + j] = line[i + j];
-
-                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
-                i += rawPrefixLength + rawDelimiterLength;
-                continue;
-            }
-
-            if (ch == '@' && next == '"')
-            {
-                output[i] = '@';
-                output[i + 1] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
-                i += 2;
-                continue;
-            }
-
-            if (ch == '$' && next == '@' && i + 2 < line.Length && line[i + 2] == '"')
-            {
-                output[i] = '$';
-                output[i + 1] = '@';
-                output[i + 2] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
-                i += 3;
-                continue;
-            }
-
-            if (ch == '@' && next == '$' && i + 2 < line.Length && line[i + 2] == '"')
-            {
-                output[i] = '@';
-                output[i + 1] = '$';
-                output[i + 2] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
-                i += 3;
-                continue;
-            }
-
-            if (ch == '$' && next == '"')
-            {
-                output[i] = '$';
-                output[i + 1] = '"';
-                state = state with { Mode = CSharpLexMode.String };
-                i += 2;
-                continue;
-            }
-
-            if (ch == '"')
-            {
-                output[i] = '"';
-                state = state with { Mode = CSharpLexMode.String };
-                i++;
-                continue;
-            }
-
-            if (ch == '\'')
-            {
-                output[i] = '\'';
-                state = state with { Mode = CSharpLexMode.Char };
-                i++;
-                continue;
-            }
-
-            output[i] = ch;
-            i++;
-        }
-
-        return new string(output);
+        return output.ToString();
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)
