@@ -3432,6 +3432,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsEnumMembersAcrossDirectiveLines()
+    {
+        var content = "public enum Mode\n{\n#if DEBUG\n    A,\n#endif\n#region values\n    B,\n#endregion\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var memberA = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A"));
+        var memberB = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Equal("enum", memberA.ContainerKind);
+        Assert.Equal("Mode", memberA.ContainerName);
+        Assert.Equal("enum", memberB.ContainerKind);
+        Assert.Equal("Mode", memberB.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsLowercaseAndUnicodeEnumMembers()
     {
         var content = "public enum Status\n{\n    active,\n    inactive,\n    Δelta = active,\n}";

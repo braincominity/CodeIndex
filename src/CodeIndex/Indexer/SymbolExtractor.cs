@@ -975,12 +975,27 @@ public static class SymbolExtractor
         while (lineIndex <= bodyEndLineIndex)
         {
             var maskedLine = csharpMatchLines[lineIndex];
+            var lineScanStartColumn = lineIndex == bodyStartLineIndex
+                ? Math.Min(bodyStartColumn, maskedLine.Length)
+                : 0;
             var scanEndColumnExclusive = lineIndex == bodyEndLineIndex
                 ? Math.Min(bodyEndColumnExclusive, maskedLine.Length)
                 : maskedLine.Length;
 
             if (column >= scanEndColumnExclusive)
             {
+                lineIndex++;
+                column = 0;
+                continue;
+            }
+
+            if (TryGetFirstNonWhitespaceColumn(maskedLine, lineScanStartColumn, scanEndColumnExclusive, out var firstNonWhitespaceColumn)
+                && column == firstNonWhitespaceColumn
+                && maskedLine[column] == '#')
+            {
+                currentStart = null;
+                parenDepth = 0;
+                bracketDepth = 0;
                 lineIndex++;
                 column = 0;
                 continue;
@@ -1039,6 +1054,18 @@ public static class SymbolExtractor
 
         if (currentStart != null)
             TryAddCSharpEnumMemberFromSpan(fileId, rawLines, csharpMatchLines, currentStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
+    }
+
+    private static bool TryGetFirstNonWhitespaceColumn(string line, int startColumn, int endColumnExclusive, out int column)
+    {
+        for (column = Math.Min(startColumn, line.Length); column < Math.Min(endColumnExclusive, line.Length); column++)
+        {
+            if (!char.IsWhiteSpace(line[column]))
+                return true;
+        }
+
+        column = -1;
+        return false;
     }
 
     private static bool TrySkipLeadingCSharpAttributeListsInEnumBody(
@@ -6047,10 +6074,11 @@ public static class SymbolExtractor
 
             if (stack.Count > 0)
             {
-                var container = stack.Peek();
+                var containerPath = GetEffectiveContainerPath(stack, symbol);
+                var container = containerPath[^1];
                 symbol.ContainerKind ??= container.Kind;
                 symbol.ContainerName ??= container.Name;
-                var qualifiedContainerName = BuildQualifiedContainerName(stack);
+                var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
                 symbol.ContainerQualifiedName = qualifiedContainerName;
                 symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
             }
@@ -6062,10 +6090,22 @@ public static class SymbolExtractor
         }
     }
 
+    private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(IEnumerable<SymbolRecord> containers, SymbolRecord symbol)
+    {
+        var orderedContainers = containers.Reverse().ToList();
+        if (symbol.Kind == "enum" && symbol.BodyStartLine == null)
+        {
+            var enumIndex = orderedContainers.FindLastIndex(container => container.Kind == "enum");
+            if (enumIndex >= 0)
+                return orderedContainers.Take(enumIndex + 1).ToList();
+        }
+
+        return orderedContainers;
+    }
+
     private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)
     {
         var names = containers
-            .Reverse()
             .Select(container => container.Name)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .ToList();

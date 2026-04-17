@@ -2761,6 +2761,64 @@ public class QueryCommandRunnerTests
             Assert.Single(aRows);
             Assert.Equal("A", aRows[0].RootElement.GetProperty("name").GetString());
             Assert.Equal("enum", aRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("enum", aRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Mode", aRows[0].RootElement.GetProperty("container_name").GetString());
+            Assert.Equal(CommandExitCodes.Success, bExitCode);
+            Assert.Equal(string.Empty, bStderr);
+            Assert.Single(bRows);
+            Assert.Equal("B", bRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", bRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("enum", bRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Mode", bRows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsEnumMembersAcrossDirectiveLines()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_directives");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                public enum Mode
+                {
+                #if DEBUG
+                    A,
+                #endif
+                #region values
+                    B,
+                #endregion
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (aExitCode, aStdout, aStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (bExitCode, bStdout, bStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["B", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var aRows = ParseJsonLines(aStdout);
+            var bRows = ParseJsonLines(bStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, aExitCode);
+            Assert.Equal(string.Empty, aStderr);
+            Assert.Single(aRows);
+            Assert.Equal("A", aRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", aRows[0].RootElement.GetProperty("kind").GetString());
             Assert.Equal(CommandExitCodes.Success, bExitCode);
             Assert.Equal(string.Empty, bStderr);
             Assert.Single(bRows);
