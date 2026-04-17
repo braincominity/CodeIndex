@@ -128,9 +128,6 @@ public static class ReferenceExtractor
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
-    private static readonly Regex CSharpQualifiedMemberAccessRegex = new(
-        @"(?<![\w$])(?:(?:global::)?[A-Za-z_]\w*(?:(?:::|\.)[A-Za-z_]\w*)*\.)+(?<name>[A-Za-z_]\w*)\b",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -172,12 +169,6 @@ public static class ReferenceExtractor
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
             .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
-        var csharpEnumMemberNames = language == "csharp"
-            ? symbols
-                .Where(symbol => symbol.Kind == "enum" && symbol.ContainerKind == "enum")
-                .Select(symbol => symbol.Name)
-                .ToHashSet(StringComparer.Ordinal)
-            : null;
         var containerCandidates = symbols
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
                              (symbol.Kind == "function" || symbol.Kind == "class" || symbol.Kind == "namespace"))
@@ -209,29 +200,6 @@ public static class ReferenceExtractor
             {
                 foreach (Match match in EventSubscriptionRegex.Matches(preparedLine))
                     AddReference(references, seen, fileId, match, "subscribe", context, lineNumber, container);
-
-                if (csharpEnumMemberNames is { Count: > 0 })
-                {
-                    foreach (Match match in CSharpQualifiedMemberAccessRegex.Matches(preparedLine))
-                    {
-                        var name = match.Groups["name"].Value;
-                        if (!csharpEnumMemberNames.Contains(name))
-                            continue;
-                        if (definitionNames != null && definitionNames.Contains(name))
-                            continue;
-
-                        AddReference(
-                            references,
-                            seen,
-                            fileId,
-                            name,
-                            match.Groups["name"].Index + 1,
-                            "call",
-                            context,
-                            lineNumber,
-                            container);
-                    }
-                }
             }
 
             foreach (Match match in CallRegex.Matches(preparedLine))
@@ -264,29 +232,8 @@ public static class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        AddReference(
-            references,
-            seen,
-            fileId,
-            match.Groups["name"].Value,
-            match.Groups["name"].Index + 1,
-            referenceKind,
-            context,
-            lineNumber,
-            container);
-    }
-
-    private static void AddReference(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
-        long fileId,
-        string name,
-        int column,
-        string referenceKind,
-        string context,
-        int lineNumber,
-        SymbolRecord? container)
-    {
+        var name = match.Groups["name"].Value;
+        var column = match.Groups["name"].Index + 1;
         var dedupeKey = $"{lineNumber}:{column}:{referenceKind}:{name}";
         if (!seen.Add(dedupeKey))
             return;

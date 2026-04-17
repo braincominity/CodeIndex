@@ -416,7 +416,7 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_IndexesEnumMemberReferences()
+    public void Extract_CsharpQualifiedEnumMemberAccess_DoesNotCreateBareEnumMemberReferencesYet()
     {
         const string content = """
             namespace Demo;
@@ -441,8 +441,39 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, reference => reference.SymbolName == "A" && reference.ContainerName == "Use" && reference.ReferenceKind == "call");
-        Assert.Contains(references, reference => reference.SymbolName == "None" && reference.ContainerName == "Use" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "None");
+    }
+
+    [Fact]
+    public void Extract_CsharpNonEnumQualifiedMemberAccess_DoesNotBecomeEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum EnumHolder
+            {
+                A = 1
+            }
+
+            public static class Values
+            {
+                public static int A = 1;
+            }
+
+            public class UsesValues
+            {
+                public int Read()
+                {
+                    return Values.A;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
     }
 
     [Fact]

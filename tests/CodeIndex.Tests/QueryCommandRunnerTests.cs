@@ -4769,7 +4769,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpQualifiedEnumMemberAccessesStayVisible()
+    public void RunReferences_ExactJson_CSharpEnumMembersWithoutResolvedEdgesReturnNotFound()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_references");
         try
@@ -4805,14 +4805,9 @@ public class QueryCommandRunnerTests
                 ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
                 _jsonOptions));
 
-            var rows = ParseJsonLines(stdout);
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
-            Assert.Single(rows);
-            Assert.Equal("A", rows[0].RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("Use", rows[0].RootElement.GetProperty("container_name").GetString());
-            Assert.Equal("call", rows[0].RootElement.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -4821,7 +4816,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_JsonBundlesQualifiedEnumMemberReferences()
+    public void RunInspect_JsonLeavesEnumMemberReferencesEmptyWithoutResolvedEdges()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_enum_member_bundle");
         try
@@ -4854,15 +4849,13 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
             var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
-            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("A", definition.GetProperty("name").GetString());
             Assert.Equal("enum", definition.GetProperty("container_kind").GetString());
             Assert.Equal("Nested", definition.GetProperty("container_name").GetString());
-            Assert.Equal("A", reference.GetProperty("symbol_name").GetString());
-            Assert.Equal("Use", reference.GetProperty("container_name").GetString());
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
         }
         finally
         {
@@ -4910,6 +4903,51 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.DoesNotContain("A", names);
             Assert.DoesNotContain("B", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpNonEnumQualifiedMemberAccessDoesNotLeakAsEnumMemberReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_false_positive");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum EnumHolder
+                {
+                    A = 1
+                }
+
+                public static class Values
+                {
+                    public static int A = 1;
+                }
+
+                public class UsesValues
+                {
+                    public int Read()
+                    {
+                        return Values.A;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
         }
         finally
         {
