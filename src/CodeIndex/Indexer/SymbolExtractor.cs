@@ -6186,6 +6186,47 @@ public static class SymbolExtractor
                     continue;
                 }
 
+                if (inUrlToken)
+                {
+                    chars[i] = ' ';
+
+                    if (line[i] == '"' && !inSingleQuote)
+                    {
+                        inDoubleQuote = !inDoubleQuote;
+                        continue;
+                    }
+
+                    if (line[i] == '\'' && !inDoubleQuote)
+                    {
+                        inSingleQuote = !inSingleQuote;
+                        continue;
+                    }
+
+                    if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+                    {
+                        chars[i + 1] = ' ';
+                        i++;
+                        continue;
+                    }
+
+                    if (!inSingleQuote && !inDoubleQuote)
+                    {
+                        if (line[i] == '(')
+                            urlParenDepth++;
+                        else if (line[i] == ')')
+                        {
+                            urlParenDepth--;
+                            if (urlParenDepth <= 0)
+                            {
+                                inUrlToken = false;
+                                urlParenDepth = 0;
+                            }
+                        }
+                    }
+
+                    continue;
+                }
+
                 if (!inSingleQuote
                     && !inDoubleQuote
                     && !inUrlToken
@@ -6195,6 +6236,10 @@ public static class SymbolExtractor
                     && (line[i + 2] == 'l' || line[i + 2] == 'L')
                     && line[i + 3] == '(')
                 {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    chars[i + 2] = ' ';
+                    chars[i + 3] = ' ';
                     inUrlToken = true;
                     urlParenDepth = 1;
                     i += 3;
@@ -6229,21 +6274,6 @@ public static class SymbolExtractor
                     chars[i] = ' ';
                     inSingleQuote = !inSingleQuote;
                     continue;
-                }
-
-                if (inUrlToken && !inSingleQuote && !inDoubleQuote)
-                {
-                    if (line[i] == '(')
-                        urlParenDepth++;
-                    else if (line[i] == ')')
-                    {
-                        urlParenDepth--;
-                        if (urlParenDepth <= 0)
-                        {
-                            inUrlToken = false;
-                            urlParenDepth = 0;
-                        }
-                    }
                 }
 
                 if (inSingleQuote || inDoubleQuote)

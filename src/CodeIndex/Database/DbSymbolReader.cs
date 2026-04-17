@@ -559,16 +559,12 @@ public partial class DbReader
         // into references / callers / callees. See codex review of #83.
         // `exact` は bundle 内のすべての sub-query に伝播させ、leaf コマンドと precision を揃える。
         var definitionLimit = Math.Min(limit, 5);
-        DefinitionResult? primaryDefinition = null;
         var definitions = GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
+        DefinitionResult? primaryDefinition = definitions
+            .FirstOrDefault(definition => ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true)
+            ?? definitions.FirstOrDefault();
         if (exact)
-        {
-            primaryDefinition = definitions
-                .FirstOrDefault(definition => ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true)
-                ?? definitions.FirstOrDefault();
             definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
-        }
-        primaryDefinition ??= definitions.FirstOrDefault();
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);

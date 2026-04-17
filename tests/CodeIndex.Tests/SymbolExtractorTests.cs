@@ -4729,6 +4729,8 @@ public class SymbolExtractorTests
               src: url("data:application/font-woff2;charset=utf-8;base64,font-family:bogus");
               font-family: "Real Font";
             }
+            @font-face { src: url(data:text/plain;charset=utf-8;foo=1;font-family:bogus); font-family: Real Data Font; }
+            @font-face { src: url(data:image/svg+xml,<svg>{}</svg>); font-family: Svg Data Font; }
             @font-face { src: url("no-family.woff2"); }
             @font-face {
               font-family:
@@ -4744,8 +4746,11 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Comment Gap");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Commented Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real Data Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Svg Data Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
+        Assert.DoesNotContain(symbols, s => s.Name == "bogus)");
     }
 
     [Fact]

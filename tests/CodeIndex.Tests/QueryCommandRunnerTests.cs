@@ -6145,6 +6145,67 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_Json_CrossLanguageMixedHitPrefersGraphCapablePrimaryDefinition()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_cross_language_primary_alignment_non_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                function Ready() {}
+
+                function Helper() {}
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var nearbyPaths = json.GetProperty("nearby_symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("path").GetString())
+                .Where(path => path != null)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var references = json.GetProperty("references").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Equal("web/app.js", json.GetProperty("file").GetProperty("path").GetString());
+            Assert.Contains("web/app.js", nearbyPaths);
+            Assert.DoesNotContain("src/status.cs", nearbyPaths);
+            Assert.Contains(json.GetProperty("nearby_symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() == "Helper");
+            Assert.NotEmpty(references);
+            Assert.All(references, reference =>
+                Assert.Equal("javascript", reference.GetProperty("lang").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ExactJson_PathScopeDoesNotInheritOutOfScopeEnumMemberMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_scoped_js");

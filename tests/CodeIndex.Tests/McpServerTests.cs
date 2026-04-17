@@ -655,6 +655,51 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_AnalyzeSymbol_NonExactCrossLanguageMixedHitPrefersGraphCapablePrimaryDefinition()
+    {
+        InsertIndexedFile("web/app.js", "javascript",
+            """
+            function Ready() {}
+
+            function Helper() {}
+
+            Ready();
+            """);
+        InsertIndexedFile("src/status.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Ready"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var nearbyPaths = structured["nearbySymbols"]!
+            .AsArray()
+            .Select(symbol => symbol?["path"]?.GetValue<string>())
+            .Where(path => path != null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal("web/app.js", structured["file"]!["path"]!.GetValue<string>());
+        Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("web/app.js", nearbyPaths);
+        Assert.DoesNotContain("src/status.cs", nearbyPaths);
+        Assert.Contains(structured["nearbySymbols"]!.AsArray(),
+            symbol => symbol?["name"]?.GetValue<string>() == "Helper");
+        Assert.All(structured["references"]!.AsArray(),
+            reference => Assert.Equal("javascript", reference?["lang"]?.GetValue<string>()));
+    }
+
+    [Fact]
     public void ToolsCall_Callers_DefaultQueryKeepsSubscribeRowsVisible()
     {
         InsertIndexedFile("src/Publisher.cs", "csharp",
