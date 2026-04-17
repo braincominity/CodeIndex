@@ -2399,6 +2399,46 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_FollowsSubscribeEdges()
+    {
+        // Regression: impact BFS must share the call-graph contract with callers/callees,
+        // so event subscriptions (`Changed += OnChanged`) also participate in the transitive
+        // caller chain rather than being stripped like metadata edges.
+        // リグレッション: impact BFS も callers/callees と同じ call-graph 契約を共有し、
+        // イベント購読 (`Changed += OnChanged`) が transitive caller chain に含まれること。
+        InsertIndexedFile("src/impact_subscribe_publisher.cs", "csharp",
+            """
+            using System;
+
+            public class SubPublisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/impact_subscribe_subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class SubSubscriber
+            {
+                public void Hook(SubPublisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var (impact, truncated) = _reader.GetTransitiveCallers(
+            "Changed", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_subscribe_"]);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(impact);
+        Assert.Equal("Hook", caller.CallerName);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_ReturnsAllDirectCallersAcrossPages()
     {
         const int callerCount = 205;

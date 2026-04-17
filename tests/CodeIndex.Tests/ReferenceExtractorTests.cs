@@ -1418,6 +1418,125 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpParameterAttributes_ClassifiedAsAttribute()
+    {
+        // Parameter attributes are introduced by `(` or `,` rather than a scope boundary, so
+        // the classifier must use forward lookahead from `[` to disambiguate against C# 12
+        // collection expressions in argument position like `Consume([Make()])`.
+        // パラメータ属性は `(` や `,` に続くため、collection expression と区別するには `[` から
+        // 対応する `]` まで前方を走査して、直後が識別子かを確認する必要がある。
+        const string content = """
+            public class C
+            {
+                public void M([Attr("x")] int a, [Other("y")] int b) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        var other = Assert.Single(references.Where(r => r.SymbolName == "Other"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+        Assert.Equal("attribute", other.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineAttribute_ClassifiedAsAttribute()
+    {
+        // A multi-line attribute list `[\n Foo("x")\n ]` must still classify `Foo` as
+        // attribute even though the opening `[` is not on the same line as the identifier.
+        // `[` と `Foo("x")` が別行にある場合でも `Foo` を属性として判定すること。
+        const string content = """
+            [
+                Foo("x")
+            ]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var foo = Assert.Single(references.Where(r => r.SymbolName == "Foo"));
+        Assert.Equal("attribute", foo.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Parameter attribute split across lines — `(` ends one line, `[Attr]` sits on the
+        // next, and the declaration continues after. Cross-line lookahead must still find
+        // the identifier after the matching `]`.
+        // 改行を挟んだパラメータ属性でも、跨行 lookahead で `]` の直後に続く識別子まで到達し、
+        // 属性として判定できること。
+        const string content = """
+            public class C
+            {
+                public void M(
+                    [Attr("x")]
+                    int a)
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTargetedAttribute_StaysAttribute()
+    {
+        // Regression: `[return: NotNullWhen(true)]` is recognised as an attribute section by
+        // the pre-pass (bracket position, not `target:` heuristics). Keep the case covered.
+        // リグレッション: `[return: NotNullWhen(true)]` も属性セクションとして判定されること。
+        const string content = """
+            public class C
+            {
+                [return: NotNullWhen(true)]
+                public bool Try() => true;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var notNullWhen = Assert.Single(references.Where(r => r.SymbolName == "NotNullWhen"));
+        Assert.Equal("attribute", notNullWhen.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionInArgument_StaysCallAfterParen()
+    {
+        // Defense-in-depth: `Consume([Make()])` has `[` immediately after `(`, matching the
+        // parameter-attribute entry point, but forward lookahead sees `)` after the matching
+        // `]` and correctly keeps `Make` as `call`.
+        // `Consume([Make()])` のように `(` 直後に `[` が続くケースでも、`]` の直後が `)` であれば
+        // collection expression として `call` のままであること。
+        const string content = """
+            public class C
+            {
+                public void M()
+                {
+                    Consume([Make(), Make()]);
+                }
+                private static int Make() => 0;
+                private void Consume(int[] xs) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var makeRefs = references.Where(r => r.SymbolName == "Make").ToList();
+        Assert.Equal(2, makeRefs.Count);
+        Assert.All(makeRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
     public void Extract_KotlinQualifiedFieldTargetAnnotation_ClassifiedAsAnnotation()
     {
         // issue #293 follow-up: Kotlin use-site target with a fully-qualified annotation

@@ -1306,13 +1306,19 @@ public partial class DbReader
             : @"
               AND r.symbol_name = @symbolName COLLATE NOCASE";
 
+        // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
+        // so event subscriptions (`Click += OnClick`) also participate in the transitive
+        // caller chain. Metadata edges (`attribute`, `annotation`) stay excluded.
+        // impact の BFS は `callers`/`callees`/`hotspots` と同じ call-graph 契約を共有し、
+        // `subscribe` エッジ（`Click += OnClick` 等）も推移 caller に含める。`attribute` /
+        // `annotation` のような metadata エッジは引き続き除外する。
         var sql = $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND r.reference_kind IN {InvokeReferenceKindsSql}
+                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {supportedLangFilter}
                   {nameCondition}";
         if (lang != null)

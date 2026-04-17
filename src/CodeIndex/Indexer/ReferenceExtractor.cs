@@ -132,13 +132,6 @@ public static class ReferenceExtractor
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
 
-    // C# targeted-attribute prefixes (e.g. [return: NotNull], [assembly: InternalsVisibleTo(...)]).
-    // C# のターゲット付き属性の prefix。
-    private static readonly HashSet<string> CSharpAttributeTargets = new(StringComparer.Ordinal)
-    {
-        "return", "param", "method", "type", "field", "property", "event", "assembly", "module",
-    };
-
     // Languages whose `@Decorator(args)` / `@Annotation(args)` syntax should produce
     // `annotation` reference rows rather than `call` rows (issue #293).
     // `@Decorator(args)` / `@Annotation(args)` 構文を `call` ではなく `annotation` として
@@ -190,6 +183,16 @@ public static class ReferenceExtractor
 
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines);
+        var preparedLines = new string[lines.Length];
+        for (var pi = 0; pi < lines.Length; pi++)
+            preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
+        // Pre-pass C# attribute analysis so cross-line `[\n Foo("x")\n]` and parameter
+        // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
+        // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
+        // 同じ判定で属性として扱えるように、事前パスで C# 属性セクションの範囲を構築する。
+        var csharpAttrRanges = language == "csharp"
+            ? BuildCSharpAttributeRanges(preparedLines)
+            : null;
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
             .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
@@ -212,9 +215,10 @@ public static class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
-            var preparedLine = PrepareLine(language, structuralLines[i]);
+            var preparedLine = preparedLines[i];
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
+            var csharpAttrRangesOnLine = csharpAttrRanges?[i];
 
             var context = originalLine.Trim();
             if (context.Length == 0)
@@ -250,7 +254,9 @@ public static class ReferenceExtractor
                 // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
                 // issue #293: 引数付きの C# attribute と Java/Kotlin/Scala/TypeScript annotation 使用を
                 // `call` ではなく専用の種別に分類し、call-graph の phantom エッジを防ぐ。
-                var metadataKind = TryClassifyMetadataReference(language, preparedLine, nameIndex);
+                var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
+                    && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, nameIndex);
+                var metadataKind = TryClassifyMetadataReference(language, preparedLine, nameIndex, insideCSharpAttributeRange);
                 AddReference(references, seen, fileId, match, metadataKind ?? "call", context, lineNumber, container);
             }
         }
@@ -417,16 +423,20 @@ public static class ReferenceExtractor
     /// 呼び出しに見える識別子を、C# の `[...]` 属性リスト内や Java 系 `@` 付き注釈に該当する
     /// 場合に専用の reference kind へ分類する。通常の呼び出しは null を返して既定の `call` を維持する。
     /// </summary>
-    private static string? TryClassifyMetadataReference(string language, string preparedLine, int nameIndex)
+    private static string? TryClassifyMetadataReference(
+        string language,
+        string preparedLine,
+        int nameIndex,
+        bool insideCSharpAttributeRange)
     {
+        if (language == "csharp")
+            return insideCSharpAttributeRange ? "attribute" : null;
+
         var probe = nameIndex - 1;
         while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
             probe--;
         if (probe < 0)
             return null;
-
-        if (language == "csharp")
-            return IsCSharpAttributeContext(preparedLine, probe) ? "attribute" : null;
 
         if (AnnotationLanguages.Contains(language))
             return IsAnnotationContext(preparedLine, probe) ? "annotation" : null;
@@ -434,143 +444,221 @@ public static class ReferenceExtractor
         return null;
     }
 
-    private static bool IsCSharpAttributeContext(string line, int probe)
+    /// <summary>
+    /// Build per-line column ranges that identify C# `[...]` attribute sections. Handles
+    /// declaration-position detection (including parameter attributes preceded by `(` / `,`
+    /// via forward look-ahead) and multi-line `[\n ... \n]` sections. Each inner list holds
+    /// ordered `(startColumn, endColumnExclusive)` ranges that are inside an attribute section
+    /// on that line. Call sites whose name column falls inside one of these ranges are
+    /// reclassified as `attribute` instead of `call`.
+    /// C# の `[...]` 属性セクションを行ごとの列範囲で表すテーブルを構築する。
+    /// `(` / `,` の直後に置かれるパラメータ属性を forward lookahead で、複数行にわたる
+    /// `[\n ... \n]` 属性を跨行トラッキングで検出する。各行のリストは属性セクションに含まれる
+    /// `(開始列, 終端列 (exclusive))` のレンジを保持し、呼び出し名の列がどれかのレンジに含まれる場合に
+    /// `call` ではなく `attribute` へ再分類する。
+    /// </summary>
+    private static List<List<(int start, int end)>> BuildCSharpAttributeRanges(string[] preparedLines)
     {
-        // Direct form: `[Foo(...)`. 直接形 `[Foo(...)`。
-        // Must verify that this `[` sits at a declaration position, not inside a C# 12
-        // collection expression such as `var xs = [Make(), Make()]`.
-        // この `[` が宣言位置（`var xs = [...]` のような C# 12 collection expression ではない）
-        // であることを必ず確認する必要がある。
-        if (line[probe] == '[')
-            return IsCSharpAttributeOpenBracket(line, probe);
+        var perLine = new List<List<(int, int)>>(preparedLines.Length);
+        for (var i = 0; i < preparedLines.Length; i++)
+            perLine.Add(new List<(int, int)>());
 
-        // Targeted form: `[target: Foo(...)]` — peek past the `target:` prefix.
-        // ターゲット指定形式 `[target: Foo(...)]` — `target:` 部分をスキップして `[` を探す。
-        if (line[probe] == ':')
+        // Stack entries capture the opening `[` position and whether that bracket was at
+        // a C# declaration (attribute) position. Parens inside a section are tracked so the
+        // stack only pops when the bracket actually closes, not when an inner `)` appears.
+        // スタックは `[` の位置と、その bracket が属性位置だったかを保持する。セクション内の
+        // 括弧は独立して追跡し、内部の `)` によってスタックが誤って pop されないようにする。
+        var bracketStack = new Stack<(int li, int ci, bool isAttr)>();
+        char lastMeaningful = '\0';
+        int parenDepth = 0;
+        bool lastClosedBracketWasAttribute = false;
+
+        for (var li = 0; li < preparedLines.Length; li++)
         {
-            var j = probe - 1;
-            var idEnd = j;
-            while (j >= 0 && IsIdentifierChar(line[j]))
-                j--;
-            if (j + 1 <= idEnd)
+            var line = preparedLines[li];
+            for (var ci = 0; ci < line.Length; ci++)
             {
-                var target = line[(j + 1)..(idEnd + 1)];
-                if (CSharpAttributeTargets.Contains(target))
+                var c = line[ci];
+                if (char.IsWhiteSpace(c))
+                    continue;
+
+                if (c == '(')
                 {
-                    var k = j;
-                    while (k >= 0 && char.IsWhiteSpace(line[k]))
-                        k--;
-                    if (k >= 0 && line[k] == '[' && IsCSharpAttributeOpenBracket(line, k))
-                        return true;
+                    parenDepth++;
+                    lastMeaningful = c;
+                    continue;
                 }
+                if (c == ')')
+                {
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    lastMeaningful = c;
+                    continue;
+                }
+
+                if (c == '[')
+                {
+                    bool isAttr = EvaluateCSharpAttributePosition(
+                        lastMeaningful, lastClosedBracketWasAttribute, preparedLines, li, ci);
+                    bracketStack.Push((li, ci, isAttr));
+                    lastMeaningful = c;
+                    continue;
+                }
+
+                if (c == ']')
+                {
+                    if (bracketStack.Count > 0)
+                    {
+                        var opened = bracketStack.Pop();
+                        lastClosedBracketWasAttribute = opened.isAttr;
+                        if (opened.isAttr)
+                        {
+                            // Record the attribute section span for every line it covers so
+                            // cross-line `[\n Foo("x")\n]` also classifies `Foo` as attribute.
+                            // 属性セクションがまたぐ全ての行に対して範囲を記録し、
+                            // `[\n Foo("x")\n]` のような跨行ケースでも `Foo` が属性として分類されるようにする。
+                            for (var l = opened.li; l <= li; l++)
+                            {
+                                int s = (l == opened.li) ? opened.ci : 0;
+                                int e = (l == li) ? ci + 1 : preparedLines[l].Length;
+                                perLine[l].Add((s, e));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        lastClosedBracketWasAttribute = false;
+                    }
+                    lastMeaningful = c;
+                    continue;
+                }
+
+                lastMeaningful = c;
             }
-            return false;
         }
 
-        // Comma-separated list: `[Foo("a"), Bar("b")]` — walk past prior attribute entries
-        // (and any balanced parens they contain) until an unbalanced opening `[` appears.
-        // 一行に並んだ複数属性 `[Foo("a"), Bar("b")]` では、先行する属性と対応する括弧を
-        // 読み飛ばして未対応の `[` に到達した場合にのみ属性として扱う。
-        if (line[probe] == ',')
-            return ScanLeftForAttributeOpen(line, probe - 1);
-
-        return false;
+        return perLine;
     }
 
     /// <summary>
-    /// Return true when the `[` at <paramref name="bracketIndex"/> is at a C# declaration
-    /// position rather than an expression position. Attribute `[` must be preceded on the
-    /// same line only by whitespace, another attribute list's closing `]`, or a scope/
-    /// statement boundary (`{`, `}`, `;`). Any expression-context token (identifier, digit,
-    /// `=`, `,`, `(`, `:`, etc.) means this is a collection expression or indexer.
-    /// `[` が C# の宣言位置にあるか（collection expression や indexer ではないか）を判定する。
+    /// Decide whether a `[` token sits at a C# attribute position based on the immediately
+    /// preceding meaningful character. `(` / `,` (parameter attributes) are disambiguated via
+    /// forward look-ahead because both attributes and C# 12 collection expressions can follow.
+    /// `[` が C# の属性位置にあるかを、直前の非空白文字から判定する。`(` / `,` の直後は
+    /// パラメータ属性にも collection expression にもなりうるため、forward lookahead で区別する。
     /// </summary>
-    private static bool IsCSharpAttributeOpenBracket(string line, int bracketIndex)
+    private static bool EvaluateCSharpAttributePosition(
+        char lastMeaningful,
+        bool lastClosedBracketWasAttribute,
+        string[] preparedLines,
+        int startLi,
+        int startCi)
     {
-        var i = bracketIndex - 1;
-        while (i >= 0 && char.IsWhiteSpace(line[i]))
-            i--;
-        if (i < 0)
+        // Start of file or after a scope/statement boundary — attribute position.
+        // ファイル先頭、あるいはスコープ・文境界の直後は属性位置。
+        if (lastMeaningful is '\0' or '{' or '}' or ';')
             return true;
-        var c = line[i];
-        if (c == '{' || c == '}' || c == ';')
-            return true;
-        // A preceding `]` only indicates attribute-list chaining (`[A][B]`) when that `]`
-        // actually closed an attribute section. For `arr[i][Compute()]` the preceding `]`
-        // closes an indexer, so we must walk back to the matching `[` and re-check that
-        // opening bracket's declaration position.
-        // 直前の `]` が attribute list のチェーン (`[A][B]`) を意味するのは、その `]` が
-        // 実際に attribute section を閉じていたときだけ。`arr[i][Compute()]` のように
-        // indexer を閉じた `]` の場合は、対応する `[` まで戻ってそこが宣言位置かを再判定する。
-        if (c == ']')
-            return IsCSharpAttributeSectionClose(line, i);
+
+        // Chained attribute list `[A][B]`: the prior `]` must have closed an attribute section.
+        // `arr[i][Compute()]` → the prior `]` closed an indexer, so stays `call`.
+        // 連続した属性リスト `[A][B]` は、直前の `]` が属性セクションを閉じていたときのみ属性扱い。
+        // `arr[i][Compute()]` の `]` は indexer を閉じているため `call` のまま。
+        if (lastMeaningful == ']')
+            return lastClosedBracketWasAttribute;
+
+        // Parameter attribute candidates (`(` or `,`): could be `void M([Attr] T x)` or
+        // `Consume([Make()])`. Disambiguate by scanning forward to the matching `]` and
+        // checking the next meaningful character; identifier-like → attribute, otherwise expression.
+        // パラメータ属性候補 (`(` / `,`) は `void M([Attr] T x)` にも `Consume([Make()])` にもなりうる。
+        // 対応する `]` まで進んで直後の文字を確認し、識別子なら属性、それ以外は式として扱う。
+        if (lastMeaningful is '(' or ',')
+            return IsCSharpAttributeFollowedByDeclaration(preparedLines, startLi, startCi);
+
         return false;
     }
 
     /// <summary>
-    /// Walk left from a `]` to its matching `[`, skipping balanced parens, and return true
-    /// when that opening bracket itself was at a C# declaration position.
-    /// `]` から対応する `[` まで左方向に遡り、その開き bracket 自体が宣言位置だった場合のみ true を返す。
+    /// Scan forward from a `[` to its matching `]` (skipping balanced parens) and return true
+    /// when the next meaningful character begins an identifier-like token. Works across lines so
+    /// `void M(\n    [Attr]\n    T x\n)` is recognized as a parameter attribute.
+    /// `[` から対応する `]` まで進んで、`]` の次の非空白文字が識別子を始める場合に true を返す。
+    /// 行を跨ぐ走査にも対応しているため `void M(\n    [Attr]\n    T x\n)` も属性として認識される。
     /// </summary>
-    private static bool IsCSharpAttributeSectionClose(string line, int closeBracketIndex)
+    private static bool IsCSharpAttributeFollowedByDeclaration(string[] preparedLines, int startLi, int startCi)
     {
         var bracketDepth = 1;
         var parenDepth = 0;
-        for (var i = closeBracketIndex - 1; i >= 0; i--)
+        var li = startLi;
+        var ci = startCi + 1;
+        while (li < preparedLines.Length)
         {
-            var c = line[i];
-            if (c == ')')
+            var line = preparedLines[li];
+            while (ci < line.Length)
             {
-                parenDepth++;
-                continue;
-            }
-            if (c == '(')
-            {
+                var c = line[ci];
+                if (c == '(')
+                {
+                    parenDepth++;
+                    ci++;
+                    continue;
+                }
+                if (c == ')')
+                {
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    ci++;
+                    continue;
+                }
                 if (parenDepth > 0)
-                    parenDepth--;
-                continue;
+                {
+                    ci++;
+                    continue;
+                }
+                if (c == '[')
+                {
+                    bracketDepth++;
+                    ci++;
+                    continue;
+                }
+                if (c == ']')
+                {
+                    bracketDepth--;
+                    if (bracketDepth == 0)
+                    {
+                        ci++;
+                        while (true)
+                        {
+                            while (ci < line.Length && char.IsWhiteSpace(line[ci]))
+                                ci++;
+                            if (ci < line.Length)
+                            {
+                                var next = line[ci];
+                                return IsIdentifierChar(next) || next == '@';
+                            }
+                            li++;
+                            if (li >= preparedLines.Length)
+                                return false;
+                            line = preparedLines[li];
+                            ci = 0;
+                        }
+                    }
+                    ci++;
+                    continue;
+                }
+                ci++;
             }
-            if (parenDepth > 0)
-                continue;
-            if (c == ']')
-            {
-                bracketDepth++;
-                continue;
-            }
-            if (c == '[')
-            {
-                bracketDepth--;
-                if (bracketDepth == 0)
-                    return IsCSharpAttributeOpenBracket(line, i);
-            }
+            li++;
+            ci = 0;
         }
         return false;
     }
 
-    private static bool ScanLeftForAttributeOpen(string line, int start)
+    private static bool IsInsideCSharpAttributeRange(List<(int start, int end)> ranges, int index)
     {
-        var parenDepth = 0;
-        for (var i = start; i >= 0; i--)
+        foreach (var (start, end) in ranges)
         {
-            var c = line[i];
-            if (c == ')')
-            {
-                parenDepth++;
-                continue;
-            }
-            if (c == '(')
-            {
-                if (parenDepth == 0)
-                    return false;
-                parenDepth--;
-                continue;
-            }
-            if (parenDepth > 0)
-                continue;
-            if (c == '[')
-                return IsCSharpAttributeOpenBracket(line, i);
-            if (c == ']' || c == ';' || c == '{' || c == '}')
-                return false;
+            if (index >= start && index < end)
+                return true;
         }
         return false;
     }
