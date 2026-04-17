@@ -3202,6 +3202,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_TargetedAttributeDeclarations_DoNotBecomePhantomFunctions()
+    {
+        var content = """
+            using System;
+            using System.Runtime.CompilerServices;
+            using System.Runtime.InteropServices;
+
+            [assembly: CLSCompliant(true)]
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            [module: SkipLocalsInit]
+
+            public class Fixture
+            {
+                [return: MarshalAs(UnmanagedType.Bool)]
+                public bool Method([param: MarshalAs(UnmanagedType.Bool)] bool value) => value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Fixture");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CLSCompliant");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "AssemblyVersion");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "SkipLocalsInit");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "MarshalAs");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
