@@ -140,8 +140,11 @@ public class DbWriter
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
     /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true)
     {
+        if (!allowReuse)
+            return null;
+
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT id, modified, checksum FROM files WHERE path = @path";
         cmd.Parameters.AddWithValue("@path", relativePath);
@@ -175,6 +178,18 @@ public class DbWriter
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// Check whether the DB currently contains any indexed files for the given language.
+    /// 指定言語の indexed file が DB に存在するか確認する。
+    /// </summary>
+    public bool HasAnyFilesWithLanguage(string lang)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM files WHERE lang = @lang LIMIT 1";
+        cmd.Parameters.AddWithValue("@lang", lang);
+        return cmd.ExecuteScalar() != null;
     }
 
     /// <summary>
@@ -748,6 +763,18 @@ public class DbWriter
         SetReadyBit(DbContext.FoldReadyFlag);
         SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
         SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
+    }
+
+    /// <summary>
+    /// Stamp the current C# symbol-name contract version. Readers and indexers use this to
+    /// detect canonical-name upgrades such as operator/conversion/indexer renames.
+    /// C# canonical symbol name 契約の current version を stamp する。
+    /// </summary>
+    public void MarkCSharpSymbolNameContractReady()
+    {
+        SetMeta(
+            DbContext.CSharpSymbolNameContractVersionMetaKey,
+            DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     /// <summary>

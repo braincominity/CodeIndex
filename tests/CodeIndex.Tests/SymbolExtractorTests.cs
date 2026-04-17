@@ -3114,6 +3114,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsSpacedGenericDelegatesAndEvents()
+    {
+        var content = """
+            namespace App;
+            using System;
+
+            public delegate Task<int> GetIdAsync(string user);
+            public delegate Task<Dictionary<string, int>> LoadAsync();
+            public delegate TResult Func<T1, T2, TResult>(T1 a, T2 b);
+
+            public class Pub
+            {
+                public event Action<string, int> NamedEvent;
+                public event Func<string, int, bool> Filter;
+                public event EventHandler<ChangedArgs> Changed;
+                public event Action OnReady;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "GetIdAsync" && s.ReturnType == "Task<int>");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "LoadAsync" && s.ReturnType == "Task<Dictionary<string,int>>");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Func" && s.ReturnType == "TResult");
+
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "NamedEvent" && s.ReturnType == "Action<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Filter" && s.ReturnType == "Func<string,int,bool>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Changed" && s.ReturnType == "EventHandler<ChangedArgs>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnReady" && s.ReturnType == "Action");
+        Assert.DoesNotContain(symbols, s => s.Kind == "event" && s.Name == "int");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsProperties()
     {
         // C# property with get/set / C# プロパティ（get/set付き）
@@ -3124,6 +3156,211 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Age");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Email");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsPartialProperties()
+    {
+        var content = """
+            namespace Demo;
+
+            public abstract partial class BaseModel
+            {
+                public abstract string Description { get; }
+            }
+
+            public partial class Model : BaseModel
+            {
+                public partial string Name
+                {
+                    get;
+                    set;
+                }
+
+                public partial int Count
+                {
+                    get;
+                }
+
+                public string NotPartial { get; set; } = string.Empty;
+            }
+
+            public partial class Model
+            {
+                private string _name = string.Empty;
+
+                public partial string Name
+                {
+                    get => _name;
+                    set => _name = value;
+                }
+
+                public partial int Count
+                    => 42;
+
+                public partial override string Description
+                    => "demo";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Name") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Count") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Description") >= 2);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NotPartial");
+
+        var countImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.Line == 34));
+        Assert.Equal(34, countImplementation.StartLine);
+        Assert.Equal(35, countImplementation.EndLine);
+
+        var descriptionImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Description" && s.Line == 37));
+        Assert.Equal(37, descriptionImplementation.StartLine);
+        Assert.Equal(38, descriptionImplementation.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string
+                    SplitName
+                    => "x";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        Assert.Equal(5, property.StartLine);
+        Assert.Equal(7, property.EndLine);
+        Assert.Equal("public string SplitName => \"x\";", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "SplitName");
+    }
+
+    [Fact]
+    public void Extract_CSharp_LongGenericMultilinePropertyHeader_KeepsReturnTypeAndSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public Dictionary<
+                    string,
+                    List<
+                        int
+                    >>
+                    Count
+                    => new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("Dictionary<string,List<int>>", property.ReturnType);
+        Assert.Equal("public Dictionary< string, List< int >> Count => new();", property.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Count");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceOnNextLinePropertyHeader_KeepsHeaderSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string SplitName
+                {
+                    get;
+                    set;
+                }
+
+                public int Count
+                { get => 1; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var splitName = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "SplitName"));
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal("public string SplitName {", splitName.Signature);
+        Assert.Equal("public int Count {", count.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial int Count
+                    => DateTime.Now.Day switch
+                    {
+                        > 15 => 2,
+                        _ => 1
+                    };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal(5, count.StartLine);
+        Assert.Equal(10, count.EndLine);
+        Assert.Equal("public partial int Count => DateTime.Now.Day switch", count.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_PartialPropertyImplementation_WithAccessorAttribute_IsDetected()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial string Name { get; set; }
+            }
+
+            public partial class Model
+            {
+                public partial string Name { [System.Obsolete] get => "x"; set { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.Signature != null && s.Signature.Contains("[System.Obsolete]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_PartialPropertyImplementation_WithMultilineAccessorAttribute_IsDetected()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial string Name
+                {
+                    [System.Obsolete(
+                        "x"
+                    )]
+                    get => "x";
+                    set { }
+                }
+
+                public int Other => 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Other");
     }
 
     [Fact]
@@ -3202,6 +3439,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_TargetedAttributeDeclarations_DoNotBecomePhantomFunctions()
+    {
+        var content = """
+            using System;
+            using System.Runtime.CompilerServices;
+            using System.Runtime.InteropServices;
+
+            [assembly: CLSCompliant(true)]
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            [module: SkipLocalsInit]
+
+            public class Fixture
+            {
+                [return: MarshalAs(UnmanagedType.Bool)]
+                public bool Method([param: MarshalAs(UnmanagedType.Bool)] bool value) => value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Fixture");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CLSCompliant");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "AssemblyVersion");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "SkipLocalsInit");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "MarshalAs");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
@@ -3214,6 +3479,279 @@ public class SymbolExtractorTests
         // Signature should contain parameters / シグネチャにパラメータが含まれるべき
         var userDto = symbols.First(s => s.Name == "UserDto");
         Assert.Contains("string Name", userDto.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsAsProperties()
+    {
+        var content = """
+            namespace App;
+
+            public record Point(int X, int Y);
+            public readonly record struct Vec3(double X, double Y, double Z);
+            public record Animal(string Name);
+            public record Dog(string Name, string Breed) : Animal(Name);
+            public record Options(
+                string Host,
+                int Port) { public bool UseTls { get; init; } = true; }
+            public record Container<T>(T Value, int Count) where T : class;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var pointX = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point"));
+        Assert.Equal("int", pointX.ReturnType);
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("App.Point", pointX.ContainerQualifiedName);
+        Assert.Equal("public", pointX.Visibility);
+
+        var vec3Z = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Z" && s.ContainerName == "Vec3"));
+        Assert.Equal("double", vec3Z.ReturnType);
+        Assert.Equal("struct", vec3Z.ContainerKind);
+
+        var dogBreed = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Breed" && s.ContainerName == "Dog"));
+        Assert.Equal("string", dogBreed.ReturnType);
+
+        var optionsHost = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Host" && s.ContainerName == "Options"));
+        Assert.Equal("string", optionsHost.ReturnType);
+        Assert.Contains("string Host", optionsHost.Signature);
+        Assert.Equal(8, optionsHost.Line);
+        var optionsRecord = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Options"));
+        Assert.Equal(9, optionsRecord.EndLine);
+
+        var containerValue = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Value" && s.ContainerName == "Container"));
+        Assert.Equal("T", containerValue.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsLongAndCommentedRecordPrimaryComponentsAsProperties()
+    {
+        var componentLines = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"    int P{i},"));
+        var content = $$"""
+            namespace App;
+
+            public record Big(
+            {{componentLines}}
+                int Tail);
+
+            public record Point(
+                int X /* separator, comment */,
+                // the next component must still parse
+                int Y);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P30" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Tail" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
+
+        var tail = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Tail" && s.ContainerName == "Big"));
+        Assert.Equal(34, tail.Line);
+        var bigRecord = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Big"));
+        Assert.Equal(34, bigRecord.EndLine);
+
+        var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point"));
+        Assert.Equal(39, pointY.Line);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsWithComparisonDefaults()
+    {
+        var content = """
+            public record Threshold(bool Enabled = 1 < 2, int Count = 0);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var enabled = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Enabled" && s.ContainerName == "Threshold"));
+        Assert.Equal("bool", enabled.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.ContainerName == "Threshold"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsWithTightComparisonDefaults()
+    {
+        var content = """
+            public record Threshold(bool Enabled = left<right, int Count = 0);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var enabled = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Enabled" && s.ContainerName == "Threshold"));
+        Assert.Equal("bool", enabled.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.ContainerName == "Threshold"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotInjectRecordPrimaryComponentsIntoEarlierSameNamedClass()
+    {
+        var content = """
+            namespace A
+            {
+                public class Point {}
+            }
+
+            namespace B
+            {
+                public record Point(int X);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "A.Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "B.Point");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordStructDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public readonly record struct Bodyless(
+                int X,
+                int Y);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var bodyless = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Bodyless"));
+        Assert.Equal(5, bodyless.EndLine);
+
+        var y = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Bodyless"));
+        Assert.Equal(5, y.Line);
+        Assert.Equal("App.Bodyless", y.ContainerQualifiedName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordBaseAndWhereDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Animal(string Name);
+
+            public record Dog(
+                string Name)
+                : Animal(Name);
+
+            public record Box<T>(
+                T Value)
+                where T : class;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var dog = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Dog"));
+        Assert.Equal(7, dog.EndLine);
+
+        var box = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Box"));
+        Assert.Equal(11, box.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordBaseComparisonDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Child(int X)
+                : Base(1 < 2);
+
+            public record Base(bool Flag);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal(4, child.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordTightBaseComparisonDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Child(int X)
+                : Base(left<right);
+
+            public record Base(bool Flag);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal(4, child.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEmptyBodylessRecordDeclarationRange()
+    {
+        var content = """
+            namespace Repro;
+
+            public record Empty(
+            )
+                : Base();
+
+            public record Base();
+
+            public record struct EmptyStruct(
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var empty = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Empty"));
+        Assert.Equal(5, empty.EndLine);
+
+        var emptyStruct = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "EmptyStruct"));
+        Assert.Equal(10, emptyStruct.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_TracksRecordPrimaryComponentLineAfterAttributes()
+    {
+        var content = """
+            public record Person(
+                [property: Obsolete]
+                string Name,
+                [property: Obsolete]
+                int Age);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name" && s.ContainerName == "Person"));
+        Assert.Equal(3, name.Line);
+
+        var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Age" && s.ContainerName == "Person"));
+        Assert.Equal(5, age.Line);
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecordComponents_DoNotDisruptBodyMembersOrDuplicateExplicitProperties()
+    {
+        var content = """
+            namespace App;
+
+            public record Person(string Name)
+            {
+                public string Name { get; init; } = Name;
+
+                public string Upper() => Name.ToUpperInvariant();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var nameProperties = symbols.Where(s => s.Kind == "property" && s.Name == "Name" && s.ContainerName == "Person").ToList();
+        var nameProperty = Assert.Single(nameProperties);
+        Assert.Equal(5, nameProperty.Line);
+        Assert.Equal("App.Person", nameProperty.ContainerQualifiedName);
+
+        var upper = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Upper"));
+        Assert.Equal("class", upper.ContainerKind);
+        Assert.Equal("Person", upper.ContainerName);
+        Assert.Equal("App.Person", upper.ContainerQualifiedName);
     }
 
     [Fact]
@@ -3269,6 +3807,200 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ExpressionBodiedMembers_HaveBodyRanges()
+    {
+        // issue #233: expression-bodied members must report a body range covering the
+        // declaration line through the terminating ';' so reference attribution can find
+        // them as the innermost enclosing container.
+        // issue #233: 式本体メンバーは、宣言行から終端 ';' までを本体範囲として報告する必要がある。
+        // そうすることで参照属性解決が内側コンテナとして認識できる。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap1() => Compute();\n    public int Wrap3 => Compute();\n    public int MultiLine()\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var compute = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Compute"));
+        Assert.Equal(3, compute.BodyStartLine);
+        Assert.Equal(3, compute.BodyEndLine);
+
+        var wrap1 = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Wrap1"));
+        Assert.Equal(4, wrap1.BodyStartLine);
+        Assert.Equal(4, wrap1.BodyEndLine);
+
+        var wrap3 = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap3"));
+        Assert.Equal(5, wrap3.BodyStartLine);
+        Assert.Equal(5, wrap3.BodyEndLine);
+
+        var multi = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MultiLine"));
+        Assert.Equal(6, multi.BodyStartLine);
+        Assert.Equal(7, multi.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BlockBodiedProperty_AllmanStyle_IsExtracted()
+    {
+        // issue #233 review follow-up: Allman-style block-bodied properties (with `{` on
+        // the next line) were not matched by the property regex, so `callers` would
+        // attribute accessor-internal references to the enclosing class. The widened
+        // regex plus `ShouldSkipCSharpHeaderOnlyPropertyCandidate` verification must
+        // still recognize them as properties with proper body ranges.
+        // issue #233 のレビュー指摘: Allman スタイル（次行に `{`）の block-bodied property が
+        // property regex でマッチしておらず、accessor 内の参照がクラスに帰属していた。
+        // widened regex と `ShouldSkipCSharpHeaderOnlyPropertyCandidate` の組み合わせで
+        // 正しく property として認識され、本体範囲も持つ必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    {\n        get { return Compute(); }\n    }\n    public string Name\n    {\n        get;\n        set;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(5, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Equal(8, name.StartLine);
+        Assert.Equal(12, name.EndLine);
+        Assert.Equal(9, name.BodyStartLine);
+        Assert.Equal(12, name.BodyEndLine);
+        Assert.Equal("string", name.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_IsExtracted()
+    {
+        // issue #233 second review follow-up: multi-line expression-bodied properties,
+        // where the declaration is on one line and `=> expr;` on the continuation line,
+        // must still be extracted as properties with a body range spanning the two lines.
+        // Without this, accessor-internal calls fall through to the enclosing class.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が来る multi-line 式本体
+        // プロパティも property として抽出され、本体範囲が宣言行から `;` 行までを覆う必要がある。
+        // これができないと accessor 内呼び出しが外側クラスに誤帰属する。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(5, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(5, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+    }
+
+    [Fact]
+    public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: when an Allman-style block-bodied property
+        // has a multi-line `/* ... */` block comment between the header line and the `{`
+        // line, the skip guard must traverse the comment via `LexCSharpLine` and still
+        // recognize the continuation `{`. A naive prefix-based comment skip only
+        // handled `*` / `//` / `/*` line starts and dropped the property entirely.
+        // issue #233 第4次レビュー指摘: Allman スタイルの block-bodied property で
+        // header 行と `{` の間に multi-line `/* ... */` のブロックコメントがあっても、
+        // `LexCSharpLine` でコメントを通り抜けて次の `{` を認識する必要がある。
+        // 行頭 prefix だけの素朴なスキップでは `*` / `//` / `/*` の開始行しか飛ばせず、
+        // この形の property は落ちていた。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    /* some multi-line\n       block comment */\n    {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(9, wrap.EndLine);
+        Assert.Equal(7, wrap.BodyStartLine);
+        Assert.Equal(9, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: same scenario for multi-line expression
+        // bodies — `public int Wrap` followed by `/* ... */` and then `=> Compute();`
+        // must still be extracted with the property spanning declaration through `;`.
+        // issue #233 第4次レビュー指摘: multi-line 式本体プロパティでも同じく、
+        // `public int Wrap` の後に `/* ... */`、さらに `=> Compute();` が続く形で
+        // 宣言行から `;` 行までを本体範囲とする property が抽出されること。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int WrapExpr\n    /* multi-line\n       comment */\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrapExpr"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLineProperty_IsExtracted()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property — `{` on the same line as the declaration and the accessor on the
+        // following line — must be recognized as a property with a body range spanning
+        // declaration through closing `}`.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property が property として抽出され、宣言行から `}` 行
+        // までを本体範囲として持つこと。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(6, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(6, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLine_AcceptsAttributeAndVisibility()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must also
+        // accept next lines that begin with accessor attributes (`[JsonIgnore]`) or a
+        // visibility modifier (`private set`) before the `get` / `set` / `init` token.
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、accessor attribute
+        // (`[JsonIgnore]`) や visibility 修飾子 (`private set`) で始まる行も受け入れる必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n"
+            + "    public int WithAttr {\n        [System.Obsolete] get => Compute();\n    }\n"
+            + "    public int WithVis {\n        private set { }\n        get { }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithAttr");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithVis");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineWithoutAccessor_IsNotMisclassifiedAsProperty()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must reject
+        // non-property shapes that happen to be `Type Name {` followed by a body that
+        // does not start an accessor (for example a stray method-like block).
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、`Type Name {` に
+        // 続く行が accessor 宣言でない場合（例: accessor でない任意のブロック）を
+        // property として採用してはならない。
+        var content = "public class Calc\n{\n    public int Stray {\n        Console.WriteLine(1);\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Stray");
+    }
+
+    [Fact]
+    public void Extract_CSharp_HeaderOnlyNonProperty_IsNotMisclassified()
+    {
+        // issue #233 review follow-up: the header-only property alternation must not
+        // swallow keyword lines such as `public class X` or `return Foo` even if they
+        // happen to look like `Type Name` before a newline.
+        // issue #233 のレビュー指摘: header-only の alternation が `public class X` や
+        // `return Foo` のようなキーワード行を property と誤分類しないことを担保する。
+        var content = "public class Thing\n{\n    public int Method()\n    {\n        return Thing;\n    }\n}\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Method");
+    }
+
+    [Fact]
     public void Extract_CSharp_SwitchExpressionArms_DoNotProducePhantomProperties()
     {
         var content = """
@@ -3306,6 +4038,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiLineSwitchExpressionArms_DoNotProducePhantomProperties()
+    {
+        // issue #233 third review follow-up: switch-expression arms whose `=>` is placed
+        // on a continuation line must not be misclassified as multi-line expression-bodied
+        // properties. Without switch-expression guard coverage on the continuation `=>`,
+        // each pattern variable (e.g. `text`, `neg`) would be emitted as a phantom property
+        // and `callers` / `impact` would misattribute calls inside the arm to it.
+        // issue #233 第3次レビュー指摘: switch expression arm の `=>` が継続行にある
+        // multi-line 形を、multi-line 式本体プロパティと誤認しないこと。continuation `=>`
+        // まで switch-expression ガードが及ばないと、`text` や `neg` のようなパターン変数が
+        // phantom property として抽出され、arm 内の呼び出しが phantom に誤帰属する。
+        var content = """
+            public class Matcher
+            {
+                public string Describe(object x) => x switch
+                {
+                    string text
+                        => text.Trim(),
+                    int neg
+                        => "non-pos",
+                    _
+                        => "other",
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Matcher");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Describe");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.DoesNotContain(symbols, s => s.Name == "text");
+        Assert.DoesNotContain(symbols, s => s.Name == "neg");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExplicitInterfaceImpl()
     {
         var content = "public class MyClass : IDisposable, IComparable<MyClass>\n{\n    void IDisposable.Dispose()\n    {\n    }\n    int IComparable<MyClass>.CompareTo(MyClass other) => 0;\n}";
@@ -3321,7 +4088,7 @@ public class SymbolExtractorTests
         var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var indexer = symbols.FirstOrDefault(s => s.Name == "this");
+        var indexer = symbols.FirstOrDefault(s => s.Name == "Item");
         Assert.NotNull(indexer);
         Assert.Equal("function", indexer.Kind);
         Assert.Equal("string", indexer.ReturnType);
@@ -3330,14 +4097,140 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsOperatorOverloads()
     {
-        var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
+        var content = "using System.Collections.Generic;\npublic unsafe struct Money\n{\n    public static (int whole, int cents) operator +(Money a, Money b) => (0, 0);\n    public static Dictionary<string, int> operator -(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static checked Money operator checked +(Money a, Money b) => new();\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n    public static explicit operator checked byte(Money m) => 0;\n    public static explicit operator Dictionary<string,int>(Money m) => new();\n    public static explicit operator (int whole,int cents)(Money m) => (0, 0);\n    public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;\n    public static explicit operator (int[] items, int count)(Money m) => ([], 0);\n    public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);\n    public static unsafe explicit operator int*(Money m) => (int*)0;\n    public static unsafe explicit operator delegate* unmanaged[Cdecl]<int, void>(Money m) => (delegate* unmanaged[Cdecl]<int, void>)0;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator -");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator ==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator decimal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Money");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked byte");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Dictionary<string, int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int whole, int cents)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (Dictionary<string, int> map, int count)?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int[] items, int count)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator ((int a, int b) pair, int count)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator delegate* unmanaged[Cdecl]<int, void>");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCheckedOperators()
+    {
+        // Issue #238: C# 11 user-defined checked operators (unary, binary, and explicit
+        // conversion) must be indexed alongside their unchecked counterparts instead of
+        // being silently dropped, and the `checked` keyword must survive into the symbol
+        // name so AI clients can disambiguate the two overloads.
+        // Issue #238: C# 11 のユーザー定義 `operator checked` (単項 / 二項 / 明示的変換) は
+        // unchecked 版と両方インデックスされ、`checked` の有無がシンボル名に残ることで
+        // AI クライアントがオーバーロードを区別できるようにする。
+        var content = """
+            namespace Demo;
+
+            public struct N
+            {
+                public int V;
+                public static N operator +(N a, N b) => new() { V = a.V + b.V };
+                public static N operator checked +(N a, N b) => checked(new() { V = a.V + b.V });
+                public static N operator -(N a, N b) => new() { V = a.V - b.V };
+                public static N operator checked -(N a, N b) => checked(new() { V = a.V - b.V });
+                public static N operator -(N a) => new() { V = -a.V };
+                public static N operator checked -(N a) => checked(new() { V = -a.V });
+                public static explicit operator int(N n) => n.V;
+                public static explicit operator checked int(N n) => checked((int)n.V);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator -"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator checked -"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked int");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsPointerReturnTypes()
+    {
+        // Issue #234: methods with pointer / function-pointer return types must still be indexed.
+        // Issue #234: ポインタ / 関数ポインタ戻り値型のメソッドも取りこぼさずインデックスする。
+        var content = "namespace Demo;\n\npublic unsafe class FP\n{\n    public int* Get(int[] a) { fixed (int* p = a) { return p; } }\n    public void** Double() => null;\n    public byte* Get1() => null;\n    public delegate*<int, int> Transform() => null;\n    public static unsafe int*[] Arr() => null!;\n    public unsafe void Modify(int* p, int v) { *p = v; }\n    public static unsafe int Deref(int* p) => *p;\n    public int* P { get; set; }\n    public byte* Q => null;\n    public int* this[int i] => null;\n}\n\npublic unsafe delegate int* PointerDelegate(int x);\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Double" && s.ReturnType == "void**");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get1" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Transform" && s.ReturnType == "delegate*<int, int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Arr" && s.ReturnType == "int*[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Modify");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Deref");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Q" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PointerDelegate" && s.ReturnType == "int*");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfacePointerReturnTypes()
+    {
+        // Issue #234: explicit-interface implementations with pointer / function-pointer
+        // return types must still be indexed, including nested generics inside the
+        // function-pointer payload and `delegate* unmanaged[Cdecl]<...>` calling conventions.
+        // Issue #234: explicit-interface 実装のポインタ / 関数ポインタ戻り値型も取りこぼさず、
+        // function-pointer 内部に入れ子の generic がある場合や `delegate* unmanaged[Cdecl]<...>` でも動くこと。
+        var content = """
+            namespace Demo;
+
+            public unsafe interface IFoo
+            {
+                int* Get();
+                delegate*<int, int> Transform();
+                delegate*<System.Collections.Generic.List<int>, int> TransformNested();
+                delegate*<delegate*<int, void>, int> TransformFp();
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> TransformUnmanaged();
+                byte** Double();
+                int*[] Arr();
+            }
+
+            public unsafe class Foo : IFoo
+            {
+                int* IFoo.Get() => null;
+                delegate*<int, int> IFoo.Transform() => null;
+                delegate*<System.Collections.Generic.List<int>, int> IFoo.TransformNested() => null;
+                delegate*<delegate*<int, void>, int> IFoo.TransformFp() => null;
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> IFoo.TransformUnmanaged() => null;
+                byte** IFoo.Double() => null;
+                int*[] IFoo.Arr() => null!;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Get"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Transform"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformNested"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformFp"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformUnmanaged"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Double"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Arr"));
+
+        var impls = symbols.Where(s => s.Kind == "function" && s.ContainerName == "Foo").ToList();
+        Assert.Equal("int*", impls.Single(s => s.Name == "Get").ReturnType);
+        Assert.Equal("delegate*<int, int>", impls.Single(s => s.Name == "Transform").ReturnType);
+        Assert.Equal("delegate*<System.Collections.Generic.List<int>, int>", impls.Single(s => s.Name == "TransformNested").ReturnType);
+        Assert.Equal("delegate*<delegate*<int, void>, int>", impls.Single(s => s.Name == "TransformFp").ReturnType);
+        // Spaces inside `unmanaged[...]<...>` payload are collapsed by CollapseCSharpGenericTypeWhitespace
+        // because the outer `<` has `]` as predecessor (a recognized generic-angle start); non-unmanaged
+        // `delegate*<...>` keeps payload spaces because the outer `<` has `*` as predecessor.
+        // `unmanaged[...]<...>` の payload 内のスペースは CollapseCSharpGenericTypeWhitespace で除去される
+        // （outer `<` の直前が `]` で generic angle start と認識されるため）。通常の `delegate*<...>` は
+        // outer `<` の直前が `*` で認識されないため payload 内スペースは保持される。
+        Assert.Equal("delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>,int>", impls.Single(s => s.Name == "TransformUnmanaged").ReturnType);
+        Assert.Equal("byte**", impls.Single(s => s.Name == "Double").ReturnType);
+        Assert.Equal("int*[]", impls.Single(s => s.Name == "Arr").ReturnType);
     }
 
     [Fact]
@@ -3367,6 +4260,82 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsSpacedAndNestedGenericReturnTypeMethods()
+    {
+        var content = """
+            public class App
+            {
+                public Task<Result<string, Error>> WithSpace() => null!;
+                public Task<Result<string,Error>> NoSpace() => null!;
+                public Dictionary<string, List<int>> Map() => new();
+                public Tuple<int, int, int, int> Quad() => new(1, 2, 3, 4);
+                public Func<int, int, int> Make() => null!;
+                public Task<List<Tuple<int, int, int>>> Deep() => null!;
+                public (int Left, string Right) Pair() => default;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var withSpace = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WithSpace"));
+        Assert.Equal("Task<Result<string,Error>>", withSpace.ReturnType);
+
+        var noSpace = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "NoSpace"));
+        Assert.Equal("Task<Result<string,Error>>", noSpace.ReturnType);
+
+        var map = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Map"));
+        Assert.Equal("Dictionary<string,List<int>>", map.ReturnType);
+
+        var quad = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Quad"));
+        Assert.Equal("Tuple<int,int,int,int>", quad.ReturnType);
+
+        var make = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Make"));
+        Assert.Equal("Func<int,int,int>", make.ReturnType);
+
+        var deep = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Deep"));
+        Assert.Equal("Task<List<Tuple<int,int,int>>>", deep.ReturnType);
+
+        var pair = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Pair"));
+        Assert.Equal("(int Left, string Right)", pair.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSpacedGenericTypeMembersBeyondMethods()
+    {
+        var content = """
+            public delegate Dictionary<string, int> Factory();
+
+            public interface IFoo
+            {
+                Dictionary<string, int> Get();
+            }
+
+            public class Holder : IFoo
+            {
+                public Dictionary<string, int> Lookup { get; set; } = new();
+                public event Action<string, int> OnLog;
+
+                Dictionary<string, int> IFoo.Get() => Lookup;
+                public Dictionary<string, int> this[int index] => Lookup;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Factory");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnLog" && s.ContainerName == "Holder");
+
+        var lookup = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Lookup"));
+        Assert.Equal("Dictionary<string,int>", lookup.ReturnType);
+        Assert.Equal("Holder", lookup.ContainerName);
+
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item"));
+        Assert.Equal("Dictionary<string,int>", indexer.ReturnType);
+        Assert.Equal("Holder", indexer.ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.Line == 5 && s.ReturnType == "Dictionary<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ContainerName == "Holder" && s.ReturnType == "Dictionary<string,int>");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedType()
     {
         // C# 11 file-scoped type / C# 11 のファイルスコープ型
@@ -3380,11 +4349,63 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsRefStruct()
     {
-        var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }";
+        var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }\npublic readonly struct ImmutablePoint { }";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Span2D");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "StackBuffer");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ImmutablePoint");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRefReturnMethodsPropertiesAndIndexers()
+    {
+        var content = """
+            public interface IRefBox
+            {
+                ref int GetRef();
+                ref readonly int GetRefReadonly();
+            }
+
+            public class RefBox : IRefBox
+            {
+                private static int _value;
+                private static readonly int[] _items = [1, 2, 3];
+
+                public static ref int RefReturn(ref int[] arr, int i) => ref arr[i];
+                public static ref readonly int RefReadonlyReturn(int[] arr, int i) => ref arr[i];
+                public ref int PropRef => ref _value;
+                public ref readonly int PropRefRo { get => ref _value; }
+                public ref readonly int this[int index] => ref _items[index];
+                ref int IRefBox.GetRef() => ref _value;
+                ref readonly int IRefBox.GetRefReadonly() => ref _value;
+            }
+
+            public struct RefReadonlyMembers
+            {
+                private static int _value;
+
+                public readonly ref readonly int PropReadonly => ref _value;
+                public readonly ref readonly int this[int index] => ref _value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RefReturn" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RefReadonlyReturn" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRef" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRefRo" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropReadonly" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Signature != null && s.Signature.Contains("public readonly ref readonly int this[int index]"));
+
+        var explicitGetRef = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetRef" && s.ContainerName == "RefBox"));
+        Assert.Equal("int", explicitGetRef.ReturnType);
+        Assert.Contains("ref int IRefBox.GetRef()", explicitGetRef.Signature);
+
+        var explicitGetRefReadonly = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetRefReadonly" && s.ContainerName == "RefBox"));
+        Assert.Equal("int", explicitGetRefReadonly.ReturnType);
+        Assert.Contains("ref readonly int IRefBox.GetRefReadonly()", explicitGetRefReadonly.Signature);
     }
 
     [Fact]
@@ -3971,6 +4992,131 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsRecordPrimaryComponentsAsProperties()
+    {
+        var content = """
+            package com.example;
+
+            public record Point(int x, int y) {}
+            public record Range(
+                int low,
+                int high
+            ) {
+                public int span() { return high - low; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var pointX = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point"));
+        Assert.Equal("int", pointX.ReturnType);
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("Point", pointX.ContainerQualifiedName);
+        Assert.Equal("public", pointX.Visibility);
+
+        var rangeLow = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "low" && s.ContainerName == "Range"));
+        Assert.Equal("int", rangeLow.ReturnType);
+        Assert.Equal(5, rangeLow.Line);
+
+        var rangeHigh = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "high" && s.ContainerName == "Range"));
+        Assert.Equal("int", rangeHigh.ReturnType);
+        Assert.Equal(6, rangeHigh.Line);
+
+        var span = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "span"));
+        Assert.Equal("class", span.ContainerKind);
+        Assert.Equal("Range", span.ContainerName);
+        Assert.Equal("Range", span.ContainerQualifiedName);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsLongAndCommentedRecordPrimaryComponentsAsProperties()
+    {
+        var componentLines = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"    int p{i},"));
+        var content = $$"""
+            package com.example;
+
+            public record Big(
+            {{componentLines}}
+                int tail
+            ) {}
+
+            public record Point(
+                int x /* separator, comment */,
+                // the next component must still parse
+                int y
+            ) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p1" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p30" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
+
+        var tail = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Big"));
+        Assert.Equal(34, tail.Line);
+
+        var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point"));
+        Assert.Equal(40, pointY.Line);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsRecordPrimaryComponentsWithSpacedGenericTypes()
+    {
+        var content = """
+            import java.util.Map;
+
+            public record Sample(Map <String, Integer> values, int count) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var values = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "values" && s.ContainerName == "Sample"));
+        Assert.Equal("Map <String, Integer>", values.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "count" && s.ContainerName == "Sample"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_Java_TracksRecordPrimaryComponentLineAfterAnnotations()
+    {
+        var content = """
+            public record Person(
+                @Deprecated
+                String name,
+                @Deprecated
+                int age
+            ) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "Person"));
+        Assert.Equal(3, name.Line);
+
+        var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "Person"));
+        Assert.Equal(5, age.Line);
+    }
+
+    [Fact]
+    public void Extract_Java_RecordComponents_DoNotDisruptBodyMembers()
+    {
+        var content = """
+            package repro;
+
+            public record Point(int x) {
+                public int doubled() { return x * 2; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var doubled = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "doubled"));
+        Assert.Equal("class", doubled.ContainerKind);
+        Assert.Equal("Point", doubled.ContainerName);
+        Assert.Equal("Point", doubled.ContainerQualifiedName);
     }
 
     [Fact]

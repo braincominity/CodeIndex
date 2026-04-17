@@ -589,7 +589,12 @@ public partial class DbReader
             hasSupportedGraphDefinition);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
         var exactSignal = exact
-            ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
+            ? GetAnalyzeSymbolExactQuerySignal(
+                includeGraphSignal: hasGraphApplicableFiles,
+                lang: lang,
+                pathPatterns: pathPatterns,
+                excludePathPatterns: excludePathPatterns,
+                excludeTests: excludeTests)
             : (ExactQuerySignal?)null;
         var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
         var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);

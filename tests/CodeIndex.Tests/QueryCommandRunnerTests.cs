@@ -1928,12 +1928,347 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/dispatcher.cs", json.GetProperty("path").GetString());
-            Assert.Equal("class", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Dispatcher", json.GetProperty("caller_name").GetString());
+            // With #233 fixed, the expression-bodied `Select` method spans its declaration
+            // through the terminating ';' (multi-line ternary on the RHS of `=>`), so the
+            // RunUpdateMode call at line 5 attributes to Select, not the enclosing class.
+            // #233 修正により、`=>` で始まる式本体メソッド `Select` の範囲が宣言行から
+            // 末尾 `;` までに広がり、line 5 の RunUpdateMode 呼び出しは外側クラスではなく
+            // Select に帰属する。
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Select", json.GetProperty("caller_name").GetString());
             Assert.Equal("RunUpdateMode", json.GetProperty("callee_name").GetString());
             Assert.Equal(5, json.GetProperty("first_line").GetInt32());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_FindsCallerInsideAllmanStyleBlockBodyProperty()
+    {
+        // issue #233 review follow-up: Allman-style (next-line `{`) block-bodied C#
+        // properties were not extracted as symbols, so accessor-internal calls fell
+        // through to the enclosing class. End-to-end verify that `callers` attributes
+        // the call to the property itself once the extraction regex handles this shape.
+        // issue #233 のレビュー指摘: Allman スタイル（次行 `{`）の block-bodied プロパティが
+        // 抽出されておらず、accessor 内部の呼び出しが外側クラスに帰属していた。抽出 regex が
+        // この形を扱えるようになった後、`callers` が property に帰属することを end-to-end で確認する。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_allman_prop");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "calc.cs"),
+                """
+                public class Calc
+                {
+                    public int Compute() => 42;
+
+                    public int Wrap
+                    {
+                        get { return Compute(); }
+                    }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_FindsCallerInsideMultiLineExpressionBodiedProperty()
+    {
+        // issue #233 second review follow-up: expression-bodied properties split across
+        // two lines (declaration + `=> expr;` continuation) must still attribute
+        // accessor-internal calls to the property through the CLI `callers` command.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が続く multi-line 式本体
+        // プロパティでも、CLI `callers` で accessor 内呼び出しが property に帰属すること。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_exprprop");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "calc.cs"),
+                """
+                public class Calc
+                {
+                    public int Compute() => 42;
+                    public int Wrap
+                        => Compute();
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
+            Assert.Equal(5, json.GetProperty("first_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_FindsCallerInsideBraceSameLineAccessorNextLineProperty()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property (`{` on the header line, accessor on the following line) must have
+        // CLI `callers` attribute the accessor call to the property itself.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property でも、CLI `callers` は accessor 内部の呼び出しを
+        // property に帰属させなければならない。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_brace_same_line");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "calc.cs"),
+                """
+                public class Calc
+                {
+                    public int Compute() => 42;
+
+                    public int Wrap {
+                        get { return Compute(); }
+                    }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_FindsCallerInsideAllmanPropertyWithBlockComment()
+    {
+        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
+        // between the property header line and its `{` must not prevent CLI `callers`
+        // from attributing accessor-internal calls to the property itself.
+        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `{` の間に複数行の
+        // /* ... */ ブロックコメントが入っていても、CLI `callers` は accessor 内部の
+        // 呼び出しを外側クラスではなく property に帰属させなければならない。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_allman_prop_cmt");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "calc.cs"),
+                """
+                public class Calc
+                {
+                    public int Compute() => 42;
+
+                    public int Wrap
+                    /* some multi-line
+                       block comment */
+                    {
+                        get { return Compute(); }
+                    }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_FindsCallerInsideMultiLineExpressionPropertyWithBlockComment()
+    {
+        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
+        // between the property header line and its `=>` continuation must not prevent
+        // CLI `callers` from attributing the expression-body call to the property itself.
+        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `=>` 継続行の間に
+        // 複数行の /* ... */ ブロックコメントが入っていても、CLI `callers` は式本体の
+        // 呼び出しを外側クラスではなく property に帰属させなければならない。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_exprprop_cmt");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "calc.cs"),
+                """
+                public class Calc
+                {
+                    public int Compute() => 42;
+
+                    public int Wrap
+                    /* multi-line
+                       comment */
+                        => Compute();
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_MultiLineSwitchArm_AttributesToEnclosingFunction()
+    {
+        // issue #233 third review follow-up: inside a switch expression whose `=>` is
+        // placed on a continuation line, calls from the arm body must still attribute to
+        // the enclosing function. If the switch-expression guard does not cover the
+        // continuation `=>`, the pattern variable is emitted as a phantom property and
+        // `callers Trim` would return caller_kind=property, caller_name=text.
+        // issue #233 第3次レビュー指摘: switch expression arm の `=>` が継続行にある場合でも、
+        // arm 本体の呼び出しは外側関数に帰属しなければならない。継続 `=>` まで switch-expression
+        // ガードを広げないと、パターン変数が phantom property になり、`callers Trim` が
+        // caller_kind=property, caller_name=text を返してしまう。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_switch_arm");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "sample.cs"),
+                """
+                class C
+                {
+                    string M(object o)
+                    {
+                        return o switch
+                        {
+                            string text
+                                => text.Trim(),
+                            _ => ""
+                        };
+                    }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Trim", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/sample.cs", json.GetProperty("path").GetString());
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("M", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Trim", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
         }
         finally
         {
@@ -2512,6 +2847,140 @@ public class QueryCommandRunnerTests
             Assert.Equal(exact.Result, alias.Result);
             Assert.Equal(exact.Stdout, alias.Stdout);
             Assert.Equal(exact.Stderr, alias.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpConversionOperatorsUseDistinctExactNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_names");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Money.cs",
+                "csharp",
+                """
+                using System.Collections.Generic;
+
+                public struct Money
+                {
+                    public Money(decimal amount) { }
+                    public static explicit operator Money(decimal d) => new();
+                    public static explicit operator Dictionary<string,int>(Money m) => new();
+                    public static explicit operator (int whole,int cents)(Money m) => (0, 0);
+                    public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;
+                    public static explicit operator (int[] items, int count)(Money m) => ([], 0);
+                    public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);
+                    public static unsafe explicit operator int*(Money m) => (int*)0;
+                    public static unsafe explicit operator delegate* unmanaged[Cdecl]<int, void>(Money m) => (delegate* unmanaged[Cdecl]<int, void>)0;
+                }
+                """);
+
+            var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                _jsonOptions));
+
+            using var operatorDocument = ParseJsonOutput(operatorStdout);
+            var operatorSymbol = operatorDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, operatorExitCode);
+            Assert.Equal(string.Empty, operatorStderr);
+            Assert.Equal("explicit operator Money", operatorSymbol.GetProperty("name").GetString());
+
+            var (genericExitCode, genericStdout, genericStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Dictionary<string, int>", "--exact-name"],
+                _jsonOptions));
+
+            using var genericDocument = ParseJsonOutput(genericStdout);
+            var genericSymbol = genericDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, genericExitCode);
+            Assert.Equal(string.Empty, genericStderr);
+            Assert.Equal("explicit operator Dictionary<string, int>", genericSymbol.GetProperty("name").GetString());
+
+            var (tupleExitCode, tupleStdout, tupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (int whole, int cents)", "--exact-name"],
+                _jsonOptions));
+
+            using var tupleDocument = ParseJsonOutput(tupleStdout);
+            var tupleSymbol = tupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, tupleExitCode);
+            Assert.Equal(string.Empty, tupleStderr);
+            Assert.Equal("explicit operator (int whole, int cents)", tupleSymbol.GetProperty("name").GetString());
+
+            var (namedTupleExitCode, namedTupleStdout, namedTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (Dictionary<string, int> map, int count)?", "--exact-name"],
+                _jsonOptions));
+
+            using var namedTupleDocument = ParseJsonOutput(namedTupleStdout);
+            var namedTupleSymbol = namedTupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, namedTupleExitCode);
+            Assert.Equal(string.Empty, namedTupleStderr);
+            Assert.Equal("explicit operator (Dictionary<string, int> map, int count)?", namedTupleSymbol.GetProperty("name").GetString());
+
+            var (arrayTupleExitCode, arrayTupleStdout, arrayTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (int[] items, int count)", "--exact-name"],
+                _jsonOptions));
+
+            using var arrayTupleDocument = ParseJsonOutput(arrayTupleStdout);
+            var arrayTupleSymbol = arrayTupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, arrayTupleExitCode);
+            Assert.Equal(string.Empty, arrayTupleStderr);
+            Assert.Equal("explicit operator (int[] items, int count)", arrayTupleSymbol.GetProperty("name").GetString());
+
+            var (nestedTupleExitCode, nestedTupleStdout, nestedTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator ((int a, int b) pair, int count)", "--exact-name"],
+                _jsonOptions));
+
+            using var nestedTupleDocument = ParseJsonOutput(nestedTupleStdout);
+            var nestedTupleSymbol = nestedTupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, nestedTupleExitCode);
+            Assert.Equal(string.Empty, nestedTupleStderr);
+            Assert.Equal("explicit operator ((int a, int b) pair, int count)", nestedTupleSymbol.GetProperty("name").GetString());
+
+            var (pointerExitCode, pointerStdout, pointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator int*", "--exact-name"],
+                _jsonOptions));
+
+            using var pointerDocument = ParseJsonOutput(pointerStdout);
+            var pointerSymbol = pointerDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, pointerExitCode);
+            Assert.Equal(string.Empty, pointerStderr);
+            Assert.Equal("explicit operator int*", pointerSymbol.GetProperty("name").GetString());
+
+            var (functionPointerExitCode, functionPointerStdout, functionPointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator delegate* unmanaged[Cdecl]<int, void>", "--exact-name"],
+                _jsonOptions));
+
+            using var functionPointerDocument = ParseJsonOutput(functionPointerStdout);
+            var functionPointerSymbol = functionPointerDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, functionPointerExitCode);
+            Assert.Equal(string.Empty, functionPointerStderr);
+            Assert.Equal("explicit operator delegate* unmanaged[Cdecl]<int, void>", functionPointerSymbol.GetProperty("name").GetString());
+
+            var (constructorExitCode, constructorStdout, constructorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "Money", "--exact-name"],
+                _jsonOptions));
+
+            using var constructorDocument = ParseJsonOutput(constructorStdout);
+            var constructorSymbol = constructorDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, constructorExitCode);
+            Assert.Equal(string.Empty, constructorStderr);
+            Assert.Equal("Money", constructorSymbol.GetProperty("name").GetString());
+            Assert.Contains("public Money(decimal amount)", constructorSymbol.GetProperty("signature").GetString());
         }
         finally
         {
@@ -3523,6 +3992,67 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_ExactNameStaleCSharpCanonicalNamesReportDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_stale");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Money.cs",
+                "csharp",
+                """
+                public struct Money
+                {
+                    public Money(decimal amount) { }
+                    public static explicit operator Money(decimal d) => new();
+                    public int this[int index] => index;
+                }
+                """);
+
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countJson.GetProperty("count").GetInt32());
+            Assert.False(countJson.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("csharp_symbol_name_ready=false", countJson.GetProperty("degraded_reason").GetString());
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No symbols found.", stderr);
+            Assert.Contains("WARN: --exact symbol query may return false negatives", stderr);
+            Assert.Contains("csharp_symbol_name_ready=false", stderr);
+            Assert.Contains(Path.GetFullPath(projectRoot), stderr);
+            Assert.Contains(Path.GetFullPath(dbPath), stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_CSharpBraceCharLiteralKeepsMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_csharp_brace_char");
@@ -3722,6 +4252,381 @@ public class QueryCommandRunnerTests
             Assert.Equal(8, get.GetProperty("end_line").GetInt32());
             Assert.Equal("class", get.GetProperty("container_kind").GetString());
             Assert.Equal("Holder", get.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutlineAndDefinition_CSharpMultilineExpressionBodiedPartialProperty_PreservesRangeAndContent()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_partial_property_range");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial int Count
+                        => 42;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Count", "--db", dbPath, "--json", "--exact-name", "--body"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var definitionJson = definitionDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, property.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, definitionJson.GetProperty("end_line").GetInt32());
+            Assert.Contains("=> 42;", definitionJson.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpSplitPropertyHeader_DoesNotEmitPhantomFunctionAndKeepsSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_split_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public string
+                        SplitName
+                        => "x";
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var splitNameSymbols = outlineJson.GetProperty("symbols").EnumerateArray()
+                .Where(symbol => symbol.GetProperty("name").GetString() == "SplitName")
+                .ToArray();
+            var property = Assert.Single(splitNameSymbols.Where(symbol => symbol.GetProperty("kind").GetString() == "property"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Single(splitNameSymbols);
+            Assert.Equal("public string SplitName => \"x\";", property.GetProperty("signature").GetString());
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(7, property.GetProperty("end_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpLongGenericMultilinePropertyHeader_KeepsReturnTypeAndSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_long_generic_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public Dictionary<
+                        string,
+                        List<
+                            int
+                        >>
+                        Count
+                        => new();
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal("Dictionary<string,List<int>>", property.GetProperty("return_type").GetString());
+            Assert.Equal("public Dictionary< string, List< int >> Count => new();", property.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpBraceOnNextLinePropertyHeader_KeepsHeaderSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_brace_property_header");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public class Model
+                {
+                    public string SplitName
+                    {
+                        get;
+                        set;
+                    }
+
+                    public int Count
+                    { get => 1; }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var splitName = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "SplitName"));
+            var count = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal("public string SplitName {", splitName.GetProperty("signature").GetString());
+            Assert.Equal("public int Count {", count.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutlineAndDefinition_CSharpMultilineSwitchExpressionProperty_PreservesFullBodyRange()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_switch_expression_property");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial int Count
+                        => DateTime.Now.Day switch
+                        {
+                            > 15 => 2,
+                            _ => 1
+                        };
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Count", "--db", dbPath, "--json", "--exact-name", "--body"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var definitionJson = definitionDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(10, property.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
+            Assert.Equal(10, definitionJson.GetProperty("end_line").GetInt32());
+            Assert.Contains("> 15 => 2,", definitionJson.GetProperty("content").GetString());
+            Assert.Contains("_ => 1", definitionJson.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpPartialPropertyImplementation_WithAccessorAttribute_IsDetected()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_accessor_attribute_property");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial string Name { get; set; }
+                }
+
+                public partial class Model
+                {
+                    public partial string Name { [System.Obsolete] get => "x"; set { } }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var names = outlineJson.GetProperty("symbols").EnumerateArray()
+                .Where(symbol => symbol.GetProperty("kind").GetString() == "property"
+                    && symbol.GetProperty("name").GetString() == "Name")
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(2, names.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpPartialPropertyImplementation_WithMultilineAccessorAttribute_IsDetected()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_multiline_accessor_attribute_property");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial string Name
+                    {
+                        [System.Obsolete(
+                            "x"
+                        )]
+                        get => "x";
+                        set { }
+                    }
+
+                    public int Other => 1;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var symbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "property" && symbol.GetProperty("name").GetString() == "Name");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "property" && symbol.GetProperty("name").GetString() == "Other");
         }
         finally
         {
@@ -10780,6 +11685,7 @@ public class QueryCommandRunnerTests
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkFoldReady();
+        writer.MarkCSharpSymbolNameContractReady();
     }
 
     private static (string ProjectRoot, string DbPath) CreateCountOnlyTotalFixtureDb()

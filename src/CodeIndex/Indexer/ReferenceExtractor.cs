@@ -220,9 +220,15 @@ public static class ReferenceExtractor
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
             .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
+        // Include 'property' so expression-bodied and block-bodied property accessors
+        // attribute their calls to the property rather than falling through to the
+        // enclosing class (see issue #233).
+        // 式本体・ブロック本体のプロパティアクセサ内の呼び出しを、外側のクラスではなく
+        // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = symbols
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                             (symbol.Kind == "function" || symbol.Kind == "class" || symbol.Kind == "namespace"))
+                             (symbol.Kind == "function" || symbol.Kind == "class"
+                              || symbol.Kind == "namespace" || symbol.Kind == "property"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
 

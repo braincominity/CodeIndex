@@ -234,6 +234,14 @@ public class StatusResult
     public bool GraphTableAvailable { get; set; } = true;
     public bool IssuesTableAvailable { get; set; } = true;
     /// <summary>
+    /// True when C# canonical symbol-name upgrades (for operators, conversion operators,
+    /// indexers) have been applied to all indexed C# rows in this DB. False means exact-name
+    /// lookup for those C# symbol families may still require an upgrade pass via `cdidx index .`.
+    /// C# canonical symbol name 契約が DB 全体へ適用済みかどうか。
+    /// </summary>
+    [JsonPropertyName("csharp_symbol_name_ready")]
+    public bool CSharpSymbolNameReady { get; set; } = true;
+    /// <summary>
     /// True when every row in symbols / symbol_references has its name_folded column
     /// populated AND the FoldReadyFlag bit is set on the DB. False means `--exact` still
     /// falls back to ASCII `COLLATE NOCASE` (non-ASCII casing pairs like Ä/ä won't match).
