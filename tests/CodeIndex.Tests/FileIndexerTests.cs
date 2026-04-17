@@ -87,8 +87,8 @@ public class FileIndexerTests
     [InlineData("common.mk", "makefile")]
     [InlineData("page.htm", "html")]
     [InlineData("style.less", "css")]
-    [InlineData("style.sass", "css")]
-    [InlineData("style.styl", "css")]
+    [InlineData("style.sass", "sass")]
+    [InlineData("style.styl", "stylus")]
     [InlineData("style.pcss", "css")]
     [InlineData("schema.pgsql", "sql")]
     [InlineData("proc.tsql", "sql")]
@@ -245,6 +245,42 @@ public class FileIndexerTests
         {
             Directory.Delete(tempDir, true);
         }
+    }
+
+    [Fact]
+    public void GetLanguageExtensions_ExposesPrefixAndFileNameVariants()
+    {
+        // `cdidx languages` (and the MCP listing) should advertise everything TryDetectLanguage
+        // actually recognizes, including exact-name Dockerfile / Makefile / Gemfile and the
+        // Dockerfile.<suffix> / Makefile.<suffix> prefix variants added for Issue #189.
+        // `cdidx languages`（および MCP の一覧）は TryDetectLanguage が実際に解釈するものを
+        // 網羅すべき。Dockerfile / Makefile / Gemfile の完全一致に加え、Issue #189 で追加した
+        // Dockerfile.<suffix> / Makefile.<suffix> などのプレフィックス変種も露出させる。
+        var map = FileIndexer.GetLanguageExtensions();
+
+        // Exact filenames surface with their language.
+        // 完全一致ファイル名が言語付きで露出する。
+        Assert.Equal("dockerfile", map["Dockerfile"]);
+        Assert.Equal("dockerfile", map["Containerfile"]);
+        Assert.Equal("makefile", map["Makefile"]);
+        Assert.Equal("makefile", map["GNUmakefile"]);
+        Assert.Equal("ruby", map["Gemfile"]);
+        Assert.Equal("ruby", map["Rakefile"]);
+        Assert.Equal("python", map["BUILD.bazel"]);
+
+        // Prefix variants (Dockerfile.dev, Makefile.am, ...) surface as `<Prefix><suffix>` pseudo-entries.
+        // プレフィックス変種は `<Prefix><suffix>` 形の擬似エントリとして露出する。
+        Assert.Equal("dockerfile", map["Dockerfile.<suffix>"]);
+        Assert.Equal("dockerfile", map["Containerfile.<suffix>"]);
+        Assert.Equal("makefile", map["Makefile.<suffix>"]);
+        Assert.Equal("makefile", map["GNUmakefile.<suffix>"]);
+
+        // Sass / Stylus are distinct buckets now (indented syntax is incompatible with the CSS extractor).
+        // Sass / Stylus は別バケット（インデント構文が CSS のシンボル抽出と非互換のため）。
+        Assert.Equal("sass", map[".sass"]);
+        Assert.Equal("stylus", map[".styl"]);
+        Assert.Equal("css", map[".scss"]);
+        Assert.Equal("css", map[".less"]);
     }
 
     [Fact]

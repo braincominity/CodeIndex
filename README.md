@@ -541,7 +541,9 @@ The database reflects the working tree at the time of the last index. After swit
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm` | -- |
-| CSS | `.css`, `.scss`, `.less`, `.sass`, `.styl`, `.pcss` | yes |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
+| Sass (indented) | `.sass` | -- |
+| Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
@@ -1413,7 +1415,9 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm` | -- |
-| CSS | `.css`, `.scss`, `.less`, `.sass`, `.styl`, `.pcss` | yes |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
+| Sass（インデント構文） | `.sass` | -- |
+| Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |

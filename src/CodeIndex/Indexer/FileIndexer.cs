@@ -123,9 +123,14 @@ public class FileIndexer
         [".css"]    = "css",
         [".scss"]   = "css",
         [".less"]   = "css",    // Less preprocessor / Less プリプロセッサ
-        [".sass"]   = "css",    // Sass indented syntax / Sass インデント構文
-        [".styl"]   = "css",    // Stylus preprocessor / Stylus プリプロセッサ
         [".pcss"]   = "css",    // PostCSS / PostCSS
+        // Sass indented syntax / Stylus use indentation instead of braces, so they live in
+        // separate search-only buckets — the CSS symbol extractor's brace-based patterns do
+        // not apply, but exact-name search still works.
+        // Sass インデント構文と Stylus は波括弧ではなくインデントで構造化するため、
+        // CSS のシンボル抽出（波括弧ベース）は使わず、検索用の別バケットに分ける。
+        [".sass"]   = "sass",
+        [".styl"]   = "stylus",
         [".vue"]    = "vue",
         [".svelte"] = "svelte",
         [".tf"]     = "terraform",
@@ -783,6 +788,12 @@ public class FileIndexer
         var merged = new Dictionary<string, string>(LangMap, StringComparer.OrdinalIgnoreCase);
         foreach (var (name, lang) in FileNameMap)
             merged.TryAdd(name, lang);
+        // Surface suffixed variants like Dockerfile.dev / Makefile.am as `<Prefix><suffix>` entries
+        // so `cdidx languages` and the MCP listing reflect what TryDetectLanguage actually handles.
+        // Dockerfile.dev / Makefile.am のようなサフィックス付き変種も `<Prefix><suffix>` 形で
+        // 露出させ、`cdidx languages` や MCP の一覧が TryDetectLanguage の実挙動と一致するようにする。
+        foreach (var (prefix, lang) in FileNamePrefixMap)
+            merged.TryAdd($"{prefix}<suffix>", lang);
         return merged;
     }
 
