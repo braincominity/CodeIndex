@@ -293,7 +293,7 @@ public static class SymbolExtractor
             new("property",  new Regex(
                 $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?"
               + @"(?:(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
-              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|var|class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
+              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
               + $@"(?<returnType>{CSharpTypePattern})\s+"
               + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
                 RegexOptions.Compiled),
@@ -923,24 +923,57 @@ public static class SymbolExtractor
                                 csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn)
                             : line[absoluteStartColumn..].Trim();
 
-                    AddSymbolRecord(
-                        symbols,
-                        cssSeenSymbols,
-                        startLine,
-                        new SymbolRecord
+                    var declaratorEntries = lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None
+                        ? TryExpandCSharpFieldDeclaratorList(patternMatchLine, absoluteStartColumn, match, pattern.ReturnTypeGroup, name)
+                        : null;
+
+                    if (declaratorEntries != null)
+                    {
+                        foreach (var entry in declaratorEntries)
                         {
-                            FileId = fileId,
-                            Kind = kind,
-                            Name = name,
-                            Line = startLine,
-                            StartLine = startLine,
-                            EndLine = Math.Max(startLine, endLine),
-                            BodyStartLine = bodyStartLine,
-                            BodyEndLine = bodyEndLine,
-                            Signature = signature,
-                            Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                            ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
-                        });
+                            AddSymbolRecord(
+                                symbols,
+                                cssSeenSymbols,
+                                startLine,
+                                new SymbolRecord
+                                {
+                                    FileId = fileId,
+                                    Kind = kind,
+                                    Name = entry.Name,
+                                    Line = startLine,
+                                    StartLine = startLine,
+                                    EndLine = Math.Max(startLine, endLine),
+                                    BodyStartLine = bodyStartLine,
+                                    BodyEndLine = bodyEndLine,
+                                    Signature = signature,
+                                    Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                    ReturnType = NormalizeMetadata(entry.ReturnType),
+                                });
+                        }
+                    }
+                    else
+                    {
+                        AddSymbolRecord(
+                            symbols,
+                            cssSeenSymbols,
+                            startLine,
+                            new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = kind,
+                                Name = name,
+                                Line = startLine,
+                                StartLine = startLine,
+                                EndLine = Math.Max(startLine, endLine),
+                                BodyStartLine = bodyStartLine,
+                                BodyEndLine = bodyEndLine,
+                                Signature = signature,
+                                Visibility = TryGetGroup(match, pattern.VisibilityGroup),
+                                ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
+                            });
+                    }
 
                     if (lang == "csharp"
                         && pattern.Kind == "property"
@@ -5460,6 +5493,22 @@ public static class SymbolExtractor
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i, null, expressionEndLineIndex);
             }
 
+            // Plain-field multi-line declaration: the header line holds only the type (e.g.
+            // `private Dictionary<string, int>`) and the next line finishes with the name and
+            // the `;` terminator (possibly with an initializer like `= new();`). Return the
+            // combined candidate so the field regex can match it. Without this return the old
+            // `(` break short-circuits legitimate field initializers such as `= new()`.
+            // 複数行にまたがる通常フィールド宣言: ヘッダ行が型だけ
+            // （例: `private Dictionary<string, int>`）で、次行で名前と `;` 終端まで続く
+            // （`= new();` のような初期化式を含む場合もある）形に対応する。
+            // 結合済み候補を返し、field 用 regex がそれを受けられるようにする。
+            // これを入れないと、`= new()` のような正当な初期化式が `(` break で弾かれる。
+            if (openBraceLineIndex < 0
+                && normalizedCombined.TrimEnd().EndsWith(";", StringComparison.Ordinal))
+            {
+                return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
+            }
+
             if (nextLine.StartsWith(";", StringComparison.Ordinal)
                 || openBraceLineIndex < 0 && nextLine.Contains("(", StringComparison.Ordinal))
             {
@@ -5738,6 +5787,327 @@ public static class SymbolExtractor
     private static readonly Regex CSharpTypeBodyDeclarationMarker = new(
         @"\b(?:class|struct|interface|record|enum)\b\s+\w",
         RegexOptions.Compiled);
+
+    // Expand a C# plain-field regex match into one entry per declarator when the
+    // declaration is a declarator list such as `int _x, _y;`, `int _x = 5, _y;`,
+    // or `int _x = 5, _y = 10;`. Two shapes need to be stitched back together:
+    //
+    //  1. When the later declarators have no initializer, the field regex backtracks
+    //     until the first declarator with `=` or `;` terminates. Earlier names get
+    //     swallowed into `returnType` (e.g. `int _x, _y;` → returnType=`int _x,`,
+    //     name=`_y`). Recover them by splitting `returnType` on top-level commas and
+    //     treating the last captured name as the trailing declarator.
+    //
+    //  2. When the first declarator carries an initializer, the regex terminates at
+    //     `=` and leaves the comma-separated tail unconsumed (e.g. `int _x = 5, _y;`
+    //     → returnType=`int`, name=`_x`, tail=` 5, _y;`). Walk the tail after the
+    //     match to pick up additional names and their optional initializers.
+    //
+    // Returns null when the match is a single declarator.
+    // C# の通常フィールド用 regex が `int _x, _y;` / `int _x = 5, _y;` /
+    // `int _x = 5, _y = 10;` のような declarator list を捕まえた場合に、
+    // 各 declarator を 1 件ずつのシンボルに展開する。復元すべき形は 2 通り:
+    //
+    //  1. 後段 declarator に初期化式が無い場合、regex は最初の `=` か `;` まで
+    //     バックトラックし、前段の名前は returnType に吸収される
+    //     （`int _x, _y;` → returnType=`int _x,`、name=`_y`）。returnType を
+    //     トップレベルの `,` で分割し、regex が捕まえた最後の name を末尾の
+    //     declarator として繋ぎ直す。
+    //
+    //  2. 先頭 declarator が初期化式を持つ場合、regex は `=` で終了し、
+    //     `,` で続く後段 declarator はマッチ後のテールに残る
+    //     （`int _x = 5, _y;` → returnType=`int`、name=`_x`、tail=` 5, _y;`）。
+    //     マッチ末尾以降のテールを走査して追加の declarator を拾う。
+    //
+    // declarator list でないときは null を返す。
+    private static List<(string Name, string? ReturnType)>? TryExpandCSharpFieldDeclaratorList(
+        string patternMatchLine,
+        int absoluteStartColumn,
+        Match match,
+        string? returnTypeGroup,
+        string finalName)
+    {
+        if (string.IsNullOrEmpty(returnTypeGroup))
+            return null;
+        var returnTypeGroupMatch = match.Groups[returnTypeGroup];
+        if (!returnTypeGroupMatch.Success)
+            return null;
+
+        var returnTypeRaw = returnTypeGroupMatch.Value;
+        if (string.IsNullOrEmpty(returnTypeRaw))
+            return null;
+
+        var matchEnd = absoluteStartColumn + match.Length;
+        if (matchEnd > patternMatchLine.Length)
+            matchEnd = patternMatchLine.Length;
+        var matchEndedAtEquals = matchEnd > 0 && patternMatchLine[matchEnd - 1] == '=';
+        var tailText = matchEnd < patternMatchLine.Length
+            ? patternMatchLine[matchEnd..]
+            : string.Empty;
+
+        var hasCommaInReturnType = ContainsCSharpTopLevelComma(returnTypeRaw);
+        var tailDeclaratorNames = ScanCSharpTailDeclaratorNames(tailText, matchEndedAtEquals);
+
+        if (!hasCommaInReturnType && tailDeclaratorNames.Count == 0)
+            return null;
+
+        string actualType;
+        var results = new List<(string Name, string? ReturnType)>();
+
+        if (hasCommaInReturnType)
+        {
+            var segments = SplitCSharpTopLevelComma(returnTypeRaw);
+            if (segments.Count < 2)
+                return null;
+            // Expect a trailing empty segment (returnType ends with `,`). If not,
+            // the comma is at an unexpected position — bail out.
+            // returnType は末尾が `,` なので最後のセグメントは空のはず。そうで
+            // なければ想定外の位置にある `,` なので展開を諦める。
+            if (segments[^1].Trim().Length != 0)
+                return null;
+            segments.RemoveAt(segments.Count - 1);
+            if (segments.Count < 1)
+                return null;
+
+            var firstSegment = segments[0].Trim();
+            if (!TrySplitCSharpFieldTypeAndName(firstSegment, out actualType, out var firstDeclaratorName))
+                return null;
+            results.Add((firstDeclaratorName, actualType));
+
+            for (int i = 1; i < segments.Count; i++)
+            {
+                var segment = segments[i].Trim();
+                var declaratorName = StripCSharpDeclaratorInitializer(segment);
+                if (string.IsNullOrEmpty(declaratorName) || !IsCSharpIdentifier(declaratorName))
+                    return null;
+                results.Add((declaratorName, actualType));
+            }
+
+            if (!string.IsNullOrEmpty(finalName) && IsCSharpIdentifier(finalName))
+                results.Add((finalName, actualType));
+        }
+        else
+        {
+            actualType = returnTypeRaw.Trim();
+            if (!string.IsNullOrEmpty(finalName) && IsCSharpIdentifier(finalName))
+                results.Add((finalName, actualType));
+        }
+
+        foreach (var tailName in tailDeclaratorNames)
+        {
+            results.Add((tailName, actualType));
+        }
+
+        return results.Count > 1 ? results : null;
+    }
+
+    private static List<string> ScanCSharpTailDeclaratorNames(string tail, bool matchEndedAtEquals)
+    {
+        var result = new List<string>();
+        var i = 0;
+
+        if (matchEndedAtEquals)
+        {
+            // Skip the initializer value until the next top-level `,` or `;`.
+            // 初期化式を `,` / `;` に到達するまで読み飛ばす。
+            i = SkipCSharpTopLevelValue(tail, 0);
+            if (i >= tail.Length || tail[i] == ';')
+                return result;
+            if (tail[i] == ',')
+                i++;
+        }
+
+        while (i < tail.Length)
+        {
+            while (i < tail.Length && char.IsWhiteSpace(tail[i]))
+                i++;
+            if (i >= tail.Length || tail[i] == ';')
+                break;
+            if (tail[i] != '_' && !char.IsLetter(tail[i]))
+                break;
+
+            var start = i;
+            while (i < tail.Length && (tail[i] == '_' || char.IsLetterOrDigit(tail[i])))
+                i++;
+            var name = tail[start..i];
+            if (!IsCSharpIdentifier(name))
+                break;
+            result.Add(name);
+
+            i = SkipCSharpTopLevelValue(tail, i);
+            if (i >= tail.Length || tail[i] == ';')
+                break;
+            if (tail[i] == ',')
+            {
+                i++;
+                continue;
+            }
+            break;
+        }
+
+        return result;
+    }
+
+    private static int SkipCSharpTopLevelValue(string text, int start)
+    {
+        int angle = 0, paren = 0, bracket = 0, brace = 0;
+        for (int i = start; i < text.Length; i++)
+        {
+            var ch = text[i];
+            switch (ch)
+            {
+                case '<': angle++; continue;
+                case '>' when angle > 0: angle--; continue;
+                case '(': paren++; continue;
+                case ')' when paren > 0: paren--; continue;
+                case '[': bracket++; continue;
+                case ']' when bracket > 0: bracket--; continue;
+                case '{': brace++; continue;
+                case '}' when brace > 0: brace--; continue;
+            }
+
+            if ((ch == ',' || ch == ';') && angle == 0 && paren == 0 && bracket == 0 && brace == 0)
+                return i;
+        }
+        return text.Length;
+    }
+
+    private static bool ContainsCSharpTopLevelComma(string text)
+    {
+        int angle = 0, paren = 0, bracket = 0, brace = 0;
+        foreach (var ch in text)
+        {
+            switch (ch)
+            {
+                case '<': angle++; break;
+                case '>' when angle > 0: angle--; break;
+                case '(': paren++; break;
+                case ')' when paren > 0: paren--; break;
+                case '[': bracket++; break;
+                case ']' when bracket > 0: bracket--; break;
+                case '{': brace++; break;
+                case '}' when brace > 0: brace--; break;
+                case ',' when angle == 0 && paren == 0 && bracket == 0 && brace == 0:
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<string> SplitCSharpTopLevelComma(string text)
+    {
+        var result = new List<string>();
+        var segment = new StringBuilder();
+        int angle = 0, paren = 0, bracket = 0, brace = 0;
+        foreach (var ch in text)
+        {
+            switch (ch)
+            {
+                case '<': angle++; segment.Append(ch); continue;
+                case '>' when angle > 0: angle--; segment.Append(ch); continue;
+                case '(': paren++; segment.Append(ch); continue;
+                case ')' when paren > 0: paren--; segment.Append(ch); continue;
+                case '[': bracket++; segment.Append(ch); continue;
+                case ']' when bracket > 0: bracket--; segment.Append(ch); continue;
+                case '{': brace++; segment.Append(ch); continue;
+                case '}' when brace > 0: brace--; segment.Append(ch); continue;
+            }
+
+            if (ch == ',' && angle == 0 && paren == 0 && bracket == 0 && brace == 0)
+            {
+                result.Add(segment.ToString());
+                segment.Clear();
+                continue;
+            }
+
+            segment.Append(ch);
+        }
+        result.Add(segment.ToString());
+        return result;
+    }
+
+    private static bool TrySplitCSharpFieldTypeAndName(string segment, out string type, out string name)
+    {
+        type = string.Empty;
+        name = string.Empty;
+        if (string.IsNullOrEmpty(segment))
+            return false;
+
+        // Strip initializer portion if any (e.g. `int _x = 5` → `int _x`).
+        segment = StripCSharpDeclaratorInitializer(segment);
+        if (string.IsNullOrEmpty(segment))
+            return false;
+
+        int angle = 0, paren = 0, bracket = 0;
+        var lastWhitespaceIndex = -1;
+        for (int i = 0; i < segment.Length; i++)
+        {
+            var ch = segment[i];
+            switch (ch)
+            {
+                case '<': angle++; continue;
+                case '>' when angle > 0: angle--; continue;
+                case '(': paren++; continue;
+                case ')' when paren > 0: paren--; continue;
+                case '[': bracket++; continue;
+                case ']' when bracket > 0: bracket--; continue;
+            }
+
+            if (angle == 0 && paren == 0 && bracket == 0 && char.IsWhiteSpace(ch))
+                lastWhitespaceIndex = i;
+        }
+
+        if (lastWhitespaceIndex <= 0)
+            return false;
+
+        type = segment[..lastWhitespaceIndex].TrimEnd();
+        name = segment[(lastWhitespaceIndex + 1)..].Trim();
+        return !string.IsNullOrEmpty(type) && IsCSharpIdentifier(name);
+    }
+
+    private static string StripCSharpDeclaratorInitializer(string segment)
+    {
+        int angle = 0, paren = 0, bracket = 0, brace = 0;
+        for (int i = 0; i < segment.Length; i++)
+        {
+            var ch = segment[i];
+            switch (ch)
+            {
+                case '<': angle++; continue;
+                case '>' when angle > 0: angle--; continue;
+                case '(': paren++; continue;
+                case ')' when paren > 0: paren--; continue;
+                case '[': bracket++; continue;
+                case ']' when bracket > 0: bracket--; continue;
+                case '{': brace++; continue;
+                case '}' when brace > 0: brace--; continue;
+            }
+
+            if (ch == '=' && angle == 0 && paren == 0 && bracket == 0 && brace == 0)
+            {
+                // Skip `==` / `=>` — not initializers.
+                if (i + 1 < segment.Length && (segment[i + 1] == '=' || segment[i + 1] == '>'))
+                    continue;
+                return segment[..i].TrimEnd();
+            }
+        }
+        return segment.TrimEnd();
+    }
+
+    private static bool IsCSharpIdentifier(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return false;
+        if (text[0] != '_' && !char.IsLetter(text[0]))
+            return false;
+        for (int i = 1; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch != '_' && !char.IsLetterOrDigit(ch))
+                return false;
+        }
+        return true;
+    }
 
     private static bool[] BuildCSharpTypeBodyScope(string[] structuralLines)
     {

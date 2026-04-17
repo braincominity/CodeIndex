@@ -5206,6 +5206,127 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsMultiLineFieldDeclaration()
+    {
+        // Plain field whose type occupies one line and whose name / initializer spill
+        // onto the next line (`private Dictionary<string, int>\n    _map = new();`) must
+        // still be captured as a single `property` symbol. The multi-line property match
+        // builder combines the header and continuation lines before handing them to the
+        // field regex. Closes #298 follow-up (codex adversarial review).
+        // 型が 1 行目、名前と初期化式が次行へ回る通常フィールド
+        // （`private Dictionary<string, int>\n    _map = new();`）も、1 件の `property`
+        // シンボルとして抽出する。multi-line property match builder がヘッダ行と
+        // 継続行を結合してから field regex に渡す。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "using System.Collections.Generic;",
+            "namespace Demo;",
+            "public class Store",
+            "{",
+            "    private Dictionary<string, int>",
+            "        _map = new();",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_map"
+            && s.Visibility == "private"
+            && s.ReturnType == "Dictionary<string,int>");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsDeclaratorListFields()
+    {
+        // `private int _x, _y;` must emit one `property` symbol per declarator. The
+        // field regex greedily swallows earlier declarators into `returnType`, so the
+        // post-match expander walks the top-level commas in `returnType` and the tail
+        // after the match to recover every declarator name. Closes #298 follow-up
+        // (codex adversarial review).
+        // `private int _x, _y;` のような declarator list は declarator ごとに 1 件の
+        // `property` シンボルを発行する。field regex は前段の declarator を
+        // returnType に飲み込むため、post-match 展開で returnType のトップレベル `,`
+        // とマッチ後テールを走査し、すべての declarator 名を復元する。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "public class Holder",
+            "{",
+            "    private int _x, _y;",
+            "    public string First, Second, Third;",
+            "    private int _a = 1, _b, _c = 3;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_x" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_y" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "First" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Second" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Third" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_a" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_b" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_c" && s.ReturnType == "int" && s.Visibility == "private");
+        // The bogus `int _x,` or `int _a = 1,` returnType from a single-symbol emit must
+        // not leak into the index. 単一シンボル発行で紛れ込む `int _x,` 等の returnType は
+        // インデックスに漏らさない。
+        Assert.DoesNotContain(symbols, s => s.ReturnType != null && s.ReturnType.Contains(','));
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsFunctionPointerField()
+    {
+        // Function-pointer field (`delegate*<int, void> Callback;`) must be captured.
+        // The plain-field negative lookahead rejects `delegate` to stay away from
+        // delegate-type declarations, but `delegate*` is a type form and the lookahead
+        // uses `delegate\b(?!\*)` so it does not reject the function-pointer field.
+        // Closes #298 follow-up (codex adversarial review).
+        // function-pointer field（`delegate*<int, void> Callback;`）も抽出できること。
+        // field pattern の negative lookahead は delegate 型宣言を除外するために
+        // `delegate` を並べているが、`delegate*` は型なので `delegate\b(?!\*)` で
+        // function-pointer field を排除しない。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "public unsafe class Bridge",
+            "{",
+            "    public delegate*<int, void> Callback;",
+            "    private delegate* unmanaged[Cdecl]<int, int> _op;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "Callback"
+            && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_op"
+            && s.Visibility == "private");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DelegateTypeDeclarationIsNotField()
+    {
+        // `public delegate int Foo();` still declares a delegate type, not a field, so
+        // the plain-field lookahead `delegate\b(?!\*)` must continue to reject it.
+        // Closes #298 follow-up (codex adversarial review).
+        // `public delegate int Foo();` は相変わらず delegate 型宣言であり field では
+        // ないため、plain-field pattern の lookahead `delegate\b(?!\*)` がこれを
+        // 引き続き排除することを確認する。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "public class Host",
+            "{",
+            "    public delegate int Callback(int x);",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Accept either a dedicated delegate / function classification, but never
+        // classify the statement as a plain `property` field.
+        // delegate / function としての抽出は許容するが、`property` field にだけは
+        // 分類しないことを確認する。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Callback");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsSubFunctionClassModule()
     {
         // VB.NET: Sub, Function, Class, Module, Imports / VB.NET: サブ、関数、クラス、モジュール、Imports
