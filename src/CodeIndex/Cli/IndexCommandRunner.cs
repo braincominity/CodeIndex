@@ -177,7 +177,7 @@ public static class IndexCommandRunner
                 {
                     if (message != null)
                     {
-                        var displayPath = Path.GetRelativePath(options.ProjectPath, f).Replace('\\', '/');
+                        var displayPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(options.ProjectPath, f));
                         errorList.Add(new { file = displayPath, message });
                         if (!options.Json)
                             ConsoleUi.PrintWarning($"{displayPath}: {message}");
@@ -1069,7 +1069,7 @@ public static class IndexCommandRunner
             if (FileIndexer.IsIgnoreFilePath(absolutePath) && IsRelevantIgnoreFileForProjectRoot(projectRoot, absolutePath))
                 relevantIgnoreFileChanged = true;
 
-            var relativePath = Path.GetRelativePath(projectRoot, absolutePath).Replace('\\', '/');
+            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
             if (IsOutsideProjectRoot(relativePath))
                 continue;
 
@@ -1105,7 +1105,7 @@ public static class IndexCommandRunner
         foreach (var file in updateFiles)
         {
             var absPath = Path.IsPathRooted(file) ? file : Path.GetFullPath(Path.Combine(projectRoot, file));
-            var relPath = Path.GetRelativePath(projectRoot, absPath).Replace('\\', '/');
+            var relPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absPath));
             if (IsOutsideProjectRoot(relPath))
             {
                 if (!json)
@@ -1264,7 +1264,7 @@ public static class IndexCommandRunner
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
         var retainedPaths = files
-            .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+            .Select(path => FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path)))
             .ToHashSet(StringComparer.Ordinal);
         if (scanResult.HadErrors)
         {
@@ -1587,7 +1587,7 @@ public static class IndexCommandRunner
             var dbDirAbsolute = Path.GetDirectoryName(dbAbsolutePath);
             if (string.IsNullOrEmpty(dbDirAbsolute)) return;
 
-            var dbDirRelative = Path.GetRelativePath(projectRoot, dbDirAbsolute).Replace('\\', '/');
+            var dbDirRelative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, dbDirAbsolute));
             if (IsOutsideProjectRoot(dbDirRelative)) return;
 
             string[] patterns;
