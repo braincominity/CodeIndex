@@ -5353,9 +5353,101 @@ public static class SymbolExtractor
         var normalized = CSharpTypeWhitespaceRegex.Replace(typeName.Trim(), " ");
         normalized = CSharpTypeDoubleColonWhitespaceRegex.Replace(normalized, "::");
         normalized = CSharpTypeDotWhitespaceRegex.Replace(normalized, ".");
-        normalized = CSharpTypeBracketWhitespaceRegex.Replace(normalized, "$1");
-        normalized = CSharpTypeCommaWhitespaceRegex.Replace(normalized, ", ");
-        return normalized;
+        return NormalizeCSharpTypeTokenSpacing(normalized);
+    }
+
+    private static string NormalizeCSharpTypeTokenSpacing(string typeName)
+    {
+        var builder = new StringBuilder(typeName.Length);
+
+        for (var index = 0; index < typeName.Length; index++)
+        {
+            var ch = typeName[index];
+            switch (ch)
+            {
+                case ' ':
+                    var previous = GetLastNonWhitespace(builder);
+                    var next = FindNextNonWhitespace(typeName, index + 1);
+                    if (!previous.HasValue || !next.HasValue)
+                        continue;
+
+                    if (ShouldInsertCSharpTypeSpace(previous.Value, next.Value) && (builder.Length == 0 || builder[^1] != ' '))
+                        builder.Append(' ');
+                    break;
+
+                case ',':
+                    TrimTrailingWhitespace(builder);
+                    builder.Append(',');
+                    var nextAfterComma = FindNextNonWhitespace(typeName, index + 1);
+                    if (nextAfterComma.HasValue && nextAfterComma.Value is not ')' and not '>' and not ']')
+                        builder.Append(' ');
+                    break;
+
+                case '<':
+                case '>':
+                case '[':
+                case ']':
+                case '(':
+                case ')':
+                case '?':
+                    TrimTrailingWhitespace(builder);
+                    builder.Append(ch);
+                    break;
+
+                default:
+                    builder.Append(ch);
+                    break;
+            }
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static char? GetLastNonWhitespace(StringBuilder builder)
+    {
+        for (var index = builder.Length - 1; index >= 0; index--)
+        {
+            if (!char.IsWhiteSpace(builder[index]))
+                return builder[index];
+        }
+
+        return null;
+    }
+
+    private static char? FindNextNonWhitespace(string text, int startIndex)
+    {
+        for (var index = startIndex; index < text.Length; index++)
+        {
+            if (!char.IsWhiteSpace(text[index]))
+                return text[index];
+        }
+
+        return null;
+    }
+
+    private static void TrimTrailingWhitespace(StringBuilder builder)
+    {
+        while (builder.Length > 0 && char.IsWhiteSpace(builder[^1]))
+            builder.Length--;
+    }
+
+    private static bool ShouldInsertCSharpTypeSpace(char previous, char next)
+    {
+        if (IsCSharpTypeIdentifierChar(previous) && IsCSharpTypeIdentifierStart(next))
+            return true;
+
+        return previous is '>' or ']' or ')' or '?'
+            && IsCSharpTypeIdentifierStart(next);
+    }
+
+    private static bool IsCSharpTypeIdentifierStart(char ch)
+    {
+        return ch == '@' || ch == '_' || char.IsLetter(ch);
+    }
+
+    private static bool IsCSharpTypeIdentifierChar(char ch)
+    {
+        return IsCSharpTypeIdentifierStart(ch) || char.IsDigit(ch);
     }
 
     private static readonly Regex ComplexityRegex = new(
@@ -5364,8 +5456,6 @@ public static class SymbolExtractor
     private static readonly Regex CSharpTypeWhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly Regex CSharpTypeDoubleColonWhitespaceRegex = new(@"\s*::\s*", RegexOptions.Compiled);
     private static readonly Regex CSharpTypeDotWhitespaceRegex = new(@"\s*\.\s*", RegexOptions.Compiled);
-    private static readonly Regex CSharpTypeBracketWhitespaceRegex = new(@"\s*([<>\[\]\(\)\?])\s*", RegexOptions.Compiled);
-    private static readonly Regex CSharpTypeCommaWhitespaceRegex = new(@"\s*,\s*", RegexOptions.Compiled);
 
     /// <summary>
     /// Estimate cyclomatic complexity of a code body using keyword counting.

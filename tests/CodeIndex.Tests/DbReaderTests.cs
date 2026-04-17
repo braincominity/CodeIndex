@@ -261,6 +261,9 @@ public class DbReaderTests : IDisposable
                 public static explicit operator checked byte(Money m) => 0;
                 public static explicit operator Dictionary<string,int>(Money m) => new();
                 public static explicit operator (int whole,int cents)(Money m) => (0, 0);
+                public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;
+                public static explicit operator (int[] items, int count)(Money m) => ([], 0);
+                public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);
             }
 
             public class Bag
@@ -278,6 +281,9 @@ public class DbReaderTests : IDisposable
         Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("explicit operator Dictionary<string, int>", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("explicit operator (int whole, int cents)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (Dictionary<string, int> map, int count)?", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int[] items, int count)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator ((int a, int b) pair, int count)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
     }
