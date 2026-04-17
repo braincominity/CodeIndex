@@ -170,10 +170,15 @@ public static class ReferenceExtractor
     // Same intent as CSharpRecordPrimaryCtorSignatureRegex but applied to the joined multi-line
     // header produced by CollectCSharpRecordHeader, so split-line forms like
     // `public record Child\n(\n    int Value\n)\n    : Parent(Value);` still match.
-    // CollectCSharpRecordHeader で連結された複数行ヘッダーに対しても当てるため、`record` と
-    // `(` が別行に分かれる書式でも primary-ctor record と判定できるようにする。
-    private static readonly Regex CSharpRecordPrimaryCtorHeaderRegex = new(
-        @"\brecord\s+(?:class\s+|struct\s+)?\w+(?:\s*<[^>]+>)?\s*\(",
+    // Also covers C# 12 `class` / `struct` primary constructors such as
+    // `public class Child(int value) : Parent(value) { }` and
+    // `public struct Child(int value) : IParent { }` so their `Parent(value)` chain edges are
+    // also attributed to the synthetic function-kind container named after the declaring type.
+    // CollectCSharpRecordHeader で連結された複数行ヘッダーに対しても当てるため、`record` / `class` /
+    // `struct` と `(` が別行に分かれる書式でも primary-ctor 宣言と判定できるようにする。
+    // C# 12 以降の class / struct primary constructor にも同じ合成コンテナ経路を適用する。
+    private static readonly Regex CSharpPrimaryCtorHeaderRegex = new(
+        @"\b(?:record\s+(?:class\s+|struct\s+)?|class\s+|struct\s+)\w+(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
@@ -288,13 +293,13 @@ public static class ReferenceExtractor
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
 
-        // Synthetic function-kind container for C# record primary-ctor declarations with a base
-        // primary-ctor call such as `record Child(int x) : Parent(x)`. The range spans the entire
-        // declaration header so multi-line forms where `: Parent(x)` sits on a later line are
-        // covered. Later lines inside the record body keep their real innermost containers.
-        // C# record のプライマリコンストラクタ宣言で base primary-ctor を呼んでいる場合、
+        // Synthetic function-kind container for C# primary-ctor declarations with a base
+        // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
+        // The range spans the entire declaration header so multi-line forms where `: Parent(x)` sits on a
+        // later line are covered. Later lines inside the body keep their real innermost containers.
+        // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
-        var recordPrimaryCtorRanges = BuildCSharpRecordPrimaryCtorContainers(language, symbols, structuralLines);
+        var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -904,20 +909,24 @@ public static class ReferenceExtractor
     }
 
     /// <summary>
-    /// Build a list of line ranges paired with synthetic function-kind containers for C# record
-    /// declarations that carry a base primary-constructor call (e.g. `record Child(int x) : Parent(x)`
-    /// or the multi-line form where `: Parent(x)` sits on a continuation line). SymbolExtractor does
-    /// not synthesize a separate ctor symbol for the implicit primary constructor, so the `Parent(x)`
-    /// reference would otherwise land on `container = null` (when the declaration line has no body
-    /// range) or on the record class itself. Overriding the container over the whole header range
-    /// keeps the chain edge attached to a synthetic function named after the record. Body lines past
-    /// `;` / `{` are not included, so methods inside a braced record still resolve to their real
-    /// containers via FindInnermostContainer.
-    /// C# record のプライマリコンストラクタ宣言に対して、宣言ヘッダー全体を合成 function コンテナで
-    /// 上書きするための (start, end, container) リストを作る。multi-line 宣言でも `Parent(...)` が
-    /// header 末尾にあれば拾える。
+    /// Build a list of line ranges paired with synthetic function-kind containers for C# primary
+    /// constructor declarations that carry a base primary-constructor call. This covers records
+    /// (`record Child(int x) : Parent(x)`), C# 12 classes (`class Child(int x) : Parent(x)`) and
+    /// structs (`struct Child(int x) : Parent(x)`), including the multi-line form where
+    /// `: Parent(x)` sits on a continuation line. SymbolExtractor does not synthesize a separate
+    /// ctor symbol for the implicit primary constructor, so the `Parent(x)` reference would
+    /// otherwise land on `container = null` (when the declaration line has no body range) or on
+    /// the declaring type itself. The synthetic container covers the header range only; methods
+    /// inside a braced body still resolve to their real containers via FindInnermostContainer,
+    /// and within the end line the override is limited to columns before the terminator so body
+    /// calls sharing the same line (e.g. `record Child(int V) : Parent(V) { ... Add(V, 1); }`)
+    /// are not pulled onto the synthetic ctor.
+    /// C# の primary constructor 宣言に対して合成 function コンテナの (start, end, endColumn, container)
+    /// リストを作る。record だけでなく C# 12 の class / struct primary constructor も対象にし、
+    /// 宣言ヘッダーの範囲（end line は終端 `;` / `{` のカラムまで）だけ合成 ctor に差し替えることで、
+    /// 同一行 braced body の呼び出しや後続メソッドは本来の container に残る。
     /// </summary>
-    private static List<(int StartLine, int EndLine, int EndColumn, SymbolRecord Container)> BuildCSharpRecordPrimaryCtorContainers(
+    private static List<(int StartLine, int EndLine, int EndColumn, SymbolRecord Container)> BuildCSharpPrimaryCtorContainers(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines)
@@ -928,7 +937,10 @@ public static class ReferenceExtractor
 
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "class")
+            // SymbolExtractor stores C# records as Kind=class and C# 12 structs as Kind=struct.
+            // Interfaces / enums / delegates cannot have primary constructors in C# so skip them.
+            // C# record は Kind=class、C# 12 struct は Kind=struct として登録されるため両方対象。
+            if (symbol.Kind != "class" && symbol.Kind != "struct")
                 continue;
             var signature = symbol.Signature;
             if (string.IsNullOrWhiteSpace(signature))
@@ -937,15 +949,15 @@ public static class ReferenceExtractor
             // SymbolRecord.Signature only captures the first declaration line, so the first-line
             // regex filter misses split-line primary-ctor forms such as
             // `public record Child\n(\n    int Value\n)\n    : Parent(Value);`. Walk the
-            // structural-masked lines from StartLine until we hit `;` / `{` and run the record
-            // detection on the joined header text instead.
-            // 宣言の signature は 1 行目だけしか持たないので、`record` と `(` を別行に分ける
-            // 改行スタイルでは先頭行 regex の前段フィルタが空振りする。ここでは structuralLines
-            // から `;` / `{` までヘッダーを連結し、連結後のテキストで record 判定を行う。
+            // structural-masked lines from StartLine until we hit `;` / `{` and run the
+            // primary-ctor detection on the joined header text instead.
+            // 宣言の signature は 1 行目だけしか持たないので、`record` / `class` / `struct` と
+            // `(` を別行に分ける書式では先頭行 regex の前段フィルタが空振りする。ここでは
+            // structuralLines から `;` / `{` までヘッダーを連結し、連結後のテキストで判定する。
             var (headerEndLine, headerEndColumn, headerText) = CollectCSharpRecordHeader(structuralLines, symbol.StartLine);
-            if (!IsCSharpRecordPrimaryCtorHeader(headerText))
+            if (!IsCSharpPrimaryCtorHeader(headerText))
                 continue;
-            if (!HasCSharpRecordBasePrimaryCtorCall(headerText))
+            if (!HasCSharpBasePrimaryCtorCall(headerText))
                 continue;
 
             var synthetic = new SymbolRecord
@@ -1041,21 +1053,21 @@ public static class ReferenceExtractor
     /// </summary>
     /// <summary>
     /// Return true when a joined C# type-declaration header (possibly spanning multiple lines,
-    /// including line-broken primary-ctor parens) looks like a record declaration that carries a
-    /// primary constructor parameter list. Accepts `record Child(...)`, `record class Child(...)`,
-    /// `record struct Child(...)`, generic arity such as `record Child<T>(...)`, and the
-    /// split-line form where `record Child\n(\n ... )` places the `(` on a continuation line.
-    /// 連結済みの C# 宣言ヘッダーが record primary-ctor ヘッダーかを判定する。`record` と `(` が
-    /// 別行に分かれる改行スタイルでも拾う。
+    /// including line-broken primary-ctor parens) looks like a primary-constructor declaration.
+    /// Accepts `record Child(...)`, `record class Child(...)`, `record struct Child(...)`,
+    /// C# 12 `class Child(...)`, `struct Child(...)`, generic arity such as `class Child<T>(...)`,
+    /// and the split-line form where `record Child\n(\n ... )` places the `(` on a continuation line.
+    /// 連結済みの C# 宣言ヘッダーが primary-ctor 宣言かを判定する。`record` だけでなく C# 12 の
+    /// `class` / `struct` primary constructor も対象にし、`(` が別行に分かれる書式にも対応する。
     /// </summary>
-    private static bool IsCSharpRecordPrimaryCtorHeader(string headerText)
+    private static bool IsCSharpPrimaryCtorHeader(string headerText)
     {
         if (string.IsNullOrWhiteSpace(headerText))
             return false;
-        return CSharpRecordPrimaryCtorHeaderRegex.IsMatch(headerText);
+        return CSharpPrimaryCtorHeaderRegex.IsMatch(headerText);
     }
 
-    private static bool HasCSharpRecordBasePrimaryCtorCall(string headerText)
+    private static bool HasCSharpBasePrimaryCtorCall(string headerText)
     {
         var text = headerText.TrimEnd();
         if (text.EndsWith(";", StringComparison.Ordinal))
