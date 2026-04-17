@@ -769,6 +769,19 @@ internal static class StructuralLineMasker
                 continue;
             }
 
+            // Inside the inner `{expr}` hole, skip single-line Python string
+            // literals so a `{` or `}` inside them does not affect brace tracking
+            // (e.g. `f"{prefix('}') + real_call()}"` must keep the inner hole
+            // open through `'}'`). The contents are preserved by default; the
+            // downstream `StringLiteralRegex` will remove them harmlessly.
+            // 内側ホール内で単行 Python 文字列リテラルはスキップし、
+            // `'}'` のようなものが inner hole を早閉じしないようにする。
+            if (innerHoleDepth > 0 && (line[p] == '\'' || line[p] == '"'))
+            {
+                p = SkipPythonSingleLineString(line, p);
+                continue;
+            }
+
             if (line[p] == '{')
             {
                 innerHoleDepth++;
@@ -1003,17 +1016,28 @@ internal static class StructuralLineMasker
     // flip the following `/` from division to regex literal.
     // 1 行内の JS/TS regex 判定用 state。直前の識別子語も保持し、`return` / `throw` /
     // `typeof` など regex-prefix keyword の後の `/` を division ではなく regex として扱う。
-    private enum JsPrevTokenKind { None, Identifier, Numeric, Literal, CloseParen, CloseBracket, CloseBrace, Arrow, Other }
+    private enum JsPrevTokenKind { None, Identifier, Numeric, Literal, CloseParen, StatementHeadCloseParen, CloseBracket, CloseBrace, Arrow, Other }
 
     private struct JsLexState
     {
         public JsPrevTokenKind PrevTokenKind;
         public string PrevIdentifier;
+        // Tracks whether each open `(` was preceded by a statement-head keyword
+        // (`if`/`while`/`for`/`switch`/`catch`/`with`). After the matching `)`,
+        // a following `/` begins a regex literal, not division.
+        // 各 `(` の直前が statement-head キーワード（`if` / `while` / `for` /
+        // `switch` / `catch` / `with`）だったかを追跡し、対応する `)` の直後に
+        // 続く `/` を division ではなく regex literal として扱えるようにする。
+        public Stack<bool> ParenStatementHead;
 
         public void Reset()
         {
             PrevTokenKind = JsPrevTokenKind.None;
             PrevIdentifier = string.Empty;
+            if (ParenStatementHead is null)
+                ParenStatementHead = new Stack<bool>();
+            else
+                ParenStatementHead.Clear();
         }
 
         public void SetKind(JsPrevTokenKind kind)
@@ -1028,6 +1052,9 @@ internal static class StructuralLineMasker
             PrevIdentifier = word;
         }
     }
+
+    private static bool IsJsStatementHeadKeyword(string word) =>
+        word is "if" or "while" or "for" or "switch" or "catch" or "with";
 
     // JavaScript/TypeScript template literals: `...` with ${expr} interpolation holes.
     // Interpolation hole contents are preserved (not masked) so the call-graph keeps real call edges.
@@ -1268,8 +1295,28 @@ internal static class StructuralLineMasker
 
         switch (c)
         {
+            case '(':
+                // Remember whether this `(` opens a statement-head control-flow
+                // clause. Its matching `)` will need to keep the following `/`
+                // regex-legal rather than flipping to division.
+                // この `(` が statement-head control-flow（`if (x)` など）を
+                // 開いているかを stack に記録し、対応する `)` の直後の `/` を
+                // division ではなく regex literal として扱えるようにする。
+                var openIsStmtHead = lexState.PrevTokenKind == JsPrevTokenKind.Identifier
+                    && IsJsStatementHeadKeyword(lexState.PrevIdentifier);
+                lexState.ParenStatementHead?.Push(openIsStmtHead);
+                lexState.SetKind(JsPrevTokenKind.Other);
+                break;
             case ')':
-                lexState.SetKind(JsPrevTokenKind.CloseParen);
+                var closeIsStmtHead = lexState.ParenStatementHead is { Count: > 0 }
+                    && lexState.ParenStatementHead.Pop();
+                // Statement-head `)` tags the following `/` as regex-legal and the
+                // following `{` as a statement block; other `)` flips `/` to division
+                // and `{` to an object-literal-style expression brace.
+                // statement-head の `)` は続く `/` を regex、続く `{` を block と扱う。
+                // それ以外の `)` は `/` を division、`{` を object literal 的な
+                // expression brace と扱う。
+                lexState.SetKind(closeIsStmtHead ? JsPrevTokenKind.StatementHeadCloseParen : JsPrevTokenKind.CloseParen);
                 break;
             case ']':
                 lexState.SetKind(JsPrevTokenKind.CloseBracket);
@@ -1337,6 +1384,7 @@ internal static class StructuralLineMasker
                 return false;
             case JsPrevTokenKind.Identifier:
                 return IsJsRegexPrefixKeyword(lexState.PrevIdentifier);
+            case JsPrevTokenKind.StatementHeadCloseParen:
             case JsPrevTokenKind.Arrow:
             case JsPrevTokenKind.Other:
             default:
@@ -1359,6 +1407,7 @@ internal static class StructuralLineMasker
         switch (lexState.PrevTokenKind)
         {
             case JsPrevTokenKind.CloseParen:
+            case JsPrevTokenKind.StatementHeadCloseParen:
             case JsPrevTokenKind.Arrow:
                 return false;
             case JsPrevTokenKind.Identifier:

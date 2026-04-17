@@ -1474,6 +1474,84 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JsIfStatementParenRegexLiteral_DoesNotMaskFollowingCode()
+    {
+        // Regression for issue #291 follow-up: after an `if (value)` paren close,
+        // `/.../` must parse as a regex literal, not division. Otherwise the masker
+        // mistakes the trailing `/` for division, swallows the backtick inside the
+        // regex body as a phantom template opener, and erases the real call after.
+        // issue #291 続編: `if (value)` の `)` 直後の `/.../` は regex literal と
+        // して扱うこと。division 扱いすると regex 本文の backtick を template 開始
+        // と誤認して後続コードを潰し、実呼び出しが参照として残らない。
+        const string content = "function caller(value) {\n"
+            + "    if (value) /`/.test(value);\n"
+            + "    realCall(value);\n"
+            + "}\n"
+            + "function realCall(x) { return x; }\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleIfParenRegexLiteral_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: inside a template literal hole, the
+        // same statement-head paren + regex literal pattern must also classify `/`
+        // as regex. Otherwise the inner call `runTask()` after the regex is dropped
+        // because the hole's backtick-containing regex is misread as a template.
+        // issue #291 続編: テンプレートホール内でも同じく statement-head paren +
+        // regex の組み合わせで `/` を regex として扱うこと。そうしないと regex 内
+        // の backtick を template 開始と取り違え、続く `runTask()` を消してしまう。
+        const string content = "function caller(value) {\n"
+            + "    const s = `${(() => { if (value) /`/.test(value); runTask(); return 1; })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_PythonNestedFStringInnerHoleStringLiteralWithBrace_PreservesInnerCall()
+    {
+        // Regression for issue #291 follow-up: inside the inner hole of a nested
+        // single-line f-string, a string literal containing `}` (e.g. `'}'`) must
+        // not close the inner hole prematurely. The inner-hole scanner must skip
+        // over string literals the same way the outer hole scanner does.
+        // issue #291 続編: ネスト単行 f-string の inner hole 内で、`}` を含む単行
+        // 文字列リテラルにより inner hole が早閉じしないこと。inner hole も outer
+        // hole と同じく文字列リテラルをスキップする必要がある。
+        const string content = "def caller():\n"
+            + "    msg = f\"\"\"\n"
+            + "    {format(f\"{prefix('}') + real_call()}\")}\n"
+            + "    \"\"\"\n"
+            + "    tail()\n"
+            + "\n"
+            + "def prefix(_):\n"
+            + "    return \"\"\n"
+            + "\n"
+            + "def real_call():\n"
+            + "    pass\n"
+            + "\n"
+            + "def tail():\n"
+            + "    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_PythonFStringHole_NestedSingleLineFStringPreservesInnerCall()
     {
         // Regression for issue #291 follow-up: a nested single-line f-string inside an
