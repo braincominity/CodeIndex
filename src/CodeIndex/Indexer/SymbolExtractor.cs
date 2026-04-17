@@ -1580,21 +1580,22 @@ public static class SymbolExtractor
 
     private static int SkipLeadingJavaAnnotations(string span)
     {
-        var index = 0;
-        while (index < span.Length)
-        {
-            while (index < span.Length && char.IsWhiteSpace(span[index]))
-                index++;
+        var mode = JavaScanMode.Normal;
+        var index = SkipJavaWhitespaceAndComments(span, 0, ref mode);
 
-            if (index >= span.Length || span[index] != '@')
+        while (index < span.Length && mode == JavaScanMode.Normal && span[index] == '@')
+        {
+            index++; // consume '@'
+            index = SkipJavaWhitespaceAndComments(span, index, ref mode);
+            if (mode != JavaScanMode.Normal)
                 return index;
 
-            index++; // consume '@'
             while (index < span.Length && (char.IsLetterOrDigit(span[index]) || span[index] == '_' || span[index] == '.' || span[index] == '$'))
                 index++;
 
-            while (index < span.Length && char.IsWhiteSpace(span[index]))
-                index++;
+            index = SkipJavaWhitespaceAndComments(span, index, ref mode);
+            if (mode != JavaScanMode.Normal)
+                return index;
 
             if (index < span.Length && span[index] == '(')
             {
@@ -1602,14 +1603,147 @@ public static class SymbolExtractor
                 index++;
                 while (index < span.Length && depth > 0)
                 {
+                    if (TryConsumeJavaNonCodeAcrossLines(span, ref index, ref mode))
+                        continue;
+
                     var ch = span[index];
                     if (ch == '(') depth++;
                     else if (ch == ')') depth--;
                     index++;
                 }
             }
+
+            index = SkipJavaWhitespaceAndComments(span, index, ref mode);
+        }
+
+        return index;
+    }
+
+    // Walk whitespace, comments, and newlines in a multi-line span until the next non-whitespace code position.
+    // 複数行 span 内の空白・コメント・改行をまとめて読み飛ばす。
+    private static int SkipJavaWhitespaceAndComments(string span, int index, ref JavaScanMode mode)
+    {
+        while (index < span.Length)
+        {
+            if (mode == JavaScanMode.Normal && char.IsWhiteSpace(span[index]))
+            {
+                index++;
+                continue;
+            }
+
+            if (TryConsumeJavaNonCodeAcrossLines(span, ref index, ref mode))
+                continue;
+
+            if (mode == JavaScanMode.Normal)
+                return index;
+
+            index++;
         }
         return index;
+    }
+
+    // Multi-line-aware variant of TryConsumeJavaNonCode. Handles `\n` explicitly so it can run on
+    // a single span string that contains newlines (the line-based caller uses the per-line variant).
+    // 複数行 span 対応版。`\n` を明示的に処理し、改行跨ぎの line-comment / 文字列終端も扱う。
+    private static bool TryConsumeJavaNonCodeAcrossLines(string span, ref int index, ref JavaScanMode mode)
+    {
+        if (index >= span.Length)
+            return false;
+
+        var ch = span[index];
+        switch (mode)
+        {
+            case JavaScanMode.LineComment:
+                if (ch == '\n')
+                    mode = JavaScanMode.Normal;
+                index++;
+                return true;
+            case JavaScanMode.String:
+            case JavaScanMode.Char:
+                // Non-text-block Java string / char literals cannot cross raw newlines.
+                // Treat a newline as an implicit terminator so the annotation skip stays sane.
+                // Java の非 text-block 文字列 / char は生の改行を跨げないため、改行で暗黙終端する。
+                if (ch == '\n')
+                {
+                    mode = JavaScanMode.Normal;
+                    index++;
+                    return true;
+                }
+                if (ch == '\\' && index + 1 < span.Length)
+                {
+                    index += 2;
+                    return true;
+                }
+                if (mode == JavaScanMode.String && ch == '"')
+                {
+                    mode = JavaScanMode.Normal;
+                    index++;
+                    return true;
+                }
+                if (mode == JavaScanMode.Char && ch == '\'')
+                {
+                    mode = JavaScanMode.Normal;
+                    index++;
+                    return true;
+                }
+                index++;
+                return true;
+            case JavaScanMode.BlockComment:
+                if (ch == '*' && index + 1 < span.Length && span[index + 1] == '/')
+                {
+                    mode = JavaScanMode.Normal;
+                    index += 2;
+                    return true;
+                }
+                index++;
+                return true;
+            case JavaScanMode.TextBlock:
+                if (ch == '"' && index + 2 < span.Length && span[index + 1] == '"' && span[index + 2] == '"')
+                {
+                    mode = JavaScanMode.Normal;
+                    index += 3;
+                    return true;
+                }
+                if (ch == '\\' && index + 1 < span.Length)
+                {
+                    index += 2;
+                    return true;
+                }
+                index++;
+                return true;
+            default:
+                if (ch == '/' && index + 1 < span.Length && span[index + 1] == '/')
+                {
+                    mode = JavaScanMode.LineComment;
+                    index += 2;
+                    return true;
+                }
+                if (ch == '/' && index + 1 < span.Length && span[index + 1] == '*')
+                {
+                    mode = JavaScanMode.BlockComment;
+                    index += 2;
+                    return true;
+                }
+                if (ch == '"' && index + 2 < span.Length && span[index + 1] == '"' && span[index + 2] == '"')
+                {
+                    mode = JavaScanMode.TextBlock;
+                    index += 3;
+                    return true;
+                }
+                if (ch == '"')
+                {
+                    mode = JavaScanMode.String;
+                    index++;
+                    return true;
+                }
+                if (ch == '\'')
+                {
+                    mode = JavaScanMode.Char;
+                    index++;
+                    return true;
+                }
+                return false;
+        }
     }
 
     private static bool TryGetFirstNonWhitespaceColumn(string line, int startColumn, int endColumnExclusive, out int column)

@@ -5367,6 +5367,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_HandlesAnnotationWithQuotedParen()
+    {
+        // `@Label(")")` must not fool the paren-balance counter — the `)` is inside a string literal.
+        // `@Label(")")` の `)` は文字列内なので括弧バランスで閉じてはいけない。
+        var content = "public enum E {\n    @Label(\")\") A,\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesBlockCommentBetweenAnnotationAndMember()
+    {
+        // Block comments between `@Annotation` and the member name must be skipped.
+        // アノテーションとメンバー名の間の block comment を読み飛ばすこと。
+        var content = "public enum E {\n    @A /*note*/ B,\n    C;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.ContainerName == "E");
+    }
+
+    [Fact]
     public void Extract_Java_StopsEnumMembersAtSemicolon()
     {
         // After the first top-level `;` inside the enum body, non-member declarations must not be captured as members.
