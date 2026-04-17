@@ -26,6 +26,204 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
+    {
+        // issue #233: expression-bodied methods and properties must attribute their
+        // calls to the individual member, not collapse to the enclosing class.
+        // issue #233: 式本体メソッドと式本体プロパティは、外側クラスにまとめられず
+        // 個別メンバーに呼び出しが帰属する必要がある。
+        const string content = """
+            namespace App;
+
+            public class Calc
+            {
+                public int Compute() => 42;
+                public int Wrap1() => Compute();
+                public int Wrap2() => this.Compute();
+                public int Wrap3 => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRefs = references.Where(r => r.SymbolName == "Compute").ToList();
+        Assert.Equal(3, computeRefs.Count);
+        Assert.Contains(computeRefs, r => r.ContainerKind == "function" && r.ContainerName == "Wrap1");
+        Assert.Contains(computeRefs, r => r.ContainerKind == "function" && r.ContainerName == "Wrap2");
+        Assert.Contains(computeRefs, r => r.ContainerKind == "property" && r.ContainerName == "Wrap3");
+        Assert.DoesNotContain(computeRefs, r => r.ContainerKind == "class");
+    }
+
+    [Fact]
+    public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
+    {
+        // Multi-line expression body (declaration on one line, `=> expr;` on the next)
+        // must still attribute calls on the expression line to the enclosing member.
+        // 宣言行の次の行に `=> expr;` が来る multi-line 式本体でも、式行の呼び出しが
+        // 外側メンバーに帰属すること。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+                public int MultiLine()
+                    => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("function", computeRef.ContainerKind);
+        Assert.Equal("MultiLine", computeRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineExpressionBodiedProperty_AttributesToProperty()
+    {
+        // issue #233 second review follow-up: multi-line expression-bodied property
+        // (`public int Wrap` + newline + `    => Compute();`) must attribute the
+        // Compute() call to the property, not the enclosing class.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が来る multi-line 式本体
+        // プロパティも、Compute() 呼び出しが外側クラスではなく property に帰属すること。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+                public int Wrap
+                    => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpBlockBodiedPropertyAccessor_AttributesToProperty()
+    {
+        // issue #233 review follow-up: Allman-style block-bodied properties (with `{`
+        // on the next line) must have accessor-internal calls attributed to the property,
+        // not the enclosing class.
+        // issue #233 のレビュー指摘: Allman スタイル（次行に `{`）の block-bodied property は、
+        // accessor 内部の呼び出しが外側クラスではなく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap
+                {
+                    get { return Compute(); }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpBraceSameLineAccessorNextLineProperty_AttributesToProperty()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property — `{` on the same line as the declaration and the accessor on the
+        // following line — must have accessor-internal calls attributed to the property,
+        // not the enclosing class.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property でも、accessor 内部の呼び出しが外側クラスでは
+        // なく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap {
+                    get { return Compute(); }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpAllmanBlockBodiedProperty_WithBlockComment_AttributesToProperty()
+    {
+        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
+        // between the property header line and its `{` must not prevent the property
+        // from being recognized, so accessor-internal calls still attribute to the
+        // property rather than the enclosing class.
+        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `{` の間に複数行の
+        // /* ... */ ブロックコメントが入っていても、property として認識され、
+        // accessor 内部の呼び出しは外側クラスではなく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap
+                /* some multi-line
+                   block comment */
+                {
+                    get { return Compute(); }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineExpressionBodiedProperty_WithBlockComment_AttributesToProperty()
+    {
+        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
+        // between the property header line and its `=>` continuation must not prevent
+        // the property from being recognized, so Compute() still attributes to the
+        // property rather than the enclosing class.
+        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `=>` 継続行の間に
+        // 複数行の /* ... */ ブロックコメントが入っていても property として認識され、
+        // Compute() 呼び出しは外側クラスではなく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap
+                /* multi-line
+                   comment */
+                    => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpDefinitionLine_DoesNotBecomeReference()
     {
         const string content = """
@@ -194,6 +392,90 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineVerbatimString_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #288: call-looking identifiers inside a multi-line
+        // @"..." verbatim string body must not be captured as references.
+        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子は
+        // 参照として抽出してはならない。
+        const string content = """
+            public class FixtureHost
+            {
+                public void M()
+                {
+                    var legacy = @"
+                        SELECT * FROM t
+                        WHERE x = BadCall()
+                    ";
+                    RealCall();
+                }
+
+                private void RealCall() { }
+                private void BadCall() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineRawString_IssueRepro_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #288 exact repro: C# 11 raw strings, interpolated raw
+        // strings, and multi-line verbatim strings must not leak call-looking
+        // identifiers from their content into the reference graph.
+        // issue #288 の repro に対する回帰: C# 11 の raw string、補間付き raw string、
+        // 複数行 verbatim string の本体から呼び出しらしい識別子を参照グラフへ漏らさない。
+        const string content = """"
+            namespace App;
+
+            public class Demo
+            {
+                public void M()
+                {
+                    var sql = """
+                        SELECT * FROM users
+                        WHERE id = EvilCall(42)
+                        AND name = AnotherCall('bob')
+                        """;
+
+                    var id = 42;
+                    var msg = $"""
+                        Query result for id={id}
+                        Hidden: PhantomCall({id})
+                        """;
+
+                    var legacy = @"
+                        SELECT * FROM t
+                        WHERE x = BadCall()
+                    ";
+
+                    RealCall();
+                }
+
+                private void RealCall() { }
+                private int EvilCall(int x) => x;
+                private string AnotherCall(string s) => s;
+                private int PhantomCall(int x) => x;
+                private void BadCall() { }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "EvilCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "AnotherCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
     }
 
     [Fact]
@@ -416,6 +698,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_DoesNotCreateBareEnumMemberReferencesYet()
+    {
+        const string content = """
+            namespace Demo;
+
+            public class Outer
+            {
+                public enum First { None }
+            }
+
+            public enum Nested { A = 1, B = A }
+
+            public class UsesEnum
+            {
+                public void Use()
+                {
+                    _ = Nested.A;
+                    _ = Outer.First.None;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "None");
+    }
+
+    [Fact]
     public void Extract_CsharpReturnTargetAttribute_CallIsNotDropped()
     {
         const string content = """
@@ -442,6 +754,37 @@ public class ReferenceExtractorTests
         Assert.Equal(2, marshalAsCalls.Count);
         Assert.Equal([5, 8], marshalAsCalls.Select(reference => reference.Line).ToArray());
         Assert.All(marshalAsCalls, reference => Assert.Equal("Foo", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpNonEnumQualifiedMemberAccess_DoesNotBecomeEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum EnumHolder
+            {
+                A = 1
+            }
+
+            public static class Values
+            {
+                public static int A = 1;
+            }
+
+            public class UsesValues
+            {
+                public int Read()
+                {
+                    return Values.A;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
     }
 
     [Fact]

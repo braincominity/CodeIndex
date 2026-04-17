@@ -3807,6 +3807,200 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ExpressionBodiedMembers_HaveBodyRanges()
+    {
+        // issue #233: expression-bodied members must report a body range covering the
+        // declaration line through the terminating ';' so reference attribution can find
+        // them as the innermost enclosing container.
+        // issue #233: 式本体メンバーは、宣言行から終端 ';' までを本体範囲として報告する必要がある。
+        // そうすることで参照属性解決が内側コンテナとして認識できる。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap1() => Compute();\n    public int Wrap3 => Compute();\n    public int MultiLine()\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var compute = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Compute"));
+        Assert.Equal(3, compute.BodyStartLine);
+        Assert.Equal(3, compute.BodyEndLine);
+
+        var wrap1 = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Wrap1"));
+        Assert.Equal(4, wrap1.BodyStartLine);
+        Assert.Equal(4, wrap1.BodyEndLine);
+
+        var wrap3 = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap3"));
+        Assert.Equal(5, wrap3.BodyStartLine);
+        Assert.Equal(5, wrap3.BodyEndLine);
+
+        var multi = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MultiLine"));
+        Assert.Equal(6, multi.BodyStartLine);
+        Assert.Equal(7, multi.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BlockBodiedProperty_AllmanStyle_IsExtracted()
+    {
+        // issue #233 review follow-up: Allman-style block-bodied properties (with `{` on
+        // the next line) were not matched by the property regex, so `callers` would
+        // attribute accessor-internal references to the enclosing class. The widened
+        // regex plus `ShouldSkipCSharpHeaderOnlyPropertyCandidate` verification must
+        // still recognize them as properties with proper body ranges.
+        // issue #233 のレビュー指摘: Allman スタイル（次行に `{`）の block-bodied property が
+        // property regex でマッチしておらず、accessor 内の参照がクラスに帰属していた。
+        // widened regex と `ShouldSkipCSharpHeaderOnlyPropertyCandidate` の組み合わせで
+        // 正しく property として認識され、本体範囲も持つ必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    {\n        get { return Compute(); }\n    }\n    public string Name\n    {\n        get;\n        set;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(5, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Equal(8, name.StartLine);
+        Assert.Equal(12, name.EndLine);
+        Assert.Equal(9, name.BodyStartLine);
+        Assert.Equal(12, name.BodyEndLine);
+        Assert.Equal("string", name.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_IsExtracted()
+    {
+        // issue #233 second review follow-up: multi-line expression-bodied properties,
+        // where the declaration is on one line and `=> expr;` on the continuation line,
+        // must still be extracted as properties with a body range spanning the two lines.
+        // Without this, accessor-internal calls fall through to the enclosing class.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が来る multi-line 式本体
+        // プロパティも property として抽出され、本体範囲が宣言行から `;` 行までを覆う必要がある。
+        // これができないと accessor 内呼び出しが外側クラスに誤帰属する。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(5, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(5, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+    }
+
+    [Fact]
+    public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: when an Allman-style block-bodied property
+        // has a multi-line `/* ... */` block comment between the header line and the `{`
+        // line, the skip guard must traverse the comment via `LexCSharpLine` and still
+        // recognize the continuation `{`. A naive prefix-based comment skip only
+        // handled `*` / `//` / `/*` line starts and dropped the property entirely.
+        // issue #233 第4次レビュー指摘: Allman スタイルの block-bodied property で
+        // header 行と `{` の間に multi-line `/* ... */` のブロックコメントがあっても、
+        // `LexCSharpLine` でコメントを通り抜けて次の `{` を認識する必要がある。
+        // 行頭 prefix だけの素朴なスキップでは `*` / `//` / `/*` の開始行しか飛ばせず、
+        // この形の property は落ちていた。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    /* some multi-line\n       block comment */\n    {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(9, wrap.EndLine);
+        Assert.Equal(7, wrap.BodyStartLine);
+        Assert.Equal(9, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: same scenario for multi-line expression
+        // bodies — `public int Wrap` followed by `/* ... */` and then `=> Compute();`
+        // must still be extracted with the property spanning declaration through `;`.
+        // issue #233 第4次レビュー指摘: multi-line 式本体プロパティでも同じく、
+        // `public int Wrap` の後に `/* ... */`、さらに `=> Compute();` が続く形で
+        // 宣言行から `;` 行までを本体範囲とする property が抽出されること。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int WrapExpr\n    /* multi-line\n       comment */\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrapExpr"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLineProperty_IsExtracted()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property — `{` on the same line as the declaration and the accessor on the
+        // following line — must be recognized as a property with a body range spanning
+        // declaration through closing `}`.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property が property として抽出され、宣言行から `}` 行
+        // までを本体範囲として持つこと。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(6, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(6, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLine_AcceptsAttributeAndVisibility()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must also
+        // accept next lines that begin with accessor attributes (`[JsonIgnore]`) or a
+        // visibility modifier (`private set`) before the `get` / `set` / `init` token.
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、accessor attribute
+        // (`[JsonIgnore]`) や visibility 修飾子 (`private set`) で始まる行も受け入れる必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n"
+            + "    public int WithAttr {\n        [System.Obsolete] get => Compute();\n    }\n"
+            + "    public int WithVis {\n        private set { }\n        get { }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithAttr");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithVis");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineWithoutAccessor_IsNotMisclassifiedAsProperty()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must reject
+        // non-property shapes that happen to be `Type Name {` followed by a body that
+        // does not start an accessor (for example a stray method-like block).
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、`Type Name {` に
+        // 続く行が accessor 宣言でない場合（例: accessor でない任意のブロック）を
+        // property として採用してはならない。
+        var content = "public class Calc\n{\n    public int Stray {\n        Console.WriteLine(1);\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Stray");
+    }
+
+    [Fact]
+    public void Extract_CSharp_HeaderOnlyNonProperty_IsNotMisclassified()
+    {
+        // issue #233 review follow-up: the header-only property alternation must not
+        // swallow keyword lines such as `public class X` or `return Foo` even if they
+        // happen to look like `Type Name` before a newline.
+        // issue #233 のレビュー指摘: header-only の alternation が `public class X` や
+        // `return Foo` のようなキーワード行を property と誤分類しないことを担保する。
+        var content = "public class Thing\n{\n    public int Method()\n    {\n        return Thing;\n    }\n}\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Method");
+    }
+
+    [Fact]
     public void Extract_CSharp_SwitchExpressionArms_DoNotProducePhantomProperties()
     {
         var content = """
@@ -3841,6 +4035,41 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "d");
         Assert.DoesNotContain(symbols, s => s.Name == "list");
         Assert.DoesNotContain(symbols, s => s.Name == "0");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineSwitchExpressionArms_DoNotProducePhantomProperties()
+    {
+        // issue #233 third review follow-up: switch-expression arms whose `=>` is placed
+        // on a continuation line must not be misclassified as multi-line expression-bodied
+        // properties. Without switch-expression guard coverage on the continuation `=>`,
+        // each pattern variable (e.g. `text`, `neg`) would be emitted as a phantom property
+        // and `callers` / `impact` would misattribute calls inside the arm to it.
+        // issue #233 第3次レビュー指摘: switch expression arm の `=>` が継続行にある
+        // multi-line 形を、multi-line 式本体プロパティと誤認しないこと。continuation `=>`
+        // まで switch-expression ガードが及ばないと、`text` や `neg` のようなパターン変数が
+        // phantom property として抽出され、arm 内の呼び出しが phantom に誤帰属する。
+        var content = """
+            public class Matcher
+            {
+                public string Describe(object x) => x switch
+                {
+                    string text
+                        => text.Trim(),
+                    int neg
+                        => "non-pos",
+                    _
+                        => "other",
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Matcher");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Describe");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.DoesNotContain(symbols, s => s.Name == "text");
+        Assert.DoesNotContain(symbols, s => s.Name == "neg");
     }
 
     [Fact]
@@ -3886,6 +4115,42 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator ((int a, int b) pair, int count)");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int*");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator delegate* unmanaged[Cdecl]<int, void>");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCheckedOperators()
+    {
+        // Issue #238: C# 11 user-defined checked operators (unary, binary, and explicit
+        // conversion) must be indexed alongside their unchecked counterparts instead of
+        // being silently dropped, and the `checked` keyword must survive into the symbol
+        // name so AI clients can disambiguate the two overloads.
+        // Issue #238: C# 11 のユーザー定義 `operator checked` (単項 / 二項 / 明示的変換) は
+        // unchecked 版と両方インデックスされ、`checked` の有無がシンボル名に残ることで
+        // AI クライアントがオーバーロードを区別できるようにする。
+        var content = """
+            namespace Demo;
+
+            public struct N
+            {
+                public int V;
+                public static N operator +(N a, N b) => new() { V = a.V + b.V };
+                public static N operator checked +(N a, N b) => checked(new() { V = a.V + b.V });
+                public static N operator -(N a, N b) => new() { V = a.V - b.V };
+                public static N operator checked -(N a, N b) => checked(new() { V = a.V - b.V });
+                public static N operator -(N a) => new() { V = -a.V };
+                public static N operator checked -(N a) => checked(new() { V = -a.V });
+                public static explicit operator int(N n) => n.V;
+                public static explicit operator checked int(N n) => checked((int)n.V);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator -"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator checked -"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked int");
     }
 
     [Fact]
@@ -4150,9 +4415,216 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Color");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Red");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Green");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Blue");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Red");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Green");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Blue");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCompactAndZeroIndentEnumMembers()
+    {
+        var content = "namespace Demo;\n\npublic enum Compact { A, B = A }\npublic enum Flat\n{\nC,\nD = C\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var compactA = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A"));
+        var compactB = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Compact");
+        Assert.Equal("enum", compactA.ContainerKind);
+        Assert.Equal("Compact", compactA.ContainerName);
+        Assert.Equal("Demo.Compact", compactA.ContainerQualifiedName);
+        Assert.Equal("enum", compactB.ContainerKind);
+        Assert.Equal("Compact", compactB.ContainerName);
+        Assert.Equal("Demo.Compact", compactB.ContainerQualifiedName);
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Flat");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "D");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSameLineSiblingEnums()
+    {
+        var content = "namespace Demo;\n\npublic enum InlineA { A1 } public enum InlineB { B1 }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var a1 = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A1"));
+        var b1 = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B1"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "InlineA");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "InlineB");
+        Assert.Equal("InlineA", a1.ContainerName);
+        Assert.Equal("Demo.InlineA", a1.ContainerQualifiedName);
+        Assert.Equal("InlineB", b1.ContainerName);
+        Assert.Equal("Demo.InlineB", b1.ContainerQualifiedName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsCompactEnumMembersWithAttributesAndCastValues()
+    {
+        var content = "public enum Mode { [Obsolete] A = (int)B, [EnumMember(Value = \"b\")] B = (MyFlags)(A | C), C = 1 }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "C");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEnumMembersAcrossDirectiveLines()
+    {
+        var content = "public enum Mode\n{\n#if DEBUG\n    A,\n#endif\n#region values\n    B,\n#endregion\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var memberA = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A"));
+        var memberB = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Equal("enum", memberA.ContainerKind);
+        Assert.Equal("Mode", memberA.ContainerName);
+        Assert.Equal("enum", memberB.ContainerKind);
+        Assert.Equal("Mode", memberB.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_TrimsClosingBraceFromFinalEnumMemberSpan()
+    {
+        var content = "public enum Status\n{\n    Ready,\n    Busy\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var busy = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Busy"));
+
+        Assert.Equal("Busy", busy.Signature);
+        Assert.Equal(4, busy.EndLine);
+        Assert.DoesNotContain("}", busy.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsLowercaseAndUnicodeEnumMembers()
+    {
+        var content = "public enum Status\n{\n    active,\n    inactive,\n    Δelta = active,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "active");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "inactive");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Δelta");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEnumMembersWhenAttributeSharesDeclarationLine()
+    {
+        var content = "[Flags] public enum Mode\n{\n    A,\n    B = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEnumMembersWhenMemberAttributesShareLine()
+    {
+        var content = "public enum Mode\n{\n    [Obsolete] A,\n    [EnumMember(Value = \"a\")] B = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotTreatMultilineEnumMemberAttributeArgumentsAsMembers()
+    {
+        var content = "using System.Runtime.Serialization;\n\npublic enum Mode\n{\n    [EnumMember(\n        Value = Alias,\n        Other = 1)]\n    A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Value");
+        Assert.DoesNotContain(symbols, s => s.Name == "Other");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsTabIndentedEnumMembers()
+    {
+        var content = "public enum Mode\n{\n\tA,\n\tB = A,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumDeclarationAttribute()
+    {
+        var content = "[Attr(\npublic enum Mode\n{\n    A,\n}\n\npublic class After\n{\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "After");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttribute()
+    {
+        var content = "public enum Mode\n{\n    [Attr()\n    A,\n    B\n}\n\npublic class After\n{\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "After");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttributeMissingParen()
+    {
+        var content = "public enum BrokenAttr\n{\n    [Attr(\n    X,\n    Y\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var memberY = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Y"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "BrokenAttr");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "X");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Y");
+        Assert.Equal("Y", memberY.Signature);
+        Assert.Equal(5, memberY.EndLine);
+        Assert.DoesNotContain("}", memberY.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversModifierlessMembersAfterIncompleteAttribute()
+    {
+        var content = "public class C\n{\n    [Attr(\n    void M() {}\n    string Name { get; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversBracketTypedMembersAfterIncompleteAttribute()
+    {
+        var content = "public class C\n{\n    [Attr(\n    int[] Values { get; }\n    int[] Build() => [];\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Values");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Build");
+    }
+
+    [Fact]
+    public void Extract_CSharp_EnumMembersTrackOwningEnum()
+    {
+        var content = "namespace Demo;\n\npublic enum First\n{\n    None,\n}\n\npublic enum Second\n{\n    None,\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var noneMembers = symbols
+            .Where(s => s.Kind == "enum" && s.Name == "None")
+            .OrderBy(s => s.Line)
+            .ToList();
+
+        Assert.Equal(2, noneMembers.Count);
+        Assert.Equal("enum", noneMembers[0].ContainerKind);
+        Assert.Equal("First", noneMembers[0].ContainerName);
+        Assert.Equal("Demo.First", noneMembers[0].ContainerQualifiedName);
+        Assert.Equal("enum", noneMembers[1].ContainerKind);
+        Assert.Equal("Second", noneMembers[1].ContainerName);
+        Assert.Equal("Demo.Second", noneMembers[1].ContainerQualifiedName);
     }
 
     [Fact]
@@ -4163,8 +4635,9 @@ public class SymbolExtractorTests
         var content = "var user = new User\n{\n    Name = \"Alice\",\n    Age = 30,\n    Email = GetEmail(),\n};";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
-        Assert.DoesNotContain(symbols, s => s.Name == "Email" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "Name");
+        Assert.DoesNotContain(symbols, s => s.Name == "Age");
+        Assert.DoesNotContain(symbols, s => s.Name == "Email");
     }
 
     [Fact]
@@ -5402,6 +5875,8 @@ public class SymbolExtractorTests
               src: url("data:application/font-woff2;charset=utf-8;base64,font-family:bogus");
               font-family: "Real Font";
             }
+            @font-face { src: url(data:text/plain;charset=utf-8;foo=1;font-family:bogus); font-family: Real Data Font; }
+            @font-face { src: url(data:image/svg+xml,<svg>{}</svg>); font-family: Svg Data Font; }
             @font-face { src: url("no-family.woff2"); }
             @font-face {
               font-family:
@@ -5417,8 +5892,11 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Comment Gap");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Commented Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real Data Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Svg Data Font");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
         Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
+        Assert.DoesNotContain(symbols, s => s.Name == "bogus)");
     }
 
     [Fact]
@@ -5444,6 +5922,19 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".media-class");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".inline-media");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".nested-child");
+    }
+
+    [Fact]
+    public void Extract_CSS_DoesNotLeakNestedSelectorsAfterSameLineGroupingAndQualifiedRule()
+    {
+        var content = """
+            @media screen { .outer {
+              .inner { color: red; }
+            } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".inner");
     }
 
     [Fact]
