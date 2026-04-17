@@ -1998,6 +1998,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_ExactJson_FindsCallerInsideMultiLineExpressionBodiedProperty()
+    {
+        // issue #233 second review follow-up: expression-bodied properties split across
+        // two lines (declaration + `=> expr;` continuation) must still attribute
+        // accessor-internal calls to the property through the CLI `callers` command.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が続く multi-line 式本体
+        // プロパティでも、CLI `callers` で accessor 内呼び出しが property に帰属すること。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_exprprop");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "calc.cs"),
+                """
+                public class Calc
+                {
+                    public int Compute() => 42;
+                    public int Wrap
+                        => Compute();
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
+            Assert.Equal(5, json.GetProperty("first_line").GetInt32());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallees_JsonZeroResults_WithMissingGraphTable_ReturnsDegradedPayload()
     {
         var (projectRoot, readOnlyUri) = CreateReadOnlyMissingGraphTableDb("cdidx_callees_zero_json_missing_graph");

@@ -80,6 +80,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultiLineExpressionBodiedProperty_AttributesToProperty()
+    {
+        // issue #233 second review follow-up: multi-line expression-bodied property
+        // (`public int Wrap` + newline + `    => Compute();`) must attribute the
+        // Compute() call to the property, not the enclosing class.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が来る multi-line 式本体
+        // プロパティも、Compute() 呼び出しが外側クラスではなく property に帰属すること。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+                public int Wrap
+                    => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpBlockBodiedPropertyAccessor_AttributesToProperty()
     {
         // issue #233 review follow-up: Allman-style block-bodied properties (with `{`

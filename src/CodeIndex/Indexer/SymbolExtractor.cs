@@ -5356,7 +5356,16 @@ public static class SymbolExtractor
                 || candidate.StartsWith("/*", StringComparison.Ordinal)
                 || candidate.StartsWith('*'))
                 continue;
-            return !candidate.StartsWith('{');
+
+            // Accept either a block body (`{`) on the next non-blank line or a
+            // continuation-style expression body (`=> expr;`). Without the `=>` branch,
+            // multi-line expression-bodied properties (`public int Wrap` + `    => Compute();`)
+            // are silently dropped and `callers` / `impact` fall back to the enclosing class.
+            // 次の空白以外の行が `{` で始まるブロック本体、または継続行の `=> expr;` 形の
+            // 式本体のいずれかを受け入れる。`=>` を許容しないと、`public int Wrap` の次行に
+            // `    => Compute();` が続く multi-line 式本体プロパティが抽出されず、
+            // `callers` / `impact` の帰属が外側クラスに戻ってしまう。
+            return !(candidate.StartsWith('{') || candidate.StartsWith("=>", StringComparison.Ordinal));
         }
 
         return true;

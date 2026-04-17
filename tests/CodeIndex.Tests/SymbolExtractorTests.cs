@@ -3661,6 +3661,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_IsExtracted()
+    {
+        // issue #233 second review follow-up: multi-line expression-bodied properties,
+        // where the declaration is on one line and `=> expr;` on the continuation line,
+        // must still be extracted as properties with a body range spanning the two lines.
+        // Without this, accessor-internal calls fall through to the enclosing class.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が来る multi-line 式本体
+        // プロパティも property として抽出され、本体範囲が宣言行から `;` 行までを覆う必要がある。
+        // これができないと accessor 内呼び出しが外側クラスに誤帰属する。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(5, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(5, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+    }
+
+    [Fact]
     public void Extract_CSharp_HeaderOnlyNonProperty_IsNotMisclassified()
     {
         // issue #233 review follow-up: the header-only property alternation must not
