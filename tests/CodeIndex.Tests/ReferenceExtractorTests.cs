@@ -1814,6 +1814,52 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultiLineNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): multi-line no-arg attribute forms such as
+        // `[\n Serializable\n]`, `[\n global::System.Obsolete\n]`, and `[Serializable,\n Obsolete]`
+        // must still classify as `attribute`. The attribute range pre-pass already tracks the
+        // section across line breaks; the no-arg regex must not reject identifiers just because
+        // the opening `[` or `,` is on a previous line.
+        // リグレッション (issue #293 補足): `[\n Serializable\n]` のように `[` と識別子が別行に
+        // ある複数行形、`[\n global::System.Obsolete\n]` のような `::` 修飾複数行形、そして
+        // `[Serializable,\n Obsolete]` のような行を跨ぐカンマ区切りも `attribute` として取り込まれること。
+        const string content = """
+            [
+                Serializable
+            ]
+            [
+                global::System.Obsolete
+            ]
+            [Required,
+                Key]
+            public class C
+            {
+            }
+            """;
+
+        // Use SymbolExtractor to mirror end-to-end indexing: if SymbolExtractor misclassifies
+        // a bare identifier inside a multi-line attribute section as a top-level symbol, the
+        // reference would be filtered out via the `definitionNames` guard and this test would
+        // catch that regression instead of silently passing with `[]` symbols.
+        // SymbolExtractor を通すことで end-to-end と同じ流れを再現する。複数行属性セクション内の
+        // 裸識別子を誤ってトップレベルのシンボルとして抽出してしまうと `definitionNames` ガードで
+        // 参照が脱落してしまうため、本テストがその退行も検出する。
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var serializable = Assert.Single(references.Where(r => r.SymbolName == "Serializable"));
+        Assert.Equal("attribute", serializable.ReferenceKind);
+        var obsolete = Assert.Single(references.Where(r => r.SymbolName == "Obsolete"));
+        Assert.Equal("attribute", obsolete.ReferenceKind);
+        var required = Assert.Single(references.Where(r => r.SymbolName == "Required"));
+        Assert.Equal("attribute", required.ReferenceKind);
+        var key = Assert.Single(references.Where(r => r.SymbolName == "Key"));
+        Assert.Equal("attribute", key.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpAliasQualifiedNoArgAttribute_ClassifiedAsAttribute()
     {
         // Regression (issue #293 follow-up): `[Alias::MyAttr]` — alias-qualified attribute.

@@ -5345,14 +5345,79 @@ public static class SymbolExtractor
     {
         var matchLines = new string[structuralLines.Length];
         var lexState = new CSharpLexState();
+        // Track multi-line attribute bracket depth so interior lines of a `[\n Serializable\n]`
+        // section are blanked out before the declaration-pattern regexes run. Otherwise a bare
+        // identifier on a line like `    Serializable` gets picked up as a top-level function
+        // and poisons reference classification via the `definitionNames` guard.
+        // 複数行にまたがる `[...]` 属性セクションの内部行を空行扱いするため、`[` / `]` の
+        // 深さを跨行で追跡する。そうしないと `    Serializable` のような裸識別子が
+        // トップレベル関数として抽出されてしまい、`definitionNames` ガードで参照分類が壊れる。
+        int multiLineAttrDepth = 0;
         for (int i = 0; i < structuralLines.Length; i++)
         {
             var lexedLine = LexCSharpLine(structuralLines[i], lexState);
             lexState = lexedLine.EndState;
-            matchLines[i] = CollapseCSharpGenericTypeWhitespace(StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine));
+            var sanitized = StripMultiLineCSharpAttributeInterior(lexedLine.SanitizedLine, ref multiLineAttrDepth);
+            matchLines[i] = CollapseCSharpGenericTypeWhitespace(StripLeadingCSharpAttributeLists(sanitized));
         }
 
         return matchLines;
+    }
+
+    /// <summary>
+    /// Track multi-line C# `[...]` attribute sections across lines and blank out any text that
+    /// sits inside those sections, so downstream symbol regexes do not treat interior identifiers
+    /// as declarations. Only activates when a leading `[` (optionally after whitespace) opens the
+    /// section without a matching `]` on the same line — single-line attribute lists continue to
+    /// be handled by `StripLeadingCSharpAttributeLists`.
+    /// 複数行にまたがる C# `[...]` 属性セクションを跨行で追跡し、内部の文字列を空白化することで
+    /// 下流のシンボル regex が内部の識別子を宣言として誤解釈しないようにする。行頭（空白の後）の
+    /// `[` が同一行内で閉じないときだけ起動し、同一行で完結する属性リストは
+    /// `StripLeadingCSharpAttributeLists` が引き続き担当する。
+    /// </summary>
+    private static string StripMultiLineCSharpAttributeInterior(string line, ref int depth)
+    {
+        if (depth == 0)
+        {
+            // Detect the opening of a multi-line attribute section: line starts with `[`, and the
+            // `[` is not closed on the same line (single-line cases are handled downstream).
+            var cursor = 0;
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+            if (cursor >= line.Length || line[cursor] != '[')
+                return line;
+
+            // Count `[` / `]` on this line to decide whether we span into following lines.
+            int localDepth = 0;
+            for (int i = cursor; i < line.Length; i++)
+            {
+                if (line[i] == '[') localDepth++;
+                else if (line[i] == ']')
+                {
+                    localDepth--;
+                    if (localDepth == 0)
+                        return line; // single-line section — leave to StripLeadingCSharpAttributeLists
+                }
+            }
+            if (localDepth <= 0)
+                return line;
+
+            depth = localDepth;
+            return string.Empty;
+        }
+
+        // We are inside a multi-line attribute section. Walk the line, closing brackets when we
+        // see `]`. Once depth returns to zero, the remainder of the line is real code.
+        int index = 0;
+        while (index < line.Length && depth > 0)
+        {
+            if (line[index] == '[') depth++;
+            else if (line[index] == ']') depth--;
+            index++;
+        }
+        if (depth > 0)
+            return string.Empty;
+        return line[index..];
     }
 
     private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)

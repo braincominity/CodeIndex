@@ -133,19 +133,23 @@ public static class ReferenceExtractor
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
 
     // No-arg C# attribute name (`[Serializable]`, `[assembly: CLSCompliant]`, `[System.Obsolete]`,
-    // `[global::System.Obsolete]`, `[Alias::MyAttr]`, `[Required, Key]`). CallRegex only matches
-    // identifiers followed by `(`, so no-arg attributes would otherwise never be indexed. The
-    // pattern anchors to `[` / `,` boundaries and refuses to match when the identifier is followed
-    // by `(` (handled by CallRegex + TryClassifyMetadataReference) or a qualifier continuation
-    // (`.` / `::`). A subsequent `IsInsideCSharpAttributeRange` filter keeps the match from firing
-    // on indexer access like `arr[i]`.
+    // `[global::System.Obsolete]`, `[Alias::MyAttr]`, `[Required, Key]`, and their multi-line
+    // variants where `[` / `]` sit on separate lines). CallRegex only matches identifiers followed
+    // by `(`, so no-arg attributes would otherwise never be indexed. The pattern refuses to match
+    // when the identifier is followed by `(` (handled by CallRegex + TryClassifyMetadataReference)
+    // or a qualifier continuation (`.` / `::`). The match is gated downstream by
+    // `IsInsideCSharpAttributeRange`, so it is safe to relax the `[` / `,` left-anchor in favor of
+    // a word-boundary lookbehind — that lets a bare identifier on a line like `    Serializable`
+    // inside a multi-line attribute section still be recognized.
     // 引数なしの C# attribute 名用 regex。`[Serializable]` などは CallRegex では拾えないため専用の
     // 入口で捕捉する。`global::System.Obsolete` や `Alias::MyAttr` のように `::` 修飾子の付く形も
-    // 許容する。`[` / `,` 境界にアンカーし、後続が `(`（CallRegex 経路で処理）や `.` / `::`
-    // （qualifier 継続）なら採用しない。`arr[i]` のような indexer を排除するため、マッチ後に
-    // `IsInsideCSharpAttributeRange` で範囲内かも確認する。
+    // 許容する。`[` / `,` / `]` が別行にある複数行形（例: `[\n Serializable\n]`）も取り込むため、
+    // 左側は `[` / `,` ではなく単語境界だけでアンカーする。属性以外の位置で誤検出しないよう、
+    // マッチ後は `IsInsideCSharpAttributeRange` で属性レンジ内かどうかを確認する。後続が `(`
+    // （CallRegex 経路）や `.` / `::`（qualifier 継続）なら名前を確定させず、行末（`$`）・`]`・`,`
+    // のいずれかで初めて採用する。
     private static readonly Regex CSharpNoArgAttributeRegex = new(
-        @"[\[,]\s*(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)\s*(?=[\],])",
+        @"(?<!\w)(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)\s*(?=[\],]|$)",
         RegexOptions.Compiled);
 
     // No-arg Java-family annotation (`@Deprecated`, `@Override`, `@org.junit.Test`, `@field:Deprecated`).
