@@ -3684,6 +3684,86 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPointerReturnTypes()
+    {
+        // Issue #234: methods with pointer / function-pointer return types must still be indexed.
+        // Issue #234: ポインタ / 関数ポインタ戻り値型のメソッドも取りこぼさずインデックスする。
+        var content = "namespace Demo;\n\npublic unsafe class FP\n{\n    public int* Get(int[] a) { fixed (int* p = a) { return p; } }\n    public void** Double() => null;\n    public byte* Get1() => null;\n    public delegate*<int, int> Transform() => null;\n    public static unsafe int*[] Arr() => null!;\n    public unsafe void Modify(int* p, int v) { *p = v; }\n    public static unsafe int Deref(int* p) => *p;\n    public int* P { get; set; }\n    public byte* Q => null;\n    public int* this[int i] => null;\n}\n\npublic unsafe delegate int* PointerDelegate(int x);\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Double" && s.ReturnType == "void**");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get1" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Transform" && s.ReturnType == "delegate*<int, int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Arr" && s.ReturnType == "int*[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Modify");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Deref");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Q" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PointerDelegate" && s.ReturnType == "int*");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfacePointerReturnTypes()
+    {
+        // Issue #234: explicit-interface implementations with pointer / function-pointer
+        // return types must still be indexed, including nested generics inside the
+        // function-pointer payload and `delegate* unmanaged[Cdecl]<...>` calling conventions.
+        // Issue #234: explicit-interface 実装のポインタ / 関数ポインタ戻り値型も取りこぼさず、
+        // function-pointer 内部に入れ子の generic がある場合や `delegate* unmanaged[Cdecl]<...>` でも動くこと。
+        var content = """
+            namespace Demo;
+
+            public unsafe interface IFoo
+            {
+                int* Get();
+                delegate*<int, int> Transform();
+                delegate*<System.Collections.Generic.List<int>, int> TransformNested();
+                delegate*<delegate*<int, void>, int> TransformFp();
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> TransformUnmanaged();
+                byte** Double();
+                int*[] Arr();
+            }
+
+            public unsafe class Foo : IFoo
+            {
+                int* IFoo.Get() => null;
+                delegate*<int, int> IFoo.Transform() => null;
+                delegate*<System.Collections.Generic.List<int>, int> IFoo.TransformNested() => null;
+                delegate*<delegate*<int, void>, int> IFoo.TransformFp() => null;
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> IFoo.TransformUnmanaged() => null;
+                byte** IFoo.Double() => null;
+                int*[] IFoo.Arr() => null!;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Get"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Transform"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformNested"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformFp"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformUnmanaged"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Double"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Arr"));
+
+        var impls = symbols.Where(s => s.Kind == "function" && s.ContainerName == "Foo").ToList();
+        Assert.Equal("int*", impls.Single(s => s.Name == "Get").ReturnType);
+        Assert.Equal("delegate*<int, int>", impls.Single(s => s.Name == "Transform").ReturnType);
+        Assert.Equal("delegate*<System.Collections.Generic.List<int>, int>", impls.Single(s => s.Name == "TransformNested").ReturnType);
+        Assert.Equal("delegate*<delegate*<int, void>, int>", impls.Single(s => s.Name == "TransformFp").ReturnType);
+        // Spaces inside `unmanaged[...]<...>` payload are collapsed by CollapseCSharpGenericTypeWhitespace
+        // because the outer `<` has `]` as predecessor (a recognized generic-angle start); non-unmanaged
+        // `delegate*<...>` keeps payload spaces because the outer `<` has `*` as predecessor.
+        // `unmanaged[...]<...>` の payload 内のスペースは CollapseCSharpGenericTypeWhitespace で除去される
+        // （outer `<` の直前が `]` で generic angle start と認識されるため）。通常の `delegate*<...>` は
+        // outer `<` の直前が `*` で認識されないため payload 内スペースは保持される。
+        Assert.Equal("delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>,int>", impls.Single(s => s.Name == "TransformUnmanaged").ReturnType);
+        Assert.Equal("byte**", impls.Single(s => s.Name == "Double").ReturnType);
+        Assert.Equal("int*[]", impls.Single(s => s.Name == "Arr").ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPartialMethods()
     {
         // C# 9 extended partial methods / C# 9 拡張 partial メソッド
