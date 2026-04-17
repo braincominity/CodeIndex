@@ -15,16 +15,19 @@ public static class SymbolExtractor
     // (`int*`, `void**`, `delegate*<int, int>`, `int*[]`) are not silently dropped.
     // The trailing `(?:\?|\[[\],\s]*\])*` loop lets a tuple group carry suffixes
     // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`) so tuple-array and
-    // nullable-tuple return types are captured on methods, properties, indexers, delegates,
-    // events, and explicit interface implementations. The identifier branch already absorbs
+    // nullable-tuple return types are captured on methods, properties, indexers, and
+    // explicit interface implementations. Delegate and event declarations with tuple-array
+    // returns remain blocked by pre-existing pattern-order / generic-over-tuple issues
+    // (#340, #241) and are out of scope for this loop. The identifier branch already absorbs
     // these characters via its char class, but keeping the suffix loop outside both branches
     // is harmless and makes the tuple branch's responsibilities explicit.
     // 戻り値型のクラスに `*` を含め、ポインタ / 関数ポインタ戻り値型（`int*` / `void**` / `delegate*<int, int>` / `int*[]`）を取りこぼさない。
     // 末尾の `(?:\?|\[[\],\s]*\])*` ループで tuple 分岐にも `[]` / `?` / `[][]` / `[,]` の
-    // サフィックスを許容し、`(int, int)[]` / `(int, int)?` のような tuple-array や
-    // nullable-tuple 戻り値をメソッド・プロパティ・インデクサ・delegate・event・明示的
-    // インターフェース実装で捕捉できるようにする。識別子側の分岐は文字クラスに `[`/`]`/`?`
-    // を既に含むため無害な冗長だが、tuple 分岐側の責務が明確になる。
+    // サフィックスを許容し、`(int, int)[]` / `(int, int)?` のような tuple-array / nullable-tuple
+    // 戻り値をメソッド・プロパティ・インデクサ・明示的インターフェース実装で捕捉できるようにする。
+    // delegate / event 宣言で tuple-array 戻り値を扱う件はパターン評価順や generic-over-tuple
+    // 側の既存バグ（#340、#241）が残っており、このループの範囲外。識別子側の分岐は
+    // 文字クラスに `[`/`]`/`?` を既に含むため無害な冗長だが、tuple 分岐側の責務が明確になる。
     private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)(?:\?|\[[\],\s]*\])*)";
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
