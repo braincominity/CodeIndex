@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -691,7 +692,7 @@ public static class SymbolExtractor
             {
                 var lexedLine = LexCSharpLine(structuralLine, csharpLexState);
                 csharpLexState = lexedLine.EndState;
-                matchLine = StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine);
+                matchLine = CollapseCSharpGenericTypeWhitespace(StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine));
             }
 
             var stopAfterFirstPatternMatch = false;
@@ -5203,6 +5204,40 @@ public static class SymbolExtractor
         }
 
         return cursor < line.Length ? line[cursor..] : string.Empty;
+    }
+
+    private static string CollapseCSharpGenericTypeWhitespace(string line)
+    {
+        if (string.IsNullOrEmpty(line) || !line.Contains('<') || !line.Contains(' '))
+            return line;
+
+        var builder = new StringBuilder(line.Length);
+        var angleDepth = 0;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '<' && LooksLikeRecordGenericAngleStart(line, i))
+            {
+                angleDepth++;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '>' && angleDepth > 0)
+            {
+                angleDepth--;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (angleDepth > 0 && char.IsWhiteSpace(ch))
+                continue;
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
