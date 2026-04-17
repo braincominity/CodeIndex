@@ -147,11 +147,14 @@ public static class ReferenceExtractor
     private static readonly Regex JavaExtendsRegex = new(@"\bextends\s+(?<base>[\w.$]+)", RegexOptions.Compiled);
     // Same-line Java constructor declaration used to synthesize a container for chain rewrites
     // when SymbolExtractor does not emit a function symbol (the enum-member regex requires the
-    // line to end with `,`, `{`, or `;`, so `Leaf(int x){super(x);}` is skipped).
+    // line to end with `,`, `{`, or `;`, so `Leaf(int x){super(x);}` is skipped). The pattern
+    // also accepts leading annotations (with optional argument lists) and generic type
+    // parameters (`<T>`, `<T extends Foo>`) that precede the constructor name.
     // SymbolExtractor が function 化しない same-line ctor body を、chain 書き換えの container
-    // として合成するための正規表現。
+    // として合成するための正規表現。先頭アノテーション列と、名前直前の generic 型パラメータ
+    // （`<T>` / `<T extends Foo>`）にも対応する。
     private static readonly Regex JavaSameLineCtorRegex = new(
-        @"^\s*(?:(?:public|private|protected|static|final|synchronized|strictfp|abstract|native|default)\s+)*(?<name>\w+)\s*\([^)]*\)(?:\s*throws\s+[\w.,\s]+?)?\s*\{",
+        @"^\s*(?:@\w+(?:\s*\([^)]*\))?\s+)*(?:(?:public|private|protected|static|final|synchronized|strictfp|abstract|native|default)\s+)*(?:<[^>{};]+>\s*)?(?<name>\w+)\s*\([^)]*\)(?:\s*throws\s+[\w.,\s]+?)?\s*\{",
         RegexOptions.Compiled);
     // Inline `where` constraint in a C# type header; used to trim base-list parsing
     // C# 型ヘッダーの where 制約句。base-list 解析の終端として使用

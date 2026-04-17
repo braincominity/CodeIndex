@@ -1171,6 +1171,73 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaCtorChain_SameLineBody_WithLeadingAnnotation_RewritesToBaseClass()
+    {
+        // Same-line ctor bodies can be preceded by annotations (with or without argument
+        // lists), e.g. `@Deprecated Leaf(int x){super(x);}` or
+        // `@SuppressWarnings("unused") Leaf(int x){super(x);}`.
+        // The synthesis regex must accept the leading annotation so the chain rewrite still
+        // finds a ctor container.
+        // 同一行 ctor 本体の直前にアノテーションが付く形（引数あり/なし）も、合成コンテナ生成で
+        // 取りこぼしてはならない。
+        const string content = """
+            package demo;
+
+            public class Root {
+                public Root(int x) {}
+            }
+
+            class Leaf extends Root {
+                @Deprecated Leaf(int x){super(x);}
+                @SuppressWarnings("unused") Leaf(long x){super((int) x);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var rootRefs = references.Where(r =>
+            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
+        Assert.Equal(2, rootRefs.Count);
+        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+        Assert.DoesNotContain(references, r => r.SymbolName == "this");
+    }
+
+    [Fact]
+    public void Extract_JavaCtorChain_SameLineBody_WithGenericCtor_RewritesToBaseClass()
+    {
+        // Generic constructors (`public <T> Leaf(T x){super(0);}`) insert type parameters
+        // between the modifiers and the ctor name. The synthesis regex must accept the
+        // optional `<...>` token before `<name>`.
+        // 型パラメータ付き ctor (`public <T> Leaf(T x){super(0);}`) は修飾子と ctor 名の間に
+        // `<...>` が入る。合成コンテナ生成は名前直前の generic 型パラメータを許容すべし。
+        const string content = """
+            package demo;
+
+            public class Root {
+                public Root(int x) {}
+            }
+
+            class Leaf extends Root {
+                public <T> Leaf(T x){super(0);}
+                <T extends Number> Leaf(T x, int y){super(y);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var rootRefs = references.Where(r =>
+            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
+        Assert.Equal(2, rootRefs.Count);
+        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
     public void Extract_JavaSuperCall_OutsideConstructor_IsNotRewritten()
     {
         // super.method(...) is a regular method call, not a ctor chain.
