@@ -3219,6 +3219,74 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsReadonlyProperties()
+    {
+        // issue #327: `readonly` is a valid property/accessor modifier on C# 8+ struct
+        // members. All three shapes — expression-bodied (`readonly int A => _v;`),
+        // auto-property (`readonly int B { get; }`), and accessor-body
+        // (`readonly int C { get => _v; }`) — must surface as `property` rows. The regex
+        // modifier slot must consume `readonly` so that a standalone accessor line
+        // (`readonly get => _v;`) inside a block-bodied property does NOT match the
+        // expression-bodied property regex and leak a phantom `property get` / `property set`.
+        // issue #327: C# 8+ 構造体メンバーの `readonly` は property/accessor 修飾子として有効。
+        // 式本体 (`readonly int A => _v;`)、自動プロパティ (`readonly int B { get; }`)、
+        // accessor-body (`readonly int C { get => _v; }`) の三形態はいずれも `property`
+        // として抽出される必要がある。regex の修飾子スロットが `readonly` を消費することで、
+        // ブロック本体プロパティ内の `readonly get => _v;` accessor 行が単独で式本体プロパティ
+        // regex にマッチせず phantom `property get` / `property set` を生まない。
+        var content = """
+            namespace Demo;
+
+            public struct S
+            {
+                private int _v;
+
+                public readonly int A => _v;
+                public readonly int B { get; }
+                public readonly int C { get => _v; }
+
+                public int Mixed
+                {
+                    readonly get => _v;
+                    set => _v = value;
+                }
+
+                public int D { get; set; }
+                public readonly int GetD() => D;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var a = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "A"));
+        Assert.Equal("int", a.ReturnType);
+        Assert.Equal("public", a.Visibility);
+
+        var b = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "B"));
+        Assert.Equal("int", b.ReturnType);
+        Assert.Equal("public", b.Visibility);
+
+        var c = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "C"));
+        Assert.Equal("int", c.ReturnType);
+        Assert.Equal("public", c.Visibility);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Mixed");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "D");
+
+        // Baseline: `readonly` methods continue to extract as `function`.
+        // ベースライン: `readonly` メソッドは従来どおり `function` として抽出される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetD");
+
+        // Phantom suppression: neither the accessor line `readonly get => _v;` nor the
+        // accessor line `set => _v = value;` must leak a top-level `property` row named
+        // `get` / `set` / `init`.
+        // phantom 抑止: accessor 行の `readonly get => _v;` や `set => _v = value;` が
+        // top-level の `property get` / `property set` / `property init` を生まないこと。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "get");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "set");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "init");
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
     {
         var content = """
@@ -3548,6 +3616,56 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Column");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "DatabaseGenerated");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "ApiController");
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedConstructorInitializer_DoesNotLeakBaseOrThisAsPhantoms()
+    {
+        // Wrapped `: base(...)` / `: this(...)` initializers must not surface as phantom
+        // `function base` / `function this` symbols. The C# returnType char class includes `:`
+        // to support alias-qualified type names like `Alias::Type`, so a wrapped initializer line
+        // like `    : base(s, 0)` could otherwise tokenize as returnType=`:` + name=`base` + paren.
+        // Both the first-char `(?![?:])` guard and the name-level `(?!(?:base|this)\b)` guard
+        // must cooperate to block it. Closes #331.
+        // ラップされた `: base(...)` / `: this(...)` 初期化子行が `function base` / `function this`
+        // の phantom として漏れないことを担保する。Closes #331.
+        var content = """
+            namespace CtorChain;
+
+            public class Base
+            {
+                public Base() { }
+                public Base(int x) { }
+                public Base(string s, int n) { }
+            }
+
+            public class Derived : Base
+            {
+                public Derived(int x) : base(x) { }
+
+                public Derived(string s)
+                    : base(s, 0)
+                {
+                }
+
+                public Derived() : this(0) { }
+
+                public Derived(int a, int b)
+                    : this(a)
+                {
+                }
+
+                public Derived(double d) : base((int)d, "d") => System.Console.WriteLine(d);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Base");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Derived");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "base");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "this");
+        // All five Derived constructors should still be captured / 5 つのコンストラクタは正しく取得できること
+        Assert.Equal(5, symbols.Count(s => s.Kind == "function" && s.Name == "Derived"));
     }
 
     [Fact]
@@ -4528,6 +4646,95 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.Line == 5 && s.ReturnType == "Dictionary<string,int>");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ContainerName == "Holder" && s.ReturnType == "Dictionary<string,int>");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsTupleReturnTypesWithTrailingSuffix()
+    {
+        // Issue #328: tuple return types with a trailing suffix (`[]`, `?`, `[,]`, `[][]`)
+        // must not be silently dropped. The C# returnType alternation's tuple branch
+        // needs to carry a trailing `(?:\?|\[[\],\s]*\])*` loop so tuple-array and
+        // nullable-tuple members are captured on methods, properties, indexers, and
+        // explicit interface implementations.
+        // Issue #328: 末尾サフィックス（`[]` / `?` / `[,]` / `[][]`）付きの tuple 戻り値型が
+        // サイレントに落ちてはならない。C# の returnType 分岐の tuple 側に
+        // `(?:\?|\[[\],\s]*\])*` のループを持たせ、tuple-array / nullable-tuple を
+        // メソッド・プロパティ・インデクサ・明示的インターフェース実装で捕捉する。
+        var content = """
+            namespace Demo;
+
+            public class Svc
+            {
+                public (int, int)[]        A()  => new (int, int)[0];
+                public (int x, int y)[]    B()  => new (int x, int y)[0];
+                public (int, int)?         C()  => null;
+                public (int x, int y)?     D()  => null;
+                public (int, int)[][]      E()  => new (int, int)[0][];
+                public (int, int)[,]       F()  => new (int, int)[0, 0];
+                public (int, int)?[]       G()  => null!;
+                public (int, int)[]? H()         => null;
+                public (int, int)[] Ap { get; set; } = System.Array.Empty<(int, int)>();
+                public (int, int)? Np { get; set; }
+                public (int, int)[] Fp => new (int, int)[0];
+                public (int, int)[] this[int index] => Ap;
+                (int, int)? ICoord.MaybeFind(string key) => null;
+                (int, int)[] ICoord.FindAll(string key) => System.Array.Empty<(int, int)>();
+                public (int, int) Plain() => (0, 0);
+                public (int, int) PlainProp { get; set; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var a = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "A"));
+        Assert.Equal("(int, int)[]", a.ReturnType);
+
+        var b = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "B"));
+        Assert.Equal("(int x, int y)[]", b.ReturnType);
+
+        var c = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "C"));
+        Assert.Equal("(int, int)?", c.ReturnType);
+
+        var d = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "D"));
+        Assert.Equal("(int x, int y)?", d.ReturnType);
+
+        var e = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "E"));
+        Assert.Equal("(int, int)[][]", e.ReturnType);
+
+        var f = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "F"));
+        Assert.Equal("(int, int)[,]", f.ReturnType);
+
+        var g = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "G"));
+        Assert.Equal("(int, int)?[]", g.ReturnType);
+
+        var h = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "H"));
+        Assert.Equal("(int, int)[]?", h.ReturnType);
+
+        var ap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Ap"));
+        Assert.Equal("(int, int)[]", ap.ReturnType);
+
+        var np = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Np"));
+        Assert.Equal("(int, int)?", np.ReturnType);
+
+        var fp = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Fp"));
+        Assert.Equal("(int, int)[]", fp.ReturnType);
+
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item" && s.ContainerName == "Svc"));
+        Assert.Equal("(int, int)[]", indexer.ReturnType);
+
+        var maybeFindImpl = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MaybeFind" && s.ContainerName == "Svc"));
+        Assert.Equal("(int, int)?", maybeFindImpl.ReturnType);
+
+        var findAllImpl = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "FindAll" && s.ContainerName == "Svc"));
+        Assert.Equal("(int, int)[]", findAllImpl.ReturnType);
+
+        // Regression: plain tuple without a suffix still captured.
+        // 回帰: サフィックスなしの素の tuple も引き続き捕捉される。
+        var plain = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Plain"));
+        Assert.Equal("(int, int)", plain.ReturnType);
+
+        var plainProp = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "PlainProp"));
+        Assert.Equal("(int, int)", plainProp.ReturnType);
     }
 
     [Fact]
