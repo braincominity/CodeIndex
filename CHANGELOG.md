@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Changed
+- **Windows CI test run no longer pays 9x Windows Defender overhead (#394)** — The `Build and Test` workflow previously saw Windows at ~5m35s versus ~36s on Ubuntu and ~51s on macOS for the same sequential xUnit suite, because every temp project, SQLite DB, `.cdidx/` directory, and synthetic source file created by the tests triggered Windows Defender real-time scanning on the `windows-latest` runner. Added a Windows-only `Exclude workspace and temp paths from Windows Defender` step before `Set up .NET` that calls `Add-MpPreference -ExclusionPath` for the workspace, `$RUNNER_TEMP`, and `$TEMP`, plus `Add-MpPreference -ExclusionProcess` for `dotnet.exe`, `git.exe`, and `testhost.exe`. This is a CI-only change scoped to the ephemeral Windows runner, does not touch production or test code, and does not relax xUnit's assembly-level `DisableTestParallelization` serialization contract. Affected: `.github/workflows/dotnet.yml`. Closes #394.
 - **Developer Guide now distinguishes SQLite's role from "zero dependencies" and labels release numbers as examples** — Clarified that cdidx remains a zero-configuration, single-file CLI with exactly one production dependency (`Microsoft.Data.Sqlite`), and made the release-workflow checklist explicitly state that `1.9.0` is only an example version to substitute during an actual release. Affected: `DEVELOPER_GUIDE.md`.
 
 #### Fixed
@@ -681,6 +682,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 変更
+- **Windows CI テスト実行が Windows Defender の overhead で 9 倍遅い問題を解消 (#394)** — `Build and Test` ワークフローの Windows runner は、同じ逐次 xUnit スイートに対して Ubuntu の約36秒・macOS の約51秒に対して約5分35秒かかっていた。原因は、テストが生成する大量の一時プロジェクト、SQLite DB、`.cdidx/` ディレクトリ、合成ソースファイルを `windows-latest` の Windows Defender が都度スキャンしていたこと。`Set up .NET` の前に Windows 限定の `Exclude workspace and temp paths from Windows Defender` ステップを追加し、`${{ github.workspace }}`、`$RUNNER_TEMP`、`$TEMP` を `Add-MpPreference -ExclusionPath` で、`dotnet.exe`、`git.exe`、`testhost.exe` を `Add-MpPreference -ExclusionProcess` で除外する。CI 専用の変更で一時的な Windows runner だけに効き、本番コードやテストコードには触れず、xUnit の assembly 単位 `DisableTestParallelization` による直列化契約も崩さない。対象: `.github/workflows/dotnet.yml`。Closes #394。
 - **DEVELOPER_GUIDE が SQLite の位置付けとリリース番号の例示を明確化** — cdidx が「設定ゼロ・単一ファイル・本番依存1個」の CLI であり、その唯一の本番依存が `Microsoft.Data.Sqlite` であることを明記した。あわせて、リリース手順のチェックリスト中に出てくる `1.9.0` は固定値ではなく例示であり、実際のリリース番号へ読み替える前提だと明示した。対象: `DEVELOPER_GUIDE.md`。
 
 #### 修正

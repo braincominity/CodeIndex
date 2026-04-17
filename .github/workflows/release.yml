@@ -36,6 +36,23 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.tag_name || github.ref }}
 
+      # Same mitigation as .github/workflows/dotnet.yml for issue #394:
+      # Windows Defender real-time scanning of the test suite's temp files
+      # dominates the Windows lane. Exclude workspace/temp/process paths so
+      # the release workflow's Windows test step does not pay 9x overhead.
+      # dotnet.yml と同じ issue #394 対策。release workflow の Windows
+      # test step にも同じ exclusion を適用する。
+      - name: Exclude workspace and temp paths from Windows Defender (Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'dotnet.exe' -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'git.exe' -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'testhost.exe' -ErrorAction SilentlyContinue
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:

@@ -30,6 +30,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Windows Defender real-time scanning of every temp file created by the
+      # test suite (temp projects, SQLite DBs, .cdidx directories, synthetic
+      # source files) dominates the Windows lane of this matrix; see issue #394.
+      # Excluding the workspace, runner temp, and the test process paths before
+      # build/test brings the Windows runtime back in line with macOS/Ubuntu.
+      # テストスイートが大量に作る一時ファイル（temp project / SQLite DB /
+      # .cdidx / 合成ソース）を Windows Defender が都度スキャンする影響で
+      # Windows lane だけ極端に遅くなる（issue #394）。build/test 前に
+      # workspace と temp とテストプロセスを除外して macOS/Ubuntu と同等に戻す。
+      - name: Exclude workspace and temp paths from Windows Defender (Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:TEMP" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'dotnet.exe' -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'git.exe' -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'testhost.exe' -ErrorAction SilentlyContinue
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
