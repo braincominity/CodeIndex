@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.11.0] - 2026-04-17
+
 #### Changed
 - **Developer Guide now distinguishes SQLite's role from "zero dependencies" and labels release numbers as examples** — Clarified that cdidx remains a zero-configuration, single-file CLI with exactly one production dependency (`Microsoft.Data.Sqlite`), and made the release-workflow checklist explicitly state that `1.9.0` is only an example version to substitute during an actual release. Affected: `DEVELOPER_GUIDE.md`.
 
@@ -681,6 +683,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.11.0] - 2026-04-17
+
 #### 変更
 - **DEVELOPER_GUIDE が SQLite の位置付けとリリース番号の例示を明確化** — cdidx が「設定ゼロ・単一ファイル・本番依存1個」の CLI であり、その唯一の本番依存が `Microsoft.Data.Sqlite` であることを明記した。あわせて、リリース手順のチェックリスト中に出てくる `1.9.0` は固定値ではなく例示であり、実際のリリース番号へ読み替える前提だと明示した。対象: `DEVELOPER_GUIDE.md`。
 
@@ -1345,7 +1349,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/Widthdom/CodeIndex/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Widthdom/CodeIndex/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Widthdom/CodeIndex/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/Widthdom/CodeIndex/compare/v1.8.0...v1.8.1
