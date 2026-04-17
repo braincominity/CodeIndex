@@ -1225,9 +1225,9 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_CsharpTypeof_HandlesGenericAndArrayArguments()
     {
-        // typeof(List<int>) should capture `List`; typeof(int[]) should capture `int` — both
-        // non-dotted so only the leading segment is emitted.
-        // typeof(List<int>) は `List` を拾い、typeof(int[]) は `int` を拾う。
+        // typeof(List<int>) should capture `List`; the lexer skips `<int>` because `int` is a
+        // built-in C# alias that must never appear as a type_reference row.
+        // typeof(List<int>) は `List` を拾い、`<int>` 内の C# built-in alias はスキップする。
         const string content = """
             using System.Collections.Generic;
 
@@ -1251,6 +1251,100 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Collections" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Generic" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "type_reference");
+
+        // C# built-in aliases inside generic arguments must not surface as type_reference rows.
+        // C# の built-in alias は type_reference としてインデックスしない。
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "type_reference" && (r.SymbolName == "int" || r.SymbolName == "string"));
+    }
+
+    [Fact]
+    public void Extract_CsharpNameof_CapturesTrailingMemberAfterGenericMidPath()
+    {
+        // issue #253 review: `nameof(List<int>.Count)` must emit both `List` AND `Count`;
+        // regex-only extraction stopped at `<`, dropping the actual member name that the user
+        // is navigating to. The lexer skips generic `<...>` and resumes scanning at `.Count`.
+        // issue #253 レビュー: `nameof(List<int>.Count)` は `List` と `Count` を両方拾う必要あり。
+        const string content = """
+            using System.Collections.Generic;
+
+            public class Caller
+            {
+                public void Work()
+                {
+                    var n = nameof(List<int>.Count);
+                    var n2 = nameof(System.Collections.Generic.Dictionary<string, int>.KeyCollection);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Count" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "KeyCollection" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpNameof_SkipsGlobalAliasQualifier()
+    {
+        // issue #253 review: `nameof(global::System.String)` — `global` is a namespace alias
+        // qualifier and should NOT be captured; `System` is a built-in alias and should be
+        // skipped; only real user-indexed path segments remain (none in this example).
+        // Before the fix, only the bogus `global` token was emitted.
+        // issue #253 レビュー: `global::` のエイリアス修飾子は捕捉しない。
+        const string content = """
+            public class Caller
+            {
+                public void Work()
+                {
+                    var n = nameof(global::System.String);
+                    var n2 = nameof(MyAlias::Some.Type);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "global" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "MyAlias" && r.ReferenceKind == "type_reference");
+        // BCL type names (`String`, capital) are real types and must surface; only lowercase
+        // alias keywords (`string`) are filtered.
+        // BCL 型名（`String`）は実型なので捕捉し、lowercase の alias だけを除外する。
+        Assert.Contains(references, r => r.SymbolName == "System" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Some" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Type" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpTypeof_SkipsBuiltInAliasArguments()
+    {
+        // issue #253 review: `typeof(int)`, `sizeof(int)`, `typeof(string)` etc. resolve to
+        // BCL primitives and should NOT pollute `references` / `inspect`. The ignore set
+        // mirrors the Java primitive skip for `T.class`.
+        // issue #253 レビュー: C# built-in alias は type_reference として索引しない。
+        const string content = """
+            public class Caller
+            {
+                public void Work()
+                {
+                    var t1 = typeof(int);
+                    var t2 = typeof(string);
+                    var t3 = typeof(object);
+                    var s = sizeof(int);
+                    var v = typeof(void);
+                    var d = typeof(dynamic);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "type_reference");
     }
 
     [Fact]
