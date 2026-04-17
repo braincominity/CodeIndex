@@ -2701,4 +2701,89 @@ public class ReferenceExtractorTests
             r.SymbolName == "Root" && r.ReferenceKind == "call"
             && r.ContainerKind == "function" && r.ContainerName == "Leaf");
     }
+
+    [Fact]
+    public void Extract_Java_AnnotationStringArgWithCloseParen_ResolvesBaseToRoot()
+    {
+        // Regression: StripJavaTypeAnnotations and SkipBalancedParens previously counted raw
+        // parens, so a closing `)` inside a string literal such as `@Ann(text=")")` closed the
+        // annotation early. ExtractBareTypeName then received a mangled prefix like `") Root`
+        // and the super(...) edge was silently dropped (or misattributed) for otherwise legal
+        // annotations with quoted arguments.
+        // annotation 引数内の `)` / `(` を含む文字列リテラルを正しくスキップし、基底型解決が
+        // 壊れないことを固定する。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int value) {}
+            }
+
+            @interface Ann {
+                String text();
+            }
+
+            class Leaf extends @Ann(text=")") Root {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineCtorWithQuotedAnnotationArg_KeepsSuperEdge()
+    {
+        // Regression: TryExtractJavaCtorNameFromLine walks past annotations using
+        // SkipBalancedParens, which previously counted raw `)` characters. A legal
+        // `@Ann(text=")")` prefix on a same-line ctor truncated annotation scanning at the
+        // string's closing `)` and the ctor name read then started mid-string, so
+        // TrySynthesizeSameLineJavaCtor returned null and the synthesized `super(...)` edge
+        // added for same-line ctors vanished.
+        // 同一行 ctor の annotation 文字列引数内 `)` が ctor 名抽出を壊さないことを固定する。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int value) {}
+            }
+
+            @interface Ann {
+                String text();
+            }
+
+            class Leaf extends Root {
+                public @Ann(text=")") Leaf(){super(0);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+    }
+
+    [Fact]
+    public void TryExtractJavaCtorNameFromLine_QuotedAnnotationArg_ReturnsCtorName()
+    {
+        // Direct regression on the shared annotation scanner: an `)` inside a string literal
+        // argument must not end the balanced-paren walk, otherwise ctor name extraction lands
+        // on the `"` and returns null.
+        // annotation 引数の文字列リテラル内の `)` で走査が切れないことを直接検証。
+        Assert.Equal(
+            "Leaf",
+            ReferenceExtractor.TryExtractJavaCtorNameFromLine("public @Ann(text=\")\") Leaf(){super(0);}"));
+        Assert.Equal(
+            "Leaf",
+            ReferenceExtractor.TryExtractJavaCtorNameFromLine("@Ann(text=\"(\") Leaf(){this(0);}"));
+    }
 }

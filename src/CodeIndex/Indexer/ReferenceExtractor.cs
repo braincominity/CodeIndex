@@ -840,8 +840,26 @@ public static class ReferenceExtractor
         int depth = 0;
         for (; i < text.Length; i++)
         {
-            if (text[i] == '(') depth++;
-            else if (text[i] == ')')
+            var c = text[i];
+            // Skip string / char literals so an embedded `)` inside `@Ann(text=")")` does not
+            // prematurely close the annotation argument list.
+            // 文字列・文字リテラル内の `)` で annotation 引数を早期終了しないようスキップする。
+            if (c == '"' || c == '\'')
+            {
+                var quote = c;
+                i++;
+                while (i < text.Length)
+                {
+                    var ch = text[i];
+                    if (ch == '\\' && i + 1 < text.Length) { i += 2; continue; }
+                    if (ch == quote) break;
+                    i++;
+                }
+                if (i >= text.Length) return false;
+                continue;
+            }
+            if (c == '(') depth++;
+            else if (c == ')')
             {
                 depth--;
                 if (depth == 0)
@@ -1345,8 +1363,24 @@ public static class ReferenceExtractor
                     i++;
                     while (i < text.Length && parenDepth > 0)
                     {
-                        if (text[i] == '(') parenDepth++;
-                        else if (text[i] == ')') parenDepth--;
+                        var ch = text[i];
+                        // Skip string / char literals so `@Ann(text=")")` does not close early.
+                        // 文字列・文字リテラル内の `)` で早期終了しないようスキップする。
+                        if (ch == '"' || ch == '\'')
+                        {
+                            var quote = ch;
+                            i++;
+                            while (i < text.Length)
+                            {
+                                var lc = text[i];
+                                if (lc == '\\' && i + 1 < text.Length) { i += 2; continue; }
+                                if (lc == quote) { i++; break; }
+                                i++;
+                            }
+                            continue;
+                        }
+                        if (ch == '(') parenDepth++;
+                        else if (ch == ')') parenDepth--;
                         i++;
                     }
                 }
