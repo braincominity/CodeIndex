@@ -3263,9 +3263,11 @@ public class SymbolExtractorTests
 
         var b = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "B"));
         Assert.Equal("int", b.ReturnType);
+        Assert.Equal("public", b.Visibility);
 
         var c = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "C"));
         Assert.Equal("int", c.ReturnType);
+        Assert.Equal("public", c.Visibility);
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Mixed");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "D");
