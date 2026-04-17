@@ -1293,6 +1293,18 @@ internal static class StructuralLineMasker
             return pos;
         }
 
+        // Postfix / prefix `++` and `--` both produce a numeric-typed expression,
+        // so the following `/` must be division, not a regex start. Consume as one
+        // 2-char token to stop the second `+` / `-` from being classified as `Other`.
+        // postfix / prefix の `++` と `--` は数値を生むため、続く `/` は division と
+        // 扱う必要がある。2 文字 token として消費し、2 文字目が `Other` に落ちて
+        // 直後の `/` を regex と誤判定するのを防ぐ。
+        if ((c == '+' || c == '-') && pos + 1 < line.Length && line[pos + 1] == c)
+        {
+            lexState.SetKind(JsPrevTokenKind.Numeric);
+            return pos + 2;
+        }
+
         switch (c)
         {
             case '(':

@@ -1666,4 +1666,51 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
         Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
     }
+
+    [Fact]
+    public void Extract_JsTemplateHolePostfixIncrementDivision_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: postfix `++` inside a template hole
+        // produces a numeric value, so the next `/` must be division, not a regex
+        // literal. Otherwise `/ 2 + runTask()` is swallowed as a regex body and
+        // the `runTask` edge disappears.
+        // issue #291 続編: テンプレートホール内の postfix `++` は数値を生むため、
+        // 直後の `/` は division として扱う必要がある。regex と誤判定すると
+        // `/ 2 + runTask()` が regex 本体として消費され、`runTask` 参照が失われる。
+        const string content = "function caller(counter) {\n"
+            + "    const branch = `${counter++ / 2 + runTask()}`;\n"
+            + "    realCall();\n"
+            + "    return branch;\n"
+            + "}\n"
+            + "function runTask() { return 1; }\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHolePostfixDecrementDivision_PreservesFollowingCall()
+    {
+        // Same regression for postfix `--`: numeric-typed operand, so `/` after it
+        // must be division. Covers the second 2-char-token path in AdvanceJsToken.
+        // postfix `--` も同様に数値を生み、続く `/` は division 扱い。
+        // `AdvanceJsToken` の 2 文字 token 経路のもう 1 本を確認する。
+        const string content = "function caller(counter) {\n"
+            + "    const branch = `${counter-- / 2 + runTask()}`;\n"
+            + "    realCall();\n"
+            + "    return branch;\n"
+            + "}\n"
+            + "function runTask() { return 1; }\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
 }
