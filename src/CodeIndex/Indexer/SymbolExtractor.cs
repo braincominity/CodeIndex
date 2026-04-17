@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -280,7 +281,7 @@ public static class SymbolExtractor
             // 戻り値型付きメソッド — 明示的インターフェース実装やネストメンバー向けに visibility 省略可。
             // negative lookahead で呼び出し行（await/return/throw/yield/var/typeof 等）と ternary continuation を除外する。
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex(@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex(@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file)\s+)*(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -691,7 +692,7 @@ public static class SymbolExtractor
             {
                 var lexedLine = LexCSharpLine(structuralLine, csharpLexState);
                 csharpLexState = lexedLine.EndState;
-                matchLine = StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine);
+                matchLine = CollapseCSharpGenericTypeWhitespace(StripLeadingCSharpAttributeLists(lexedLine.SanitizedLine));
             }
 
             var stopAfterFirstPatternMatch = false;
@@ -5202,7 +5203,41 @@ public static class SymbolExtractor
                 cursor++;
         }
 
-        return cursor < line.Length ? line[cursor..] : line;
+        return cursor < line.Length ? line[cursor..] : string.Empty;
+    }
+
+    private static string CollapseCSharpGenericTypeWhitespace(string line)
+    {
+        if (string.IsNullOrEmpty(line) || !line.Contains('<') || !line.Contains(' '))
+            return line;
+
+        var builder = new StringBuilder(line.Length);
+        var angleDepth = 0;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '<' && LooksLikeRecordGenericAngleStart(line, i))
+            {
+                angleDepth++;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '>' && angleDepth > 0)
+            {
+                angleDepth--;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (angleDepth > 0 && char.IsWhiteSpace(ch))
+                continue;
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
