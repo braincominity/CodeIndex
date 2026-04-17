@@ -21,7 +21,7 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
-    private const string CSharpEnumMemberUnusedGraphReason = "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused until those edges exist.";
+    private const string CSharpEnumMemberUnusedGraphReason = "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum declarations and enum members are excluded from unused until those edges exist.";
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -3190,7 +3190,7 @@ public static class QueryCommandRunner
             return null;
         if (kind != null && !string.Equals(kind, "enum", StringComparison.Ordinal))
             return null;
-        if (!reader.HasFilteredCSharpEnumMembers(kind, lang, pathPatterns, excludePaths, excludeTests))
+        if (!reader.HasFilteredCSharpEnumSymbols(kind, lang, pathPatterns, excludePaths, excludeTests))
             return null;
 
         return new GraphSupportOverride(

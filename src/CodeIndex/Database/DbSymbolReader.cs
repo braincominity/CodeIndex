@@ -720,7 +720,7 @@ public partial class DbReader
         return cmd.ExecuteScalar() != null;
     }
 
-    public bool HasFilteredCSharpEnumMembers(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public bool HasFilteredCSharpEnumSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (lang != null && !string.Equals(lang, "csharp", StringComparison.Ordinal))
             return false;
@@ -733,8 +733,7 @@ public partial class DbReader
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
-              AND s.kind = 'enum'
-              AND " + GetSymbolColumnSql("container_kind", "''") + @" = 'enum'";
+              AND s.kind = 'enum'";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " LIMIT 1";
         cmd.CommandText = sql;
@@ -1467,7 +1466,7 @@ public partial class DbReader
         var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
         const string pathSql = "lower(f.path)";
         var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
-        var isEnumMemberSql = $"(s.kind = 'enum' AND {GetSymbolColumnSql("container_kind", "''")} = 'enum')";
+        var isCSharpEnumSql = "(f.lang = 'csharp' AND s.kind = 'enum')";
         var hasConfigContextSql = $@"(
                 {pathSql} LIKE 'config/%'
                 OR {pathSql} LIKE '%/config/%'
@@ -1509,7 +1508,7 @@ public partial class DbReader
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')
-                  AND NOT {isEnumMemberSql}
+                  AND NOT {isCSharpEnumSql}
                   AND NOT EXISTS (
                       SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
                   )";
@@ -1628,14 +1627,14 @@ public partial class DbReader
             return (0, 0);
 
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
-        var isEnumMemberSql = $"(s.kind = 'enum' AND {GetSymbolColumnSql("container_kind", "''")} = 'enum')";
+        var isCSharpEnumSql = "(f.lang = 'csharp' AND s.kind = 'enum')";
         using var cmd = _conn.CreateCommand();
         var sql = @"
             SELECT COUNT(*), COUNT(DISTINCT f.path)
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
-              AND NOT " + isEnumMemberSql + @"
+              AND NOT " + isCSharpEnumSql + @"
               AND NOT EXISTS (
                   SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
               )";

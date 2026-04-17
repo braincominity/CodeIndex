@@ -691,9 +691,9 @@ public static class SymbolExtractor
                     var match = pattern.Regex.Match(matchLine[lineOffset..]);
                     if (!match.Success)
                     {
-                        if (lang is "javascript" or "typescript")
+                        if (lang is "javascript" or "typescript" or "csharp")
                         {
-                            lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, lineOffset + 1);
+                            lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                             continue;
                         }
 
@@ -5734,7 +5734,7 @@ public static class SymbolExtractor
             return false;
 
         return lang is "javascript" or "typescript"
-            || (lang == "csharp" && kind == "enum");
+            || (lang == "csharp" && CanContinueScanningSameLineCSharpBraceBody(kind));
     }
 
     private static int FindNextSameLineBraceStatementStart(string matchLine, int startIndex, string? lang)
@@ -5773,9 +5773,14 @@ public static class SymbolExtractor
         return lang switch
         {
             "javascript" or "typescript" => FindJavaScriptTypeScriptSameLineBraceEndColumn(line, startColumn, lang),
-            "csharp" when kind == "enum" => FindCSharpSameLineBraceEndColumn(line, startColumn),
+            "csharp" => FindCSharpSameLineBraceEndColumn(line, startColumn),
             _ => -1,
         };
+    }
+
+    private static bool CanContinueScanningSameLineCSharpBraceBody(string kind)
+    {
+        return kind is "namespace" or "class" or "struct" or "interface" or "enum";
     }
 
     private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
@@ -6246,6 +6251,7 @@ public static class SymbolExtractor
         var ordered = symbols
             .OrderBy(s => s.StartLine)
             .ThenByDescending(s => s.EndLine)
+            .ThenByDescending(s => s.Signature?.Length ?? 0)
             .ToList();
 
         var stack = new Stack<SymbolRecord>();
@@ -6363,8 +6369,7 @@ public static class SymbolExtractor
 
         if (candidate.StartLine == container.StartLine)
         {
-            return ((container.Kind == "class" && candidate.Kind == "function")
-                    || (container.Kind == "enum" && candidate.Kind == "enum"))
+            return CanContainSameLineSymbol(container, candidate)
                 && container.Signature != null
                 && candidate.Signature != null
                 && container.Signature.Contains(candidate.Signature, StringComparison.Ordinal);
@@ -6373,6 +6378,19 @@ public static class SymbolExtractor
         return candidate.StartLine >= container.BodyStartLine
             && candidate.StartLine <= container.BodyEndLine
             && candidate.StartLine > container.StartLine;
+    }
+
+    private static bool CanContainSameLineSymbol(SymbolRecord container, SymbolRecord candidate)
+    {
+        return (container.Kind, candidate.Kind) switch
+        {
+            ("enum", "enum") => true,
+            ("namespace", _) => true,
+            ("class", _) => true,
+            ("struct", _) => true,
+            ("interface", _) => true,
+            _ => false,
+        };
     }
 
     private static bool IsFileScopedNamespace(SymbolRecord symbol) =>

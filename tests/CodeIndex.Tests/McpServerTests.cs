@@ -3853,6 +3853,46 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_SkipsCSharpEnumDeclarationsUsedOnlyThroughMembers()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red,
+                Blue
+            }
+
+            public class UsesColor
+            {
+                public Color Shade => Color.Red;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        var names = structured["symbols"]!
+            .AsArray()
+            .Select(symbol => symbol?["name"]?.GetValue<string>())
+            .Where(name => name != null)
+            .Cast<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
+        Assert.True(structured["graph_degraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
+        Assert.Contains("enum declarations and enum members are excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
+        Assert.DoesNotContain("Color", names);
+        Assert.DoesNotContain("Red", names);
+        Assert.DoesNotContain("Blue", names);
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_ClassifiesReflectionAttributedPropertyAsSuspect()
     {
         var writer = new DbWriter(_db.Connection);

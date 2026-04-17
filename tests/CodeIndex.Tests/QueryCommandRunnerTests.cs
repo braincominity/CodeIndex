@@ -2816,6 +2816,90 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CSharpSameLineNamespaceBodyIncludesNestedEnumAndMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_enum_same_line_namespace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mode.cs",
+                "csharp",
+                """
+                namespace Demo { public enum E { A } }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/mode.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Demo", names);
+            Assert.Contains("E", names);
+            Assert.Contains("A", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsEnumInsideSameLineClassBody()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_same_line_class");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mode.cs",
+                "csharp",
+                """
+                public class Holder { public enum E { A } }
+                """);
+
+            var (enumExitCode, enumStdout, enumStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["E", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (memberExitCode, memberStdout, memberStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var enumRows = ParseJsonLines(enumStdout);
+            var memberRows = ParseJsonLines(memberStdout);
+
+            Assert.Equal(CommandExitCodes.Success, enumExitCode);
+            Assert.Equal(string.Empty, enumStderr);
+            Assert.Single(enumRows);
+            Assert.Equal("E", enumRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", enumRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Holder", enumRows[0].RootElement.GetProperty("container_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, memberExitCode);
+            Assert.Equal(string.Empty, memberStderr);
+            Assert.Single(memberRows);
+            Assert.Equal("A", memberRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", memberRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("E", memberRows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CSharpExactNameFindsCompactEnumMembersWithAttributesAndCastValues()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_compact_attr_cast");
@@ -5497,6 +5581,59 @@ public class QueryCommandRunnerTests
             Assert.Contains("excluded from unused", document.RootElement.GetProperty("graph_support_reason").GetString());
             Assert.DoesNotContain("A", names);
             Assert.DoesNotContain("B", names);
+            Assert.DoesNotContain("Nested", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonSkipsCSharpEnumDeclarationsUsedOnlyThroughMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_enum_declarations");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+
+                public class UsesColor
+                {
+                    public Color Shade => Color.Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum declarations and enum members are excluded from unused", document.RootElement.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("Color", names);
+            Assert.DoesNotContain("Red", names);
+            Assert.DoesNotContain("Blue", names);
         }
         finally
         {

@@ -1286,7 +1286,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
-            var hasEnumMemberGap = reader.HasFilteredCSharpEnumMembers(kind, lang, pathPatterns, excludePaths, excludeTests);
+            var hasEnumMemberGap = reader.HasFilteredCSharpEnumSymbols(kind, lang, pathPatterns, excludePaths, excludeTests);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
@@ -1296,7 +1296,7 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["graph_supported"] = hasEnumMemberGap ? true : graphSupported,
                 ["graph_support_reason"] = hasEnumMemberGap
-                    ? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused until those edges exist."
+                    ? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum declarations and enum members are excluded from unused until those edges exist."
                     : graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
