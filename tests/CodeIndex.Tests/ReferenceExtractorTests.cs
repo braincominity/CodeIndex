@@ -26,6 +26,60 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
+    {
+        // issue #233: expression-bodied methods and properties must attribute their
+        // calls to the individual member, not collapse to the enclosing class.
+        // issue #233: 式本体メソッドと式本体プロパティは、外側クラスにまとめられず
+        // 個別メンバーに呼び出しが帰属する必要がある。
+        const string content = """
+            namespace App;
+
+            public class Calc
+            {
+                public int Compute() => 42;
+                public int Wrap1() => Compute();
+                public int Wrap2() => this.Compute();
+                public int Wrap3 => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRefs = references.Where(r => r.SymbolName == "Compute").ToList();
+        Assert.Equal(3, computeRefs.Count);
+        Assert.Contains(computeRefs, r => r.ContainerKind == "function" && r.ContainerName == "Wrap1");
+        Assert.Contains(computeRefs, r => r.ContainerKind == "function" && r.ContainerName == "Wrap2");
+        Assert.Contains(computeRefs, r => r.ContainerKind == "property" && r.ContainerName == "Wrap3");
+        Assert.DoesNotContain(computeRefs, r => r.ContainerKind == "class");
+    }
+
+    [Fact]
+    public void Extract_CsharpExpressionBodiedMultiLine_AttributesToMember()
+    {
+        // Multi-line expression body (declaration on one line, `=> expr;` on the next)
+        // must still attribute calls on the expression line to the enclosing member.
+        // 宣言行の次の行に `=> expr;` が来る multi-line 式本体でも、式行の呼び出しが
+        // 外側メンバーに帰属すること。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+                public int MultiLine()
+                    => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("function", computeRef.ContainerKind);
+        Assert.Equal("MultiLine", computeRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpDefinitionLine_DoesNotBecomeReference()
     {
         const string content = """

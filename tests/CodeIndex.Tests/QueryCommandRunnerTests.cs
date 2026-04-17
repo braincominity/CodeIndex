@@ -1923,8 +1923,14 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/dispatcher.cs", json.GetProperty("path").GetString());
-            Assert.Equal("class", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Dispatcher", json.GetProperty("caller_name").GetString());
+            // With #233 fixed, the expression-bodied `Select` method spans its declaration
+            // through the terminating ';' (multi-line ternary on the RHS of `=>`), so the
+            // RunUpdateMode call at line 5 attributes to Select, not the enclosing class.
+            // #233 修正により、`=>` で始まる式本体メソッド `Select` の範囲が宣言行から
+            // 末尾 `;` までに広がり、line 5 の RunUpdateMode 呼び出しは外側クラスではなく
+            // Select に帰属する。
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Select", json.GetProperty("caller_name").GetString());
             Assert.Equal("RunUpdateMode", json.GetProperty("callee_name").GetString());
             Assert.Equal(5, json.GetProperty("first_line").GetInt32());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());

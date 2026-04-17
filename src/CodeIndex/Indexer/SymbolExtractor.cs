@@ -288,9 +288,14 @@ public static class SymbolExtractor
             // Property with get/set/init — visibility optional
             // プロパティ（get/set/init）— visibility 省略可
             new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Expression-bodied property (public int X => ...) — must come before delegate
-            // 式本体プロパティ (public int X => ...) — delegate の前に配置
-            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Expression-bodied property (public int X => ...) — must come before delegate.
+            // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns the
+            // declaration line as the body range, enabling caller attribution through
+            // ReferenceExtractor.FindInnermostContainer.
+            // 式本体プロパティ (public int X => ...) — delegate の前に配置。
+            // BodyStyle.Brace を指定し、FindCSharpBraceRange の '=>' 検出によって
+            // 宣言行を本体範囲とすることで caller 属性解決を可能にする。
+            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Delegate — visibility optional / デリゲート — visibility 省略可
             new("delegate",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|unsafe)\s+)?delegate\s+(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Event — visibility optional / イベント — visibility 省略可
@@ -3679,6 +3684,14 @@ public static class SymbolExtractor
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
+        // Expression-bodied member (`=> expr;`) detection. Tracks paren/bracket depth only
+        // until '=>' is observed at top level, so default-value lambdas in params
+        // (e.g. `Action a = () => ...`) don't trigger expression-body mode.
+        // 式本体メンバー (`=> expr;`) の検出。param のデフォルト値に出てくるラムダ
+        // (`Action a = () => ...` 等) を誤検出しないよう、paren/bracket の深さを追う。
+        bool expressionBody = false;
+        int parenDepth = 0;
+        int bracketDepth = 0;
         var lexState = new CSharpLexState();
 
         for (int i = startIndex; i < lines.Length; i++)
@@ -3692,9 +3705,31 @@ public static class SymbolExtractor
                     ? string.Empty
                     : sanitizedLine;
 
-            foreach (var c in scanLine)
+            for (int j = 0; j < scanLine.Length; j++)
             {
-                if (c == '{')
+                var c = scanLine[j];
+
+                if (expressionBody)
+                {
+                    // In expression-body mode: track nested (), [], {} and stop at ';' at top level.
+                    // 式本体モード: ()/[]/{} の深さを追い、トップレベルの ';' で終端する。
+                    if (c == '(') parenDepth++;
+                    else if (c == ')' && parenDepth > 0) parenDepth--;
+                    else if (c == '[') bracketDepth++;
+                    else if (c == ']' && bracketDepth > 0) bracketDepth--;
+                    else if (c == '{') depth++;
+                    else if (c == '}' && depth > 0) depth--;
+                    else if (c == ';' && parenDepth == 0 && bracketDepth == 0 && depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                    continue;
+                }
+
+                if (c == '(') { parenDepth++; continue; }
+                if (c == ')' && parenDepth > 0) { parenDepth--; continue; }
+                if (c == '[') { bracketDepth++; continue; }
+                if (c == ']' && bracketDepth > 0) { bracketDepth--; continue; }
+
+                if (c == '{' && parenDepth == 0 && bracketDepth == 0)
                 {
                     depth++;
                     if (!opened)
@@ -3702,18 +3737,38 @@ public static class SymbolExtractor
                         opened = true;
                         bodyStartLine = i + 1;
                     }
+                    continue;
                 }
-                else if (c == '}' && opened)
+
+                if (c == '}' && opened && parenDepth == 0 && bracketDepth == 0)
                 {
                     depth--;
                     if (depth == 0)
                         return (i + 1, bodyStartLine, i + 1);
+                    continue;
+                }
+
+                // Detect '=>' at top level (outside any (), [], {}) before any block body opened.
+                // This marks an expression-bodied member; body spans the declaration line
+                // through the line holding the terminating ';'.
+                // () / [] / {} の外側で、かつブロック本体がまだ開いていない状態で '=>' を検出すると
+                // 式本体メンバー開始。本体は宣言行から終端 ';' の行までとする。
+                if (c == '=' && j + 1 < scanLine.Length && scanLine[j + 1] == '>'
+                    && !opened && parenDepth == 0 && bracketDepth == 0)
+                {
+                    expressionBody = true;
+                    bodyStartLine = startIndex + 1;
+                    j++; // consume '>' / '>' を消費
+                    continue;
                 }
             }
 
-            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+            if (!opened && !expressionBody && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
+
+        if (expressionBody)
+            return (lines.Length, bodyStartLine, lines.Length);
 
         return opened
             ? (lines.Length, bodyStartLine, lines.Length)

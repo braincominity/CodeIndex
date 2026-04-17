@@ -3602,6 +3602,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ExpressionBodiedMembers_HaveBodyRanges()
+    {
+        // issue #233: expression-bodied members must report a body range covering the
+        // declaration line through the terminating ';' so reference attribution can find
+        // them as the innermost enclosing container.
+        // issue #233: 式本体メンバーは、宣言行から終端 ';' までを本体範囲として報告する必要がある。
+        // そうすることで参照属性解決が内側コンテナとして認識できる。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap1() => Compute();\n    public int Wrap3 => Compute();\n    public int MultiLine()\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var compute = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Compute"));
+        Assert.Equal(3, compute.BodyStartLine);
+        Assert.Equal(3, compute.BodyEndLine);
+
+        var wrap1 = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Wrap1"));
+        Assert.Equal(4, wrap1.BodyStartLine);
+        Assert.Equal(4, wrap1.BodyEndLine);
+
+        var wrap3 = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap3"));
+        Assert.Equal(5, wrap3.BodyStartLine);
+        Assert.Equal(5, wrap3.BodyEndLine);
+
+        var multi = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MultiLine"));
+        Assert.Equal(6, multi.BodyStartLine);
+        Assert.Equal(7, multi.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_CSharp_SwitchExpressionArms_DoNotProducePhantomProperties()
     {
         var content = """
