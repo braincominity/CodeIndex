@@ -615,6 +615,9 @@ internal static class StructuralLineMasker
     private static void MaskRustRawStringContents(string[] lines)
     {
         var hashCount = -1;
+        // Rust supports nested `/* ... */` block comments; track depth across lines.
+        // Rust の `/* ... */` ブロックコメントはネスト可能で、行をまたぐため深度で管理する。
+        var blockCommentDepth = 0;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -627,6 +630,26 @@ internal static class StructuralLineMasker
 
             while (pos < line.Length)
             {
+                if (blockCommentDepth > 0)
+                {
+                    if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                    {
+                        blockCommentDepth++;
+                        pos += 2;
+                        continue;
+                    }
+
+                    if (pos + 1 < line.Length && line[pos] == '*' && line[pos + 1] == '/')
+                    {
+                        blockCommentDepth--;
+                        pos += 2;
+                        continue;
+                    }
+
+                    pos++;
+                    continue;
+                }
+
                 if (hashCount >= 0)
                 {
                     if (line[pos] == '"' && HasHashRun(line, pos + 1, hashCount))
@@ -644,6 +667,32 @@ internal static class StructuralLineMasker
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                     break;
+
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                {
+                    // Must enter block-comment state before `TryOpenRustRawString`, otherwise
+                    // `/* r#" */` would be mis-parsed as a real raw string opener and swallow
+                    // subsequent source until the next `"#`.
+                    // `TryOpenRustRawString` の前に block comment 状態へ入る。そうしないと
+                    // `/* r#" */` が本物の raw string 開始と誤認され、次の `"#` まで
+                    // 以降のソースを丸ごとマスクしてしまう。
+                    blockCommentDepth = 1;
+                    pos += 2;
+                    continue;
+                }
+
+                if (line[pos] == '\'')
+                {
+                    // `'X'` / `'\n'` char literals may contain `"`, `r#`, or other sequences
+                    // that would otherwise trip the raw-string / string scanners. Lifetimes
+                    // (`'a`, `'static`) are advanced one char at a time so their trailing
+                    // identifier is scanned normally.
+                    // `'X'` / `'\n'` の char literal 内には `"` や `r#` が入りうる。それらを
+                    // 丸ごと読み飛ばす。lifetime (`'a`, `'static`) は 1 文字だけ進めて後続の
+                    // 識別子を通常走査へ渡す。
+                    pos = SkipRustCharLiteralOrLifetime(line, pos);
+                    continue;
+                }
 
                 if (TryOpenRustRawString(line, pos, out var openingLength, out var hashes))
                 {
@@ -666,6 +715,34 @@ internal static class StructuralLineMasker
 
             lines[i] = new string(masked);
         }
+    }
+
+    private static int SkipRustCharLiteralOrLifetime(string line, int startIndex)
+    {
+        if (startIndex + 1 >= line.Length)
+            return startIndex + 1;
+
+        // Escape-form char literal `'\X'` — scan to the next `'` on the line.
+        // エスケープ付き char literal `'\X'` は次の `'` まで読み飛ばす。
+        if (line[startIndex + 1] == '\\')
+        {
+            var p = startIndex + 2;
+            while (p < line.Length && line[p] != '\'')
+                p++;
+            if (p < line.Length)
+                p++;
+            return p;
+        }
+
+        // Simple `'X'`: the character at startIndex+2 must be the closing quote.
+        // 単純な `'X'` は startIndex+2 が閉じクォート。
+        if (startIndex + 2 < line.Length && line[startIndex + 2] == '\'')
+            return startIndex + 3;
+
+        // Lifetime or stray apostrophe: advance one char so the following identifier
+        // (or other token) is scanned normally.
+        // lifetime やぶら下がり `'` は 1 文字だけ進める。
+        return startIndex + 1;
     }
 
     private static bool HasHashRun(string line, int startIndex, int count)
@@ -773,6 +850,18 @@ internal static class StructuralLineMasker
     private static void MaskJsTsTemplateLiteralContents(string[] lines)
     {
         var frames = new Stack<ScannerFrame>();
+        // `lexState` must persist across lines so that multi-line expressions in
+        // template-literal holes keep the preceding token context. For example,
+        // `${(() => value\n  / 2 + runTask())()}` continues on a new line: the `/`
+        // at the start of line 2 is division (prev token `value`), not a regex
+        // opener. Resetting state per line caused `lexState.PrevTokenKind` to be
+        // `None`, flipping `/` into regex mode and swallowing the closing `}` and
+        // backtick.
+        // `lexState` はホール内の複数行式で直前トークンを保持するため、行をまたいで
+        // 維持する必要がある。行頭で Reset すると継続行の `/` が常に regex 扱いに
+        // なり、hole を閉じる `}` やバッククォートを巻き込んでしまう。
+        var lexState = default(JsLexState);
+        lexState.Reset();
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -782,8 +871,6 @@ internal static class StructuralLineMasker
 
             var masked = line.ToCharArray();
             var pos = 0;
-            var lexState = default(JsLexState);
-            lexState.Reset();
 
             while (pos < line.Length)
             {

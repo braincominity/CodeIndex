@@ -1340,6 +1340,77 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustRawStringInsideBlockComment_DoesNotMaskFollowingCode()
+    {
+        // Regression for issue #291 follow-up: `r#"` inside a `/* ... */` Rust block
+        // comment must not be treated as a real raw-string opener — otherwise the
+        // masker stays in raw-string mode for the rest of the file and every
+        // subsequent `fn` / `struct` / `impl` call site is wiped out. Nested block
+        // comments and block comments that span multiple lines must behave the
+        // same way.
+        // issue #291 続編: Rust の `/* ... */` ブロックコメント内に現れる `r#"` を
+        // 本物の raw-string 開始扱いしないこと。さもないと以降の `fn` / `struct` /
+        // `impl` が全部マスクされて参照グラフから落ちる。ネストしたブロックコメント
+        // や複数行に渡るコメントでも同様であること。
+        const string content = """
+            /* raw marker r#" stays in comment only */
+            fn caller() {
+                real_fn();
+            }
+
+            /* outer /* inner r#" still inert */ outer again */
+            fn trailing_caller() {
+                trailing_real();
+            }
+
+            fn real_fn() {}
+            fn trailing_real() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "trailing_caller");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "real_fn");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "trailing_real");
+        Assert.Contains(references, r => r.SymbolName == "real_fn" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "trailing_real" && r.ContainerName == "trailing_caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleMultilineDivisionContinuation_PreservesCallAttribution()
+    {
+        // Regression for issue #291 follow-up: when a template-literal `${...}` hole
+        // wraps a multi-line expression that continues with a leading `/` on the next
+        // line (division, not regex), the masker must not lose lexer state at the
+        // line boundary. Otherwise the `/` gets reclassified as a regex literal and
+        // swallows the hole-closing `}` and the backtick, collapsing the caller's
+        // body range and dropping `runTask` / `realCall` from the reference graph.
+        // issue #291 続編: `${...}` ホール内で行をまたぐ division `/` が、次行頭に
+        // 置かれた場合に lexState をまたげず regex 扱いされて hole と backtick を
+        // 食いつぶし、body 範囲が潰れて `runTask` / `realCall` が落ちないこと。
+        const string content = """
+            function caller(value) {
+                const branch = `${value
+                    / 2 + runTask()}`;
+                realCall();
+                return branch;
+            }
+
+            function runTask() {}
+            function realCall() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_PythonFStringHole_StringLiteralWithBraceDoesNotCloseHole()
     {
         // Regression for issue #291 follow-up: inside an f-string `{expr}` hole,
