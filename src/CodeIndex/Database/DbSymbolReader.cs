@@ -563,8 +563,9 @@ public partial class DbReader
         var definitions = GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
         if (exact)
         {
-            primaryDefinition = GetDefinitions(query, 1, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: true)
-                .FirstOrDefault();
+            primaryDefinition = definitions
+                .FirstOrDefault(definition => ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true)
+                ?? definitions.FirstOrDefault();
             definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
         }
         primaryDefinition ??= definitions.FirstOrDefault();
