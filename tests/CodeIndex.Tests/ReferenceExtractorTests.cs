@@ -416,6 +416,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_IndexesEnumMemberReferences()
+    {
+        const string content = """
+            namespace Demo;
+
+            public class Outer
+            {
+                public enum First { None }
+            }
+
+            public enum Nested { A = 1, B = A }
+
+            public class UsesEnum
+            {
+                public void Use()
+                {
+                    _ = Nested.A;
+                    _ = Outer.First.None;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "A" && reference.ContainerName == "Use" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "None" && reference.ContainerName == "Use" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_ConstructorCalls_AreInstantiateOnly()
     {
         const string content = """

@@ -3420,6 +3420,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsSameLineSiblingEnums()
+    {
+        var content = "namespace Demo;\n\npublic enum InlineA { A1 } public enum InlineB { B1 }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var a1 = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "A1"));
+        var b1 = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "B1"));
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "InlineA");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "InlineB");
+        Assert.Equal("InlineA", a1.ContainerName);
+        Assert.Equal("Demo.InlineA", a1.ContainerQualifiedName);
+        Assert.Equal("InlineB", b1.ContainerName);
+        Assert.Equal("Demo.InlineB", b1.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsCompactEnumMembersWithAttributesAndCastValues()
     {
         var content = "public enum Mode { [Obsolete] A = (int)B, [EnumMember(Value = \"b\")] B = (MyFlags)(A | C), C = 1 }";
@@ -3521,6 +3537,17 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "After");
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttributeMissingParen()
+    {
+        var content = "public enum BrokenAttr\n{\n    [Attr(\n    X,\n    Y\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "BrokenAttr");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "X");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Y");
     }
 
     [Fact]

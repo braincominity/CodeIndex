@@ -775,10 +775,9 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    var sameLineEndColumn = lang is "javascript" or "typescript"
-                        && pattern.BodyStyle == BodyStyle.Brace
+                    var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
-                        ? FindJavaScriptTypeScriptSameLineBraceEndColumn(line, absoluteStartColumn, lang)
+                        ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
                         : -1;
 
                     AddSymbolRecord(
@@ -802,10 +801,7 @@ public static class SymbolExtractor
                             ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
                         });
 
-                    if (lang is not "javascript" and not "typescript"
-                        || pattern.BodyStyle != BodyStyle.Brace
-                        || bodyEndLine != startLine
-                        || sameLineEndColumn < absoluteStartColumn)
+                    if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
                         // Stop after first match per line to avoid duplicate symbols
                         // (e.g. C# method pattern + constructor pattern both matching)
@@ -814,7 +810,7 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    lineOffset = FindNextJavaScriptTypeScriptStatementStart(matchLine, sameLineEndColumn + 1);
+                    lineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                 }
 
                 if (stopAfterFirstPatternMatch)
@@ -860,13 +856,13 @@ public static class SymbolExtractor
         if (lang is "javascript" or "typescript")
             ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
         else if (lang == "csharp")
-            ExtractCSharpEnumMembers(fileId, lines, csharpMatchLines!, symbols);
+            ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
 
         AssignContainers(symbols);
         return symbols;
     }
 
-    private static void ExtractCSharpEnumMembers(long fileId, string[] rawLines, string[] csharpMatchLines, List<SymbolRecord> symbols)
+    private static void ExtractCSharpEnumMembers(long fileId, string[] rawLines, string[] enumScannerLines, string[] csharpMatchLines, List<SymbolRecord> symbols)
     {
         var enumDeclarations = symbols
             .Where(s => s.Kind == "enum" && s.BodyStartLine != null && s.BodyEndLine != null)
@@ -876,13 +872,14 @@ public static class SymbolExtractor
 
         foreach (var enumSymbol in enumDeclarations)
         {
-            if (!TryFindCSharpEnumBodyBounds(csharpMatchLines, enumSymbol, out var bodyStartLineIndex, out var bodyStartColumn, out var bodyEndLineIndex, out var bodyEndColumnExclusive))
+            if (!TryFindCSharpEnumBodyBounds(rawLines, csharpMatchLines, enumSymbol, out var bodyStartLineIndex, out var bodyStartColumn, out var bodyEndLineIndex, out var bodyEndColumnExclusive))
                 continue;
 
             ExtractCSharpEnumMembersFromBody(
                 fileId,
+                enumSymbol,
                 rawLines,
-                csharpMatchLines,
+                enumScannerLines,
                 bodyStartLineIndex,
                 bodyStartColumn,
                 bodyEndLineIndex,
@@ -892,6 +889,7 @@ public static class SymbolExtractor
     }
 
     private static bool TryFindCSharpEnumBodyBounds(
+        string[] rawLines,
         string[] csharpMatchLines,
         SymbolRecord enumSymbol,
         out int bodyStartLineIndex,
@@ -908,7 +906,12 @@ public static class SymbolExtractor
         if (declarationLineIndex < 0 || declarationLineIndex >= csharpMatchLines.Length)
             return false;
 
-        var declarationMatch = CSharpEnumDeclarationRegex.Match(csharpMatchLines[declarationLineIndex]);
+        var declarationLine = csharpMatchLines[declarationLineIndex];
+        var declarationStartColumn = FindCSharpDeclarationStartColumn(rawLines[declarationLineIndex], enumSymbol.Signature);
+        if (declarationStartColumn < 0 || declarationStartColumn >= declarationLine.Length)
+            declarationStartColumn = 0;
+
+        var declarationMatch = CSharpEnumDeclarationRegex.Match(declarationLine[declarationStartColumn..]);
         if (!declarationMatch.Success)
             return false;
 
@@ -919,7 +922,7 @@ public static class SymbolExtractor
         {
             var line = csharpMatchLines[lineIndex];
             var scanStartColumn = lineIndex == declarationLineIndex
-                ? declarationMatch.Index
+                ? declarationStartColumn + declarationMatch.Index
                 : 0;
 
             for (int column = scanStartColumn; column < line.Length; column++)
@@ -958,8 +961,9 @@ public static class SymbolExtractor
 
     private static void ExtractCSharpEnumMembersFromBody(
         long fileId,
+        SymbolRecord enumSymbol,
         string[] rawLines,
-        string[] csharpMatchLines,
+        string[] enumScannerLines,
         int bodyStartLineIndex,
         int bodyStartColumn,
         int bodyEndLineIndex,
@@ -974,7 +978,7 @@ public static class SymbolExtractor
 
         while (lineIndex <= bodyEndLineIndex)
         {
-            var maskedLine = csharpMatchLines[lineIndex];
+            var maskedLine = enumScannerLines[lineIndex];
             var lineScanStartColumn = lineIndex == bodyStartLineIndex
                 ? Math.Min(bodyStartColumn, maskedLine.Length)
                 : 0;
@@ -1012,7 +1016,7 @@ public static class SymbolExtractor
 
                 if (ch == '['
                     && TrySkipLeadingCSharpAttributeListsInEnumBody(
-                        csharpMatchLines,
+                        enumScannerLines,
                         lineIndex,
                         column,
                         bodyEndLineIndex,
@@ -1021,6 +1025,19 @@ public static class SymbolExtractor
                 {
                     lineIndex = nextPosition.LineIndex;
                     column = nextPosition.Column;
+                    continue;
+                }
+
+                if (ch == '['
+                    && TryRecoverBrokenCSharpEnumAttributeInBody(
+                        enumScannerLines,
+                        lineIndex,
+                        bodyEndLineIndex,
+                        bodyEndColumnExclusive,
+                        out var recoveredPosition))
+                {
+                    lineIndex = recoveredPosition.LineIndex;
+                    column = recoveredPosition.Column;
                     continue;
                 }
 
@@ -1045,7 +1062,7 @@ public static class SymbolExtractor
             }
             else if (ch == ',' && parenDepth == 0 && bracketDepth == 0 && currentStart != null)
             {
-                TryAddCSharpEnumMemberFromSpan(fileId, rawLines, csharpMatchLines, currentStart.Value, (lineIndex, column + 1), symbols);
+                TryAddCSharpEnumMemberFromSpan(fileId, enumSymbol, rawLines, enumScannerLines, currentStart.Value, (lineIndex, column + 1), symbols);
                 currentStart = null;
             }
 
@@ -1053,7 +1070,7 @@ public static class SymbolExtractor
         }
 
         if (currentStart != null)
-            TryAddCSharpEnumMemberFromSpan(fileId, rawLines, csharpMatchLines, currentStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
+            TryAddCSharpEnumMemberFromSpan(fileId, enumSymbol, rawLines, enumScannerLines, currentStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
     }
 
     private static bool TryGetFirstNonWhitespaceColumn(string line, int startColumn, int endColumnExclusive, out int column)
@@ -1065,6 +1082,50 @@ public static class SymbolExtractor
         }
 
         column = -1;
+        return false;
+    }
+
+    private static int FindCSharpDeclarationStartColumn(string rawLine, string? signature)
+    {
+        if (!string.IsNullOrWhiteSpace(signature))
+        {
+            var signatureIndex = rawLine.IndexOf(signature, StringComparison.Ordinal);
+            if (signatureIndex >= 0)
+                return signatureIndex;
+        }
+
+        return rawLine.IndexOf("enum ", StringComparison.Ordinal);
+    }
+
+    private static bool TryRecoverBrokenCSharpEnumAttributeInBody(
+        string[] csharpMatchLines,
+        int startLineIndex,
+        int bodyEndLineIndex,
+        int bodyEndColumnExclusive,
+        out (int LineIndex, int Column) recoveredPosition)
+    {
+        recoveredPosition = default;
+        for (var lineIndex = startLineIndex + 1; lineIndex <= bodyEndLineIndex; lineIndex++)
+        {
+            var line = csharpMatchLines[lineIndex];
+            var scanEndColumnExclusive = lineIndex == bodyEndLineIndex
+                ? Math.Min(bodyEndColumnExclusive, line.Length)
+                : line.Length;
+
+            if (!TryGetFirstNonWhitespaceColumn(line, 0, scanEndColumnExclusive, out var firstNonWhitespaceColumn))
+                continue;
+
+            var first = line[firstNonWhitespaceColumn];
+            if (first is '#' or '[' or '}')
+                continue;
+
+            if (!CSharpEnumMemberNameRegex.IsMatch(line[firstNonWhitespaceColumn..scanEndColumnExclusive]))
+                continue;
+
+            recoveredPosition = (lineIndex, firstNonWhitespaceColumn);
+            return true;
+        }
+
         return false;
     }
 
@@ -1169,6 +1230,7 @@ public static class SymbolExtractor
 
     private static void TryAddCSharpEnumMemberFromSpan(
         long fileId,
+        SymbolRecord enumSymbol,
         string[] rawLines,
         string[] csharpMatchLines,
         (int LineIndex, int Column) start,
@@ -1196,6 +1258,8 @@ public static class SymbolExtractor
             StartLine = start.LineIndex + 1,
             EndLine = endExclusive.LineIndex + 1,
             Signature = rawSignature,
+            ContainerKind = "enum",
+            ContainerName = enumSymbol.Name,
         });
     }
 
@@ -5625,6 +5689,88 @@ public static class SymbolExtractor
             && CSharpEnumMemberNameRegex.IsMatch(line);
     }
 
+    private static bool CanContinueScanningSameLineBraceBody(
+        string? lang,
+        string kind,
+        BodyStyle bodyStyle,
+        int? endLine,
+        int startLine,
+        int sameLineEndColumn,
+        int absoluteStartColumn)
+    {
+        if (bodyStyle != BodyStyle.Brace || endLine != startLine || sameLineEndColumn < absoluteStartColumn)
+            return false;
+
+        return lang is "javascript" or "typescript"
+            || (lang == "csharp" && kind == "enum");
+    }
+
+    private static int FindNextSameLineBraceStatementStart(string matchLine, int startIndex, string? lang)
+    {
+        return lang is "javascript" or "typescript"
+            ? FindNextJavaScriptTypeScriptStatementStart(matchLine, startIndex)
+            : FindNextBraceStatementStart(matchLine, startIndex);
+    }
+
+    private static int FindNextBraceStatementStart(string line, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < line.Length)
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (index >= line.Length)
+                return -1;
+
+            var previous = index - 1;
+            while (previous >= 0 && char.IsWhiteSpace(line[previous]))
+                previous--;
+
+            if (previous < 0 || line[previous] is ';' or '{' or '}')
+                return index;
+
+            index++;
+        }
+
+        return -1;
+    }
+
+    private static int FindSameLineBraceEndColumn(string line, int startColumn, string? lang, string kind)
+    {
+        return lang switch
+        {
+            "javascript" or "typescript" => FindJavaScriptTypeScriptSameLineBraceEndColumn(line, startColumn, lang),
+            "csharp" when kind == "enum" => FindCSharpSameLineBraceEndColumn(line, startColumn),
+            _ => -1,
+        };
+    }
+
+    private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
+    {
+        var sanitizedLine = LexCSharpLine(line, new CSharpLexState()).SanitizedLine;
+        var depth = 0;
+        var opened = false;
+
+        for (var index = Math.Max(0, startColumn); index < sanitizedLine.Length; index++)
+        {
+            var ch = sanitizedLine[index];
+            if (ch == '{')
+            {
+                depth++;
+                opened = true;
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return index;
+            }
+        }
+
+        return -1;
+    }
+
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
         string? lang,
         SymbolPattern pattern,
@@ -6075,12 +6221,27 @@ public static class SymbolExtractor
             if (stack.Count > 0)
             {
                 var containerPath = GetEffectiveContainerPath(stack, symbol);
-                var container = containerPath[^1];
-                symbol.ContainerKind ??= container.Kind;
-                symbol.ContainerName ??= container.Name;
-                var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
-                symbol.ContainerQualifiedName = qualifiedContainerName;
-                symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
+                if (symbol.ContainerKind != null && symbol.ContainerName != null)
+                {
+                    var explicitContainerAlreadyPresent = containerPath.Count > 0
+                        && containerPath[^1].Kind == symbol.ContainerKind
+                        && containerPath[^1].Name == symbol.ContainerName;
+                    var parentQualifiedName = BuildQualifiedContainerName(containerPath);
+                    symbol.ContainerQualifiedName ??= explicitContainerAlreadyPresent
+                        ? parentQualifiedName
+                        : string.IsNullOrWhiteSpace(parentQualifiedName)
+                            ? symbol.ContainerName
+                            : $"{parentQualifiedName}.{symbol.ContainerName}";
+                }
+                else
+                {
+                    var container = containerPath[^1];
+                    symbol.ContainerKind ??= container.Kind;
+                    symbol.ContainerName ??= container.Name;
+                    var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
+                    symbol.ContainerQualifiedName = qualifiedContainerName;
+                    symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
+                }
             }
 
             symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, stack);
