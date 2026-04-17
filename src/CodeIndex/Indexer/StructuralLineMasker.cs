@@ -1127,12 +1127,43 @@ internal static class StructuralLineMasker
         // 保つことで、続く `/regex/` が division に倒れて regex 本文の backtick を
         // phantom template 開始として読んでしまうのを防ぐ。
         public bool ClassHeaderPending;
+        // True after `case` / `default` keyword and cleared at the first `:` at
+        // paren depth 0. Used to recognize the following `:` as a case-label
+        // colon (not object-key / ternary / type-annotation colon).
+        // `case` / `default` キーワード直後に true、paren 深さ 0 の `:` で解除。
+        // 以降の `:` が case ラベル終端の `:` か（object key / ternary / type
+        // annotation の `:` でないか）を区別するために使う。
+        public bool CaseLabelPending;
+        // Paren depth captured when `case` / `default` was seen. The matching
+        // case-label `:` appears at the same depth; a `:` at a deeper paren
+        // level belongs to an object-literal key, ternary, or type annotation
+        // inside the case expression and must not flip CaseColonBlockPending.
+        // Capturing the base depth (instead of requiring depth 0) is required
+        // because the enclosing template-hole expression may itself be wrapped
+        // in one or more `(` — e.g. `${(() => { switch (x) { case 1: ... }})()}`.
+        // `case` / `default` を読んだ時点の paren 深さ。case ラベル終端の `:`
+        // は同じ深さに現れ、それより深い `:` は case 式内の object key /
+        // ternary / type annotation の `:` で、case label 扱いにしてはならない。
+        // テンプレートホール全体が `(() => { ... })()` 等でラップされている
+        // 場合に count==0 を要求すると case 内の `:` をスキップできないため、
+        // `case` 時点の深さを基準値として保存する。
+        public int CaseLabelBaseParenDepth;
+        // True after a case-label `:` is consumed; the next `{` opens a
+        // statement block (`case 1: {}`, `default: {}`), so the matching `}`
+        // must keep `/regex/` regex-legal. Consumed by the next `{`.
+        // case ラベル終端の `:` 消費直後に true。次の `{` は statement block
+        // （`case 1: {}` / `default: {}`）として扱い、対応する `}` 後の
+        // `/regex/` を regex-legal に保つ。次の `{` で消費。
+        public bool CaseColonBlockPending;
 
         public void Reset()
         {
             PrevTokenKind = JsPrevTokenKind.None;
             PrevIdentifier = string.Empty;
             ClassHeaderPending = false;
+            CaseLabelPending = false;
+            CaseLabelBaseParenDepth = 0;
+            CaseColonBlockPending = false;
             if (ParenStatementHead is null)
                 ParenStatementHead = new Stack<bool>();
             else
@@ -1151,6 +1182,11 @@ internal static class StructuralLineMasker
             PrevIdentifier = word;
             if (word == "class")
                 ClassHeaderPending = true;
+            if (word == "case" || word == "default")
+            {
+                CaseLabelPending = true;
+                CaseLabelBaseParenDepth = ParenStatementHead?.Count ?? 0;
+            }
         }
     }
 
@@ -1290,8 +1326,17 @@ internal static class StructuralLineMasker
                             // class header pending 中は直前トークンが何であっても class
                             // body とみなす。
                             var isExpressionBrace = !lexState.ClassHeaderPending
+                                && !lexState.CaseColonBlockPending
                                 && IsJsExpressionBraceContext(lexState);
                             lexState.ClassHeaderPending = false;
+                            lexState.CaseColonBlockPending = false;
+                            // A new block scope starts; clear any half-complete case
+                            // label tracking so a stray `case` keyword seen earlier
+                            // does not tag the wrong `:` in the inner scope.
+                            // 新しい block scope の開始。半端な case ラベル追跡を
+                            // クリアし、外側の `case` が内側の無関係な `:` を
+                            // case-label colon と誤判定しないようにする。
+                            lexState.CaseLabelPending = false;
                             holeFrame.InnerBraceIsExpression.Push(isExpressionBrace);
                             pos++;
                             lexState.SetKind(JsPrevTokenKind.Other);
@@ -1441,6 +1486,31 @@ internal static class StructuralLineMasker
             case ']':
                 lexState.SetKind(JsPrevTokenKind.CloseBracket);
                 break;
+            case ':':
+                // `case expr :` / `default :` — the case-label colon. Treat it
+                // as such only when the paren depth is back to what it was at
+                // the `case` / `default` keyword, so object-key, ternary, and
+                // type-annotation colons inside the case expression do not
+                // consume the hint.
+                // `case expr :` / `default :` の case ラベル終端 `:`。paren
+                // 深さが `case` / `default` 時点と同じに戻ったときだけ使い、
+                // case 式内の object-key / ternary / type annotation の `:`
+                // でヒントを消費しないようにする。
+                if (lexState.CaseLabelPending
+                    && (lexState.ParenStatementHead?.Count ?? 0) == lexState.CaseLabelBaseParenDepth)
+                {
+                    lexState.CaseLabelPending = false;
+                    lexState.CaseColonBlockPending = true;
+                }
+                lexState.SetKind(JsPrevTokenKind.Other);
+                break;
+            case ';':
+                // `;` terminates any in-progress case-label tracking.
+                // `;` で case ラベル追跡を打ち切る。
+                lexState.CaseLabelPending = false;
+                lexState.CaseColonBlockPending = false;
+                lexState.SetKind(JsPrevTokenKind.Other);
+                break;
             case '>':
                 // `=>` is the only 2-char JS token we need to distinguish here: `{`
                 // following `=>` opens an arrow-function body (a statement block, so
@@ -1532,9 +1602,11 @@ internal static class StructuralLineMasker
                 return false;
             case JsPrevTokenKind.Identifier:
                 // Keywords that open a statement block follow the same rule as `)`.
-                // `else { ... }`, `do { ... }`, `try { ... }`, `finally { ... }`.
-                // block を開く keyword は `)` と同じ扱い。
-                return lexState.PrevIdentifier is not ("else" or "do" or "try" or "finally");
+                // `else { ... }`, `do { ... }`, `try { ... }`, `finally { ... }`,
+                // and the optional-binding `catch { ... }` (ES2019).
+                // block を開く keyword は `)` と同じ扱い。ES2019 の optional
+                // binding 付き `catch { ... }` も block として扱う。
+                return lexState.PrevIdentifier is not ("else" or "do" or "try" or "finally" or "catch");
             default:
                 return true;
         }

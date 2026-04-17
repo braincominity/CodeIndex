@@ -1776,4 +1776,75 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
+
+    [Fact]
+    public void Extract_JsTemplateHoleOptionalCatchBlockThenRegex_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: ES2019 optional-binding `catch {}`
+        // inside a template hole must open a statement block, not an expression
+        // brace. Otherwise the matching `}` flips `/regex/` into division,
+        // swallows the regex body, and a backtick inside the regex is read as a
+        // phantom template opener — erasing the `runTask` edge that follows.
+        // issue #291 続編: ES2019 の optional binding 付き `catch {}` が
+        // テンプレートホール内で statement block として開くこと。expression
+        // brace として扱うと直後の `/regex/` が division になり、regex 本文
+        // 中の backtick が phantom template opener と解釈され、その後の
+        // `runTask` 参照が失われる。
+        const string content = "function caller(value) {\n"
+            + "    const s = `${(() => { try { risky(); } catch { } /`/.test(value); runTask(); return 1; })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function risky() {}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleSwitchCaseBlockThenRegex_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: `case N: { }` / `default: { }`
+        // inside a template hole must open a statement block, not an expression
+        // brace. The case-label colon is recognized via a one-shot hint set on
+        // `:` at paren depth 0 after a `case` / `default` keyword.
+        // issue #291 続編: テンプレートホール内の `case N: { }` / `default: { }`
+        // が statement block として開くこと。case ラベル終端の `:` は
+        // `case` / `default` 後かつ paren 深さ 0 のときだけ hint を立てる。
+        const string content = "function caller(value) {\n"
+            + "    const s = `${(() => { switch (value) { case 1: { } /`/.test(value); runTask(); return 1; } })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleSwitchDefaultBlockThenRegex_PreservesFollowingCall()
+    {
+        // Same regression for `default: { }` inside a template hole.
+        // テンプレートホール内の `default: { }` についても同じ回帰。
+        const string content = "function caller(value) {\n"
+            + "    const s = `${(() => { switch (value) { default: { } /`/.test(value); runTask(); return 1; } })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
 }
