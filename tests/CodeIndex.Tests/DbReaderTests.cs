@@ -244,6 +244,51 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_CSharpOperatorsConversionsAndIndexersUseNavigableNames()
+    {
+        InsertIndexedFile("src/csharp_special_names.cs", "csharp",
+            """
+            using System.Collections.Generic;
+
+            public struct Money
+            {
+                public static (int whole, int cents) operator +(Money a, Money b) => (0, 0);
+                public static Dictionary<string, int> operator -(Money a, Money b) => new();
+                public static checked Money operator checked +(Money a, Money b) => new();
+                public static implicit operator decimal(Money m) => 0m;
+                public static explicit operator Money(decimal d) => new();
+                public Money(decimal amount) { }
+                public static explicit operator checked byte(Money m) => 0;
+                public static explicit operator Dictionary<string,int>(Money m) => new();
+                public static explicit operator (int whole,int cents)(Money m) => (0, 0);
+                public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;
+                public static explicit operator (int[] items, int count)(Money m) => ([], 0);
+                public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);
+            }
+
+            public class Bag
+            {
+                private string[] _items = new string[10];
+                public string this[int i] { get => _items[i]; set => _items[i] = value; }
+            }
+            """);
+
+        Assert.Single(_reader.SearchSymbols("operator +", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("operator -", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("operator checked +", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("implicit operator decimal", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Dictionary<string, int>", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int whole, int cents)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (Dictionary<string, int> map, int count)?", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int[] items, int count)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator ((int a, int b) pair, int count)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+    }
+
+    [Fact]
     public void SearchSymbols_AndDeps_DoNotTreatNamedArgumentLabelsAsLocalFunctions()
     {
         InsertIndexedFile("src/platform.cs", "csharp",

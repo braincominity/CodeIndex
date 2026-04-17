@@ -179,14 +179,14 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountDefinitionsTotal(options.Query, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
-                var exactSignalForCount = reader.GetDefinitionExactQuerySignal();
+                var exactSignalForCount = reader.GetDefinitionExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact,
                     () => reader.CountSearchSymbols(options.Query, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
                     () => reader.CountSearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     () => reader.SearchSymbols(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     r => r.Name);
-                WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
@@ -214,14 +214,14 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetDefinitions(options.Query, options.Limit, options.Kind, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
-            var exactSignal = reader.GetDefinitionExactQuerySignal();
+            var exactSignal = reader.GetDefinitionExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             var exactZeroHint = BuildExactZeroHint(
                 exact,
                 () => reader.CountSearchSymbols(options.Query, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false) > 0,
                 () => reader.CountSearchSymbols(options.Query, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                 () => reader.SearchSymbols(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                 r => r.Name);
-            WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignal);
+            WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
                 if (!options.Json)
@@ -308,14 +308,14 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var exactSignalForCount = reader.GetReferencesExactQuerySignal();
+                var exactSignalForCount = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
                     () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                     () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     r => r.SymbolName);
-                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
@@ -327,14 +327,14 @@ public static class QueryCommandRunner
             }
 
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
-            var exactSignal = reader.GetReferencesExactQuerySignal();
+            var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountSearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.SymbolName);
-            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
+            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
@@ -410,14 +410,14 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountCallersTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var exactSignalForCount = reader.GetCallersExactQuerySignal();
+                var exactSignalForCount = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                     () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     r => r.CalleeName);
-                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
@@ -429,14 +429,14 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-            var exactSignal = reader.GetCallersExactQuerySignal();
+            var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CalleeName);
-            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
+            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
@@ -508,14 +508,14 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountCalleesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var exactSignalForCount = reader.GetCalleesExactQuerySignal();
+                var exactSignalForCount = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                     () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     r => r.CallerName);
-                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount);
+                WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
                     WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
@@ -527,14 +527,14 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-            var exactSignal = reader.GetCalleesExactQuerySignal();
+            var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
                 () => reader.CountCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                 r => r.CallerName);
-            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal);
+            WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
@@ -630,7 +630,7 @@ public static class QueryCommandRunner
             {
                 var counts = reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
                 var hasExactPredicateForCount = exact && symbolQueries is { Count: > 0 };
-                var exactSignalForCount = reader.GetSymbolsExactQuerySignal();
+                var exactSignalForCount = reader.GetSymbolsExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
                 var multiNameExactHintForCount = symbolQueries != null && symbolQueries.Count > 1;
                 var exactZeroHintForCount = multiNameExactHintForCount
                     ? BuildExactZeroHint(
@@ -644,7 +644,7 @@ public static class QueryCommandRunner
                         () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                         () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                         r => r.Name);
-                WriteExactSymbolWarningIfNeeded(hasExactPredicateForCount, options.Json, exactSignalForCount);
+                WriteExactSymbolWarningIfNeeded(hasExactPredicateForCount, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
@@ -673,7 +673,7 @@ public static class QueryCommandRunner
 
             var results = reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact);
             var hasExactPredicate = exact && symbolQueries is { Count: > 0 };
-            var exactSignal = reader.GetSymbolsExactQuerySignal();
+            var exactSignal = reader.GetSymbolsExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
             var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
             var exactZeroHint = multiNameExactHint
                 ? BuildExactZeroHint(
@@ -687,7 +687,7 @@ public static class QueryCommandRunner
                     () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false),
                     r => r.Name);
-            WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal);
+            WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
                 if (!options.Json)
@@ -1208,7 +1208,7 @@ public static class QueryCommandRunner
                 : (ExactQuerySignal?)null;
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath, options.DbPathExplicit);
             if (exactSignal.HasValue)
-                WriteExactBundleWarningIfNeeded(exact, options.Json, exactSignal.Value);
+                WriteExactBundleWarningIfNeeded(exact, options.Json, exactSignal.Value, reader, options);
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
@@ -1234,8 +1234,16 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
                 if (!analysis.GraphTableAvailable)
                     Console.WriteLine("Graph Table          : MISSING — empty References/Callers/Callees are degraded, NOT real zero-hit results.");
-                if (exactSignal is ExactQuerySignal signal && signal.HasMissingIndex && signal.DegradedReason != null)
-                    Console.WriteLine($"Exact Index          : DEGRADED — {signal.DegradedReason}. Results are correct but may be slow.");
+                if (exactSignal is ExactQuerySignal signal && !signal.ExactIndexAvailable && signal.DegradedReason != null)
+                {
+                    if (signal.HasMissingIndex)
+                        Console.WriteLine($"Exact Index          : DEGRADED — {signal.DegradedReason}. Results are correct but may be slow.");
+                    else if (IsCSharpCanonicalNameSignal(signal))
+                    {
+                        Console.WriteLine($"Exact Index          : DEGRADED — {signal.DegradedReason}. Exact-name C# operator / indexer matches may be incomplete.");
+                        Console.WriteLine($"Hint                 : Run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}`.");
+                    }
+                }
                 WriteExactZeroHint(analysis.ExactZeroHint);
                 WriteRepoMapSection("Definitions", analysis.Definitions.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
                 WriteRepoMapSection("Nearby symbols", analysis.NearbySymbols.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.StartLine}-{item.EndLine}"));
@@ -1455,7 +1463,7 @@ public static class QueryCommandRunner
                 ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
                 : "unknown";
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable) ? ", DEGRADED" : "";
+            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable || !status.CSharpSymbolNameReady) ? ", DEGRADED" : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
 
             if (options.Json)
@@ -1499,6 +1507,8 @@ public static class QueryCommandRunner
                     Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
                 if (!status.IssuesTableAvailable)
                     Console.WriteLine("WARN    : file_issues table missing — validate output is degraded to empty.");
+                if (!status.CSharpSymbolNameReady)
+                    Console.WriteLine($"WARN    : C# exact-name for operators / conversion operators / indexers is degraded. Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical symbol names in place.");
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)
@@ -2870,13 +2880,60 @@ public static class QueryCommandRunner
             Console.Error.WriteLine($"Hint: --exact found 0 matches, but substring matching would return results{examples}. Drop --exact or use the exact indexed name.");
     }
 
-    private static void WriteExactSymbolWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal)
+    private static bool IsCSharpCanonicalNameSignal(ExactQuerySignal signal)
+        => !signal.ExactIndexAvailable
+           && !signal.HasMissingIndex
+           && !signal.HasMissingTable
+           && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string BuildCSharpCanonicalNameRepairCommand(DbReader reader, QueryCommandOptions options)
     {
-        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null || !signal.HasMissingIndex)
+        var status = reader.GetStatus();
+        WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
+        return BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit);
+    }
+
+    private static string BuildCSharpCanonicalNameRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+    {
+        if (!dbPathExplicit)
+            return "cdidx index .";
+
+        var resolvedDbPath = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            ? dbPath
+            : Path.GetFullPath(dbPath);
+        var targetProject = string.IsNullOrWhiteSpace(projectRoot)
+            ? "<projectPath>"
+            : QuoteCommandArgument(projectRoot);
+        return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)}";
+    }
+
+    private static string QuoteCommandArgument(string value)
+    {
+        var fullPath = value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            ? value
+            : Path.GetFullPath(value);
+        return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
+            ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : fullPath;
+    }
+
+    private static void WriteExactSymbolWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal, DbReader reader, QueryCommandOptions options)
+    {
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
             return;
 
-        Console.Error.WriteLine($"WARN: --exact symbol query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
-        Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+        if (signal.HasMissingIndex)
+        {
+            Console.Error.WriteLine($"WARN: --exact symbol query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
+            Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+            return;
+        }
+
+        if (IsCSharpCanonicalNameSignal(signal))
+        {
+            Console.Error.WriteLine($"WARN: --exact symbol query may return false negatives ({signal.DegradedReason}).");
+            Console.Error.WriteLine($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
+        }
     }
 
     /// <summary>
@@ -2983,22 +3040,42 @@ public static class QueryCommandRunner
         }
     }
 
-    private static void WriteExactGraphWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal)
+    private static void WriteExactGraphWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal, DbReader reader, QueryCommandOptions options)
     {
-        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null || !signal.HasMissingIndex)
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
             return;
 
-        Console.Error.WriteLine($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
-        Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+        if (signal.HasMissingIndex)
+        {
+            Console.Error.WriteLine($"WARN: --exact graph query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
+            Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+            return;
+        }
+
+        if (IsCSharpCanonicalNameSignal(signal))
+        {
+            Console.Error.WriteLine($"WARN: --exact graph query may return false negatives ({signal.DegradedReason}).");
+            Console.Error.WriteLine($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
+        }
     }
 
-    private static void WriteExactBundleWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal)
+    private static void WriteExactBundleWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal, DbReader reader, QueryCommandOptions options)
     {
-        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null || !signal.HasMissingIndex)
+        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
             return;
 
-        Console.Error.WriteLine($"WARN: --exact inspect bundle ran without all supporting indexes ({signal.DegradedReason}). Results are correct but may be slow.");
-        Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+        if (signal.HasMissingIndex)
+        {
+            Console.Error.WriteLine($"WARN: --exact inspect bundle ran without all supporting indexes ({signal.DegradedReason}). Results are correct but may be slow.");
+            Console.Error.WriteLine("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
+            return;
+        }
+
+        if (IsCSharpCanonicalNameSignal(signal))
+        {
+            Console.Error.WriteLine($"WARN: --exact inspect bundle may return false negatives ({signal.DegradedReason}).");
+            Console.Error.WriteLine($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
+        }
     }
 
     private static void WriteGraphCountResult(DbReader reader, int count, int files, QueryCommandOptions options, JsonSerializerOptions jsonOptions,

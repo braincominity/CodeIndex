@@ -3654,7 +3654,7 @@ public class SymbolExtractorTests
         var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        var indexer = symbols.FirstOrDefault(s => s.Name == "this");
+        var indexer = symbols.FirstOrDefault(s => s.Name == "Item");
         Assert.NotNull(indexer);
         Assert.Equal("function", indexer.Kind);
         Assert.Equal("string", indexer.ReturnType);
@@ -3663,14 +3663,24 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsOperatorOverloads()
     {
-        var content = "public struct Money\n{\n    public static Money operator +(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n}";
+        var content = "using System.Collections.Generic;\npublic unsafe struct Money\n{\n    public static (int whole, int cents) operator +(Money a, Money b) => (0, 0);\n    public static Dictionary<string, int> operator -(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static checked Money operator checked +(Money a, Money b) => new();\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n    public static explicit operator checked byte(Money m) => 0;\n    public static explicit operator Dictionary<string,int>(Money m) => new();\n    public static explicit operator (int whole,int cents)(Money m) => (0, 0);\n    public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;\n    public static explicit operator (int[] items, int count)(Money m) => ([], 0);\n    public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);\n    public static unsafe explicit operator int*(Money m) => (int*)0;\n    public static unsafe explicit operator delegate* unmanaged[Cdecl]<int, void>(Money m) => (delegate* unmanaged[Cdecl]<int, void>)0;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "+");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "==");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator -");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator ==");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator decimal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Money");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked byte");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Dictionary<string, int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int whole, int cents)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (Dictionary<string, int> map, int count)?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int[] items, int count)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator ((int a, int b) pair, int count)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator delegate* unmanaged[Cdecl]<int, void>");
     }
 
     [Fact]
@@ -3767,7 +3777,7 @@ public class SymbolExtractorTests
         Assert.Equal("Dictionary<string,int>", lookup.ReturnType);
         Assert.Equal("Holder", lookup.ContainerName);
 
-        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "this"));
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item"));
         Assert.Equal("Dictionary<string,int>", indexer.ReturnType);
         Assert.Equal("Holder", indexer.ContainerName);
 
@@ -3836,8 +3846,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRef" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRefRo" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropReadonly" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.ReturnType == "int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.Signature != null && s.Signature.Contains("public readonly ref readonly int this[int index]"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Signature != null && s.Signature.Contains("public readonly ref readonly int this[int index]"));
 
         var explicitGetRef = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetRef" && s.ContainerName == "RefBox"));
         Assert.Equal("int", explicitGetRef.ReturnType);
