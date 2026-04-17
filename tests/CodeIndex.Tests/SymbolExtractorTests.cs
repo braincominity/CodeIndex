@@ -3791,8 +3791,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Version" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaxRetries" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Map");
-        // Regular mutable fields should NOT be extracted / 通常のフィールドは抽出されないこと
-        Assert.DoesNotContain(symbols, s => s.Name == "MutableField");
+        // Regular mutable fields are now extracted as `property` / 通常のフィールドも `property` として抽出される
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MutableField" && s.ReturnType == "string");
     }
 
     [Fact]
@@ -5113,14 +5113,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_DoesNotMatchFieldDeclarations()
+    public void Extract_CSharp_DetectsPlainFieldDeclarations()
     {
-        // Fields should not be detected as properties / フィールドはプロパティとして検出されないこと
-        var content = "public class Config\n{\n    public string Name;\n    private int _count;\n    public readonly string Id = \"x\";\n}";
+        // Plain fields are now captured as kind `property` so definition/symbols/outline/
+        // hotspots/unused can see the full member surface of a class. See issue #298.
+        // 通常フィールドも kind `property` として抽出される（issue #298）。これにより
+        // definition/symbols/outline/hotspots/unused がクラスの全メンバー形を見える。
+        var content = "public class Config\n{\n    public string Name;\n    private int _count;\n    public readonly string Id = \"x\";\n    protected List<int> Items = new();\n    internal volatile bool IsReady;\n    public static int GlobalCount;\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_count" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Id" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Items" && s.Visibility == "protected");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "IsReady" && s.ReturnType == "bool" && s.Visibility == "internal");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "GlobalCount" && s.ReturnType == "int" && s.Visibility == "public");
+        // const / static readonly keep kind `function` / const と static readonly は引き続き kind `function`
         Assert.DoesNotContain(symbols, s => s.Name == "Name" && s.Kind == "function");
-        Assert.DoesNotContain(symbols, s => s.Name == "_count");
+        Assert.DoesNotContain(symbols, s => s.Name == "_count" && s.Kind == "function");
         Assert.DoesNotContain(symbols, s => s.Name == "Id" && s.Kind == "function");
     }
 

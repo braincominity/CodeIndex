@@ -273,6 +273,31 @@ public static class SymbolExtractor
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:new)\s+)?static\s+readonly\s+(?<returnType>[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[=;]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Plain field (instance, readonly, volatile, plain static, etc.) — kind `property`.
+            // Must come AFTER the `const` and `static readonly` patterns (which take priority
+            // with kind `function`), and BEFORE the structural declaration patterns.
+            // The terminator `=(?![=>])` or `;` distinguishes fields from methods (which end
+            // with `(`), property accessors (which end with `{`), expression-bodied members
+            // (which use `=>`), and comparison-operator overloads (which contain `==`).
+            // The negative lookahead repeats every visibility and modifier keyword so the
+            // regex engine cannot backtrack past an unconsumed `public static event …`
+            // declaration and match it as a field whose returnType is `public static event …`.
+            // Closes #298.
+            // 通常フィールド（instance / readonly / volatile / 通常 static など） — kind は `property`。
+            // `const` / `static readonly` パターン（kind `function`）より後、型宣言パターンより前に置く。
+            // 終端を `=(?![=>])` または `;` にすることで、メソッド（`(`）、プロパティアクセサ（`{`）、
+            // 式本体メンバー（`=>`）、比較演算子オーバーロード（`==`）を除外する。
+            // visibility / modifier キーワードを negative lookahead にも並べて、regex engine が
+            // それらを returnType として飲み込む方向に backtrack して `public static event …`
+            // のような宣言を field としてマッチすることを防ぐ。Closes #298.
+            new("property",  new Regex(
+                $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?"
+              + @"(?:(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
+              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|var|class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
+              + $@"(?<returnType>{CSharpTypePattern})\s+"
+              + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
+                RegexOptions.Compiled),
+                BodyStyle.None, "visibility", "returnType"),
             // Interface — visibility optional / インターフェース — visibility 省略可
             new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:partial|unsafe)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
