@@ -80,52 +80,99 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
+        var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
+        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath);
+
         // --dry-run: scan files but do not write to database / --dry-run: ファイルスキャンのみでDBに書き込まない
         if (options.DryRun)
         {
-            var dryIndexer = new FileIndexer(options.ProjectPath);
+            var dryIndexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
             IReadOnlyList<string> dryCandidates;
             var errorList = new List<object>();
+            var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
+
+            void RecordDryRunScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
+            {
+                foreach (var scanError in scanErrors)
+                {
+                    var key = $"{scanError.Path}\n{scanError.Message}";
+                    if (!dryScanErrorKeys.Add(key))
+                        continue;
+
+                    errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                    if (!options.Json)
+                        ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
+                }
+            }
 
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
-                dryCandidates = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json)
-                    .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                    .Where(File.Exists)
-                    .ToList();
+                var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(options.ProjectPath, options.UpdateFiles);
+                var updatePaths = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json);
+                if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
+                {
+                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    dryCandidates = scanResult.Files;
+                    RecordDryRunScanErrors(scanResult.Errors);
+                }
+                else
+                {
+                    dryCandidates = updatePaths
+                        .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
+                        .Where(File.Exists)
+                        .ToList();
+                }
             }
             else if (options.Commits.Count > 0)
             {
                 // --commits: files changed in the specified commits / --commits: 指定コミットの変更ファイル
-                var changedFiles = new List<string>();
+                var changedFiles = new HashSet<string>(StringComparer.Ordinal);
+                var relevantIgnoreFileChanged = false;
+                var repoRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath);
                 foreach (var commit in options.Commits)
                 {
                     try
                     {
                         var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
-                        changedFiles.AddRange(changed.Select(f => Path.Combine(options.ProjectPath, f)).Where(File.Exists));
+                        var normalized = NormalizeCommitFileTargets(options.ProjectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
+                        relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
+                        foreach (var path in normalized)
+                            changedFiles.Add(path);
                     }
                     catch { /* ignore git errors in dry-run */ }
                 }
-                dryCandidates = changedFiles.Distinct().ToList();
+
+                if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
+                {
+                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    dryCandidates = scanResult.Files;
+                    RecordDryRunScanErrors(scanResult.Errors);
+                }
+                else
+                {
+                    dryCandidates = changedFiles
+                        .Select(path => Path.Combine(options.ProjectPath, path.Replace('/', Path.DirectorySeparatorChar)))
+                        .Where(File.Exists)
+                        .ToList();
+                }
             }
             else
             {
                 var scanResult = dryIndexer.ScanFilesDetailed();
                 dryCandidates = scanResult.Files;
-                errorList.AddRange(scanResult.Errors.Select(error => (object)new { file = error.Path, message = error.Message }));
-                if (!options.Json)
-                {
-                    foreach (var error in scanResult.Errors)
-                        ConsoleUi.PrintWarning($"{error.Path}: {error.Message}");
-                }
+                RecordDryRunScanErrors(scanResult.Errors);
             }
 
             var dryFiles = new List<string>();
             var langCounts = new Dictionary<string, int>();
             foreach (var f in dryCandidates)
             {
+                var pathFilter = dryIndexer.EvaluatePathFilter(f);
+                RecordDryRunScanErrors(pathFilter.Errors);
+                if (pathFilter.ShouldSkip)
+                    continue;
+
                 if (!TryProbeDryRunFile(dryIndexer, f, out var lang, out var message))
                 {
                     if (message != null)
@@ -211,7 +258,7 @@ public static class IndexCommandRunner
         AddToGitExclude(options.ProjectPath, dbPath);
 
         var writer = new DbWriter(db.Connection);
-        var indexer = new FileIndexer(options.ProjectPath);
+        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
@@ -467,6 +514,7 @@ public static class IndexCommandRunner
         string? priorIndexedProjectRoot)
     {
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
+        var relevantIgnoreFileChanged = false;
 
         if (options.Commits.Count > 0)
         {
@@ -475,10 +523,13 @@ public static class IndexCommandRunner
             {
                 if (!options.Json)
                     spinnerCts = ConsoleUi.StartSpinner("Resolving changed files...", spinnerFrames);
+                var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot) ?? Path.GetFullPath(projectRoot);
                 foreach (var commit in options.Commits)
                 {
                     var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit);
-                    foreach (var f in changedFiles)
+                    var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var commitTouchedRelevantIgnoreFile);
+                    relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
+                    foreach (var f in normalized)
                         targetPaths.Add(f);
                 }
             }
@@ -504,14 +555,42 @@ public static class IndexCommandRunner
 
         if (options.UpdateFiles.Count > 0)
         {
+            relevantIgnoreFileChanged |= ContainsRelevantIgnoreFileUpdate(projectRoot, options.UpdateFiles);
             foreach (var relPath in NormalizeUpdateFileTargets(projectRoot, options.UpdateFiles, options.Json))
                 targetPaths.Add(relPath);
         }
 
+        if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(targetPaths))
+        {
+            if (!options.Json)
+            {
+                Console.WriteLine("  Detected ignore-file changes; falling back to a full scan to keep the index aligned.");
+                Console.WriteLine();
+            }
+
+            return RunFullScan(
+                writer,
+                indexer,
+                projectRoot,
+                resolvedDbPath,
+                options,
+                stopwatch,
+                spinnerFrames,
+                jsonOptions,
+                priorFoldVersion,
+                priorFoldFingerprint,
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints,
+                priorIndexedProjectRoot);
+        }
+
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
-        int updated = 0, removed = 0, skipped = 0, errors = 0;
+        int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<object>();
+        var warningList = new List<object>();
+        var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var readinessDemoted = false;
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
@@ -550,6 +629,31 @@ public static class IndexCommandRunner
 
             writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectRoot);
             projectRootWritten = true;
+        }
+
+        void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
+        {
+            foreach (var scanError in scanErrors)
+            {
+                var key = $"{scanError.Severity}\n{scanError.Path}\n{scanError.Message}";
+                if (!scanErrorKeys.Add(key))
+                    continue;
+
+                if (scanError.IsFatal)
+                {
+                    DemoteReadinessOnce();
+                    errors++;
+                    errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                }
+                else
+                {
+                    warnings++;
+                    warningList.Add(new { file = scanError.Path, message = scanError.Message });
+                }
+
+                if (!options.Json)
+                    ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
+            }
         }
 
         if (writer.CountUnsupportedReferences(supportedGraphLanguages) > 0)
@@ -593,6 +697,46 @@ public static class IndexCommandRunner
                         skipped++;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
+                    }
+                    continue;
+                }
+
+                var pathFilter = indexer.EvaluatePathFilter(absPath);
+                RecordScanErrors(pathFilter.Errors);
+                if (pathFilter.ShouldSkip)
+                {
+                    if (!pathFilter.ShouldDeleteExisting)
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                        continue;
+                    }
+
+                    if (!writer.HasFileAtPath(relPath))
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
+                    using var deleteTxn = writer.BeginTransaction();
+                    if (writer.DeleteFileByPath(relPath))
+                    {
+                        WriteProjectRootOnce();
+                        deleteTxn.Commit();
+                        removed++;
+                        ftsMutated = true;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                    }
+                    else
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json)
+                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
                     }
                     continue;
                 }
@@ -737,6 +881,8 @@ public static class IndexCommandRunner
             // name_folded populated, so no extra scan is needed here.
             // update mode は事前 bit を個別に復元。Graph/Issues は prior bit があれば復元、
             // Fold も prior bit があれば invariant を信じて restamp（codex 2nd review 対応）。
+            // unreadable ignore file の true no-op skip は ClearReadyFlags 自体を避けるので、
+            // ここでは通常どおり errors==0 の成功 run だけを復元対象にする。
             if ((priorReadiness & DbContext.GraphReadyFlag) != 0)
             {
                 writer.MarkGraphReady();
@@ -789,6 +935,7 @@ public static class IndexCommandRunner
                     updated,
                     removed,
                     skipped,
+                    warnings,
                     errors,
                 },
                 graph_table_available = graphTableAvailableAfter,
@@ -799,6 +946,7 @@ public static class IndexCommandRunner
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
+                warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));
         }
@@ -815,6 +963,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Updated : {updated:N0}");
             if (removed > 0) Console.WriteLine($"  Removed : {removed:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0}");
+            if (warnings > 0) Console.WriteLine($"  Warnings: {warnings:N0}");
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
@@ -888,6 +1037,67 @@ public static class IndexCommandRunner
     private static bool IsOutsideProjectRoot(string relativePath) =>
         relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
 
+    private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
+        => paths.Any(FileIndexer.IsIgnoreFilePath);
+
+    private static bool ContainsRelevantIgnoreFileUpdate(string projectRoot, IEnumerable<string> updateFiles)
+    {
+        foreach (var file in updateFiles)
+        {
+            var absolutePath = Path.IsPathRooted(file)
+                ? Path.GetFullPath(file)
+                : Path.GetFullPath(Path.Combine(projectRoot, file));
+            if (FileIndexer.IsIgnoreFilePath(absolutePath) && IsRelevantIgnoreFileForProjectRoot(projectRoot, absolutePath))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<string> NormalizeCommitFileTargets(
+        string projectRoot,
+        string repoRoot,
+        IEnumerable<string> changedFiles,
+        out bool relevantIgnoreFileChanged)
+    {
+        relevantIgnoreFileChanged = false;
+        var normalized = new List<string>();
+        foreach (var changedFile in changedFiles)
+        {
+            var absolutePath = Path.GetFullPath(Path.Combine(repoRoot, changedFile.Replace('/', Path.DirectorySeparatorChar)));
+            if (FileIndexer.IsIgnoreFilePath(absolutePath) && IsRelevantIgnoreFileForProjectRoot(projectRoot, absolutePath))
+                relevantIgnoreFileChanged = true;
+
+            var relativePath = Path.GetRelativePath(projectRoot, absolutePath).Replace('\\', '/');
+            if (IsOutsideProjectRoot(relativePath))
+                continue;
+
+            normalized.Add(relativePath);
+        }
+
+        return normalized;
+    }
+
+    private static bool IsRelevantIgnoreFileForProjectRoot(string projectRoot, string ignoreFileAbsolutePath)
+    {
+        var ignoreDirectory = Path.GetDirectoryName(ignoreFileAbsolutePath);
+        if (string.IsNullOrEmpty(ignoreDirectory))
+            return false;
+
+        return IsPathEqualOrParent(ignoreDirectory, projectRoot)
+            || IsPathEqualOrParent(projectRoot, ignoreDirectory);
+    }
+
+    private static string DescribePathFilter(FileIndexer.PathFilterKind filterKind)
+        => filterKind switch
+        {
+            FileIndexer.PathFilterKind.IgnoredByRules => "ignored by .gitignore/.cdidxignore",
+            FileIndexer.PathFilterKind.ExcludedByDefaultDirectory => "excluded by default directory rules",
+            FileIndexer.PathFilterKind.ExcludedByDefaultFile => "excluded by default file rules",
+            FileIndexer.PathFilterKind.IgnoreRulesUnavailable => "ignore rules unavailable",
+            _ => "filtered",
+        };
+
     private static IReadOnlyList<string> NormalizeUpdateFileTargets(string projectRoot, IEnumerable<string> updateFiles, bool json)
     {
         var normalized = new List<string>();
@@ -906,6 +1116,25 @@ public static class IndexCommandRunner
         }
 
         return normalized;
+    }
+
+    private static bool IsPathEqualOrParent(string candidateParent, string candidateChild)
+    {
+        var normalizedParent = Path.GetFullPath(candidateParent)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedChild = Path.GetFullPath(candidateChild)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.Equals(normalizedParent, normalizedChild, comparison))
+            return true;
+
+        var parentWithDirectorySeparator = normalizedParent + Path.DirectorySeparatorChar;
+        var parentWithAltDirectorySeparator = normalizedParent + Path.AltDirectorySeparatorChar;
+        return normalizedChild.StartsWith(parentWithDirectorySeparator, comparison)
+            || normalizedChild.StartsWith(parentWithAltDirectorySeparator, comparison);
     }
 
     private static bool TryProbeDryRunFile(FileIndexer indexer, string absolutePath, out string lang, out string? error)
@@ -1000,7 +1229,16 @@ public static class IndexCommandRunner
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
-        var errorList = scanResult.Errors
+        var fatalScanErrors = scanResult.Errors
+            .Where(error => error.IsFatal)
+            .ToList();
+        var warningScanErrors = scanResult.Errors
+            .Where(error => !error.IsFatal)
+            .ToList();
+        var errorList = fatalScanErrors
+            .Select(error => (object)new { file = error.Path, message = error.Message })
+            .ToList();
+        var warningList = warningScanErrors
             .Select(error => (object)new { file = error.Path, message = error.Message })
             .ToList();
         if (!options.Json)
@@ -1072,7 +1310,7 @@ public static class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         if (!options.Json)
             indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
-        int processed = 0, skipped = 0, errors = errorList.Count;
+        int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
         bool indexSpinnerStopped = false;
 
         foreach (var filePath in files)
@@ -1242,6 +1480,7 @@ public static class IndexCommandRunner
                     files_scanned = files.Count,
                     files_skipped = skipped,
                     files_purged = purged,
+                    warnings,
                     errors,
                 },
                 graph_table_available = graphTableAvailableAfter,
@@ -1252,6 +1491,7 @@ public static class IndexCommandRunner
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
+                warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));
         }
@@ -1266,6 +1506,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Symbols : {totalSymbols:N0}");
             Console.WriteLine($"  Refs    : {totalReferences:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
+            if (warnings > 0) Console.WriteLine($"  Warnings: {warnings:N0}");
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");

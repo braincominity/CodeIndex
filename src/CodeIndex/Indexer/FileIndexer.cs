@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -19,7 +20,16 @@ public class FileIndexer
 
     internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
 
-    public readonly record struct ScanError(string Path, string Message);
+    public enum ScanIssueSeverity
+    {
+        Warning,
+        Error,
+    }
+
+    public readonly record struct ScanError(string Path, string Message, ScanIssueSeverity Severity = ScanIssueSeverity.Error)
+    {
+        public bool IsFatal => Severity == ScanIssueSeverity.Error;
+    }
 
     public readonly record struct ScanFilesResult(
         IReadOnlyList<string> Files,
@@ -29,10 +39,31 @@ public class FileIndexer
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> FullyScannedDirectories)
     {
-        public bool HadErrors => Errors.Count > 0;
+        public bool HadErrors => Errors.Any(error => error.IsFatal);
+    }
+
+    internal enum PathFilterKind
+    {
+        None,
+        IgnoredByRules,
+        ExcludedByDefaultDirectory,
+        ExcludedByDefaultFile,
+        IgnoreRulesUnavailable,
+    }
+
+    internal readonly record struct PathFilterResult(
+        PathFilterKind FilterKind,
+        IReadOnlyList<ScanError> Errors)
+    {
+        public bool ShouldSkip => FilterKind != PathFilterKind.None;
+        public bool ShouldDeleteExisting => FilterKind is
+            PathFilterKind.IgnoredByRules or
+            PathFilterKind.ExcludedByDefaultDirectory or
+            PathFilterKind.ExcludedByDefaultFile;
     }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp"];
+    private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -158,10 +189,547 @@ public class FileIndexer
     private const long MaxFileSize = 10 * 1024 * 1024;
 
     private readonly string _projectRoot;
+    private readonly string _ignoreRuleRoot;
+    private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
+    private readonly bool _ignoreCase;
+
+    private sealed class IgnoreRuleSet
+    {
+        internal static readonly IgnoreRuleSet Empty = new(null, []);
+
+        private readonly IgnoreRuleSet? _parent;
+        private readonly IReadOnlyList<IgnoreRule> _rules;
+
+        private IgnoreRuleSet(IgnoreRuleSet? parent, IReadOnlyList<IgnoreRule> rules)
+        {
+            _parent = parent;
+            _rules = rules;
+        }
+
+        internal static IgnoreRuleSet CreateChild(IgnoreRuleSet parent, IReadOnlyList<IgnoreRule> rules)
+            => rules.Count == 0 ? parent : new IgnoreRuleSet(parent, rules);
+
+        internal bool IsIgnored(string absolutePath, bool isDirectory)
+        {
+            var ignored = _parent?.IsIgnored(absolutePath, isDirectory) ?? false;
+            foreach (var rule in _rules)
+            {
+                if (rule.IsMatch(absolutePath, isDirectory))
+                    ignored = !rule.Negated;
+            }
+
+            return ignored;
+        }
+    }
+
+    private readonly record struct IgnoreRuleLoadResult(
+        IgnoreRuleSet Rules,
+        bool IgnoreRulesAvailable);
+
+    private sealed class IgnoreRule
+    {
+        private readonly record struct PatternToken(char Value, bool Escaped);
+
+        private readonly string _sourceDirectory;
+        private readonly Regex _matcher;
+        private readonly bool _asciiIgnoreCase;
+        private readonly bool _directoryOnly;
+        private readonly bool _matchBasenameOnly;
+
+        private IgnoreRule(
+            string sourceDirectory,
+            Regex matcher,
+            bool asciiIgnoreCase,
+            bool negated,
+            bool directoryOnly,
+            bool matchBasenameOnly)
+        {
+            _sourceDirectory = sourceDirectory;
+            _matcher = matcher;
+            _asciiIgnoreCase = asciiIgnoreCase;
+            Negated = negated;
+            _directoryOnly = directoryOnly;
+            _matchBasenameOnly = matchBasenameOnly;
+        }
+
+        internal bool Negated { get; }
+
+        internal static bool TryParse(string sourceDirectory, string rawLine, bool ignoreCase, out IgnoreRule? rule, out string? errorMessage)
+        {
+            rule = null;
+            errorMessage = null;
+            if (!TryTokenize(rawLine, out var tokens))
+                return false;
+
+            if (tokens[0] is { Value: '#', Escaped: false })
+                return false;
+
+            var negated = false;
+            if (tokens[0] is { Value: '!', Escaped: false })
+            {
+                negated = true;
+                tokens.RemoveAt(0);
+            }
+
+            if (tokens.Count == 0)
+                return false;
+
+            var directoryOnly = tokens[^1] is { Value: '/', Escaped: false };
+            if (directoryOnly)
+                tokens.RemoveAt(tokens.Count - 1);
+
+            if (tokens.Count == 0)
+                return false;
+
+            var anchoredToSourceDirectory = tokens[0] is { Value: '/', Escaped: false };
+            if (anchoredToSourceDirectory)
+                tokens.RemoveAt(0);
+
+            if (tokens.Count == 0)
+                return false;
+
+            var matchBasenameOnly = !anchoredToSourceDirectory && !tokens.Any(token => token is { Value: '/', Escaped: false });
+            try
+            {
+                if (ignoreCase)
+                    tokens = FoldAsciiTokens(tokens);
+
+                var matcher = BuildMatcher(tokens, ignoreCase);
+                rule = new IgnoreRule(sourceDirectory, matcher, ignoreCase, negated, directoryOnly, matchBasenameOnly);
+                return true;
+            }
+            catch (ArgumentException ex)
+            {
+                errorMessage = $"Invalid ignore rule skipped: {ex.Message}";
+                return false;
+            }
+        }
+
+        internal bool IsMatch(string absolutePath, bool isDirectory)
+        {
+            if (_directoryOnly && !isDirectory)
+                return false;
+
+            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_sourceDirectory, absolutePath));
+            if (relativePath.Length == 0 ||
+                relativePath == "." ||
+                relativePath.StartsWith("../", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var candidate = _matchBasenameOnly
+                ? Path.GetFileName(relativePath)
+                : relativePath;
+
+            if (string.IsNullOrEmpty(candidate))
+                return false;
+
+            if (_asciiIgnoreCase)
+                candidate = FoldAscii(candidate);
+
+            return _matcher.IsMatch(candidate);
+        }
+
+        private static bool TryTokenize(string rawLine, out List<PatternToken> tokens)
+        {
+            tokens = [];
+            if (string.IsNullOrEmpty(rawLine))
+                return false;
+
+            var escaping = false;
+            foreach (var ch in rawLine)
+            {
+                if (escaping)
+                {
+                    tokens.Add(new PatternToken(ch, Escaped: true));
+                    escaping = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escaping = true;
+                    continue;
+                }
+
+                tokens.Add(new PatternToken(ch, Escaped: false));
+            }
+
+            if (escaping)
+                tokens.Add(new PatternToken('\\', Escaped: false));
+
+            while (tokens.Count > 0 && tokens[^1] is { Value: ' ', Escaped: false })
+                tokens.RemoveAt(tokens.Count - 1);
+
+            return tokens.Count > 0;
+        }
+
+        private static Regex BuildMatcher(IReadOnlyList<PatternToken> pattern, bool ignoreCase)
+        {
+            var builder = new StringBuilder();
+            builder.Append('^');
+
+            for (var i = 0; i < pattern.Count; i++)
+            {
+                var token = pattern[i];
+                var ch = token.Value;
+                if (token.Escaped)
+                {
+                    builder.Append(Regex.Escape(ch.ToString()));
+                    continue;
+                }
+
+                if (ch == '*')
+                {
+                    var isDoubleStar = i + 1 < pattern.Count && pattern[i + 1] is { Value: '*', Escaped: false };
+                    if (isDoubleStar)
+                    {
+                        var nextChar = i + 2 < pattern.Count ? pattern[i + 2].Value : '\0';
+                        if (nextChar == '/')
+                        {
+                            builder.Append("(?:[^/]+/)*");
+                            i += 2;
+                            continue;
+                        }
+
+                        if (i > 0 &&
+                            pattern[i - 1] is { Value: '/', Escaped: false } &&
+                            i + 2 == pattern.Count)
+                        {
+                            builder.Length -= 1;
+                            builder.Append("/.*");
+                            i++;
+                            continue;
+                        }
+
+                        builder.Append("[^/]*");
+                    }
+                    else
+                    {
+                        builder.Append("[^/]*");
+                    }
+
+                    if (isDoubleStar)
+                        i++;
+                    continue;
+                }
+
+                if (ch == '?')
+                {
+                    builder.Append("[^/]");
+                    continue;
+                }
+
+                if (ch == '[' && TryBuildCharacterClass(pattern, ref i, builder, ignoreCase))
+                    continue;
+
+                builder.Append(Regex.Escape(ch.ToString()));
+            }
+
+            builder.Append('$');
+            return new Regex(builder.ToString(), RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        }
+
+        private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder, bool ignoreCase)
+        {
+            var contentStart = index + 1;
+            if (contentStart >= pattern.Count)
+                throw new ArgumentException("malformed character class");
+
+            if (pattern[contentStart] is { Value: '!', Escaped: false })
+            {
+                contentStart++;
+            }
+            else if (pattern[contentStart] is { Value: '^', Escaped: false })
+            {
+                contentStart++;
+            }
+
+            if (contentStart >= pattern.Count)
+                throw new ArgumentException("malformed character class");
+
+            var allowLeadingRightBracket =
+                contentStart < pattern.Count &&
+                pattern[contentStart] is { Value: ']', Escaped: false };
+
+            var scanStart = allowLeadingRightBracket ? contentStart + 1 : contentStart;
+            var closingIndex = FindCharacterClassClosingIndex(pattern, scanStart);
+
+            if (closingIndex < scanStart)
+                throw new ArgumentException("malformed character class");
+
+            builder.Append('[');
+            if (pattern[index + 1] is { Value: '!', Escaped: false })
+            {
+                builder.Append('^');
+            }
+            else if (pattern[index + 1] is { Value: '^', Escaped: false })
+            {
+                builder.Append(@"\^");
+            }
+
+            if (allowLeadingRightBracket)
+            {
+                builder.Append(@"\]");
+                contentStart++;
+            }
+
+            for (var i = contentStart; i < closingIndex; i++)
+            {
+                var token = pattern[i];
+                var ch = token.Value;
+                if (token.Escaped)
+                {
+                    AppendCharacterClassLiteral(builder, ch, ignoreCase);
+                    continue;
+                }
+
+                if (ch == '[' && TryAppendPosixCharacterClass(pattern, closingIndex, ref i, builder, ignoreCase))
+                    continue;
+
+                if (i + 2 < closingIndex &&
+                    pattern[i + 1] is { Value: '-', Escaped: false })
+                {
+                    var endToken = pattern[i + 2];
+                    if (!endToken.Escaped &&
+                        TryAppendCharacterClassRange(builder, ch, endToken.Value, ignoreCase))
+                    {
+                        i += 2;
+                        continue;
+                    }
+                }
+
+                if (ch is '\\' or '[' or ']')
+                {
+                    builder.Append('\\');
+                    builder.Append(ch);
+                    continue;
+                }
+
+                AppendCharacterClassLiteral(builder, ch, ignoreCase);
+            }
+
+            builder.Append(']');
+            index = closingIndex;
+            return true;
+        }
+
+        private static int FindCharacterClassClosingIndex(IReadOnlyList<PatternToken> pattern, int scanStart)
+        {
+            for (var i = scanStart; i < pattern.Count; i++)
+            {
+                if (pattern[i].Escaped)
+                    continue;
+
+                if (pattern[i].Value == '[' && TryFindPosixCharacterClassEnd(pattern, i, out var posixEnd))
+                {
+                    i = posixEnd;
+                    continue;
+                }
+
+                if (pattern[i].Value == ']')
+                    return i;
+            }
+
+            return -1;
+        }
+
+        private static bool TryAppendPosixCharacterClass(IReadOnlyList<PatternToken> pattern, int closingIndex, ref int index, StringBuilder builder, bool ignoreCase)
+        {
+            if (!TryFindPosixCharacterClassEnd(pattern, index, out var posixEnd) || posixEnd >= closingIndex)
+                return false;
+
+            var nameChars = new StringBuilder();
+            for (var i = index + 2; i < posixEnd - 1; i++)
+                nameChars.Append(pattern[i].Value);
+
+            builder.Append(GetPosixCharacterClassPattern(nameChars.ToString(), ignoreCase));
+            index = posixEnd;
+            return true;
+        }
+
+        private static bool TryFindPosixCharacterClassEnd(IReadOnlyList<PatternToken> pattern, int startIndex, out int endIndex)
+        {
+            endIndex = -1;
+            if (startIndex + 3 >= pattern.Count ||
+                pattern[startIndex] is not { Value: '[', Escaped: false } ||
+                pattern[startIndex + 1] is not { Value: ':', Escaped: false })
+            {
+                return false;
+            }
+
+            for (var i = startIndex + 2; i + 1 < pattern.Count; i++)
+            {
+                if (pattern[i] is { Value: ':', Escaped: false } &&
+                    pattern[i + 1] is { Value: ']', Escaped: false })
+                {
+                    endIndex = i + 1;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string GetPosixCharacterClassPattern(string className, bool ignoreCase)
+            => className switch
+            {
+                "alnum" => "A-Za-z0-9",
+                "alpha" => "A-Za-z",
+                "blank" => " \t",
+                "cntrl" => @"\x00-\x1F\x7F",
+                "digit" => "0-9",
+                "graph" => "!-~",
+                "lower" => ignoreCase ? "A-Za-z" : "a-z",
+                "print" => " -~",
+                "punct" => @"!-/:-@\[-`\{-~",
+                "space" => " \t\r\n\v\f",
+                "upper" => ignoreCase ? "A-Za-z" : "A-Z",
+                "xdigit" => "0-9A-Fa-f",
+                _ => throw new ArgumentException($"unsupported POSIX character class '{className}'"),
+            };
+
+        private static string EscapeCharacterClassLiteral(char ch)
+            => ch switch
+            {
+                '\\' or '[' or ']' or '^' or '-' => $@"\{ch}",
+                _ => ch.ToString(),
+            };
+
+        private static void AppendCharacterClassLiteral(StringBuilder builder, char ch, bool ignoreCase)
+        {
+            if (ignoreCase && IsAsciiLetter(ch))
+            {
+                builder.Append(char.ToLowerInvariant(ch));
+                builder.Append(char.ToUpperInvariant(ch));
+                return;
+            }
+
+            builder.Append(EscapeCharacterClassLiteral(ch));
+        }
+
+        private static bool TryAppendCharacterClassRange(StringBuilder builder, char start, char end, bool ignoreCase)
+        {
+            builder.Append(EscapeCharacterClassLiteral(start));
+            builder.Append('-');
+            builder.Append(EscapeCharacterClassLiteral(end));
+
+            if (!ignoreCase ||
+                !IsAsciiLetter(start) ||
+                !IsAsciiLetter(end))
+            {
+                return true;
+            }
+
+            var lowerStart = char.ToLowerInvariant(start);
+            var lowerEnd = char.ToLowerInvariant(end);
+            var upperStart = char.ToUpperInvariant(start);
+            var upperEnd = char.ToUpperInvariant(end);
+
+            if (lowerStart == start && lowerEnd == end)
+            {
+                builder.Append(char.ToUpperInvariant(start));
+                builder.Append('-');
+                builder.Append(char.ToUpperInvariant(end));
+                return true;
+            }
+
+            if (upperStart == start && upperEnd == end)
+            {
+                builder.Append(char.ToLowerInvariant(start));
+                builder.Append('-');
+                builder.Append(char.ToLowerInvariant(end));
+                return true;
+            }
+
+            return true;
+        }
+
+        private static List<PatternToken> FoldAsciiTokens(IReadOnlyList<PatternToken> tokens)
+            => tokens
+                .Select(token => new PatternToken(FoldAsciiChar(token.Value), token.Escaped))
+                .ToList();
+
+        private static string FoldAscii(string value)
+        {
+            var chars = value.ToCharArray();
+            for (var i = 0; i < chars.Length; i++)
+                chars[i] = FoldAsciiChar(chars[i]);
+            return new string(chars);
+        }
+
+        private static char FoldAsciiChar(char ch)
+            => ch is >= 'A' and <= 'Z'
+                ? char.ToLowerInvariant(ch)
+                : ch;
+
+        private static bool IsAsciiLetter(char ch)
+            => ch is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z');
+    }
 
     public FileIndexer(string projectRoot)
+        : this(projectRoot, ignoreCase: ProbeFileSystemIgnoreCase(projectRoot), ignoreRuleRoot: null)
+    {
+    }
+
+    public FileIndexer(string projectRoot, bool ignoreCase)
+        : this(projectRoot, ignoreCase, ignoreRuleRoot: null)
+    {
+    }
+
+    public FileIndexer(string projectRoot, bool ignoreCase, string? ignoreRuleRoot)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
+        _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
+        _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
+        _ignoreCase = ignoreCase;
+    }
+
+    private static bool ProbeFileSystemIgnoreCase(string projectRoot)
+    {
+        try
+        {
+            var normalizedRoot = Path.GetFullPath(projectRoot);
+            if (TryCreateCaseVariant(normalizedRoot, out var rootVariant))
+                return Directory.Exists(rootVariant);
+
+            var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
+            File.WriteAllText(probePath, string.Empty);
+            try
+            {
+                return TryCreateCaseVariant(probePath, out var probeVariant) && File.Exists(probeVariant);
+            }
+            finally
+            {
+                if (File.Exists(probePath))
+                    File.Delete(probePath);
+            }
+        }
+        catch
+        {
+            return OperatingSystem.IsWindows();
+        }
+    }
+
+    private static bool TryCreateCaseVariant(string path, out string variant)
+    {
+        var chars = path.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            var ch = chars[i];
+            if (!char.IsLetter(ch))
+                continue;
+
+            chars[i] = char.IsUpper(ch)
+                ? char.ToLowerInvariant(ch)
+                : char.ToUpperInvariant(ch);
+            variant = new string(chars);
+            return true;
+        }
+
+        variant = path;
+        return false;
     }
 
     /// <summary>
@@ -180,6 +748,9 @@ public class FileIndexer
 
     public static string? DetectLanguage(string filePath)
         => TryDetectLanguage(filePath).Language;
+
+    internal static bool IsIgnoreFilePath(string path)
+        => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
 
     internal static LanguageDetectionResult TryDetectLanguage(string filePath)
     {
@@ -342,12 +913,91 @@ public class FileIndexer
             Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
+    private static bool IsPathEqualOrParent(string candidateParent, string candidateChild)
+    {
+        var normalizedParent = Path.GetFullPath(candidateParent)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedChild = Path.GetFullPath(candidateChild)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.Equals(normalizedParent, normalizedChild, comparison))
+            return true;
+
+        var parentWithDirectorySeparator = normalizedParent + Path.DirectorySeparatorChar;
+        var parentWithAltDirectorySeparator = normalizedParent + Path.AltDirectorySeparatorChar;
+        return normalizedChild.StartsWith(parentWithDirectorySeparator, comparison)
+            || normalizedChild.StartsWith(parentWithAltDirectorySeparator, comparison);
+    }
+
     /// <summary>
     /// Enumerate all indexable files under the project root.
     /// プロジェクトルート以下のインデックス対象ファイルを列挙する。
     /// </summary>
     public IReadOnlyList<string> ScanFiles()
         => ScanFilesDetailed().Files;
+
+    internal PathFilterResult EvaluatePathFilter(string absolutePath, bool isDirectory = false)
+    {
+        var errors = new List<ScanError>();
+        var fullPath = Path.GetFullPath(absolutePath);
+        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, fullPath));
+        if (relativePath.StartsWith("../", StringComparison.Ordinal))
+            return new PathFilterResult(PathFilterKind.None, errors);
+
+        var fullyScanned = true;
+        var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
+        var activeIgnoreRules = preloadResult.Rules;
+        if (!preloadResult.IgnoreRulesAvailable)
+            return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+
+        var projectRootFilterKind = GetDirectoryFilterKind(_projectRoot, activeIgnoreRules, isProjectRoot: true);
+        if (projectRootFilterKind != PathFilterKind.None)
+            return new PathFilterResult(projectRootFilterKind, errors);
+
+        if (relativePath.Length == 0 || relativePath == ".")
+            return new PathFilterResult(PathFilterKind.None, errors);
+
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var currentDirectory = _projectRoot;
+        var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+        activeIgnoreRules = loadResult.Rules;
+        if (!loadResult.IgnoreRulesAvailable)
+            return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+
+        var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
+        for (var i = 0; i < directorySegmentCount; i++)
+        {
+            var directoryName = segments[i];
+            var childDirectory = Path.Combine(currentDirectory, directoryName);
+
+            if (SkipDirs.Contains(directoryName))
+                return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+
+            if (activeIgnoreRules.IsIgnored(childDirectory, isDirectory: true))
+                return new PathFilterResult(PathFilterKind.IgnoredByRules, errors);
+
+            currentDirectory = childDirectory;
+            fullyScanned = true;
+            loadResult = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
+            activeIgnoreRules = loadResult.Rules;
+            if (!loadResult.IgnoreRulesAvailable)
+                return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+        }
+
+        if (isDirectory)
+            return new PathFilterResult(PathFilterKind.None, errors);
+
+        var fileName = Path.GetFileName(fullPath);
+        if (SkipFiles.Contains(fileName))
+            return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
+
+        return activeIgnoreRules.IsIgnored(fullPath, isDirectory: false)
+            ? new PathFilterResult(PathFilterKind.IgnoredByRules, errors)
+            : new PathFilterResult(PathFilterKind.None, errors);
+    }
 
     internal ScanFilesResult ScanFilesDetailed()
     {
@@ -357,7 +1007,12 @@ public class FileIndexer
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        EnumerateDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+        var fullyScanned = true;
+        var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
+        if (preloadResult.IgnoreRulesAvailable)
+        {
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules, isProjectRoot: true);
+        }
         return new ScanFilesResult(
             files,
             errors,
@@ -374,14 +1029,21 @@ public class FileIndexer
         HashSet<string> nonIndexablePaths,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories)
+        HashSet<string> fullyScannedDirectories,
+        IgnoreRuleSet activeIgnoreRules,
+        bool isProjectRoot = false)
     {
-        // Check for skip directories / スキップ対象ディレクトリかチェック
-        var dirName = Path.GetFileName(dir);
-        if (SkipDirs.Contains(dirName))
-            return true;
+        var relativeDir = ToRelativePath(dir);
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+        var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules, isProjectRoot);
+        if (filterKind != PathFilterKind.None)
+        {
+            listedDirectories.Add(relativeDir);
+            fullyScannedDirectories.Add(relativeDir);
+            return true;
+        }
+
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
     }
 
     private bool EnumerateDirectory(
@@ -391,17 +1053,26 @@ public class FileIndexer
         HashSet<string> nonIndexablePaths,
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories)
+        HashSet<string> fullyScannedDirectories,
+        IgnoreRuleSet inheritedIgnoreRules)
     {
         var fullyScanned = true;
         try
         {
+            var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, errors, ref fullyScanned);
+            var activeIgnoreRules = loadResult.Rules;
+            if (!loadResult.IgnoreRulesAvailable)
+                return false;
+
             foreach (var file in Directory.EnumerateFiles(dir))
             {
                 var fileName = Path.GetFileName(file);
 
                 // Skip excluded file names / 除外ファイル名をスキップ
                 if (SkipFiles.Contains(fileName))
+                    continue;
+
+                if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
                     continue;
 
                 // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
@@ -446,7 +1117,7 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories);
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
             }
         }
         catch (UnauthorizedAccessException)
@@ -467,6 +1138,115 @@ public class FileIndexer
 
         return fullyScanned;
     }
+
+    private static PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
+    {
+        var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
+        if (!isProjectRoot && SkipDirs.Contains(dirName))
+            return PathFilterKind.ExcludedByDefaultDirectory;
+
+        return activeIgnoreRules.IsIgnored(dir, isDirectory: true)
+            ? PathFilterKind.IgnoredByRules
+            : PathFilterKind.None;
+    }
+
+    private IgnoreRuleLoadResult LoadIgnoreRulesForDirectory(
+        string dir,
+        IgnoreRuleSet inheritedIgnoreRules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
+        var rules = new List<IgnoreRule>();
+        var ignoreRulesAvailable = true;
+
+        foreach (var ignoreFileName in IgnoreFileNames)
+        {
+            var ignorePath = Path.Combine(dir, ignoreFileName);
+            if (!File.Exists(ignorePath))
+                continue;
+
+            try
+            {
+                var lineNumber = 0;
+                foreach (var line in File.ReadLines(ignorePath))
+                {
+                    lineNumber++;
+                    if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
+                        rules.Add(rule);
+                    else if (errorMessage != null)
+                        errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+                fullyScanned = false;
+                ignoreRulesAvailable = false;
+            }
+            catch (IOException)
+            {
+                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+                fullyScanned = false;
+                ignoreRulesAvailable = false;
+            }
+        }
+
+        return ignoreRulesAvailable
+            ? new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true)
+            : new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+    }
+
+    private IgnoreRuleLoadResult LoadAncestorIgnoreRules(List<ScanError> errors, ref bool fullyScanned)
+    {
+        var activeIgnoreRules = IgnoreRuleSet.Empty;
+        foreach (var dir in _ancestorIgnoreDirectories)
+        {
+            var loadResult = LoadIgnoreRulesForDirectory(dir, activeIgnoreRules, errors, ref fullyScanned);
+            activeIgnoreRules = loadResult.Rules;
+            if (!loadResult.IgnoreRulesAvailable)
+                return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: false);
+        }
+
+        return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: true);
+    }
+
+    private string NormalizeIgnoreRuleRoot(string? ignoreRuleRoot)
+    {
+        if (string.IsNullOrWhiteSpace(ignoreRuleRoot))
+            return _projectRoot;
+
+        var candidate = Path.GetFullPath(ignoreRuleRoot);
+        return IsPathEqualOrParent(candidate, _projectRoot)
+            ? candidate
+            : _projectRoot;
+    }
+
+    private static IReadOnlyList<string> BuildAncestorIgnoreDirectories(string ignoreRuleRoot, string projectRoot)
+    {
+        if (PathsEqual(ignoreRuleRoot, projectRoot))
+            return [];
+
+        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(ignoreRuleRoot, projectRoot));
+        if (relativePath.Length == 0 || relativePath == "." || relativePath.StartsWith("../", StringComparison.Ordinal))
+            return [];
+
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+            return [];
+
+        var directories = new List<string> { ignoreRuleRoot };
+        var currentDirectory = ignoreRuleRoot;
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            currentDirectory = Path.Combine(currentDirectory, segments[i]);
+            directories.Add(currentDirectory);
+        }
+
+        return directories;
+    }
+
+    private static string NormalizeIgnorePath(string path)
+        => path.Replace('\\', '/').TrimEnd('/');
 
     /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
