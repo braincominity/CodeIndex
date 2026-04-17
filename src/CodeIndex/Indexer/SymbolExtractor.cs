@@ -330,9 +330,12 @@ public static class SymbolExtractor
             // visibility / modifier キーワードを negative lookahead にも並べて、regex engine が
             // それらを returnType として飲み込む方向に backtrack して `public static event …`
             // のような宣言を field としてマッチすることを防ぐ。Closes #298.
+            // Modifier order is free, so visibility may appear anywhere in the modifier
+            // sequence (e.g. `static public int X;`). Closes #355.
+            // 修飾子順序は自由で、visibility を修飾子列の任意位置に置ける
+            // （例: `static public int X;`）。Closes #355.
             new("property",  new Regex(
-                $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?"
-              + @"(?:(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
+                $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
               + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
               + $@"(?<returnType>{CSharpTypePattern})\s+"
               + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
@@ -828,7 +831,16 @@ public static class SymbolExtractor
     // も accessor と結合できる。末尾 `{` を許さないと、この形が未結合のまま
     // ShouldSkipCSharpBracePropertyCandidate で弾かれてしまう。
     // Closes #233.
-    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
+    // Visibility / modifier ordering is free so that multi-line declarations like
+    // `static public Dictionary<string, int>` + next-line `Map = new();` or
+    // `new public const int` + next-line `C = 1;` merge into a single match line.
+    // `const` is included alongside the other field-eligible modifiers for the
+    // multi-line const field case. Closes #355.
+    // visibility / 修飾子の順序は自由にしておき、`static public Dictionary<string, int>`
+    // + 次行 `Map = new();` や `new public const int` + 次行 `C = 1;` のような
+    // 複数行宣言も 1 つのマッチ行に結合できるようにする。複数行 const フィールド向けに
+    // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
+    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -898,7 +910,18 @@ public static class SymbolExtractor
             {
                 if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
                     continue;
-                var csharpPropertyCandidate = lang == "csharp" && pattern.Kind == "property"
+                // Merge multi-line field headers for C# regardless of kind. Kind "property" (plain
+                // fields) and kind "function" (const / static readonly fields) both need the
+                // merge. Non-field function patterns (methods, constructors, operators, indexers)
+                // are unaffected because CSharpPropertyHeaderPrefixRegex requires the line to end
+                // before `(` or `{`, so lines like `public int Foo()` never satisfy the header
+                // prefix and the merger returns the original line. Closes #355.
+                // C# の複数行フィールドヘッダ結合は kind に依らず適用する。kind "property"（通常
+                // フィールド）と kind "function"（`const` / `static readonly` フィールド）の両方で
+                // 結合が必要。method / constructor / operator / indexer のような非フィールド
+                // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
+                // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
+                var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
                     ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
                     : new CSharpPropertyMatchCandidate(matchLine, i, i);
                 var patternMatchLine = csharpPropertyCandidate.MatchLine;

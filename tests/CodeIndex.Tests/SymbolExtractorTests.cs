@@ -4272,6 +4272,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PlainField_FreeModifierOrder()
+    {
+        // Closes #355: plain fields (kind `property`) and multi-line field headers must also
+        // accept visibility anywhere in the modifier sequence. Previously `static public int X;`
+        // captured as a field with empty `visibility` (single-line plain-field regex was
+        // visibility-first), and multi-line declarations whose header line starts with a
+        // non-visibility modifier were dropped entirely because
+        // `CSharpPropertyHeaderPrefixRegex` (the merger trigger) was also visibility-first and
+        // did not accept `const`.
+        // Closes #355: 通常フィールド（kind `property`）と複数行フィールドヘッダも、修飾子列の
+        // 任意位置で visibility を受け付けなければならない。以前は `static public int X;` が
+        // visibility 空のまま captured され（単一行 plain-field 正規表現が visibility-first）、
+        // 非 visibility 修飾子から始まる複数行宣言は結合トリガの `CSharpPropertyHeaderPrefixRegex`
+        // 自体が visibility-first で `const` も受け付けなかったため完全に欠落していた。
+        var content = """
+            using System.Collections.Generic;
+            public class Edge
+            {
+                static public int X;
+                readonly public int Y;
+                new public static int Z = 1;
+                static public Dictionary<string, int>
+                    Map = new();
+                new public const int
+                    C = 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Y" && s.Visibility == "public" && s.ReturnType == "int");
+        // `new public static` is promoted to kind `function` via the static readonly / const row set.
+        // `new public static` は static readonly / const 系の行で kind `function` に昇格する。
+        Assert.Contains(symbols, s => s.Name == "Z" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Map" && s.Visibility == "public" && s.ReturnType != null && s.ReturnType.Contains("Dictionary"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.Visibility == "public" && s.ReturnType == "int");
+    }
+
+    [Fact]
     public void Extract_CSharp_UnsafeExtern_FreeModifierOrder()
     {
         // Closes #355: `unsafe` / `extern` modifiers must not force a specific slot in the
