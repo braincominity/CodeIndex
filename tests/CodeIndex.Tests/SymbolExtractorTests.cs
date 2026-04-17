@@ -3708,6 +3708,78 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NonPartialBlockStyleProperty_AccessorVariants_AreCaptured()
+    {
+        // Regression coverage for #229: non-partial properties with `{` on the next line
+        // and each major accessor body style (auto, expression-bodied arrows, `init`,
+        // full method bodies) must all surface as property symbols with header-aligned
+        // start lines and end lines spanning the closing brace.
+        // #229 の回帰ガード: 非 partial プロパティで `{` が次行に来るすべての代表的な
+        // accessor 本体スタイル（auto / `get =>` `set =>` / `init` / フル本体）を、
+        // header 行を起点に閉じブレースまでを含む property として抽出し続けることを固定する。
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string BlockAuto
+                {
+                    get;
+                    set;
+                }
+
+                public string BlockFull
+                {
+                    get => _x;
+                    set => _x = value;
+                }
+
+                public int BlockInit
+                {
+                    get;
+                    init;
+                }
+
+                public string BlockWithLogic
+                {
+                    get
+                    {
+                        return _x;
+                    }
+                    set
+                    {
+                        _x = value ?? "";
+                    }
+                }
+
+                private string _x = "";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var blockAuto = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockAuto"));
+        Assert.Equal(5, blockAuto.StartLine);
+        Assert.Equal(9, blockAuto.EndLine);
+
+        var blockFull = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockFull"));
+        Assert.Equal(11, blockFull.StartLine);
+        Assert.Equal(15, blockFull.EndLine);
+
+        var blockInit = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockInit"));
+        Assert.Equal(17, blockInit.StartLine);
+        Assert.Equal(21, blockInit.EndLine);
+
+        var blockWithLogic = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockWithLogic"));
+        Assert.Equal(23, blockWithLogic.StartLine);
+        Assert.Equal(33, blockWithLogic.EndLine);
+
+        // None of the block-style variants should leak as phantom functions with the same name.
+        // どのブロックスタイルも同名の phantom function として重複抽出されてはいけない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function"
+            && (s.Name == "BlockAuto" || s.Name == "BlockFull" || s.Name == "BlockInit" || s.Name == "BlockWithLogic"));
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
     {
         var content = """
