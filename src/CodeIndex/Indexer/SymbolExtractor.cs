@@ -5318,7 +5318,7 @@ public static class SymbolExtractor
             }
 
             if (nextLine.StartsWith(";", StringComparison.Ordinal)
-                || nextLine.Contains("(", StringComparison.Ordinal))
+                || openBraceLineIndex < 0 && nextLine.Contains("(", StringComparison.Ordinal))
             {
                 break;
             }

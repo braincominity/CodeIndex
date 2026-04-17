@@ -3157,6 +3157,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CSharpPartialPropertyImplementation_WithMultilineAccessorAttribute_IsDetected()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_multiline_accessor_attribute_property");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial string Name
+                    {
+                        [System.Obsolete(
+                            "x"
+                        )]
+                        get => "x";
+                        set { }
+                    }
+
+                    public int Other => 1;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var symbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "property" && symbol.GetProperty("name").GetString() == "Name");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "property" && symbol.GetProperty("name").GetString() == "Other");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_JavaScriptStringBraceKeepsFollowingMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_string_brace");
