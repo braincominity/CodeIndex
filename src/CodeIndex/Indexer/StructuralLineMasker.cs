@@ -423,8 +423,25 @@ internal static class StructuralLineMasker
                         // Inside an f-string `{expr}` hole: preserve chars so downstream
                         // regex extraction still sees real calls. Track nested braces so
                         // dict / set / nested f-string literal braces do not terminate early.
+                        // Skip over nested string literals and `#` comments so their braces
+                        // do not mis-close the hole.
                         // f-string `{expr}` ホール内: 文字を残して real call を抽出に見せる。
                         // dict/set/ネスト f-string のために brace 深度を追う。
+                        // ホール内の文字列リテラルや `#` コメントはスキップし、内部の
+                        // `{` / `}` が brace 深度に影響しないようにする。
+                        if (line[pos] == '\'' || line[pos] == '"')
+                        {
+                            pos = SkipPythonSingleLineString(line, pos);
+                            continue;
+                        }
+
+                        if (line[pos] == '#')
+                        {
+                            // `#` starts a Python comment; skip the rest of the line.
+                            // `#` から行末までは Python のコメント。
+                            break;
+                        }
+
                         if (line[pos] == '{')
                         {
                             holeBraceDepth++;
@@ -714,6 +731,37 @@ internal static class StructuralLineMasker
         return p;
     }
 
+    // Token-aware state for JS/TS regex-vs-division disambiguation within a line.
+    // Carries the last identifier word so keywords like `return` / `throw` / `typeof`
+    // flip the following `/` from division to regex literal.
+    // 1 行内の JS/TS regex 判定用 state。直前の識別子語も保持し、`return` / `throw` /
+    // `typeof` など regex-prefix keyword の後の `/` を division ではなく regex として扱う。
+    private enum JsPrevTokenKind { None, Identifier, Numeric, Literal, CloseParen, CloseBracket, Other }
+
+    private struct JsLexState
+    {
+        public JsPrevTokenKind PrevTokenKind;
+        public string PrevIdentifier;
+
+        public void Reset()
+        {
+            PrevTokenKind = JsPrevTokenKind.None;
+            PrevIdentifier = string.Empty;
+        }
+
+        public void SetKind(JsPrevTokenKind kind)
+        {
+            PrevTokenKind = kind;
+            PrevIdentifier = string.Empty;
+        }
+
+        public void SetIdentifier(string word)
+        {
+            PrevTokenKind = JsPrevTokenKind.Identifier;
+            PrevIdentifier = word;
+        }
+    }
+
     // JavaScript/TypeScript template literals: `...` with ${expr} interpolation holes.
     // Interpolation hole contents are preserved (not masked) so the call-graph keeps real call edges.
     // Regex literals are skipped at the outer and hole scopes so a backtick inside a regex
@@ -734,7 +782,8 @@ internal static class StructuralLineMasker
 
             var masked = line.ToCharArray();
             var pos = 0;
-            char prevSignificantChar = '\0';
+            var lexState = default(JsLexState);
+            lexState.Reset();
 
             while (pos < line.Length)
             {
@@ -767,7 +816,7 @@ internal static class StructuralLineMasker
                             ReplaceWithSpaces(masked, pos, 2);
                             pos += 2;
                             frames.Push(new JsTemplateHoleFrame());
-                            prevSignificantChar = '\0';
+                            lexState.Reset();
                             continue;
                         }
 
@@ -776,7 +825,7 @@ internal static class StructuralLineMasker
                             masked[pos] = ' ';
                             pos++;
                             frames.Pop();
-                            prevSignificantChar = '`';
+                            lexState.SetKind(JsPrevTokenKind.Literal);
                             continue;
                         }
 
@@ -797,10 +846,10 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
-                        if (line[pos] == '/' && CanStartJsRegexLiteral(prevSignificantChar))
+                        if (line[pos] == '/' && CanStartJsRegexLiteral(lexState))
                         {
                             pos = SkipJsRegexLiteral(line, pos);
-                            prevSignificantChar = 'a'; // Treat as postfix so a following `/` is division.
+                            lexState.SetKind(JsPrevTokenKind.Literal);
                             continue;
                         }
 
@@ -808,14 +857,14 @@ internal static class StructuralLineMasker
                         {
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame());
-                            prevSignificantChar = '`';
+                            lexState.Reset();
                             continue;
                         }
 
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
                             pos = SkipJsSingleLineString(line, pos);
-                            prevSignificantChar = '"';
+                            lexState.SetKind(JsPrevTokenKind.Literal);
                             continue;
                         }
 
@@ -823,7 +872,7 @@ internal static class StructuralLineMasker
                         {
                             holeFrame.NestedBraceDepth++;
                             pos++;
-                            prevSignificantChar = '{';
+                            lexState.SetKind(JsPrevTokenKind.Other);
                             continue;
                         }
 
@@ -838,19 +887,17 @@ internal static class StructuralLineMasker
                                 masked[pos] = ' ';
                                 frames.Pop();
                                 pos++;
-                                prevSignificantChar = '}';
+                                lexState.SetKind(JsPrevTokenKind.Other);
                                 continue;
                             }
 
                             holeFrame.NestedBraceDepth--;
                             pos++;
-                            prevSignificantChar = '}';
+                            lexState.SetKind(JsPrevTokenKind.Other);
                             continue;
                         }
 
-                        if (!char.IsWhiteSpace(line[pos]))
-                            prevSignificantChar = line[pos];
-                        pos++;
+                        pos = AdvanceJsToken(line, pos, ref lexState);
                         continue;
                     }
                 }
@@ -865,10 +912,10 @@ internal static class StructuralLineMasker
                     continue;
                 }
 
-                if (line[pos] == '/' && CanStartJsRegexLiteral(prevSignificantChar))
+                if (line[pos] == '/' && CanStartJsRegexLiteral(lexState))
                 {
                     pos = SkipJsRegexLiteral(line, pos);
-                    prevSignificantChar = 'a'; // Treat as postfix so a following `/` is division.
+                    lexState.SetKind(JsPrevTokenKind.Literal);
                     continue;
                 }
 
@@ -877,43 +924,108 @@ internal static class StructuralLineMasker
                     masked[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame());
-                    prevSignificantChar = '`';
+                    lexState.Reset();
                     continue;
                 }
 
                 if (line[pos] == '"' || line[pos] == '\'')
                 {
                     pos = SkipJsSingleLineString(line, pos);
-                    prevSignificantChar = '"';
+                    lexState.SetKind(JsPrevTokenKind.Literal);
                     continue;
                 }
 
-                if (!char.IsWhiteSpace(line[pos]))
-                    prevSignificantChar = line[pos];
-                pos++;
+                pos = AdvanceJsToken(line, pos, ref lexState);
             }
 
             lines[i] = new string(masked);
         }
     }
 
-    // Decide whether `/` at current scan position is the start of a regex literal
-    // rather than a division operator. Division follows identifiers, numbers, `)`, `]`;
-    // everything else (operators, `{`, `(`, `[`, `,`, `;`, `=`, `?`, `:`, `\0` at start)
-    // puts us in an expression-prefix context where `/` begins a regex.
-    // `/` が division ではなく regex literal の開始かを判定する。division は識別子、数値、
-    // `)`、`]` の直後。それ以外（演算子や `(` / `[` / `=` / `?` / `:` / `,` / `;` / 先頭 `\0`）は
-    // 式の先頭コンテキストで `/` は regex となる。
-    private static bool CanStartJsRegexLiteral(char prevSignificantChar)
+    // Advance past one JS/TS token (identifier run, numeric run, single non-string/regex char)
+    // and update lexer state so the next `/` can be classified as regex-start or division.
+    // 識別子の連続や数値、単一文字を 1 token として進め、次の `/` を regex / division に
+    // 振り分けられるよう lex state を更新する。
+    private static int AdvanceJsToken(string line, int pos, ref JsLexState lexState)
     {
-        if (prevSignificantChar == '\0')
-            return true;
-        if (prevSignificantChar == ')' || prevSignificantChar == ']')
-            return false;
-        if (IsIdentifierPart(prevSignificantChar))
-            return false;
-        return true;
+        var c = line[pos];
+        if (char.IsWhiteSpace(c))
+            return pos + 1;
+
+        if (IsJsIdentifierStart(c))
+        {
+            int start = pos;
+            pos++;
+            while (pos < line.Length && IsJsIdentifierPart(line[pos]))
+                pos++;
+            lexState.SetIdentifier(line.Substring(start, pos - start));
+            return pos;
+        }
+
+        if (char.IsDigit(c))
+        {
+            while (pos < line.Length && (char.IsLetterOrDigit(line[pos]) || line[pos] == '.' || line[pos] == '_'))
+                pos++;
+            lexState.SetKind(JsPrevTokenKind.Numeric);
+            return pos;
+        }
+
+        switch (c)
+        {
+            case ')':
+                lexState.SetKind(JsPrevTokenKind.CloseParen);
+                break;
+            case ']':
+                lexState.SetKind(JsPrevTokenKind.CloseBracket);
+                break;
+            default:
+                lexState.SetKind(JsPrevTokenKind.Other);
+                break;
+        }
+
+        return pos + 1;
     }
+
+    private static bool IsJsIdentifierStart(char c) =>
+        c == '_' || c == '$' || char.IsLetter(c);
+
+    private static bool IsJsIdentifierPart(char c) =>
+        c == '_' || c == '$' || char.IsLetterOrDigit(c);
+
+    // Decide whether `/` at the current scan position starts a regex literal rather
+    // than a division operator. Division follows numeric / string / regex / template literals,
+    // `)`, `]`, and non-keyword identifiers. Everything else (operators, `{`, `(`, `[`, `,`,
+    // `;`, `=`, `?`, `:`, leading None) puts us in an expression-prefix context where `/`
+    // begins a regex. Regex-prefix keywords such as `return`, `throw`, `typeof` re-enable
+    // regex mode even though they are identifier-shaped.
+    // `/` が division ではなく regex literal の開始かを判定する。数値 / 文字列 / regex /
+    // template 等のリテラル、`)`、`]`、および非 keyword な識別子の後は division。
+    // それ以外（演算子、`(` / `[` / `=` / `?` / `:` / `,` / `;` や行頭 None）は式の
+    // 先頭コンテキストで `/` は regex。`return` / `throw` / `typeof` など regex-prefix
+    // keyword は識別子形でも regex を許す。
+    private static bool CanStartJsRegexLiteral(JsLexState lexState)
+    {
+        switch (lexState.PrevTokenKind)
+        {
+            case JsPrevTokenKind.None:
+                return true;
+            case JsPrevTokenKind.CloseParen:
+            case JsPrevTokenKind.CloseBracket:
+            case JsPrevTokenKind.Numeric:
+            case JsPrevTokenKind.Literal:
+                return false;
+            case JsPrevTokenKind.Identifier:
+                return IsJsRegexPrefixKeyword(lexState.PrevIdentifier);
+            case JsPrevTokenKind.Other:
+            default:
+                return true;
+        }
+    }
+
+    private static bool IsJsRegexPrefixKeyword(string word) =>
+        word is "return" or "throw" or "case" or "delete" or "typeof" or "void"
+            or "new" or "in" or "of" or "instanceof" or "yield" or "await"
+            or "else" or "do" or "finally";
 
     private static int SkipJsRegexLiteral(string line, int startIndex)
     {

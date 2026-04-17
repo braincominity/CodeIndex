@@ -1279,4 +1279,99 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "fallback" && r.ContainerName == "caller");
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
+
+    [Fact]
+    public void Extract_JsRegexAfterReturnKeyword_IsTreatedAsRegexNotDivision()
+    {
+        // Regression for issue #291 follow-up: `return /regex/` must be recognised as
+        // a regex literal even though the preceding token ends in an identifier-part
+        // character (the `n` of `return`). A prev-char-only heuristic would incorrectly
+        // treat the `/` as division and leave the remainder (including any backticks
+        // or `}` inside the regex body) unscanned, which could drop `realAfter` from
+        // the reference graph.
+        // issue #291 続編: `return /regex/` は直前トークン末尾が識別子文字 (`n`) でも
+        // regex として扱うこと。prev 文字だけで判定すると division 扱いになり、
+        // regex 内の backtick や `}` がそのまま後続走査に入り、`realAfter` 等の
+        // 参照エッジを落とし得る。
+        const string content = """
+            function caller(value) {
+                const ok = (() => { return /`/.test(value) ? 1 : 0; })();
+                realAfter();
+                return ok;
+            }
+
+            function realAfter() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realAfter" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleReturnRegex_PreservesFollowingCalls()
+    {
+        // Regression for issue #291 follow-up: inside a template hole, a `return`
+        // followed by a regex whose body contains `}` must be skipped as a regex
+        // literal — otherwise the `}` inside the regex prematurely closes the hole
+        // and later `runTask` / `fallback` / `realCall` references can be dropped.
+        // issue #291 続編: template hole 内で `return /}/` のような regex を正しく
+        // regex としてスキップし、regex 内の `}` で hole を早く閉じないこと。
+        const string content = """
+            function caller(value) {
+                const branch = `${(() => { return /}/.test(value) ? runTask() : fallback(); })()}`;
+                realCall();
+                return branch;
+            }
+
+            function runTask() {}
+            function fallback() {}
+            function realCall() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "fallback" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_PythonFStringHole_StringLiteralWithBraceDoesNotCloseHole()
+    {
+        // Regression for issue #291 follow-up: inside an f-string `{expr}` hole,
+        // a nested Python string literal containing `}` must not terminate the hole
+        // (or leave the outer triple-quoted f-string scanner in the wrong state).
+        // The expression should still be preserved, so `real_call` remains a real
+        // reference edge and `tail` (outside the string entirely) stays visible.
+        // issue #291 続編: f-string ホール内のネストした文字列リテラル中の `}` で
+        // ホールが閉じないこと。式本体は残り、`real_call` は参照に、`tail` は
+        // ホール外として見えること。
+        const string content = """"
+            def caller():
+                msg = f"""
+                {prefix("}") + real_call()}
+                """
+                tail()
+
+            def prefix(_):
+                return ""
+
+            def real_call():
+                pass
+
+            def tail():
+                pass
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "prefix" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
 }
