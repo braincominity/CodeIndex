@@ -1102,6 +1102,54 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_PreservesBackslashInPosixFilename()
+    {
+        // On POSIX, '\' is a valid filename character and must not be converted to '/'.
+        // Otherwise a file named "back\slash.py" becomes a phantom "back/slash.py".
+        // POSIX では '\' は正当なファイル名文字であり、'/' に置換すべきでない。
+        // 置換すると "back\slash.py" が幻の "back/slash.py" として保存されてしまう。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "back\\slash.py");
+            File.WriteAllText(filePath, "def hu(): pass\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("back\\slash.py", record.Path);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void NormalizePathSeparators_OnPosixKeepsBackslashInFilename()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal("back\\slash.py", FileIndexer.NormalizePathSeparators("back\\slash.py"));
+        Assert.Equal("dir/back\\slash.py", FileIndexer.NormalizePathSeparators("dir/back\\slash.py"));
+    }
+
+    [Fact]
+    public void NormalizePathSeparators_OnWindowsConvertsBackslashToForwardSlash()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal("src/models/user.py", FileIndexer.NormalizePathSeparators("src\\models\\user.py"));
+    }
+
+    [Fact]
     public void ScanFiles_IncludesFileNameBasedLanguages()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

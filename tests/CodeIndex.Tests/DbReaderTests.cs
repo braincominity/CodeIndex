@@ -3395,6 +3395,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetExcerptAndOutline_RoundTripPathContainingBackslash()
+    {
+        // #191: POSIX filenames containing '\' must not be silently rewritten to '/'.
+        // The index should store the literal path, and excerpt/outline must find it
+        // when the user supplies the same literal path.
+        // #191: POSIX の '\' を含むファイル名は '/' に書き換えてはいけない。
+        // 保存と検索の両方でリテラルなパスをそのまま使い、excerpt/outline で見つかることを確認する。
+        InsertIndexedFile("back\\slash.py", "python", "def hu(): pass\n");
+
+        var excerpt = _reader.GetExcerpt("back\\slash.py", 1, 1);
+        Assert.NotNull(excerpt);
+        Assert.Equal("back\\slash.py", excerpt!.Path);
+        Assert.Contains("def hu(): pass", excerpt.Content);
+
+        var outline = _reader.GetOutline("back\\slash.py");
+        Assert.NotNull(outline);
+        Assert.Equal("back\\slash.py", outline!.Path);
+
+        // The mangled form must NOT match — otherwise the fix would be a no-op.
+        // 誤った書き換え形では見つからないことを確認する（no-op 化の検出）。
+        Assert.Null(_reader.GetExcerpt("back/slash.py", 1, 1));
+        Assert.Null(_reader.GetOutline("back/slash.py"));
+    }
+
+    [Fact]
     public void GetOutline_NullStartEndLine_FallsBackToLine()
     {
         // Insert a file with a symbol that has NULL start_line/end_line (#46)

@@ -1249,6 +1249,17 @@ public class FileIndexer
         => path.Replace('\\', '/').TrimEnd('/');
 
     /// <summary>
+    /// Normalize OS path separators to '/' for DB storage and lookup.
+    /// On Windows this converts '\' to '/'. On POSIX it returns the path
+    /// unchanged so filenames that legitimately contain '\' (e.g. "back\slash.py")
+    /// survive round-trip through the index.
+    /// DB は '/' 固定で保存するため OS に応じて区切り文字だけを正規化する。
+    /// Windows は '\' を '/' に変換し、POSIX ではファイル名内の '\' を壊さないよう何もしない。
+    /// </summary>
+    public static string NormalizePathSeparators(string path)
+        => Path.DirectorySeparatorChar == '\\' ? path.Replace('\\', '/') : path;
+
+    /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
     /// </summary>
@@ -1307,7 +1318,7 @@ public class FileIndexer
 
         var record = new FileRecord
         {
-            Path = relativePath.Replace('\\', '/'),
+            Path = NormalizePathSeparators(relativePath),
             Lang = TryDetectLanguage(absolutePath).Language,
             Size = info.Length,
             Lines = lines.Length,
@@ -1506,7 +1517,7 @@ public class FileIndexer
 
     private string ToRelativePath(string absolutePath)
     {
-        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath).Replace('\\', '/');
+        var relativePath = NormalizePathSeparators(Path.GetRelativePath(_projectRoot, absolutePath));
         return relativePath == "." ? string.Empty : relativePath;
     }
 
