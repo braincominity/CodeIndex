@@ -1240,6 +1240,870 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_WithFiles_RemovesIndexedFileThatIsNowIgnored()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "generated.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "generated.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_RemovesIndexedFileThatMatchesLeadingRightBracketCharacterClass()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "].cs"), "class Ignored { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("].cs", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "[]].cs\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "].cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("].cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_RemovesIndexedFileThatMatchesPosixPunctCharacterClass()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "!.cs"), "class Ignored { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("!.cs", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "[[:punct:]].cs\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "!.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("!.cs", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DoesNotDeleteIndexedFileForMalformedBracketIgnoreRule()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "[a.py"), "print('keep literal')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("[a.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "[a.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "[a.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore:1", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.Contains("Invalid ignore rule skipped", json.GetProperty("warnings")[0].GetProperty("message").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("[a.py", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithCommits_FallsBackToFullScanWhenIgnoreFilesChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "generated.py\n");
+            RunGit(projectRoot, "add", ".gitignore");
+            RunGit(projectRoot, "commit", "-m", "ignore generated");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+            Assert.Contains(".gitignore", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_FallsBackToFullScanWhenIgnoreFilesChange()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "generated.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", ".gitignore", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+            Assert.Contains(".gitignore", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_SkipsMutationWhenIgnoreRulesAreUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(ignorePath, "secret.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "secret.py"), "print('secret')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.DoesNotContain("secret.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "secret.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("secret.py", indexedPaths);
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithCommits_SkipsMutationWhenIgnoreRulesAreUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "secret.py"), "print('secret v1')\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("secret.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(ignorePath, "secret.py\n");
+            RunGit(projectRoot, "add", ".gitignore");
+            RunGit(projectRoot, "commit", "-m", "ignore secret");
+
+            File.WriteAllText(Path.Combine(projectRoot, "secret.py"), "print('secret v2')\n");
+            RunGit(projectRoot, "add", "secret.py");
+            RunGit(projectRoot, "commit", "-m", "update secret");
+
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("secret.py", indexedPaths);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_UnreadableIgnoreRulesDemoteReadinessForUnchangedIndexedFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(ignorePath, "secret.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "secret.py"), "print('secret')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("keep.py", ReadIndexedPaths(dbPath));
+
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "keep.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_DemotesReadinessWhenIgnoreFileChangedThenBecameUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "a.cs");
+            File.WriteAllText(sourcePath, "public class A { }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("a.cs", ReadIndexedPaths(dbPath));
+
+            File.WriteAllText(ignorePath, "a.cs\n");
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Contains("a.cs", ReadIndexedPaths(dbPath));
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_UnreadableIgnoreRulesDemoteReadinessForChangedIndexedFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var ignorePath = Path.Combine(projectRoot, ".gitignore");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            File.WriteAllText(ignorePath, "secret.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "secret.py"), "print('secret')\n");
+            var keepPath = Path.Combine(projectRoot, "keep.py");
+            File.WriteAllText(keepPath, "print('keep v1')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("keep.py", ReadIndexedPaths(dbPath));
+
+            File.WriteAllText(keepPath, "print('keep v2')\n");
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "keep.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_WithMalformedIgnoreRule_ReturnsSuccessWithWarningInsteadOfCrashing()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "[z-a].py\nignored.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('ignored')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore:1", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.Contains("Invalid ignore rule skipped", json.GetProperty("warnings")[0].GetProperty("message").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("ignored.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+            Assert.Contains(".gitignore", indexedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_SubdirectoryProjectRoot_UsesRepositoryIgnoreCaseConfigWhenTrue()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            RunGit(repoRoot, "config", "core.ignorecase", "true");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "FOO.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "foo.py"), "print('ignored')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("foo.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_SubdirectoryProjectRoot_UsesRepositoryIgnoreCaseConfigWhenFalse()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            RunGit(repoRoot, "config", "core.ignorecase", "false");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "FOO.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "foo.py"), "print('kept')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("foo.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_SubdirectoryProjectRoot_RespectsAncestorGitignore()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/ignored.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('ignored')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('kept')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("ignored.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_SubdirectoryProjectRoot_RespectsAncestorDirectoryGitignoreRule()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ignored root dir')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("app.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_RespectsAncestorGitignore()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('indexed first')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("ignored.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/ignored.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "ignored.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("ignored.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_RespectsAncestorDirectoryGitignoreRule()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('indexed first')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Contains("app.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("app.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_FallsBackToFullScanWhenAncestorIgnoreFileChanges()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var ancestorIgnorePath = Path.Combine(repoRoot, ".gitignore");
+            File.WriteAllText(ancestorIgnorePath, "subproj/generated.py\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", ancestorIgnorePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_SubdirectoryProjectRoot_FallsBackToFullScanWhenAncestorDirectoryIgnoreRuleChanges()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var ancestorIgnorePath = Path.Combine(repoRoot, ".gitignore");
+            File.WriteAllText(ancestorIgnorePath, "subproj/\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", ancestorIgnorePath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ProjectRootNamedNodeModules_IndexesExplicitProjectRoot()
+    {
+        var tempRoot = CreateTempProject();
+        var projectRoot = Path.Combine(tempRoot, "node_modules");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("app.js", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(tempRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithFiles_ProjectRootNamedNodeModules_UpdatesIndexedFile()
+    {
+        var tempRoot = CreateTempProject();
+        var projectRoot = Path.Combine(tempRoot, "node_modules");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');\n");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.js", "javascript", "console.log('stale');\n");
+            Assert.Contains("app.js", ReadIndexedPaths(dbPath));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.js", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("app.js", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(tempRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithCommits_SubdirectoryProjectRoot_UsesRepositoryRelativePaths()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            var appPath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(appPath, "print('v1')\n");
+            RunGit(repoRoot, "add", ".");
+            RunGit(repoRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var initialChecksum = ReadIndexedChecksum(dbPath, "app.py");
+
+            File.WriteAllText(appPath, "print('v2 with more content')\n");
+            RunGit(repoRoot, "add", "subproj/app.py");
+            RunGit(repoRoot, "commit", "-m", "update app");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.NotEqual(initialChecksum, ReadIndexedChecksum(dbPath, "app.py"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_WithCommits_SubdirectoryProjectRoot_FallsBackToFullScanWhenAncestorIgnoreFileChanges()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "subproj");
+        try
+        {
+            RunGit(repoRoot, "init");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "generated.py"), "print('generated')\n");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('keep')\n");
+            RunGit(repoRoot, "add", ".");
+            RunGit(repoRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/generated.py\n");
+            RunGit(repoRoot, "add", ".gitignore");
+            RunGit(repoRoot, "commit", "-m", "ignore generated");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", "HEAD", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.DoesNotContain("generated.py", indexedPaths);
+            Assert.Contains("keep.py", indexedPaths);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithFiles_DoesNotPurgeOldRenamePathUnlessExplicitlyListed()
     {
         var projectRoot = CreateTempProject();
@@ -2064,6 +2928,147 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesUnchangedCSharpFilesWhenCanonicalNameContractChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "money.cs"),
+                """
+                public struct Money
+                {
+                    public static explicit operator Money(decimal d) => new();
+                }
+
+                public class Bag
+                {
+                    public string this[int index] => "";
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.True(json.GetProperty("csharp_symbol_name_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var exactNameCmd = verify.CreateCommand();
+            exactNameCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'explicit operator Money'";
+            Assert.Equal(1L, (long)exactNameCmd.ExecuteScalar()!);
+
+            using var itemCmd = verify.CreateCommand();
+            itemCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'Item'";
+            Assert.Equal(1L, (long)itemCmd.ExecuteScalar()!);
+
+            using var legacyNameCmd = verify.CreateCommand();
+            legacyNameCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name IN ('explicit', 'this')";
+            Assert.Equal(0L, (long)legacyNameCmd.ExecuteScalar()!);
+
+            using var contractCmd = verify.CreateCommand();
+            contractCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version'";
+            Assert.Equal(
+                DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                contractCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_JsonReportsDegradedCSharpCanonicalNameTrust()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "money.cs"),
+                """
+                public struct Money
+                {
+                    public static explicit operator Money(decimal d) => new();
+                }
+
+                public class Bag
+                {
+                    public string this[int index] => "";
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("csharp_symbol_name_ready").GetBoolean());
+
+            int humanExitCode;
+            string output;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    humanExitCode = QueryCommandRunner.RunStatus(["--db", dbPath], _jsonOptions);
+                    output = writer.ToString();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("WARN    : C# exact-name for operators / conversion operators / indexers is degraded.", output);
+            Assert.Contains("--db", output);
+            Assert.Contains(Path.GetFullPath(projectRoot), output);
+            Assert.Contains(Path.GetFullPath(dbPath), output);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {
         var projectRoot = CreateTempProject();
@@ -2829,7 +3834,6 @@ public class IndexCommandRunnerTests
                 {
                     public void Run()
                     {
-                        Run(1);
                     }
                 }
                 """);
@@ -2842,6 +3846,18 @@ public class IndexCommandRunnerTests
                     public void Run(int value) { }
                 }
                 """);
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Caller.cs"),
+                """
+                namespace Shared;
+
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                    }
+                }
+                """);
 
             File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part1.cs"),
                 """
@@ -2851,7 +3867,6 @@ public class IndexCommandRunnerTests
                 {
                     public void Run()
                     {
-                        Run(1);
                     }
                 }
                 """);
@@ -2864,6 +3879,18 @@ public class IndexCommandRunnerTests
                     public void Run(int value) { }
                 }
                 """);
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Caller.cs"),
+                """
+                namespace Shared;
+
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                    }
+                }
+                """);
 
             var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -2872,20 +3899,10 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
 
-            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.Equal(CommandExitCodes.NotFound, hotspotsExitCode);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
-
-            var runRows = hotspotsJson.GetProperty("hotspots")
-                .EnumerateArray()
-                .Where(item => item.GetProperty("name").GetString() == "Run")
-                .OrderBy(item => item.GetProperty("path").GetString(), StringComparer.Ordinal)
-                .ToList();
-
-            Assert.Equal(2, runRows.Count);
-            Assert.StartsWith("projA/src/Api.Part", runRows[0].GetProperty("path").GetString(), StringComparison.Ordinal);
-            Assert.Equal(1, runRows[0].GetProperty("reference_count").GetInt32());
-            Assert.StartsWith("projB/src/Api.Part", runRows[1].GetProperty("path").GetString(), StringComparison.Ordinal);
-            Assert.Equal(1, runRows[1].GetProperty("reference_count").GetInt32());
+            Assert.Equal(0, hotspotsJson.GetProperty("count").GetInt32());
+            Assert.Empty(hotspotsJson.GetProperty("hotspots").EnumerateArray());
         }
         finally
         {
@@ -3418,6 +4435,14 @@ public class IndexCommandRunnerTests
         return reader.ListFiles(limit: 1000)
             .Select(file => file.Path)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static string? ReadIndexedChecksum(string dbPath, string relativePath)
+    {
+        using var db = new DbContext(dbPath);
+        db.TryMigrateForRead();
+        var reader = new DbReader(db.Connection, db.IsReadOnly);
+        return reader.GetFileByPath(relativePath)?.Checksum;
     }
 
     private static void DeleteIndexedProjectRootMetadata(string dbPath)

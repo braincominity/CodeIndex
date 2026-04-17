@@ -2515,6 +2515,140 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpConversionOperatorsUseDistinctExactNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_names");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Money.cs",
+                "csharp",
+                """
+                using System.Collections.Generic;
+
+                public struct Money
+                {
+                    public Money(decimal amount) { }
+                    public static explicit operator Money(decimal d) => new();
+                    public static explicit operator Dictionary<string,int>(Money m) => new();
+                    public static explicit operator (int whole,int cents)(Money m) => (0, 0);
+                    public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;
+                    public static explicit operator (int[] items, int count)(Money m) => ([], 0);
+                    public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);
+                    public static unsafe explicit operator int*(Money m) => (int*)0;
+                    public static unsafe explicit operator delegate* unmanaged[Cdecl]<int, void>(Money m) => (delegate* unmanaged[Cdecl]<int, void>)0;
+                }
+                """);
+
+            var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                _jsonOptions));
+
+            using var operatorDocument = ParseJsonOutput(operatorStdout);
+            var operatorSymbol = operatorDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, operatorExitCode);
+            Assert.Equal(string.Empty, operatorStderr);
+            Assert.Equal("explicit operator Money", operatorSymbol.GetProperty("name").GetString());
+
+            var (genericExitCode, genericStdout, genericStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Dictionary<string, int>", "--exact-name"],
+                _jsonOptions));
+
+            using var genericDocument = ParseJsonOutput(genericStdout);
+            var genericSymbol = genericDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, genericExitCode);
+            Assert.Equal(string.Empty, genericStderr);
+            Assert.Equal("explicit operator Dictionary<string, int>", genericSymbol.GetProperty("name").GetString());
+
+            var (tupleExitCode, tupleStdout, tupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (int whole, int cents)", "--exact-name"],
+                _jsonOptions));
+
+            using var tupleDocument = ParseJsonOutput(tupleStdout);
+            var tupleSymbol = tupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, tupleExitCode);
+            Assert.Equal(string.Empty, tupleStderr);
+            Assert.Equal("explicit operator (int whole, int cents)", tupleSymbol.GetProperty("name").GetString());
+
+            var (namedTupleExitCode, namedTupleStdout, namedTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (Dictionary<string, int> map, int count)?", "--exact-name"],
+                _jsonOptions));
+
+            using var namedTupleDocument = ParseJsonOutput(namedTupleStdout);
+            var namedTupleSymbol = namedTupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, namedTupleExitCode);
+            Assert.Equal(string.Empty, namedTupleStderr);
+            Assert.Equal("explicit operator (Dictionary<string, int> map, int count)?", namedTupleSymbol.GetProperty("name").GetString());
+
+            var (arrayTupleExitCode, arrayTupleStdout, arrayTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (int[] items, int count)", "--exact-name"],
+                _jsonOptions));
+
+            using var arrayTupleDocument = ParseJsonOutput(arrayTupleStdout);
+            var arrayTupleSymbol = arrayTupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, arrayTupleExitCode);
+            Assert.Equal(string.Empty, arrayTupleStderr);
+            Assert.Equal("explicit operator (int[] items, int count)", arrayTupleSymbol.GetProperty("name").GetString());
+
+            var (nestedTupleExitCode, nestedTupleStdout, nestedTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator ((int a, int b) pair, int count)", "--exact-name"],
+                _jsonOptions));
+
+            using var nestedTupleDocument = ParseJsonOutput(nestedTupleStdout);
+            var nestedTupleSymbol = nestedTupleDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, nestedTupleExitCode);
+            Assert.Equal(string.Empty, nestedTupleStderr);
+            Assert.Equal("explicit operator ((int a, int b) pair, int count)", nestedTupleSymbol.GetProperty("name").GetString());
+
+            var (pointerExitCode, pointerStdout, pointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator int*", "--exact-name"],
+                _jsonOptions));
+
+            using var pointerDocument = ParseJsonOutput(pointerStdout);
+            var pointerSymbol = pointerDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, pointerExitCode);
+            Assert.Equal(string.Empty, pointerStderr);
+            Assert.Equal("explicit operator int*", pointerSymbol.GetProperty("name").GetString());
+
+            var (functionPointerExitCode, functionPointerStdout, functionPointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator delegate* unmanaged[Cdecl]<int, void>", "--exact-name"],
+                _jsonOptions));
+
+            using var functionPointerDocument = ParseJsonOutput(functionPointerStdout);
+            var functionPointerSymbol = functionPointerDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, functionPointerExitCode);
+            Assert.Equal(string.Empty, functionPointerStderr);
+            Assert.Equal("explicit operator delegate* unmanaged[Cdecl]<int, void>", functionPointerSymbol.GetProperty("name").GetString());
+
+            var (constructorExitCode, constructorStdout, constructorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "Money", "--exact-name"],
+                _jsonOptions));
+
+            using var constructorDocument = ParseJsonOutput(constructorStdout);
+            var constructorSymbol = constructorDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, constructorExitCode);
+            Assert.Equal(string.Empty, constructorStderr);
+            Assert.Equal("Money", constructorSymbol.GetProperty("name").GetString());
+            Assert.Contains("public Money(decimal amount)", constructorSymbol.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CssExactNameSeparatesLiteralSelectors()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_css_exact_name");
@@ -2619,6 +2753,67 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.NotFound, fontFaceExitCode);
             Assert.Equal(string.Empty, fontFaceStderr);
             Assert.Equal(string.Empty, fontFaceStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_ExactNameStaleCSharpCanonicalNamesReportDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_stale");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Money.cs",
+                "csharp",
+                """
+                public struct Money
+                {
+                    public Money(decimal amount) { }
+                    public static explicit operator Money(decimal d) => new();
+                    public int this[int index] => index;
+                }
+                """);
+
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var countDocument = ParseJsonOutput(countStdout);
+            var countJson = countDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countJson.GetProperty("count").GetInt32());
+            Assert.False(countJson.GetProperty("exact_index_available").GetBoolean());
+            Assert.Contains("csharp_symbol_name_ready=false", countJson.GetProperty("degraded_reason").GetString());
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("No symbols found.", stderr);
+            Assert.Contains("WARN: --exact symbol query may return false negatives", stderr);
+            Assert.Contains("csharp_symbol_name_ready=false", stderr);
+            Assert.Contains(Path.GetFullPath(projectRoot), stderr);
+            Assert.Contains(Path.GetFullPath(dbPath), stderr);
         }
         finally
         {

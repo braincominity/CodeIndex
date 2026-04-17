@@ -105,6 +105,33 @@ public static class GitHelper
     }
 
     /// <summary>
+    /// Try to resolve the repository root that contains the project path.
+    /// projectPath を含むリポジトリのルートを安全に取得する。
+    /// </summary>
+    public static string? TryGetRepositoryRoot(string projectPath)
+        => TryGetRepositoryRoot(projectPath, gitEnvironmentOverrides: null);
+
+    /// <summary>
+    /// Resolve whether ignore matching should be case-insensitive for this workspace.
+    /// git 管理下なら core.ignorecase を優先し、そうでなければファイルシステム特性を推定する。
+    /// </summary>
+    public static bool ResolveIgnoreCase(string projectRoot)
+        => ResolveIgnoreCase(projectRoot, gitEnvironmentOverrides: null);
+
+    internal static bool ResolveIgnoreCase(string projectRoot, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
+    {
+        var repoRoot = TryGetRepositoryRoot(projectRoot, gitEnvironmentOverrides);
+        if (repoRoot == null)
+            return ProbeFileSystemIgnoreCase(projectRoot);
+
+        var configured = TryRunGit(repoRoot, gitEnvironmentOverrides, "config", "--bool", "--get", "core.ignorecase")?.Trim();
+        if (bool.TryParse(configured, out var ignoreCase))
+            return ignoreCase;
+
+        return ProbeFileSystemIgnoreCase(projectRoot);
+    }
+
+    /// <summary>
     /// Try to determine whether the worktree has uncommitted changes.
     /// worktree に未コミット変更があるか安全に判定する。
     /// </summary>
@@ -114,11 +141,23 @@ public static class GitHelper
         return output == null ? null : output.Length > 0;
     }
 
-    private static string? TryRunGit(string projectRoot, params string[] args)
+    internal static string? TryGetRepositoryRoot(string projectPath, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
     {
-        if (ResolveGitCommonDir(projectRoot) == null)
+        var cdup = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--show-cdup");
+        if (cdup == null)
             return null;
 
+        var value = cdup.Trim();
+        return string.IsNullOrEmpty(value)
+            ? Path.GetFullPath(projectPath)
+            : Path.GetFullPath(Path.Combine(projectPath, value));
+    }
+
+    private static string? TryRunGit(string projectRoot, params string[] args)
+        => TryRunGit(projectRoot, gitEnvironmentOverrides: null, args);
+
+    private static string? TryRunGit(string projectRoot, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides, params string[] args)
+    {
         try
         {
             var psi = new ProcessStartInfo
@@ -133,6 +172,17 @@ public static class GitHelper
 
             foreach (var arg in args)
                 psi.ArgumentList.Add(arg);
+
+            if (gitEnvironmentOverrides != null)
+            {
+                foreach (var (key, value) in gitEnvironmentOverrides)
+                {
+                    if (value == null)
+                        psi.Environment.Remove(key);
+                    else
+                        psi.Environment[key] = value;
+                }
+            }
 
             using var process = Process.Start(psi);
             if (process == null)
@@ -149,5 +199,64 @@ public static class GitHelper
         {
             return null;
         }
+    }
+
+    private static bool ProbeFileSystemIgnoreCase(string projectRoot)
+    {
+        try
+        {
+            var normalizedRoot = Path.GetFullPath(projectRoot);
+            if (TryProbeExistingDirectoryPath(normalizedRoot, out var ignoreCase))
+                return ignoreCase;
+
+            var probePath = Path.Combine(normalizedRoot, $".cdidx_case_probe_{Guid.NewGuid():N}");
+            File.WriteAllText(probePath, string.Empty);
+            try
+            {
+                if (TryCreateCaseVariant(probePath, out var variant))
+                    return File.Exists(variant);
+            }
+            finally
+            {
+                if (File.Exists(probePath))
+                    File.Delete(probePath);
+            }
+        }
+        catch
+        {
+            // Best-effort fallback only / best-effort のフォールバックのみ
+        }
+
+        return OperatingSystem.IsWindows();
+    }
+
+    private static bool TryProbeExistingDirectoryPath(string path, out bool ignoreCase)
+    {
+        ignoreCase = false;
+        if (!TryCreateCaseVariant(path, out var variant))
+            return false;
+
+        ignoreCase = Directory.Exists(variant);
+        return true;
+    }
+
+    private static bool TryCreateCaseVariant(string path, out string variant)
+    {
+        var chars = path.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            var ch = chars[i];
+            if (!char.IsLetter(ch))
+                continue;
+
+            chars[i] = char.IsUpper(ch)
+                ? char.ToLowerInvariant(ch)
+                : char.ToUpperInvariant(ch);
+            variant = new string(chars);
+            return true;
+        }
+
+        variant = path;
+        return false;
     }
 }

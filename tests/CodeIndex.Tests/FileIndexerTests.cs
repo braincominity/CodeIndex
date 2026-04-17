@@ -1,6 +1,8 @@
-using CodeIndex.Indexer;
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Threading.Tasks;
+using CodeIndex.Cli;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
@@ -231,6 +233,695 @@ public class FileIndexerTests
             // app.jsのみ検出され、package-lock.jsonは除外される
             Assert.Single(files);
             Assert.Contains("app.js", files[0]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignorePatternsAndNegation()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "secret.py\nbuild_output/\n*.generated.js\n!keep.generated.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
+            File.WriteAllText(Path.Combine(tempDir, "app.generated.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "keep.generated.js"), "export const kept = true;");
+            Directory.CreateDirectory(Path.Combine(tempDir, "build_output"));
+            File.WriteAllText(Path.Combine(tempDir, "build_output", "inside.py"), "print('ignored')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.generated.js", "keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsCdidxignoreAndNestedGitignore()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "fixtures"));
+            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "fixtures/\n*.cache.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "src", ".gitignore"), "*.generated.cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "src", "Service.cs"), "public class Service { }");
+            File.WriteAllText(Path.Combine(tempDir, "src", "Generated.generated.cs"), "public class Generated { }");
+            File.WriteAllText(Path.Combine(tempDir, "fixtures", "sample.py"), "print('fixture')");
+            File.WriteAllText(Path.Combine(tempDir, "app.cache.js"), "export const cache = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js", "src/.gitignore", "src/Service.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FailsClosedWhenRootIgnoreFileIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var ignorePath = Path.Combine(tempDir, ".gitignore");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(ignorePath, "secret.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Empty(result.Files);
+            Assert.Contains(result.Errors, error => error.Path == ".gitignore" && error.Message == "Could not read .gitignore.");
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FailsClosedWhenNestedIgnoreFileIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var nestedDir = Path.Combine(tempDir, "src");
+        var ignorePath = Path.Combine(nestedDir, ".gitignore");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            Directory.CreateDirectory(nestedDir);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(ignorePath, "secret.py\n");
+            File.WriteAllText(Path.Combine(nestedDir, "secret.py"), "print('secret')");
+            File.WriteAllText(Path.Combine(nestedDir, "keep_nested.py"), "print('nested keep')");
+            originalMode = File.GetUnixFileMode(ignorePath);
+            SetUnixPermissions(ignorePath, UnixFileMode.None);
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["keep.py"], files);
+            Assert.Contains(result.Errors, error => error.Path == "src/.gitignore" && error.Message == "Could not read .gitignore.");
+        }
+        finally
+        {
+            if (originalMode.HasValue && File.Exists(ignorePath))
+                SetUnixPermissions(ignorePath, originalMode.Value);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsRootAnchoredGitignorePatterns()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "root_only_dir"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "src", "root_only_dir"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "/root_only_dir/\n/secret.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "root_only_dir", "root.py"), "print('ignored root dir')");
+            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('ignored root file')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept root file')");
+            File.WriteAllText(Path.Combine(tempDir, "src", "root_only_dir", "nested.py"), "print('kept nested dir')");
+            File.WriteAllText(Path.Combine(tempDir, "src", "secret.py"), "print('kept nested file')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py", "src/root_only_dir/nested.py", "src/secret.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGlobstarPrefixPatternAtProjectRoot()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "**/*.min.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "app.min.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "nested", "lib.min.js"), "export const nestedIgnored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const kept = true;");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "app.js"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGlobstarMiddlePatternWithZeroOrMoreDirectories()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo", "deep"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**/bar.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "bar.py"), "print('ignored shallow')");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "deep", "bar.py"), "print('ignored deep')");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "foo/keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsTrailingGlobstarWithoutIgnoringRootDirectoryItself()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo", "nested"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**\n!foo/bar.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "bar.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "nested", "ignored.py"), "print('ignored')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "foo/bar.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsTrailingGlobstarDirectoryPatternWithoutIgnoringRootDirectoryItself()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "foo", "bar"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**/\n!foo/bar.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "bar.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "foo", "bar", "ignored.py"), "print('ignored')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "foo/bar.py", "foo/keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_TreatsNonSpecialDoubleStarAsSingleSegmentWildcard()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "dir"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a", "x"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "dir/a**b.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "dir", "ab.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "dir", "axxb.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "dir", "a", "x", "b.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "dir/a/x/b.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitIgnoreCaseSettingFromRepository()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            RunGit(tempDir, "config", "core.ignorecase", "true");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "FOO.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "foo.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitIgnoreCaseSettingForAsciiOnly()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            RunGit(tempDir, "config", "core.ignorecase", "true");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "Å.py\n[[:upper:]].rb\n[A-Z].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "å.py"), "print('kept non-ascii fold')");
+            File.WriteAllText(Path.Combine(tempDir, "a.rb"), "puts 'ignored lower via ignorecase'");
+            File.WriteAllText(Path.Combine(tempDir, "å.rb"), "puts 'kept non-ascii lower'");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class IgnoredLower { }");
+            File.WriteAllText(Path.Combine(tempDir, "å.cs"), "class KeptLower { }");
+
+            var indexer = new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "å.cs", "å.py", "å.rb"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignore()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(tempDir, "subproj");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "subproj/ignored.py\n");
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["keep.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignoreDirectoryRule()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(tempDir, "subproj");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "subproj/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ignored root dir')");
+
+            var indexer = new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Empty(files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ProjectRootNamedNodeModules_IsIndexedButNestedSkipDirsRemainSkipped()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var projectRoot = Path.Combine(tempDir, "node_modules");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "node_modules"));
+            File.WriteAllText(Path.Combine(projectRoot, "node_modules", "nested.js"), "console.log('skip child');");
+
+            var indexer = new FileIndexer(projectRoot);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreBracketCharacterClassesAndRanges()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[ab].cs\nfile[0-9].py\n");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
+            File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
+            File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
+            File.WriteAllText(Path.Combine(tempDir, "file1.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "filex.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "c.cs", "filex.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreNegatedBracketCharacterClass()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
+            File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
+            File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "a.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreBracketCharacterClassWithLeadingLiteralRightBracket()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[]].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreAsciiPosixDigitBracketCharacterClass()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:digit:]].py\n");
+            File.WriteAllText(Path.Combine(tempDir, "1.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "١.py"), "print('kept non-ascii digit')");
+            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "a.py", "١.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreAsciiPosixUpperBracketCharacterClass()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:upper:]].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "A.cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "É.cs"), "class KeptNonAscii { }");
+            File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.cs", "É.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignorePosixPunctBracketCharacterClass()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:punct:]].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "!.cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class Kept { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "a.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreNegatedBracketCharacterClassWithLeadingLiteralRightBracket()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!]].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Kept { }");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class Ignored { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "].cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreEscapedLiteralCharacters()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo\\ bar.py\nliteral\\[name\\].js\n\\#literal.txt\n\\!important.cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "foo bar.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "literal[name].js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "#literal.txt"), "ignored");
+            File.WriteAllText(Path.Combine(tempDir, "!important.cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_SkipsMalformedIgnoreRulesWithoutAborting()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[z-a].py\n[!].cs\n[a.py\n[!a\n[^\n[\n[]\nignored.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "[a.py"), "print('kept malformed literal')");
+            File.WriteAllText(Path.Combine(tempDir, "ignored.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var scanResult = indexer.ScanFilesDetailed();
+            var files = scanResult.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "[a.py", "keep.py"], files);
+            Assert.Equal(7, scanResult.Errors.Count);
+            Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
+            Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
+            Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
         }
         finally
         {
@@ -655,5 +1346,38 @@ public class FileIndexerTests
         process.WaitForExit();
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
+    private static string RunGit(string workDir, params string[] args)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process / gitプロセスの起動に失敗");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.Trim()}");
+
+        return stdout;
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void SetUnixPermissions(string path, UnixFileMode mode)
+    {
+        File.SetUnixFileMode(path, mode);
     }
 }
