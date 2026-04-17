@@ -388,6 +388,18 @@ public static class SymbolExtractor
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
             new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
+            // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
+            // short property name (Value) is recorded as name, consistent with how the method row
+            // exposes Dispose/CompareTo instead of the qualified form. Closes #333.
+            // 明示的インターフェースプロパティ実装（ブレース本体）。例: int IThing.Value { get; set; }
+            // 上の明示的インターフェースメソッド行と同じ構造で、修飾子は非キャプチャにしてショート名
+            // (Value) のみを name として記録する。メソッド側が Dispose / CompareTo を返すのと揃える。
+            // Closes #333.
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            // Explicit interface property implementation (expression body), e.g. string IThing.Name => "x";
+            // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Indexer (this[...]) / インデクサ (this[...])
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Static constructor / 静的コンストラクタ
@@ -722,11 +734,19 @@ public static class SymbolExtractor
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     // Explicit-interface implementations reuse CSharpTypePattern for the return type so nested
     // generics and function pointers (`delegate*<List<int>, int>`, `delegate*<delegate*<int, void>, int>`)
-    // are handled uniformly with the regular method / property / indexer / delegate paths.
+    // are handled uniformly with the regular method / property / indexer / delegate paths. The
+    // qualifier itself also has to span multi-argument generics (`IMap<string, int>.Prop`),
+    // nullable / array / pointer type arguments (`IFoo<string?>.X`, `IFoo<int[]>.X`, `IFoo<int*>.X`),
+    // and nested type paths (`Outer.Inner<T>.Bar`). The shape mirrors CSharpTypePattern's token set
+    // so comma + whitespace combinations inside generic argument lists are not dropped.
     // 明示的インターフェース実装の戻り値型は CSharpTypePattern を共有するため、入れ子の generic や
     // `delegate*<...>` / `delegate* unmanaged[Cdecl]<...>` も通常メソッドと同じ経路で扱える。
+    // qualifier 側も複数型引数 generic (`IMap<string, int>.Prop`)、nullable / array / pointer 型引数
+    // (`IFoo<string?>.X` / `IFoo<int[]>.X` / `IFoo<int*>.X`)、入れ子型パス (`Outer.Inner<T>.Bar`)
+    // を通せるように CSharpTypePattern と同じトークン集合へ揃え、generic 引数リスト内の
+    // `,` + 空白の組み合わせを落とさないようにする。
     private const string CSharpExplicitInterfaceQualifierPattern =
-        @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)(?:[\w.<>:]*)";
+        @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)[\w?.<>\[\],:*]*(?:\s+[\w?.<>\[\],:*]+)*";
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
     // Accepts `Type Name`, `Type`, and `Type Name {` (bare brace at end of declaration
