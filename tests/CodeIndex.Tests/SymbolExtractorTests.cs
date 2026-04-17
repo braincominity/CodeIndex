@@ -3436,10 +3436,11 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DoesNotTreatMultilineEnumMemberAttributeArgumentsAsMembers()
     {
-        var content = "public enum Mode\n{\n    [EnumMember(\n        Value = Alias | Other)]\n    A,\n}";
+        var content = "using System.Runtime.Serialization;\n\npublic enum Mode\n{\n    [EnumMember(\n        Value = Alias,\n        Other = 1)]\n    A,\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.DoesNotContain(symbols, s => s.Name == "Value");
+        Assert.DoesNotContain(symbols, s => s.Name == "Other");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
     }
 
@@ -3467,7 +3468,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_RecoversAfterIncompleteEnumMemberAttribute()
     {
-        var content = "public enum Mode\n{\n    [Attr(\n    A,\n    B,\n}\n\npublic class After\n{\n}";
+        var content = "public enum Mode\n{\n    [Attr()\n    A,\n    B,\n}\n\npublic class After\n{\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");

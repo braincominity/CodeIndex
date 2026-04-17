@@ -5139,7 +5139,12 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
-    private static string StripLeadingCSharpAttributeLists(string line, ref bool inLeadingAttributeBlock, ref int attributeBracketDepth, bool insideEnumBody)
+    private static string StripLeadingCSharpAttributeLists(
+        string line,
+        ref bool inLeadingAttributeBlock,
+        ref int attributeBracketDepth,
+        ref int attributeParenDepth,
+        bool insideEnumBody)
     {
         var index = 0;
         while (index < line.Length && char.IsWhiteSpace(line[index]))
@@ -5151,10 +5156,11 @@ public static class SymbolExtractor
         if (!inLeadingAttributeBlock && line[index] != '[')
             return line;
 
-        if (inLeadingAttributeBlock && ShouldRecoverFromIncompleteLeadingCSharpAttribute(line, index, insideEnumBody))
+        if (inLeadingAttributeBlock && ShouldRecoverFromIncompleteLeadingCSharpAttribute(line, index, insideEnumBody, attributeParenDepth))
         {
             inLeadingAttributeBlock = false;
             attributeBracketDepth = 0;
+            attributeParenDepth = 0;
             return line;
         }
 
@@ -5169,6 +5175,7 @@ public static class SymbolExtractor
 
                 inLeadingAttributeBlock = true;
                 attributeBracketDepth = 0;
+                attributeParenDepth = 0;
             }
 
             while (cursor < line.Length)
@@ -5178,12 +5185,21 @@ public static class SymbolExtractor
                 {
                     attributeBracketDepth++;
                 }
+                else if (ch == '(')
+                {
+                    attributeParenDepth++;
+                }
+                else if (ch == ')' && attributeParenDepth > 0)
+                {
+                    attributeParenDepth--;
+                }
                 else if (ch == ']')
                 {
                     attributeBracketDepth--;
                     if (attributeBracketDepth == 0)
                     {
                         inLeadingAttributeBlock = false;
+                        attributeParenDepth = 0;
                         break;
                     }
                 }
@@ -5205,7 +5221,11 @@ public static class SymbolExtractor
             : line[..index] + new string(' ', blankUntil - index);
     }
 
-    private static bool ShouldRecoverFromIncompleteLeadingCSharpAttribute(string line, int firstNonWhitespaceIndex, bool insideEnumBody)
+    private static bool ShouldRecoverFromIncompleteLeadingCSharpAttribute(
+        string line,
+        int firstNonWhitespaceIndex,
+        bool insideEnumBody,
+        int attributeParenDepth)
     {
         if (firstNonWhitespaceIndex >= line.Length || line[firstNonWhitespaceIndex] == '[')
             return false;
@@ -5213,10 +5233,10 @@ public static class SymbolExtractor
         if (line.AsSpan(firstNonWhitespaceIndex).Contains(']'))
             return false;
 
-        return TryMatchAnyRecoverableCSharpPattern(line, insideEnumBody);
+        return TryMatchAnyRecoverableCSharpPattern(line, insideEnumBody, attributeParenDepth);
     }
 
-    private static bool TryMatchAnyRecoverableCSharpPattern(string line, bool insideEnumBody)
+    private static bool TryMatchAnyRecoverableCSharpPattern(string line, bool insideEnumBody, int attributeParenDepth)
     {
         if (PatternCache.TryGetValue("csharp", out var patterns))
         {
@@ -5231,6 +5251,7 @@ public static class SymbolExtractor
         }
 
         return insideEnumBody
+            && attributeParenDepth == 0
             && CSharpEnumMemberRegex.IsMatch(line)
             && line.TrimEnd().EndsWith(",", StringComparison.Ordinal);
     }
@@ -5262,6 +5283,7 @@ public static class SymbolExtractor
         var csharpLexState = new CSharpLexState();
         var inLeadingAttributeBlock = false;
         var attributeBracketDepth = 0;
+        var attributeParenDepth = 0;
         var pendingEnumDeclaration = false;
         var activeEnumBodyDepth = 0;
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
@@ -5272,6 +5294,7 @@ public static class SymbolExtractor
                 lexedLine.SanitizedLine,
                 ref inLeadingAttributeBlock,
                 ref attributeBracketDepth,
+                ref attributeParenDepth,
                 activeEnumBodyDepth > 0);
 
             var matchLine = matchLines[lineIndex];

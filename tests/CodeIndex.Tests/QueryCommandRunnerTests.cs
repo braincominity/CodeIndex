@@ -2773,7 +2773,8 @@ public class QueryCommandRunnerTests
                 public enum Mode
                 {
                     [EnumMember(
-                        Value = Alias | Other)]
+                        Value = Alias,
+                        Other = 1)]
                     A,
                 }
                 """);
@@ -2782,15 +2783,21 @@ public class QueryCommandRunnerTests
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json"],
                 _jsonOptions));
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            var (valueExitCode, valueStdout, valueStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Value", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (otherExitCode, otherStdout, otherStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Other", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(CommandExitCodes.NotFound, valueExitCode);
+            Assert.Equal(string.Empty, valueStdout);
+            Assert.Equal(string.Empty, valueStderr);
+            Assert.Equal(CommandExitCodes.NotFound, otherExitCode);
+            Assert.Equal(string.Empty, otherStdout);
+            Assert.Equal(string.Empty, otherStderr);
         }
         finally
         {
@@ -2890,7 +2897,7 @@ public class QueryCommandRunnerTests
                 """
                 public enum Mode
                 {
-                    [Attr(
+                    [Attr()
                     A,
                     B,
                 }
