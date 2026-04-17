@@ -1531,6 +1531,32 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ExactSignals_RespectMcpQueryScopeForStaleCSharpCanonicalNames()
+    {
+        InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n");
+        var writer = new DbWriter(_db.Connection);
+        writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "0");
+
+        var pythonRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","lang":"python","exact":true}}}""")!;
+        var pythonResponse = _server.HandleMessage(pythonRequest)!;
+        var pythonStructured = pythonResponse["result"]!["structuredContent"]!;
+
+        Assert.True(pythonStructured["exact_index_available"]!.GetValue<bool>());
+        Assert.Null(pythonStructured["degraded_reason"]);
+        Assert.True(pythonStructured["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Null(pythonStructured["degradedReason"]);
+
+        var csharpRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","lang":"csharp","exact":true}}}""")!;
+        var csharpResponse = _server.HandleMessage(csharpRequest)!;
+        var csharpStructured = csharpResponse["result"]!["structuredContent"]!;
+
+        Assert.False(csharpStructured["exact_index_available"]!.GetValue<bool>());
+        Assert.Contains("csharp_symbol_name_ready=false", csharpStructured["degraded_reason"]!.GetValue<string>());
+        Assert.False(csharpStructured["exactIndexAvailable"]!.GetValue<bool>());
+        Assert.Contains("csharp_symbol_name_ready=false", csharpStructured["degradedReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ExactOnReadOnlyLegacyDb_WithMissingSymbolFallbackIndex_IncludesBundleSignal()
     {
         InsertIndexedFile("src/session.py", "python", "def Run(user):\n    return user\n\ndef login(user, password):\n    return Run(user)\n");
