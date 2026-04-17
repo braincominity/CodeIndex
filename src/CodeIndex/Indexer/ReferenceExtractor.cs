@@ -321,6 +321,21 @@ public static class ReferenceExtractor
                 : null;
             var container = FindInnermostContainer(containerCandidates, lineNumber);
 
+            // Per-line Java same-line ctor synthesis. When `public Leaf(){super(0); doWork();}`
+            // is entirely on one line, SymbolExtractor does not emit a function symbol for the
+            // ctor (its method regex requires the line to end with `{`), so `FindInnermostContainer`
+            // returns the enclosing `class:Leaf`. Body-level calls such as `doWork()` would then
+            // attach to the class rather than the ctor. We pre-compute a synthetic function-kind
+            // container covering the body `{ ... }` region on the current line, so those calls
+            // land on `function:Leaf` and `callers Leaf` reflects what the ctor actually does.
+            // 同一行 ctor は function symbol が作られないため、body `{ ... }` 内の通常 call が
+            // 外側クラスに吸われてしまう。合成 function コンテナを per-line で構築して差し替える。
+            (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)? javaSameLineCtor = null;
+            if (language == "java")
+            {
+                javaSameLineCtor = TryBuildJavaSameLineCtorSpan(preparedLine, lineNumber, enclosingTypeCandidates);
+            }
+
             // Per-call-site record primary-ctor override: only calls whose column sits inside the
             // record header (not in a braced body on the same line) should land on the synthetic
             // ctor. Overriding `container` for the whole line would steal body-level calls such as
@@ -340,6 +355,26 @@ public static class ReferenceExtractor
                         continue;
                     return syntheticRecordCtor;
                 }
+
+                // Java same-line ctor body override: calls whose column sits strictly inside the
+                // `{ ... }` block on the ctor declaration line attach to the synthetic function-kind
+                // ctor instead of the enclosing class container. When no matching `}` is found on
+                // the same line (CloseBraceIndex < 0), the body extends beyond the current line —
+                // in that case SymbolExtractor emits a real ctor function symbol (its regex matches
+                // because the line ends with `{`), so this override is only needed for the fully
+                // same-line shape where the matching `}` exists on the same line.
+                // Java の same-line ctor では `{ ... }` 内の call を合成 function コンテナに振り向ける。
+                if (javaSameLineCtor != null)
+                {
+                    var info = javaSameLineCtor.Value;
+                    if (info.CloseBraceIndex >= 0
+                        && column > info.OpenBraceIndex
+                        && column < info.CloseBraceIndex)
+                    {
+                        return info.Synthetic;
+                    }
+                }
+
                 return container!;
             }
 
@@ -371,8 +406,23 @@ public static class ReferenceExtractor
             foreach (Match match in CallRegex.Matches(preparedLine))
             {
                 var name = match.Groups["name"].Value;
-                var callContainer = ResolveContainerForCall(match.Groups["name"].Index);
-                if (IsConstructorCallName(language, preparedLine, match.Groups["name"].Index))
+                var callIndex = match.Groups["name"].Index;
+
+                // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
+                // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
+                // site — not a call — so attributing it to `class:CtorName` produces a phantom
+                // `CtorName|call|class|CtorName` edge. `definitionNames` does not cover this
+                // because same-line ctors do not appear in the symbol table.
+                // 同一行 ctor の宣言子 `CtorName(` は呼び出しではないため CallRegex の対象から除外する。
+                if (javaSameLineCtor != null
+                    && callIndex == javaSameLineCtor.Value.NameIndex
+                    && string.Equals(name, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var callContainer = ResolveContainerForCall(callIndex);
+                if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
                     AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, callContainer);
                     continue;
@@ -694,7 +744,40 @@ public static class ReferenceExtractor
         if (!string.Equals(name, enclosingType.Name, StringComparison.Ordinal))
             return null;
 
-        return new SymbolRecord
+        return BuildSameLineJavaCtorContainer(enclosingType, lineNumber);
+    }
+
+    /// <summary>
+    /// Per-line Java same-line ctor span resolved against the enclosing class. Returns the
+    /// synthetic function-kind container paired with the 0-based indices of the ctor name,
+    /// body-opening `{`, and body-closing `}` on the current line. Used by the main loop to
+    /// (1) attribute body-level calls inside the `{ ... }` block to the synthetic ctor and
+    /// (2) suppress the bogus declarator self-call on the ctor name.
+    /// 同一行 Java ctor の span を外側クラスと突き合わせた結果を返す。合成 function コンテナと、
+    /// ctor 名・body `{`・body `}` の 0-based 位置をセットで返し、call 帰属の振り向けと宣言子
+    /// の自己 call 抑止に使う。
+    /// </summary>
+    private static (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)?
+        TryBuildJavaSameLineCtorSpan(
+            string preparedLine,
+            int lineNumber,
+            IReadOnlyList<SymbolRecord> enclosingTypeCandidates)
+    {
+        var span = TryExtractJavaSameLineCtorSpan(preparedLine);
+        if (span is null)
+            return null;
+        var enclosingType = FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        if (enclosingType == null)
+            return null;
+        if (!string.Equals(span.Value.Name, enclosingType.Name, StringComparison.Ordinal))
+            return null;
+
+        var synthetic = BuildSameLineJavaCtorContainer(enclosingType, lineNumber);
+        return (synthetic, span.Value.NameIndex, span.Value.OpenBraceIndex, span.Value.CloseBraceIndex);
+    }
+
+    private static SymbolRecord BuildSameLineJavaCtorContainer(SymbolRecord enclosingType, int lineNumber)
+        => new SymbolRecord
         {
             Kind = "function",
             Name = enclosingType.Name,
@@ -708,7 +791,21 @@ public static class ReferenceExtractor
             ContainerQualifiedName = enclosingType.ContainerQualifiedName,
             Visibility = enclosingType.Visibility,
         };
-    }
+
+    /// <summary>
+    /// Same-line Java ctor span capturing the declarator name plus the 0-based indices of the
+    /// ctor name, the opening `{` of the body, and the matching `}` on the same line (or -1
+    /// when no matching close brace is found). Used to override the container for body-level
+    /// calls and to suppress the bogus declarator self-call on the ctor name.
+    /// same-line Java ctor の宣言情報。ctor 名位置・body `{` 位置・body `}` 位置を保持し、
+    /// body 内の call に合成 function コンテナを流すのと、宣言子 `CtorName(` が誤って
+    /// call として記録されるのを抑止するのに使う。
+    /// </summary>
+    internal readonly record struct JavaSameLineCtorSpan(
+        string Name,
+        int NameIndex,
+        int OpenBraceIndex,
+        int CloseBraceIndex);
 
     /// <summary>
     /// Depth-aware scanner for `@Annot ... <T extends Comparable<Integer>> Ctor(...) { ... }`
@@ -719,6 +816,15 @@ public static class ReferenceExtractor
     /// same-line ctor 宣言を depth-aware にスキャンして ctor 名を返すヘルパー。
     /// </summary>
     internal static string? TryExtractJavaCtorNameFromLine(string line)
+        => TryExtractJavaSameLineCtorSpan(line)?.Name;
+
+    /// <summary>
+    /// Same as <see cref="TryExtractJavaCtorNameFromLine"/> but also returns the ctor name
+    /// index, body-open `{` index, and the matching body-close `}` index on the same line.
+    /// `TryExtractJavaCtorNameFromLine` と同じスキャナだが、ctor 名位置・`{` 位置・対応する
+    /// `}` 位置もまとめて返すバリアント。
+    /// </summary>
+    internal static JavaSameLineCtorSpan? TryExtractJavaSameLineCtorSpan(string line)
     {
         int i = 0;
         int n = line.Length;
@@ -790,7 +896,49 @@ public static class ReferenceExtractor
         }
 
         SkipWhitespace(line, ref i);
-        return i < n && line[i] == '{' ? name : null;
+        if (i >= n || line[i] != '{')
+            return null;
+
+        int openBrace = i;
+        int closeBrace = FindMatchingBraceClose(line, openBrace);
+        return new JavaSameLineCtorSpan(name, nameStart, openBrace, closeBrace);
+    }
+
+    /// <summary>
+    /// Find the `}` that closes the block opened at <paramref name="openBrace"/>, respecting
+    /// string / char literals and nested `{ ... }` pairs. Returns -1 when no matching close is
+    /// on the same line. Used to bound per-line Java same-line ctor body ranges.
+    /// 同一行内で `{` と対応する `}` を探す。文字列・文字リテラルと入れ子の `{}` を尊重する。
+    /// </summary>
+    private static int FindMatchingBraceClose(string line, int openBrace)
+    {
+        int depth = 0;
+        int n = line.Length;
+        for (int i = openBrace; i < n; i++)
+        {
+            var c = line[i];
+            if (c == '"' || c == '\'')
+            {
+                var quote = c;
+                i++;
+                while (i < n)
+                {
+                    var ch = line[i];
+                    if (ch == '\\' && i + 1 < n) { i += 2; continue; }
+                    if (ch == quote) break;
+                    i++;
+                }
+                if (i >= n) return -1;
+                continue;
+            }
+            if (c == '{') depth++;
+            else if (c == '}')
+            {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
     }
 
     private static void SkipWhitespace(string text, ref int i)

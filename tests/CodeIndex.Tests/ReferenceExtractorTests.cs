@@ -2845,4 +2845,78 @@ public class ReferenceExtractorTests
             "Leaf",
             ReferenceExtractor.TryExtractJavaCtorNameFromLine("@Ann(text=\"(\") Leaf(){this(0);}"));
     }
+
+    [Fact]
+    public void Extract_Java_SameLineCtorBodyCall_AttributesToCtorContainer()
+    {
+        // Regression: non-chain body calls on a same-line Java ctor (for example the
+        // `Helper.doWork()` statement after `super(0);` in `Leaf(T x){super(0); Helper.doWork();}`)
+        // previously landed on `class:Leaf` because SymbolExtractor does not emit a function
+        // symbol for the same-line ctor shape. The main loop now pre-computes a per-line synthetic
+        // function-kind container covering the body `{ ... }` span so body calls attribute to
+        // `function:Leaf` instead of leaking to the enclosing class.
+        // 同一行 ctor 本体の通常 call が外側 class に吸われず、合成 function コンテナに帰属することを固定する。
+        const string content = """
+            package demo;
+
+            class Helper {
+                static void doWork() {}
+            }
+
+            class Root {
+                Root(int v) {}
+            }
+
+            class Leaf extends Root {
+                public <T> Leaf(T x){super(0); Helper.doWork();}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "doWork" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "doWork" && r.ContainerKind == "class");
+
+        // Chain edge remains on the synthetic function ctor too.
+        // 連鎖エッジも合成 function コンテナに帰属したままであることを確認する。
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineCtorDeclarator_DoesNotEmitSelfCall()
+    {
+        // Regression: `CallRegex` matches `CtorName(` on the declarator of a same-line Java ctor
+        // and, without suppression, emitted a phantom `Leaf|call|class|Leaf` edge attributing the
+        // declarator to the enclosing class. The main loop now skips the `CtorName(` match at the
+        // declarator's name column when the current line carries a synthesized same-line ctor.
+        // 同一行 ctor の宣言子 `CtorName(` が自己 call として記録されないことを固定する。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int v) {}
+            }
+
+            class Leaf extends Root {
+                Leaf(){super(0);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Leaf" && r.ReferenceKind == "call");
+        // But the chain rewrite still emits the `Root` edge attributed to `function:Leaf`.
+        // 連鎖書き換えによる `Root` エッジは残っていることを確認する。
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+    }
 }
