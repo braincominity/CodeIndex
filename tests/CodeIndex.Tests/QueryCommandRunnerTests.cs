@@ -2925,6 +2925,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpExactNameRecoversModifierlessMembersAfterIncompleteAttribute()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_broken_member_attr_modifierless");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "broken.cs"),
+                """
+                public class C
+                {
+                    [Attr(
+                    void M() {}
+                    string Name { get; }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (methodExitCode, methodStdout, methodStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["M", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (propertyExitCode, propertyStdout, propertyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Name", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var methodRows = ParseJsonLines(methodStdout);
+            var propertyRows = ParseJsonLines(propertyStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, methodExitCode);
+            Assert.Equal(string.Empty, methodStderr);
+            Assert.Single(methodRows);
+            Assert.Equal("M", methodRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("function", methodRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal(CommandExitCodes.Success, propertyExitCode);
+            Assert.Equal(string.Empty, propertyStderr);
+            Assert.Single(propertyRows);
+            Assert.Equal("Name", propertyRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("property", propertyRows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CSharpExactNameReportsOwningEnumForDuplicateMemberNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_container");

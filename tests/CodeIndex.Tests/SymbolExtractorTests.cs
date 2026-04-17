@@ -3476,6 +3476,16 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_RecoversModifierlessMembersAfterIncompleteAttribute()
+    {
+        var content = "public class C\n{\n    [Attr(\n    void M() {}\n    string Name { get; }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Name");
+    }
+
+    [Fact]
     public void Extract_CSharp_EnumMembersTrackOwningEnum()
     {
         var content = "namespace Demo;\n\npublic enum First\n{\n    None,\n}\n\npublic enum Second\n{\n    None,\n}";

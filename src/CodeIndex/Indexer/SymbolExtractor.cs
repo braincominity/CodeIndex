@@ -121,12 +121,6 @@ public static class SymbolExtractor
 
     private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s+(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly string[] CSharpDeclarationRecoveryPrefixes =
-    [
-        "namespace ", "using ", "#region", "class ", "record ", "struct ", "interface ", "delegate ", "event ",
-        "public ", "private ", "protected ", "internal ", "static ", "partial ", "readonly ", "ref ", "unsafe ",
-        "sealed ", "abstract ", "new ", "file ", "const "
-    ];
 
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
     [
@@ -5145,7 +5139,7 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
-    private static string StripLeadingCSharpAttributeLists(string line, ref bool inLeadingAttributeBlock, ref int attributeBracketDepth)
+    private static string StripLeadingCSharpAttributeLists(string line, ref bool inLeadingAttributeBlock, ref int attributeBracketDepth, bool insideEnumBody)
     {
         var index = 0;
         while (index < line.Length && char.IsWhiteSpace(line[index]))
@@ -5157,7 +5151,7 @@ public static class SymbolExtractor
         if (!inLeadingAttributeBlock && line[index] != '[')
             return line;
 
-        if (inLeadingAttributeBlock && ShouldRecoverFromIncompleteLeadingCSharpAttribute(line, index))
+        if (inLeadingAttributeBlock && ShouldRecoverFromIncompleteLeadingCSharpAttribute(line, index, insideEnumBody))
         {
             inLeadingAttributeBlock = false;
             attributeBracketDepth = 0;
@@ -5211,7 +5205,7 @@ public static class SymbolExtractor
             : line[..index] + new string(' ', blankUntil - index);
     }
 
-    private static bool ShouldRecoverFromIncompleteLeadingCSharpAttribute(string line, int firstNonWhitespaceIndex)
+    private static bool ShouldRecoverFromIncompleteLeadingCSharpAttribute(string line, int firstNonWhitespaceIndex, bool insideEnumBody)
     {
         if (firstNonWhitespaceIndex >= line.Length || line[firstNonWhitespaceIndex] == '[')
             return false;
@@ -5219,21 +5213,26 @@ public static class SymbolExtractor
         if (line.AsSpan(firstNonWhitespaceIndex).Contains(']'))
             return false;
 
-        if (CSharpEnumDeclarationRegex.IsMatch(line) || CSharpEnumMemberRegex.IsMatch(line))
-            return true;
-
-        return LooksLikeCSharpDeclarationStart(line.AsSpan(firstNonWhitespaceIndex));
+        return TryMatchAnyRecoverableCSharpPattern(line, insideEnumBody);
     }
 
-    private static bool LooksLikeCSharpDeclarationStart(ReadOnlySpan<char> text)
+    private static bool TryMatchAnyRecoverableCSharpPattern(string line, bool insideEnumBody)
     {
-        foreach (var prefix in CSharpDeclarationRecoveryPrefixes)
+        if (PatternCache.TryGetValue("csharp", out var patterns))
         {
-            if (text.StartsWith(prefix, StringComparison.Ordinal))
-                return true;
+            foreach (var pattern in patterns)
+            {
+                if (ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
+                    continue;
+
+                if (pattern.Regex.IsMatch(line))
+                    return true;
+            }
         }
 
-        return false;
+        return insideEnumBody
+            && CSharpEnumMemberRegex.IsMatch(line)
+            && line.TrimEnd().EndsWith(",", StringComparison.Ordinal);
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(
@@ -5263,6 +5262,8 @@ public static class SymbolExtractor
         var csharpLexState = new CSharpLexState();
         var inLeadingAttributeBlock = false;
         var attributeBracketDepth = 0;
+        var pendingEnumDeclaration = false;
+        var activeEnumBodyDepth = 0;
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
             var lexedLine = LexCSharpLine(structuralLines[lineIndex], csharpLexState);
@@ -5270,7 +5271,33 @@ public static class SymbolExtractor
             matchLines[lineIndex] = StripLeadingCSharpAttributeLists(
                 lexedLine.SanitizedLine,
                 ref inLeadingAttributeBlock,
-                ref attributeBracketDepth);
+                ref attributeBracketDepth,
+                activeEnumBodyDepth > 0);
+
+            var matchLine = matchLines[lineIndex];
+            var trimmed = matchLine.Trim();
+            var isEnumDeclarationLine = CSharpEnumDeclarationRegex.IsMatch(matchLine);
+            if (isEnumDeclarationLine)
+                pendingEnumDeclaration = true;
+
+            foreach (var ch in matchLine)
+            {
+                if (ch == '{')
+                {
+                    if (pendingEnumDeclaration)
+                    {
+                        activeEnumBodyDepth++;
+                        pendingEnumDeclaration = false;
+                    }
+                }
+                else if (ch == '}' && activeEnumBodyDepth > 0)
+                {
+                    activeEnumBodyDepth--;
+                }
+            }
+
+            if (pendingEnumDeclaration && trimmed.Length > 0 && trimmed != "{" && !isEnumDeclarationLine)
+                pendingEnumDeclaration = false;
         }
 
         return matchLines;
