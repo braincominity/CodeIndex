@@ -724,13 +724,15 @@ public static class ReferenceExtractor
     /// whose header does not match SymbolExtractor's return-type-required method regex. Java
     /// constructors have no return type, so plain forms like `Leaf() {` / `Shade(int code) {`
     /// are not emitted as function symbols; this fallback parses them directly so chain calls
-    /// can still be attributed to the owning ctor. Handles multi-line bodies via
-    /// <see cref="SymbolExtractor.FindJavaBraceRange"/> (string/comment/text-block aware) and
-    /// same-line bodies via the opening brace on the declaration line.
+    /// can still be attributed to the owning ctor. Handles Allman style (`Leaf()\n{`),
+    /// multi-line parameter lists, and multi-line `throws` clauses by delegating body range
+    /// resolution to <see cref="SymbolExtractor.FindJavaBraceRange"/> (paren/bracket/angle
+    /// depth aware, and string/comment/text-block aware).
     /// 外側型の body 内を走査して、return 型を持たない Java コンストラクタ
-    /// （`Leaf() {` / `Shade(int code) {` など）を復元する。SymbolExtractor のメソッド regex は
-    /// 戻り値型を必須とするため function シンボルが作られない。FindJavaBraceRange を使って
-    /// 複数行 body にも対応し、chain call を正しいコンストラクタに帰属させる。
+    /// （`Leaf() {` / `Shade(int code) {` / Allman 形式の `Leaf()\n{` / 複数行 parameter /
+    /// 複数行 `throws` など）を復元する。SymbolExtractor のメソッド regex は戻り値型を必須
+    /// とするため function シンボルが作られない。body 範囲の決定は FindJavaBraceRange に
+    /// 委譲し、`()` / `[]` / `<>` の深さと文字列・コメント・text block を考慮する。
     /// </summary>
     private static SymbolRecord? FindEnclosingJavaConstructorFromStructure(
         string[] structuralLines,
@@ -748,39 +750,32 @@ public static class ReferenceExtractor
         var lastIndex = Math.Min(structuralLines.Length - 1, classBodyEnd - 1);
         while (i <= lastIndex)
         {
-            var line = structuralLines[i];
-            var span = TryExtractJavaSameLineCtorSpan(line);
-            if (span is null)
-            {
-                i++;
-                continue;
-            }
-
-            if (!string.Equals(span.Value.Name, enclosingType.Name, StringComparison.Ordinal))
+            if (!TryMatchJavaCtorHeaderStart(structuralLines, i, lastIndex, enclosingType.Name))
             {
                 i++;
                 continue;
             }
 
             int declStart = i + 1; // 1-based
-            int bodyEnd;
-            if (span.Value.CloseBraceIndex >= 0)
+
+            // Let FindJavaBraceRange scan the entire header + body from the ctor start line.
+            // It tracks paren / bracket / angle depth (so multi-line parameter lists,
+            // annotations, and bounded generics don't mislead the body scan) and returns the
+            // matching `}` as BodyEndLine. A `;`-terminated line without `{` yields
+            // BodyEndLine == null; that shape is not a constructor body and is skipped.
+            // FindJavaBraceRange がヘッダ + body を一気に走査する。`()`/`[]`/`<>` 深さを追跡
+            // するため、複数行の parameter / annotation / bounded generic で誤検出しない。
+            var (endLine, _, bodyEndLine) = SymbolExtractor.FindJavaBraceRange(structuralLines, i, 0);
+            if (bodyEndLine is null)
             {
-                // Same-line body: declaration and body end on the same line.
-                // 同一行 body: 宣言と body の終端が同じ行。
-                bodyEnd = declStart;
-            }
-            else
-            {
-                // Multi-line body: reuse SymbolExtractor's Java-aware brace scanner so
-                // strings / char literals / text blocks / comments do not mislead the
-                // depth counter. startColumn is set to the `{` column so we open on it.
-                // 複数行 body: SymbolExtractor の Java 用 brace scanner に委譲する。
-                var (endLine, _, bodyEndLine) = SymbolExtractor.FindJavaBraceRange(
-                    structuralLines, i, span.Value.OpenBraceIndex);
-                bodyEnd = bodyEndLine ?? endLine;
+                // Not a body: advance past whatever the scanner consumed to avoid re-scanning.
+                // body を持たない宣言（`;` 終端など）は ctor ではないので scanner が消費した
+                // 範囲だけ進めて次行へ。
+                i = Math.Max(i + 1, endLine);
+                continue;
             }
 
+            int bodyEnd = bodyEndLine.Value;
             if (lineNumber >= declStart && lineNumber <= bodyEnd)
             {
                 return new SymbolRecord
@@ -805,6 +800,104 @@ public static class ReferenceExtractor
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Return true when line <paramref name="startIndex"/> starts a Java constructor header
+    /// for <paramref name="ctorName"/>. Accepts both same-line forms (`Leaf() {`) and
+    /// multi-line forms (Allman `Leaf()\n{`, multi-line parameter lists, multi-line `throws`).
+    /// The detector confirms that after modifiers / annotations / optional generics, the ctor
+    /// name appears immediately followed by `(` (possibly on the next non-blank line). The
+    /// body resolver downstream (<see cref="SymbolExtractor.FindJavaBraceRange"/>) rejects
+    /// `;`-terminated declarations without a body, so false positives like enum constants
+    /// `Shade(1);` would still be discarded there even if this detector returns true.
+    /// 指定行が Java コンストラクタヘッダの先頭かを判定する。modifier / annotation /
+    /// optional generics を消費したあと ctor 名が続き、その直後（または次の非空行）に `(`
+    /// が現れるかを検査する。body 側の判定は FindJavaBraceRange が担うため、`;` 終端の
+    /// enum 定数 `Shade(1);` のような偽陽性は下流で落ちる。
+    /// </summary>
+    private static bool TryMatchJavaCtorHeaderStart(
+        string[] lines,
+        int startIndex,
+        int endIndex,
+        string ctorName)
+    {
+        if (startIndex < 0 || startIndex >= lines.Length)
+            return false;
+
+        var line = lines[startIndex];
+        int i = 0;
+        int n = line.Length;
+
+        SkipWhitespace(line, ref i);
+
+        // Consume modifiers and @annotations in any order (mirrors TryExtractJavaSameLineCtorSpan).
+        // modifier と annotation は順不同で交互に現れ得るため、両方を同一ループで消費する。
+        while (true)
+        {
+            SkipWhitespace(line, ref i);
+            if (i < n && line[i] == '@')
+            {
+                i++;
+                if (!ConsumeQualifiedIdentifier(line, ref i))
+                    return false;
+                SkipWhitespace(line, ref i);
+                if (i < n && line[i] == '(')
+                {
+                    if (!SkipBalancedParens(line, ref i))
+                        return false;
+                }
+                continue;
+            }
+
+            int wordStart = i;
+            while (i < n && char.IsLetter(line[i]))
+                i++;
+            if (i == wordStart)
+                break;
+            var word = line.Substring(wordStart, i - wordStart);
+            if (!JavaCtorModifiers.Contains(word))
+            {
+                i = wordStart;
+                break;
+            }
+        }
+
+        SkipWhitespace(line, ref i);
+
+        if (i < n && line[i] == '<')
+        {
+            if (!SkipBalancedAngles(line, ref i))
+                return false;
+            SkipWhitespace(line, ref i);
+        }
+
+        int nameStart = i;
+        if (!ConsumeIdentifier(line, ref i))
+            return false;
+        var name = line.Substring(nameStart, i - nameStart);
+        if (!string.Equals(name, ctorName, StringComparison.Ordinal))
+            return false;
+
+        // The next non-whitespace token (possibly on a later line) must be `(`. Anything else
+        // means this is not a ctor header — e.g. `Leaf leaf = ...` (field/variable) or
+        // `Leaf method() ...` (method with Leaf as return type).
+        // ctor 名の直後の非空白（次行以降でも可）は `(` でなければならない。
+        SkipWhitespace(line, ref i);
+        if (i < n)
+            return line[i] == '(';
+
+        for (int j = startIndex + 1; j <= endIndex && j < lines.Length; j++)
+        {
+            var next = lines[j];
+            int k = 0;
+            while (k < next.Length && char.IsWhiteSpace(next[k]))
+                k++;
+            if (k == next.Length)
+                continue;
+            return next[k] == '(';
+        }
+        return false;
     }
 
     /// <summary>

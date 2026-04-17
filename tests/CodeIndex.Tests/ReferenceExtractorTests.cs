@@ -2498,6 +2498,117 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaSuperCall_AllmanCtorBody_AttributesToRealBase()
+    {
+        // Regression for Allman-style ctor bodies where the opening `{` sits on a separate
+        // line from the declarator. Java ctors have no return type, so SymbolExtractor's
+        // return-type-required method regex does not emit a function symbol for them. The
+        // ReferenceExtractor structural fallback must therefore parse the multi-line header
+        // and hand the body range off to FindJavaBraceRange so the `super(...)` edge is still
+        // attributed to the owning ctor instead of being silently dropped.
+        // Allman 形式の ctor（`Leaf()\n{` のように `{` を独立行に置く形）では SymbolExtractor が
+        // function シンボルを生成しない。ReferenceExtractor の structural fallback がヘッダを
+        // 認識し、body 範囲を FindJavaBraceRange に渡すことで super(...) の連鎖エッジが落ちない
+        // ことを固定する。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int value) {}
+            }
+
+            class Leaf extends Root {
+                Leaf()
+                {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf" && r.Line == 10);
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_MultiLineParameterList_AttributesToRealBase()
+    {
+        // Regression for ctor declarations whose parameter list spans multiple lines. Before
+        // the fallback rewrite the structural scanner required `)` and `{` to share the
+        // declaration line, so the super(...) edge was silently dropped. FindJavaBraceRange
+        // already tracks paren depth across lines, so once the header is recognized the body
+        // scan handles the rest.
+        // parameter list が複数行にまたがる ctor では、以前の structural scanner が `)` と `{` を
+        // 同じ物理行で要求していたため super(...) 連鎖が落ちていた。FindJavaBraceRange の多行
+        // paren depth 追跡を活用すれば復元できる。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int a, int b) {}
+            }
+
+            class Leaf extends Root {
+                Leaf(
+                    int a,
+                    int b
+                ) {
+                    super(a, b);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf" && r.Line == 12);
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_MultiLineThrowsClause_AttributesToRealBase()
+    {
+        // Regression for ctor declarations whose `throws` clause spans multiple lines. The
+        // body `{` lives on a later physical line than the declarator name, so the old
+        // same-line-only detector missed it. The structural fallback must recognize the ctor
+        // header by name + `(` alone and let FindJavaBraceRange locate the `{` across lines.
+        // `throws` 節が複数行にわたる ctor では body `{` が宣言行とは別の物理行に来るため、
+        // 旧 same-line detector は検出に失敗していた。Structural fallback は name + `(` で
+        // 認識し、`{` の位置は FindJavaBraceRange に任せることで復元する。
+        const string content = """
+            package demo;
+
+            class IoFailure extends Exception {}
+
+            class Root {
+                Root(int value) throws IoFailure {}
+            }
+
+            class Leaf extends Root {
+                Leaf(int x)
+                    throws IoFailure
+                {
+                    super(x);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf" && r.Line == 13);
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
     public void Extract_JavaSuperCall_SameLineCtorWithModifierThenAnnotation_AttributesToRealBase()
     {
         // Regression for same-line ctor bodies where an access modifier precedes an annotation,
