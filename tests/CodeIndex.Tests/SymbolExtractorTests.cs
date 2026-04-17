@@ -3669,6 +3669,102 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_LinqQueryExpressionContinuations_DoNotLeakPhantoms()
+    {
+        // LINQ query-expression continuation lines with qualified method calls
+        // (e.g. `where Validator.Check(x)`, `select Mapper.Convert(x)`, `orderby Math.Abs(x)`)
+        // must not fire the explicit-interface-implementation regex as
+        // `returnType=<linq-keyword>` + `interface=<qualifier>` + `name=<member>`.
+        // Closes #377.
+        // LINQ 式の continuation 行（`where Validator.Check(x)` など）が、明示的インターフェース実装
+        // regex の returnType+qualifier+name 形として一致し phantom function を生まないこと。Closes #377.
+        var content = """
+            using System.Linq;
+            using System.Collections.Generic;
+
+            namespace LinqPhantom;
+
+            public static class Validator { public static bool Check(int x) => x > 0; }
+            public static class Mapper { public static string Convert(int x) => x.ToString(); }
+
+            public class Svc
+            {
+                public void Query()
+                {
+                    var list = new List<int> { 1, 2, 3 };
+
+                    var q1 = from x in list
+                             where Validator.Check(x)
+                             select x;
+
+                    var q2 = from x in list
+                             select Mapper.Convert(x);
+
+                    var q3 = from x in list
+                             orderby Math.Abs(x)
+                             select x;
+
+                    // Exercise line-leading `group`, `by`, and `into` so the guard
+                    // covers each keyword individually instead of only the q4 opener.
+                    // 行頭 `group` / `by` / `into` を個別に踏ませ、q4 先頭だけで抜けないようにする。
+                    var q4 = from x in list
+                             group x
+                             by Helper.Key(x)
+                             into g
+                             select g;
+
+                    // Exercise line-leading `join`, `on`, and `equals` so the guard
+                    // covers each keyword individually instead of only the q5 opener.
+                    // 行頭 `join` / `on` / `equals` を個別に踏ませ、q5 先頭だけで抜けないようにする。
+                    var q5 = from x in list
+                             join y in list
+                             on Helper.Key(x)
+                             equals Helper.Key(y)
+                             select x;
+
+                    var q6 = from x in list
+                             let doubled = Helper.Double(x)
+                             select doubled;
+
+                    // Exercise line-leading `ascending` and `descending` so the guard
+                    // covers them even when an `orderby` clause wraps onto its own line.
+                    // 行頭 `ascending` / `descending` を個別に踏ませ、`orderby` が折り返したときも抜けないようにする。
+                    var q7 = from x in list
+                             orderby Helper.Key(x)
+                             ascending
+                             select x;
+
+                    var q8 = from x in list
+                             orderby Helper.Key(x)
+                             descending
+                             select x;
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Real symbols should survive / 実体のシンボルは残る
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Validator");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Mapper");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Query");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Check" && s.ContainerName == "Validator");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Convert" && s.ContainerName == "Mapper");
+
+        // No phantom `function` symbols should appear inside the Query body / Query 本体から phantom が出ないこと
+        var phantomNames = new[] { "Abs", "Key", "Double" };
+        foreach (var name in phantomNames)
+        {
+            Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == name);
+        }
+
+        // Check and Convert must only be declared once each (on their real definition lines), not duplicated from LINQ continuations.
+        // Check と Convert は定義行の1個ずつだけで、LINQ continuation からの重複が出ないこと。
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "Check"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "Convert"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
