@@ -1455,7 +1455,7 @@ public static class QueryCommandRunner
                 ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
                 : "unknown";
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable) ? ", DEGRADED" : "";
+            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable || !status.CSharpSymbolNameReady) ? ", DEGRADED" : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
 
             if (options.Json)
@@ -1499,6 +1499,8 @@ public static class QueryCommandRunner
                     Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
                 if (!status.IssuesTableAvailable)
                     Console.WriteLine("WARN    : file_issues table missing — validate output is degraded to empty.");
+                if (!status.CSharpSymbolNameReady)
+                    Console.WriteLine("WARN    : C# exact-name for operators / conversion operators / indexers is degraded. Run `cdidx index .` to upgrade canonical symbol names in place.");
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)

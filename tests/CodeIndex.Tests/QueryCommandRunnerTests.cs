@@ -2537,6 +2537,8 @@ public class QueryCommandRunnerTests
                     public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;
                     public static explicit operator (int[] items, int count)(Money m) => ([], 0);
                     public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);
+                    public static unsafe explicit operator int*(Money m) => (int*)0;
+                    public static unsafe explicit operator delegate* unmanaged[Cdecl]<int, void>(Money m) => (delegate* unmanaged[Cdecl]<int, void>)0;
                 }
                 """);
 
@@ -2605,6 +2607,28 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, nestedTupleExitCode);
             Assert.Equal(string.Empty, nestedTupleStderr);
             Assert.Equal("explicit operator ((int a, int b) pair, int count)", nestedTupleSymbol.GetProperty("name").GetString());
+
+            var (pointerExitCode, pointerStdout, pointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator int*", "--exact-name"],
+                _jsonOptions));
+
+            using var pointerDocument = ParseJsonOutput(pointerStdout);
+            var pointerSymbol = pointerDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, pointerExitCode);
+            Assert.Equal(string.Empty, pointerStderr);
+            Assert.Equal("explicit operator int*", pointerSymbol.GetProperty("name").GetString());
+
+            var (functionPointerExitCode, functionPointerStdout, functionPointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator delegate* unmanaged[Cdecl]<int, void>", "--exact-name"],
+                _jsonOptions));
+
+            using var functionPointerDocument = ParseJsonOutput(functionPointerStdout);
+            var functionPointerSymbol = functionPointerDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, functionPointerExitCode);
+            Assert.Equal(string.Empty, functionPointerStderr);
+            Assert.Equal("explicit operator delegate* unmanaged[Cdecl]<int, void>", functionPointerSymbol.GetProperty("name").GetString());
 
             var (constructorExitCode, constructorStdout, constructorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "Money", "--exact-name"],

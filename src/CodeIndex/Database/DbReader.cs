@@ -2056,6 +2056,17 @@ public partial class DbReader
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
         var references = _hasReferencesTable ? ExecuteScalar("SELECT COUNT(*) FROM symbol_references") : 0L;
         var freshness = GetWorkspaceFreshness();
+        var hasCSharpFiles = false;
+        using (var csharpCmd = _conn.CreateCommand())
+        {
+            csharpCmd.CommandText = "SELECT 1 FROM files WHERE lang = 'csharp' LIMIT 1";
+            hasCSharpFiles = csharpCmd.ExecuteScalar() != null;
+        }
+        var csharpSymbolNameReady = !hasCSharpFiles
+            || string.Equals(
+                TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
+                DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -2076,6 +2087,7 @@ public partial class DbReader
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesTable,
+            CSharpSymbolNameReady = csharpSymbolNameReady,
             FoldReady = _foldReady,
         };
     }
