@@ -4353,6 +4353,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_InheritanceAndFile_FreeModifierOrder()
+    {
+        // Closes #355: inheritance modifiers on events (`virtual` / `override` / `abstract` /
+        // `sealed` / `new`) and the `file` modifier on interface / delegate declarations must
+        // be accepted in any position, with visibility still captured when present.
+        // Closes #355: event の継承修飾子 (`virtual` / `override` / `abstract` / `sealed` / `new`) と、
+        // interface / delegate 宣言の `file` 修飾子は任意位置で受理され、visibility が存在する場合は
+        // 併せて拾われる必要がある。
+        var content = """
+            file interface IWidget
+            {
+                int ProvideAnswer();
+            }
+            file delegate int Computer(int x);
+            public abstract class Base
+            {
+                abstract public event System.EventHandler A;
+                virtual public event System.EventHandler B;
+                sealed public override event System.EventHandler C;
+                new public event System.EventHandler D;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // `file interface` should be matched as an interface symbol.
+        // `file interface` は interface シンボルとして抽出される。
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IWidget");
+        // `file delegate` should be matched as a delegate symbol.
+        // `file delegate` は delegate シンボルとして抽出される。
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Computer" && s.ReturnType == "int");
+        // Events with inheritance modifiers must still record visibility = "public".
+        // 継承修飾子付きの event も visibility = "public" を保持する必要がある。
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "A" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "B" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "C" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "D" && s.Visibility == "public");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";

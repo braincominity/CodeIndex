@@ -336,15 +336,17 @@ public static class SymbolExtractor
             // （例: `static public int X;`）。Closes #355.
             new("property",  new Regex(
                 $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
-              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
+              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
               + $@"(?<returnType>{CSharpTypePattern})\s+"
               + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
                 RegexOptions.Compiled),
                 BodyStyle.None, "visibility", "returnType"),
             // Interface — visibility optional; modifier order is free, so visibility may appear
-            // anywhere in the modifier sequence (e.g. `partial public interface`). Closes #355.
-            // インターフェース — visibility 省略可。修飾子順序は自由（例: `partial public interface`）。Closes #355.
-            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // anywhere in the modifier sequence (e.g. `partial public interface`, `file interface`,
+            // `new public interface` for nested types). Closes #355.
+            // インターフェース — visibility 省略可。修飾子順序は自由
+            // （例: `partial public interface`、`file interface`、ネスト型向けの `new public interface`）。Closes #355.
+            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
             new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
             // Struct (including record struct, ref struct, readonly struct) — visibility optional;
@@ -436,12 +438,18 @@ public static class SymbolExtractor
             // クラスではなく property に帰属させるために必要。
             // Closes #233.
             new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Delegate — visibility optional; visibility / `static` / `unsafe` can appear in any order. Closes #355.
-            // デリゲート — visibility 省略可。visibility と `static` / `unsafe` の順序は自由。Closes #355.
-            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
-            // Event — visibility optional; visibility / `static` / `unsafe` / `extern` can appear in any order. Closes #355.
-            // イベント — visibility 省略可。visibility と `static` / `unsafe` / `extern` の順序は自由。Closes #355.
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Delegate — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
+            // `file` (file-scoped delegate) / `new` (nested delegate hiding). Closes #355.
+            // デリゲート — visibility 省略可。修飾子順序は自由。`static` / `unsafe` /
+            // `file`（file スコープ delegate）/ `new`（ネスト delegate の隠蔽）を受け付ける。Closes #355.
+            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Event — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
+            // `extern` plus inheritance modifiers (`virtual` / `override` / `abstract` / `sealed` / `new`)
+            // which are all legal on event declarations per the C# spec. Closes #355.
+            // イベント — visibility 省略可。修飾子順序は自由。`static` / `unsafe` / `extern` に加え、
+            // C# 仕様で event 宣言に有効な継承修飾子 (`virtual` / `override` / `abstract` / `sealed` / `new`)
+            // も受け付ける。Closes #355.
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
