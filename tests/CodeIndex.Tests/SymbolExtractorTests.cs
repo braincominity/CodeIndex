@@ -5334,6 +5334,89 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsMultiLineFieldWithObjectInitializer()
+    {
+        // Multi-line plain fields whose initializer uses an object or collection
+        // initializer (`= new() { ... };`, `= new Dictionary<...> { ... };`) must
+        // still complete at the real top-level `;`. The combined match line opens a
+        // brace inside the initializer, so the field path cannot assume every `{` is
+        // a property body — it must keep merging until the top-level semicolon closes
+        // the declaration. Closes #298 follow-up (third codex adversarial review).
+        // 複数行の通常フィールドで、`= new() { ... };` や `= new Dictionary<...> { ... };`
+        // のようなオブジェクト/コレクション初期化子を使う宣言も、実際のトップレベル `;` で
+        // 完了しなければならない。結合済みマッチ行には初期化子の `{` が入るため、field 経路は
+        // あらゆる `{` を property 本体とみなしてはならず、宣言終端のトップレベル `;` まで
+        // 結合を続ける必要がある。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "using System.Collections.Generic;",
+            "namespace Demo;",
+            "public class Containers",
+            "{",
+            "    private Dictionary<string, int>",
+            "        _map = new()",
+            "        {",
+            "            [\"a\"] = 1",
+            "        };",
+            "    private List<int>",
+            "        _list = new() {",
+            "            1, 2, 3",
+            "        };",
+            "    private Dictionary<string, int>",
+            "        _typed = new Dictionary<string, int>",
+            "        {",
+            "            [\"b\"] = 2",
+            "        };",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_map"
+            && s.Visibility == "private"
+            && s.ReturnType == "Dictionary<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_list"
+            && s.Visibility == "private"
+            && s.ReturnType == "List<int>");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_typed"
+            && s.Visibility == "private"
+            && s.ReturnType == "Dictionary<string,int>");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineFieldIgnoresBraceInsideStringLiteral()
+    {
+        // Brace detection must use the sanitized match line, not the raw source, so a
+        // `{` that lives inside a string literal or comment doesn't flip the field path
+        // into property-body handling and then silently drop the declaration. Closes
+        // #298 follow-up (third codex adversarial review).
+        // brace 検出はサニタイズ済みのマッチ行で行わなければならない。raw 行を見ると
+        // 文字列リテラルやコメント内の `{` で field 経路が property 本体扱いに切り替わり、
+        // 宣言が黙って消える恐れがあるため。Closes #298 follow-up。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "public class Templates",
+            "{",
+            "    private string",
+            "        _open = \"{\";",
+            "    private string",
+            "        _pair = \"{\" + \"}\";",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_open"
+            && s.Visibility == "private"
+            && s.ReturnType == "string");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_pair"
+            && s.Visibility == "private"
+            && s.ReturnType == "string");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsDeclaratorListFields()
     {
         // `private int _x, _y;` must emit one `property` symbol per declarator. The

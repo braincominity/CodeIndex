@@ -5452,11 +5452,16 @@ public static class SymbolExtractor
         }
 
         var builder = new StringBuilder(matchLine.TrimEnd());
-        var openBraceLineIndex = lines[startLineIndex].IndexOf('{') >= 0
+
+        // Detect `{` on the sanitized line so braces inside string literals or comments
+        // don't flip a plain field into property-body handling.
+        // サニタイズ済みの行で `{` を検出し、文字列やコメント内の `{` で通常フィールドが
+        // property 本体扱いに切り替わらないようにする。
+        var openBraceLineIndex = csharpMatchLines[startLineIndex].IndexOf('{') >= 0
             ? startLineIndex
             : -1;
         var openBraceExclusiveEndColumn = openBraceLineIndex == startLineIndex
-            ? lines[startLineIndex].IndexOf('{') + 1
+            ? ResolveCSharpBraceColumn(lines[startLineIndex], csharpMatchLines[startLineIndex]) + 1
             : (int?)null;
 
         for (int i = startLineIndex + 1; i < csharpMatchLines.Length; i++)
@@ -5468,14 +5473,10 @@ public static class SymbolExtractor
             builder.Append(' ').Append(nextLine);
             var normalizedCombined = CollapseCSharpGenericTypeWhitespace(builder.ToString());
 
-            if (openBraceLineIndex < 0)
+            if (openBraceLineIndex < 0 && csharpMatchLines[i].IndexOf('{') >= 0)
             {
-                var braceColumn = lines[i].IndexOf('{');
-                if (braceColumn >= 0)
-                {
-                    openBraceLineIndex = i;
-                    openBraceExclusiveEndColumn = braceColumn + 1;
-                }
+                openBraceLineIndex = i;
+                openBraceExclusiveEndColumn = ResolveCSharpBraceColumn(lines[i], csharpMatchLines[i]) + 1;
             }
 
             if (HasCSharpPropertyAccessorStart(normalizedCombined))
@@ -5493,16 +5494,18 @@ public static class SymbolExtractor
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i, null, expressionEndLineIndex);
             }
 
-            // Plain-field multi-line declaration: the header line holds only the type (e.g.
-            // `private Dictionary<string, int>`) and the continuation finishes with a
-            // top-level `;`. Track paren/bracket/brace depth so parenthesized initializers
-            // like `= new(\n    () => 42);` walk through the `(` instead of short-circuiting.
-            // 複数行にまたがる通常フィールド宣言: ヘッダ行が型だけで、継続行が
-            // トップレベルの `;` で終わる形に対応する。paren/bracket/brace の深さを
-            // 追うため、`= new(\n    () => 42);` のような括弧付き初期化式でも
-            // `(` で打ち切らず `;` まで読み進められる。
-            if (openBraceLineIndex < 0
-                && HasCSharpTopLevelSemicolon(normalizedCombined))
+            // Plain-field multi-line declaration: continuation reaches a top-level `;`.
+            // Object / collection initializers (`= new() { ... };`) balance their own braces,
+            // so `HasCSharpTopLevelSemicolon` fires only at the real terminator — regardless
+            // of whether an earlier line contained `{`. `HasCSharpPropertyAccessorStart` above
+            // already claimed true property bodies, so reaching this point means the `{`
+            // belongs to an initializer, not an accessor block.
+            // 複数行にまたがる通常フィールド宣言: 継続行でトップレベルの `;` に到達する形に対応する。
+            // `= new() { ... };` のようなオブジェクト/コレクション初期化子は自身の brace を閉じるため、
+            // `HasCSharpTopLevelSemicolon` は真の終端 `;` のみで発火し、先行行に `{` があっても
+            // 問題ない。上の `HasCSharpPropertyAccessorStart` が真の property 本体を先に拾うため、
+            // ここに到達する `{` は初期化子側のものと確定している。
+            if (HasCSharpTopLevelSemicolon(normalizedCombined))
             {
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
             }
@@ -5512,6 +5515,20 @@ public static class SymbolExtractor
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+    }
+
+    // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
+    // falling back to the sanitized line only when the raw line hides the brace in a string
+    // literal — in that case the sanitized position is the only safe signal we have.
+    // 本体抽出で元の位置を保つため raw 行の `{` 列を優先し、raw 側で文字列リテラル内に隠れて
+    // いる場合のみサニタイズ済み行の位置にフォールバックする。
+    private static int ResolveCSharpBraceColumn(string rawLine, string sanitizedLine)
+    {
+        var rawColumn = rawLine.IndexOf('{');
+        if (rawColumn >= 0)
+            return rawColumn;
+
+        return sanitizedLine.IndexOf('{');
     }
 
     private static bool HasCSharpPropertyAccessorStart(string text)
