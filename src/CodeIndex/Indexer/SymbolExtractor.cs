@@ -293,7 +293,22 @@ public static class SymbolExtractor
             // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:new)\s+)?static\s+readonly\s+(?<returnType>[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[=;]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
+            // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
+            // accepted anywhere, not just at the front, so legacy orderings like
+            // `readonly public static` / `static public readonly` still classify as kind `function`
+            // instead of falling through to the plain-field (kind `property`) row. Closes #355.
+            // static/readonly の順序は自由で、`new`（メンバー隠蔽）も任意位置に置ける。visibility も
+            // 先頭以外の位置に現れることを許容し、`readonly public static` や `static public readonly`
+            // のような旧来の並びでも kind `function` で取り扱う。通常フィールド（kind `property`）の
+            // 正規表現に流れ落ちないようにする。Closes #355.
+            new("function",  new Regex(
+                $@"^\s*"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*static\s+)"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*readonly\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static|readonly)\s+)+"
+              + @"(?<returnType>[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[=;]",
+                RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Plain field (instance, readonly, volatile, plain static, etc.) — kind `property`.
             // Must come AFTER the `const` and `static readonly` patterns (which take priority
             // with kind `function`), and BEFORE the structural declaration patterns.
@@ -329,12 +344,26 @@ public static class SymbolExtractor
             // Class (including record, record class) — visibility optional (defaults to internal for top-level)
             // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）
             new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Implicit/explicit conversion operator — must come before general operator pattern
-            // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?static\s+(?:(?:unsafe|extern)\s+)*(?<conversionKind>implicit|explicit)\s+operator\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Operator overload (+ - * / == != < > etc.) — must come before method pattern
-            // 演算子オーバーロード — メソッドパターンより前に配置
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?static\s+.+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Implicit/explicit conversion operator — must come before general operator pattern.
+            // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
+            // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置。
+            // visibility は `static` / `unsafe` / `extern` のどちら側にも置ける。Closes #355.
+            new("function",  new Regex(
+                $@"^\s*"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
+                RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
+            // Visibility may appear before or after `static`. Closes #355.
+            // 演算子オーバーロード — メソッドパターンより前に配置。
+            // visibility は `static` のどちら側にも置ける。Closes #355.
+            new("function",  new Regex(
+                $@"^\s*"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + @".+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(",
+                RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
             // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
@@ -357,7 +386,7 @@ public static class SymbolExtractor
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern})\s+)?delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex($@"^\s*(?<visibility>{CSharpVisibilityPattern})\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -370,7 +399,7 @@ public static class SymbolExtractor
             // `return o switch` のような複数行にまたがる文断片が `BuildCSharpPropertyMatchLine`
             // で結合された結果、property として誤判定されるのを防ぐため、戻り値型として
             // ステートメントキーワードを拒否する。Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate.
             // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns a body
             // range covering the declaration line through the terminating ';', which
@@ -383,11 +412,13 @@ public static class SymbolExtractor
             // ReferenceExtractor.FindInnermostContainer が accessor 内呼び出しを外側
             // クラスではなく property に帰属させるために必要。
             // Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Delegate — visibility optional / デリゲート — visibility 省略可
-            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|unsafe)\s+)?delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
-            // Event — visibility optional / イベント — visibility 省略可
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static)\s+)?event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Delegate — visibility optional; visibility / `static` / `unsafe` can appear in any order. Closes #355.
+            // デリゲート — visibility 省略可。visibility と `static` / `unsafe` の順序は自由。Closes #355.
+            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Event — visibility optional; visibility / `static` can appear in any order. Closes #355.
+            // イベント — visibility 省略可。visibility と `static` の順序は自由。Closes #355.
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
@@ -413,7 +444,7 @@ public static class SymbolExtractor
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
             new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Indexer (this[...]) / インデクサ (this[...])
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Static constructor / 静的コンストラクタ
             new("function",  new Regex(@"^\s*static\s+(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
