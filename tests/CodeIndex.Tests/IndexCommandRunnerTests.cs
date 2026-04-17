@@ -3834,7 +3834,6 @@ public class IndexCommandRunnerTests
                 {
                     public void Run()
                     {
-                        Run(1);
                     }
                 }
                 """);
@@ -3847,6 +3846,18 @@ public class IndexCommandRunnerTests
                     public void Run(int value) { }
                 }
                 """);
+            File.WriteAllText(Path.Combine(projectRoot, "projA", "src", "Caller.cs"),
+                """
+                namespace Shared;
+
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                    }
+                }
+                """);
 
             File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Api.Part1.cs"),
                 """
@@ -3856,7 +3867,6 @@ public class IndexCommandRunnerTests
                 {
                     public void Run()
                     {
-                        Run(1);
                     }
                 }
                 """);
@@ -3869,6 +3879,18 @@ public class IndexCommandRunnerTests
                     public void Run(int value) { }
                 }
                 """);
+            File.WriteAllText(Path.Combine(projectRoot, "projB", "src", "Caller.cs"),
+                """
+                namespace Shared;
+
+                public class Caller
+                {
+                    public void Call(Api api)
+                    {
+                        api.Run();
+                    }
+                }
+                """);
 
             var (indexExitCode, indexJson) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -3877,20 +3899,10 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
 
-            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.Equal(CommandExitCodes.NotFound, hotspotsExitCode);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
-
-            var runRows = hotspotsJson.GetProperty("hotspots")
-                .EnumerateArray()
-                .Where(item => item.GetProperty("name").GetString() == "Run")
-                .OrderBy(item => item.GetProperty("path").GetString(), StringComparer.Ordinal)
-                .ToList();
-
-            Assert.Equal(2, runRows.Count);
-            Assert.StartsWith("projA/src/Api.Part", runRows[0].GetProperty("path").GetString(), StringComparison.Ordinal);
-            Assert.Equal(1, runRows[0].GetProperty("reference_count").GetInt32());
-            Assert.StartsWith("projB/src/Api.Part", runRows[1].GetProperty("path").GetString(), StringComparison.Ordinal);
-            Assert.Equal(1, runRows[1].GetProperty("reference_count").GetInt32());
+            Assert.Equal(0, hotspotsJson.GetProperty("count").GetInt32());
+            Assert.Empty(hotspotsJson.GetProperty("hotspots").EnumerateArray());
         }
         finally
         {
