@@ -220,9 +220,18 @@ public static class ReferenceExtractor
         // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
         // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
         // 同じ判定で属性として扱えるように、事前パスで C# 属性セクションの範囲を構築する。
-        var csharpAttrRanges = language == "csharp"
+        var csharpAttrTables = language == "csharp"
             ? BuildCSharpAttributeRanges(preparedLines)
-            : null;
+            : (null, null);
+        var csharpAttrRanges = csharpAttrTables.Item1;
+        // Top-level (paren-depth 0) zones inside attribute sections. Used by the no-arg
+        // attribute regex so that enum / qualified-constant identifiers appearing inside
+        // attribute argument lists (e.g. `AllowNumbers` in `[JsonConverter(ConverterStrategy.AllowNumbers)]`)
+        // are not misclassified as no-arg attribute references.
+        // 属性セクション内で paren 深さ 0 の top-level ゾーンだけを別テーブルで持つ。複数行
+        // `[...]` の引数中に現れる enum / 修飾定数（`ConverterStrategy.AllowNumbers` など）が
+        // no-arg attribute として誤分類されないよう、no-arg 属性用ゲートに使う。
+        var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
             .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
@@ -249,6 +258,7 @@ public static class ReferenceExtractor
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
+            var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
 
             var context = originalLine.Trim();
             if (context.Length == 0)
@@ -295,13 +305,20 @@ public static class ReferenceExtractor
             // and their siblings still populate the reference table.
             // issue #293: 引数なしの属性・アノテーションは `(` が必須な CallRegex では拾えないため、
             // 専用 regex から `[Serializable]` / `@Deprecated` などの素形を reference テーブルへ反映する。
-            if (language == "csharp" && csharpAttrRangesOnLine != null && csharpAttrRangesOnLine.Count > 0)
+            if (language == "csharp" && csharpAttrTopLevelOnLine != null && csharpAttrTopLevelOnLine.Count > 0)
             {
                 foreach (Match match in CSharpNoArgAttributeRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
-                    if (!IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, nameIndex))
+                    // Gate on the attribute-section top-level (paren-depth 0) zones only, so
+                    // identifiers that sit inside an attribute's argument list (e.g.
+                    // `ConverterStrategy.AllowNumbers` in `[JsonConverter(...)]`) are not
+                    // misclassified as no-arg attributes.
+                    // 属性セクションの top-level（paren 深さ 0）ゾーンでのみ採用する。属性の
+                    // 引数リスト内にある識別子（`[JsonConverter(ConverterStrategy.AllowNumbers)]`
+                    // の `AllowNumbers` など）を no-arg 属性として誤分類しないため。
+                    if (!IsInsideCSharpAttributeRange(csharpAttrTopLevelOnLine, nameIndex))
                         continue;
                     if (IsIgnoredCallName(language, name))
                         continue;
@@ -520,11 +537,15 @@ public static class ReferenceExtractor
     /// `(開始列, 終端列 (exclusive))` のレンジを保持し、呼び出し名の列がどれかのレンジに含まれる場合に
     /// `call` ではなく `attribute` へ再分類する。
     /// </summary>
-    private static List<List<(int start, int end)>> BuildCSharpAttributeRanges(string[] preparedLines)
+    private static (List<List<(int start, int end)>>, List<List<(int start, int end)>>) BuildCSharpAttributeRanges(string[] preparedLines)
     {
         var perLine = new List<List<(int, int)>>(preparedLines.Length);
+        var perLineTopLevel = new List<List<(int, int)>>(preparedLines.Length);
         for (var i = 0; i < preparedLines.Length; i++)
+        {
             perLine.Add(new List<(int, int)>());
+            perLineTopLevel.Add(new List<(int, int)>());
+        }
 
         // Stack entries capture the opening `[` position and whether that bracket was at
         // a C# declaration (attribute) position. Parens inside a section are tracked so the
@@ -535,6 +556,28 @@ public static class ReferenceExtractor
         char lastMeaningful = '\0';
         int parenDepth = 0;
         bool lastClosedBracketWasAttribute = false;
+
+        // Top-level zone tracking: while we are inside an attribute section and parenDepth==0,
+        // the current zone span is open. When parens open we close it; when they fully close
+        // again we reopen. When the attribute section itself closes, we emit the final span.
+        // top-level ゾーン追跡: 属性セクション内かつ paren 深さ 0 のあいだだけゾーンを開いておき、
+        // `(` で閉じ、`)` で再び開く。セクションが閉じる `]` で確定させる。
+        int topZoneStartLi = -1;
+        int topZoneStartCi = 0;
+
+        void EmitTopZone(int endLi, int endCi)
+        {
+            if (topZoneStartLi < 0)
+                return;
+            for (var l = topZoneStartLi; l <= endLi; l++)
+            {
+                int s = (l == topZoneStartLi) ? topZoneStartCi : 0;
+                int e = (l == endLi) ? endCi : preparedLines[l].Length;
+                if (e > s)
+                    perLineTopLevel[l].Add((s, e));
+            }
+            topZoneStartLi = -1;
+        }
 
         for (var li = 0; li < preparedLines.Length; li++)
         {
@@ -547,6 +590,13 @@ public static class ReferenceExtractor
 
                 if (c == '(')
                 {
+                    // If we are in a top-level attribute zone and this `(` opens the first
+                    // paren depth, close the top-level zone just before the `(`.
+                    // top-level ゾーン中で paren 深さが 0→1 になる `(` ならここでゾーンを閉じる。
+                    if (parenDepth == 0 && bracketStack.Count > 0 && bracketStack.Peek().isAttr && topZoneStartLi >= 0)
+                    {
+                        EmitTopZone(li, ci);
+                    }
                     parenDepth++;
                     lastMeaningful = c;
                     continue;
@@ -554,7 +604,15 @@ public static class ReferenceExtractor
                 if (c == ')')
                 {
                     if (parenDepth > 0)
+                    {
                         parenDepth--;
+                        // paren 深さが 1→0 に戻ったら、依然として属性セクション内なら top-level ゾーンを再開する。
+                        if (parenDepth == 0 && bracketStack.Count > 0 && bracketStack.Peek().isAttr && topZoneStartLi < 0)
+                        {
+                            topZoneStartLi = li;
+                            topZoneStartCi = ci + 1;
+                        }
+                    }
                     lastMeaningful = c;
                     continue;
                 }
@@ -564,6 +622,14 @@ public static class ReferenceExtractor
                     bool isAttr = EvaluateCSharpAttributePosition(
                         lastMeaningful, lastClosedBracketWasAttribute, preparedLines, li, ci);
                     bracketStack.Push((li, ci, isAttr));
+                    if (isAttr && parenDepth == 0 && topZoneStartLi < 0)
+                    {
+                        // Start top-level zone just after the `[` so the `[` itself is not
+                        // inside the zone.
+                        // `[` 直後から top-level ゾーンを開始する。
+                        topZoneStartLi = li;
+                        topZoneStartCi = ci + 1;
+                    }
                     lastMeaningful = c;
                     continue;
                 }
@@ -586,6 +652,19 @@ public static class ReferenceExtractor
                                 int e = (l == li) ? ci + 1 : preparedLines[l].Length;
                                 perLine[l].Add((s, e));
                             }
+                            // Close the top-level zone at the `]` (paren depth should already
+                            // be 0 here — if it is not, we simply drop the open zone because
+                            // paren balancing was malformed).
+                            // ここで top-level ゾーンを確定する。paren が閉じ切っていない場合は
+                            // 不整合入力なのでゾーンを捨てる。
+                            if (parenDepth == 0)
+                            {
+                                EmitTopZone(li, ci + 1);
+                            }
+                            else
+                            {
+                                topZoneStartLi = -1;
+                            }
                         }
                     }
                     else
@@ -600,7 +679,7 @@ public static class ReferenceExtractor
             }
         }
 
-        return perLine;
+        return (perLine, perLineTopLevel);
     }
 
     /// <summary>

@@ -1860,6 +1860,42 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultiLineAttributeArgumentEnum_NotClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): identifiers appearing inside the argument list of
+        // a multi-line attribute such as `ConverterStrategy.AllowNumbers` must NOT be recorded
+        // as `attribute` references. Only the attribute-list top level (`[`/`,` boundary, paren
+        // depth 0) is a valid no-arg attribute name position.
+        // リグレッション (issue #293 補足): 複数行属性の引数リスト内にある識別子
+        // (例: `ConverterStrategy.AllowNumbers`) は `attribute` として記録してはならない。
+        // 属性リストの top-level (paren 深さ 0 の `[` / `,` 境界) のみが no-arg 属性名の位置。
+        const string content = """
+            [
+                JsonConverter(
+                    ConverterStrategy.AllowNumbers
+                )
+            ]
+            public class A
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // JsonConverter is the only attribute here (with-args, classified by the metadata path).
+        var jsonConverter = Assert.Single(references.Where(r => r.SymbolName == "JsonConverter"));
+        Assert.Equal("attribute", jsonConverter.ReferenceKind);
+
+        // AllowNumbers is an enum member access inside the attribute arguments — it must not be
+        // picked up as a no-arg attribute even though it happens to end at end-of-line inside
+        // the `[...]` section.
+        // AllowNumbers は属性引数内の enum メンバーアクセスなので、no-arg 属性として取り込まれないこと。
+        Assert.DoesNotContain(references, r => r.SymbolName == "AllowNumbers" && r.ReferenceKind == "attribute");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ConverterStrategy" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
     public void Extract_CsharpAliasQualifiedNoArgAttribute_ClassifiedAsAttribute()
     {
         // Regression (issue #293 follow-up): `[Alias::MyAttr]` — alias-qualified attribute.
