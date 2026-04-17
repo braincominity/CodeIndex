@@ -3684,6 +3684,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPointerReturnTypes()
+    {
+        // Issue #234: methods with pointer / function-pointer return types must still be indexed.
+        // Issue #234: ポインタ / 関数ポインタ戻り値型のメソッドも取りこぼさずインデックスする。
+        var content = "namespace Demo;\n\npublic unsafe class FP\n{\n    public int* Get(int[] a) { fixed (int* p = a) { return p; } }\n    public void** Double() => null;\n    public byte* Get1() => null;\n    public delegate*<int, int> Transform() => null;\n    public static unsafe int*[] Arr() => null!;\n    public unsafe void Modify(int* p, int v) { *p = v; }\n    public static unsafe int Deref(int* p) => *p;\n    public int* P { get; set; }\n    public byte* Q => null;\n    public int* this[int i] => null;\n}\n\npublic unsafe delegate int* PointerDelegate(int x);\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Double" && s.ReturnType == "void**");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get1" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Transform" && s.ReturnType == "delegate*<int, int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Arr" && s.ReturnType == "int*[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Modify");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Deref");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Q" && s.ReturnType == "byte*");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.ReturnType == "int*");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PointerDelegate" && s.ReturnType == "int*");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPartialMethods()
     {
         // C# 9 extended partial methods / C# 9 拡張 partial メソッド
