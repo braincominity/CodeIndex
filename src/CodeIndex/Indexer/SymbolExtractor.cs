@@ -6537,29 +6537,42 @@ public static class SymbolExtractor
         int? lastLineExclusiveEndColumn)
     {
         var builder = new StringBuilder();
-        var state = new CSharpLexState();
+        var stripState = new CSharpLexState();
+        var collapseState = new CSharpLexState();
 
         for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
         {
-            var stripped = StripCSharpComments(lines[i], ref state);
+            var stripped = StripCSharpComments(lines[i], ref stripState);
             int from = i == startLineIndex ? startColumn : 0;
             int to = i == lastLineIndex && lastLineExclusiveEndColumn.HasValue
                 ? Math.Min(lastLineExclusiveEndColumn.Value, stripped.Length)
                 : stripped.Length;
 
+            // Advance collapseState through stripped[0..from] silently so that lex mode
+            // (String / Char / VerbatimString / RawString) is accurate when we start
+            // collapsing at column `from`. collapseState は stripped[0..from] を空出力
+            // で前進させ、collapse 開始列の lex モードを正しく保つ。
+            if (from > 0)
+            {
+                var prefix = stripped[0..Math.Min(from, stripped.Length)];
+                CollapseCodeWhitespaceRuns(prefix, ref collapseState, emitToBuilder: null);
+            }
+
             if (from >= to)
                 continue;
 
-            // Strip-and-collapse: comments were replaced by runs of spaces in
-            // `StripCSharpComments`, so collapse consecutive whitespace into a single
-            // space to keep the signature readable. String / char literal content is
-            // preserved; we only see runs here when a block comment was expanded.
-            // Closes #382.
-            // strip-and-collapse: StripCSharpComments はコメントをスペース列に置換する
-            // ので、連続する空白を 1 つにまとめて signature を読みやすくする。
-            // 文字列・char リテラルの中身はそのまま残され、ここで空白列になるのは
-            // ブロックコメントが展開されたときだけ。Closes #382.
-            var collapsed = CollapseWhitespaceRuns(stripped[from..to]).Trim();
+            // Only Code-mode whitespace runs (including comment-replaced spaces) are
+            // collapsed to a single space; String / Char / VerbatimString / RawString
+            // contents are preserved exactly, so declarations like
+            // `record Foo(string S = "a  b")` keep the literal double-space in the
+            // signature instead of collapsing to `"a b"`. Closes #382.
+            // Code モードの空白列（コメント由来の空白を含む）だけを 1 つにまとめ、
+            // String / Char / VerbatimString / RawString の中身はそのまま残す。
+            // `record Foo(string S = "a  b")` のような宣言でリテラル内の 2 連続空白を
+            // 保持し、`"a b"` に潰れないようにする。Closes #382.
+            var segment = new StringBuilder(to - from);
+            CollapseCodeWhitespaceRuns(stripped[from..to], ref collapseState, emitToBuilder: segment);
+            var collapsed = segment.ToString().Trim();
             if (collapsed.Length == 0)
                 continue;
 
@@ -6571,32 +6584,203 @@ public static class SymbolExtractor
         return builder.ToString().Trim();
     }
 
-    private static string CollapseWhitespaceRuns(string text)
+    // Walk `text` with lex-state tracking, collapsing consecutive whitespace into a
+    // single space only when in Code mode. In String / Char / VerbatimString /
+    // RawString modes, characters are emitted raw (including any whitespace inside
+    // those literals). State is threaded across calls so multi-line string literals
+    // remain in their respective modes. If `emitToBuilder` is null, the walk is
+    // state-only and produces no output. Closes #382.
+    //
+    // `text` を lex state を追いながら走査し、Code モードのときだけ連続空白を 1 つに
+    // 畳む。String / Char / VerbatimString / RawString モードでは raw のまま出力し、
+    // リテラル内の空白を保持する。state は呼び出し間で引き継がれるので、複数行に
+    // 跨る文字列リテラルも正しく追跡できる。`emitToBuilder` が null なら出力を行わず
+    // state 前進のみ行う。Closes #382.
+    private static void CollapseCodeWhitespaceRuns(
+        string text,
+        ref CSharpLexState state,
+        StringBuilder? emitToBuilder)
     {
         if (string.IsNullOrEmpty(text))
-            return text;
+            return;
 
-        var builder = new StringBuilder(text.Length);
-        var prevWasSpace = false;
+        bool prevWasCodeSpace = emitToBuilder is { Length: > 0 }
+            && char.IsWhiteSpace(emitToBuilder[^1]);
 
-        for (int i = 0; i < text.Length; i++)
+        int i = 0;
+        while (i < text.Length)
         {
             var ch = text[i];
-            if (char.IsWhiteSpace(ch))
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+
+            if (state.Mode == CSharpLexMode.String)
             {
-                if (!prevWasSpace)
+                emitToBuilder?.Append(ch);
+                prevWasCodeSpace = false;
+                if (state.EscapeNext)
                 {
-                    builder.Append(' ');
-                    prevWasSpace = true;
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
                 }
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+                i++;
                 continue;
             }
 
-            builder.Append(ch);
-            prevWasSpace = false;
-        }
+            if (state.Mode == CSharpLexMode.Char)
+            {
+                emitToBuilder?.Append(ch);
+                prevWasCodeSpace = false;
+                if (state.EscapeNext)
+                {
+                    state = state with { EscapeNext = false };
+                    i++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    state = state with { EscapeNext = true };
+                    i++;
+                    continue;
+                }
+                if (ch == '\'')
+                    state = state with { Mode = CSharpLexMode.Code };
+                i++;
+                continue;
+            }
 
-        return builder.ToString();
+            if (state.Mode == CSharpLexMode.VerbatimString)
+            {
+                emitToBuilder?.Append(ch);
+                prevWasCodeSpace = false;
+                if (ch == '"' && next == '"')
+                {
+                    emitToBuilder?.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '"')
+                    state = state with { Mode = CSharpLexMode.Code };
+                i++;
+                continue;
+            }
+
+            if (state.Mode == CSharpLexMode.RawString)
+            {
+                emitToBuilder?.Append(ch);
+                prevWasCodeSpace = false;
+                if (ch == '"' && HasCSharpQuoteRun(text, i, state.RawDelimiterLength))
+                {
+                    var quoteRunLength = GetCSharpQuoteRunLength(text, i);
+                    for (var j = 1; j < quoteRunLength && i + j < text.Length; j++)
+                        emitToBuilder?.Append(text[i + j]);
+                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
+                    i += quoteRunLength;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            // Code mode. Comments are already stripped to spaces by StripCSharpComments,
+            // so we only need to detect string / char / verbatim / raw-string starts and
+            // collapse whitespace runs. BlockComment mode should not be re-entered here.
+            if (TryReadCSharpRawStringStart(text, i, out var rawPrefixLength, out var rawDelimiterLength))
+            {
+                if (emitToBuilder != null)
+                {
+                    for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < text.Length; j++)
+                        emitToBuilder.Append(text[i + j]);
+                }
+                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
+                i += rawPrefixLength + rawDelimiterLength;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '@' && next == '"')
+            {
+                emitToBuilder?.Append(ch);
+                emitToBuilder?.Append(next);
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 2;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '$' && next == '@' && i + 2 < text.Length && text[i + 2] == '"')
+            {
+                emitToBuilder?.Append(ch);
+                emitToBuilder?.Append(next);
+                emitToBuilder?.Append(text[i + 2]);
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '@' && next == '$' && i + 2 < text.Length && text[i + 2] == '"')
+            {
+                emitToBuilder?.Append(ch);
+                emitToBuilder?.Append(next);
+                emitToBuilder?.Append(text[i + 2]);
+                state = state with { Mode = CSharpLexMode.VerbatimString };
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '$' && next == '"')
+            {
+                emitToBuilder?.Append(ch);
+                emitToBuilder?.Append(next);
+                state = state with { Mode = CSharpLexMode.String };
+                i += 2;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                emitToBuilder?.Append(ch);
+                state = state with { Mode = CSharpLexMode.String };
+                i++;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                emitToBuilder?.Append(ch);
+                state = state with { Mode = CSharpLexMode.Char };
+                i++;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!prevWasCodeSpace)
+                {
+                    emitToBuilder?.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i++;
+                continue;
+            }
+
+            emitToBuilder?.Append(ch);
+            prevWasCodeSpace = false;
+            i++;
+        }
     }
 
     // Return the C# line with only `//` line comments and `/* ... */` block comments

@@ -3532,6 +3532,85 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // A wrapped primary constructor header that carries a string default with internal
+        // double-space must not collapse the literal into a single space. The signature is
+        // parsed downstream to recover default values, so collapsing `"a  b"` to `"a b"`
+        // would silently rewrite source. Closes #382 codex review iteration 2 blocker.
+        // 折り返された primary constructor header に内部 2 連空白を持つ文字列デフォルトが
+        // ある場合、リテラル内の空白を潰してはいけない。signature は下流で default 値の
+        // 復元に使われるため、`"a  b"` が `"a b"` に潰れると source が書き換わったのと
+        // 同じ結果になる。Closes #382 の codex レビュー iteration 2 blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo(
+                string label = "a  b")
+                : BaseFoo
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string label = \"a  b\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithVerbatimStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // Verbatim string (`@"..."`) defaults may contain runs of internal whitespace that
+        // must survive signature reconstruction verbatim. Closes #382 codex review iteration
+        // 2 blocker.
+        // verbatim 文字列（`@"..."`）のデフォルトは内部の空白列をそのまま残す必要がある。
+        // Closes #382 の codex レビュー iteration 2 blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string path = @"C:\tmp\   spaces")
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string path = @\"C:\\tmp\\   spaces\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithRawStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // Raw string literals (`"""..."""`) in a wrapped primary constructor default must
+        // preserve internal whitespace verbatim. Closes #382 codex review iteration 2
+        // blocker.
+        // raw 文字列リテラル（`"""..."""`）を持つ primary constructor デフォルトについて
+        // も、内部空白を verbatim に保つこと。Closes #382 の codex レビュー iteration 2
+        // blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string tag = """a   b""")
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string tag = \"\"\"a   b\"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
     {
         var content = """
