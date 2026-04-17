@@ -568,11 +568,40 @@ public partial class DbReader
             definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
         }
         primaryDefinition ??= definitions.FirstOrDefault();
+        var graphSupportDefinitions = GetDefinitions(
+            query,
+            Math.Max(limit, 32),
+            kind: null,
+            lang: lang,
+            includeBody: false,
+            pathPatterns: pathPatterns,
+            excludePathPatterns: excludePathPatterns,
+            excludeTests: excludeTests,
+            since: null,
+            exact: exact);
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? file?.Lang;
-        bool? graphSupported = graphLanguage == null ? null : ReferenceExtractor.SupportsLanguage(graphLanguage);
+        var graphSupportDefinition = TryGetEnumMemberGraphSupportDefinition(graphSupportDefinitions);
+        bool? graphSupported = graphSupportDefinition != null
+            ? ReferenceExtractor.SupportsSymbolGraph(graphSupportDefinition.Lang, graphSupportDefinition.Kind, graphSupportDefinition.ContainerKind)
+            : graphLanguage == null
+                ? null
+                : ReferenceExtractor.SupportsLanguage(graphLanguage);
+        var graphSupportReason = graphSupportDefinition != null
+            ? ReferenceExtractor.BuildGraphSupportReason(
+                graphSupportDefinition.Lang,
+                graphSupported,
+                graphSupportDefinition.Kind,
+                graphSupportDefinition.ContainerKind)
+            : BuildGraphSupportReason(graphLanguage, graphSupported);
+        var unsupportedSymbolKind = graphSupportDefinition != null
+            ? ReferenceExtractor.GetUnsupportedSymbolKind(
+                graphSupportDefinition.Lang,
+                graphSupportDefinition.Kind,
+                graphSupportDefinition.ContainerKind)
+            : null;
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
             : (ExactQuerySignal?)null;
@@ -599,7 +628,9 @@ public partial class DbReader
             WorkspaceLatestModified = freshness.LatestModified,
             GraphLanguage = graphLanguage,
             GraphSupported = graphSupported,
-            GraphSupportReason = BuildGraphSupportReason(graphLanguage, graphSupported),
+            GraphSupportReason = graphSupportReason,
+            GraphDegraded = unsupportedSymbolKind != null,
+            UnsupportedSymbolKind = unsupportedSymbolKind,
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
             References = references,
@@ -612,6 +643,24 @@ public partial class DbReader
             ExactHasMissingTable = exactSignal?.HasMissingTable,
             DegradedReason = exactSignal?.DegradedReason,
         };
+    }
+
+    private static DefinitionResult? TryGetEnumMemberGraphSupportDefinition(IReadOnlyList<DefinitionResult> definitions)
+    {
+        if (definitions.Count == 0)
+            return null;
+
+        var first = definitions[0];
+        return definitions.All(IsCSharpEnumMemberDefinition)
+            ? first
+            : null;
+    }
+
+    private static bool IsCSharpEnumMemberDefinition(DefinitionResult definition)
+    {
+        return string.Equals(definition.Lang, "csharp", StringComparison.Ordinal)
+            && string.Equals(definition.Kind, "enum", StringComparison.Ordinal)
+            && string.Equals(definition.ContainerKind, "enum", StringComparison.Ordinal);
     }
 
     private static List<DefinitionResult> BuildAnalysisDefinitions(DefinitionResult? primaryDefinition, List<DefinitionResult> definitions, int limit)

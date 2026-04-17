@@ -405,6 +405,8 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
+For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; `inspect` / exact `references` expose `unsupported_symbol_kind=enum_member`, and `unused` excludes C# enum members until those edges exist.
+
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
 Additionally, 14 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml.
@@ -1420,6 +1422,8 @@ LIMIT 20;
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+
+C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため `inspect` / exact `references` は `unsupported_symbol_kind=enum_member` を返し、`unused` も該当 edge が揃うまでは C# enum member を除外します。
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 

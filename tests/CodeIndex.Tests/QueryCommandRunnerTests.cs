@@ -4769,7 +4769,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpEnumMembersWithoutResolvedEdgesReturnNotFound()
+    public void RunReferences_ExactJson_CSharpEnumMembersReturnUnsupportedGraphMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_references");
         try
@@ -4805,9 +4805,18 @@ public class QueryCommandRunnerTests
                 ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
                 _jsonOptions));
 
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
         }
         finally
         {
@@ -4855,6 +4864,11 @@ public class QueryCommandRunnerTests
             Assert.Equal("A", definition.GetProperty("name").GetString());
             Assert.Equal("enum", definition.GetProperty("container_kind").GetString());
             Assert.Equal("Nested", definition.GetProperty("container_name").GetString());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
         }
         finally
@@ -4901,6 +4915,10 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("excluded from unused", document.RootElement.GetProperty("graph_support_reason").GetString());
             Assert.DoesNotContain("A", names);
             Assert.DoesNotContain("B", names);
         }
@@ -4945,9 +4963,17 @@ public class QueryCommandRunnerTests
                 ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
                 _jsonOptions));
 
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
         }
         finally
         {
