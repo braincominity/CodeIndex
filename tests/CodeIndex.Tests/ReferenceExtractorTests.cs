@@ -133,6 +133,68 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpAllmanBlockBodiedProperty_WithBlockComment_AttributesToProperty()
+    {
+        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
+        // between the property header line and its `{` must not prevent the property
+        // from being recognized, so accessor-internal calls still attribute to the
+        // property rather than the enclosing class.
+        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `{` の間に複数行の
+        // /* ... */ ブロックコメントが入っていても、property として認識され、
+        // accessor 内部の呼び出しは外側クラスではなく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap
+                /* some multi-line
+                   block comment */
+                {
+                    get { return Compute(); }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineExpressionBodiedProperty_WithBlockComment_AttributesToProperty()
+    {
+        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
+        // between the property header line and its `=>` continuation must not prevent
+        // the property from being recognized, so Compute() still attributes to the
+        // property rather than the enclosing class.
+        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `=>` 継続行の間に
+        // 複数行の /* ... */ ブロックコメントが入っていても property として認識され、
+        // Compute() 呼び出しは外側クラスではなく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap
+                /* multi-line
+                   comment */
+                    => Compute();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpDefinitionLine_DoesNotBecomeReference()
     {
         const string content = """

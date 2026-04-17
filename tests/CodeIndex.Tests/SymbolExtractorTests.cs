@@ -3683,6 +3683,50 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: when an Allman-style block-bodied property
+        // has a multi-line `/* ... */` block comment between the header line and the `{`
+        // line, the skip guard must traverse the comment via `LexCSharpLine` and still
+        // recognize the continuation `{`. A naive prefix-based comment skip only
+        // handled `*` / `//` / `/*` line starts and dropped the property entirely.
+        // issue #233 第4次レビュー指摘: Allman スタイルの block-bodied property で
+        // header 行と `{` の間に multi-line `/* ... */` のブロックコメントがあっても、
+        // `LexCSharpLine` でコメントを通り抜けて次の `{` を認識する必要がある。
+        // 行頭 prefix だけの素朴なスキップでは `*` / `//` / `/*` の開始行しか飛ばせず、
+        // この形の property は落ちていた。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    /* some multi-line\n       block comment */\n    {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(9, wrap.EndLine);
+        Assert.Equal(7, wrap.BodyStartLine);
+        Assert.Equal(9, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: same scenario for multi-line expression
+        // bodies — `public int Wrap` followed by `/* ... */` and then `=> Compute();`
+        // must still be extracted with the property spanning declaration through `;`.
+        // issue #233 第4次レビュー指摘: multi-line 式本体プロパティでも同じく、
+        // `public int Wrap` の後に `/* ... */`、さらに `=> Compute();` が続く形で
+        // 宣言行から `;` 行までを本体範囲とする property が抽出されること。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int WrapExpr\n    /* multi-line\n       comment */\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrapExpr"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_HeaderOnlyNonProperty_IsNotMisclassified()
     {
         // issue #233 review follow-up: the header-only property alternation must not

@@ -730,10 +730,10 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, lines, csharpSwitchExpressionLines, i))
+                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, matchLine, lines, csharpSwitchExpressionLines, csharpLexState, i))
                         break;
 
-                    if (ShouldSkipCSharpHeaderOnlyPropertyCandidate(lang, pattern, match, lines, i))
+                    if (ShouldSkipCSharpHeaderOnlyPropertyCandidate(lang, pattern, match, lines, csharpLexState, i))
                         break;
 
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, matchLine, cssQualifiedRuleAncestors, i))
@@ -5314,6 +5314,7 @@ public static class SymbolExtractor
         string matchLine,
         string[] lines,
         bool[]? csharpSwitchExpressionLines,
+        CSharpLexState endLineState,
         int lineIndex)
     {
         if (lang != "csharp"
@@ -5327,45 +5328,32 @@ public static class SymbolExtractor
         if (matchLine.Contains("=>", StringComparison.Ordinal))
             return true;
 
-        // Multi-line arm where the `=>` is placed on a following continuation line:
-        // `string text`
-        // `    => text.Trim()`
-        // Without this branch the `ShouldSkipCSharpHeaderOnlyPropertyCandidate` hook
-        // would accept the continuation `=>` as a property expression body and emit a
-        // phantom property for every switch arm pattern variable.
-        // 次の有意行に `=>` が置かれる multi-line arm:
-        // `string text`
-        // `    => text.Trim()`
-        // ここで弾かないと header-only property ガードが continuation の `=>` を
-        // 式本体プロパティとして受け入れてしまい、switch arm のパターン変数ごとに
+        // Multi-line arm where the `=>` is placed on a following continuation line,
+        // possibly separated by multi-line block comments. Without this branch the
+        // `ShouldSkipCSharpHeaderOnlyPropertyCandidate` hook would accept the
+        // continuation `=>` as a property expression body and emit a phantom property
+        // for every switch arm pattern variable.
+        // `=>` が継続行にある multi-line arm。間に multi-line block comment が挟まる
+        // 場合も含む。ここで弾かないと header-only property ガードが continuation の
+        // `=>` を式本体プロパティとして受け入れてしまい、switch arm のパターン変数ごとに
         // phantom property を生成してしまう。
-        for (int j = lineIndex + 1; j < lines.Length; j++)
-        {
-            var candidate = lines[j].TrimStart();
-            if (candidate.Length == 0)
-                continue;
-            if (candidate.StartsWith("//", StringComparison.Ordinal)
-                || candidate.StartsWith("/*", StringComparison.Ordinal)
-                || candidate.StartsWith('*'))
-                continue;
-            return candidate.StartsWith("=>", StringComparison.Ordinal);
-        }
-
-        return false;
+        var next = FindCSharpNextSignificantSanitizedLine(lines, lineIndex, endLineState);
+        return next != null && next.StartsWith("=>", StringComparison.Ordinal);
     }
 
     // Verify an Allman-style property candidate (header line matched without `{` on the
-    // same line) is actually followed by a block body. Without this guard, any bare
-    // `Type Name` line could be misclassified as a property when the widened regex
-    // alternation (`$`) matches end-of-line.
+    // same line) is actually followed by a block body or a continuation-style expression
+    // body. Without this guard, any bare `Type Name` line could be misclassified as a
+    // property when the widened regex alternation (`$`) matches end-of-line.
     // Allman スタイルで property として候補になった行（同一行に `{` を持たない）が
-    // 実際に次行にブロック本体を持つかを確認する。このガードがないと、regex の
+    // 実際に次行にブロック本体か継続式本体を持つかを確認する。このガードがないと、regex の
     // 選択肢（`$`）に引っかかった `Type Name` だけの行が property と誤認される。
     private static bool ShouldSkipCSharpHeaderOnlyPropertyCandidate(
         string? lang,
         SymbolPattern pattern,
         Match match,
         string[] lines,
+        CSharpLexState endLineState,
         int lineIndex)
     {
         if (lang != "csharp" || pattern.Kind != "property")
@@ -5381,28 +5369,44 @@ public static class SymbolExtractor
         if (match.Value.Contains("=>", StringComparison.Ordinal))
             return false;
 
+        // Accept either a block body (`{`) on the next significant line or a
+        // continuation-style expression body (`=> expr;`). Trivia (block comments,
+        // line comments, whitespace) between the declaration and the body is skipped
+        // via `LexCSharpLine` so multi-line block comments like `/* ... */` spanning
+        // several lines are handled correctly.
+        // 次の有意な行がブロック本体 (`{`) か継続式本体 (`=> expr;`) のどちらかで
+        // 始まることを許容する。宣言と本体の間にあるブロックコメント/行コメント/空白は
+        // `LexCSharpLine` によって適切に読み飛ばすため、複数行に跨る `/* ... */` も
+        // 正しく処理される。
+        var next = FindCSharpNextSignificantSanitizedLine(lines, lineIndex, endLineState);
+        if (next == null)
+            return true;
+        return !(next.StartsWith('{') || next.StartsWith("=>", StringComparison.Ordinal));
+    }
+
+    // Lex each line after `lineIndex` using the running C# lex state so block comments
+    // spanning multiple lines, line comments, and string/char literals are all removed
+    // before the first non-whitespace sanitized line is returned. Returns null when no
+    // such line exists before end-of-file.
+    // `lineIndex` 以降の各行を running lex state で lex し、multi-line ブロックコメント、
+    // 行コメント、string/char literal をすべて除去した上で、最初の空白以外の sanitized line
+    // を返す。最後まで見つからなければ null を返す。
+    private static string? FindCSharpNextSignificantSanitizedLine(
+        string[] lines,
+        int lineIndex,
+        CSharpLexState state)
+    {
         for (int j = lineIndex + 1; j < lines.Length; j++)
         {
-            var candidate = lines[j].TrimStart();
-            if (candidate.Length == 0)
+            var lexed = LexCSharpLine(lines[j], state);
+            state = lexed.EndState;
+            var trimmed = lexed.SanitizedLine.TrimStart();
+            if (trimmed.Length == 0)
                 continue;
-            if (candidate.StartsWith("//", StringComparison.Ordinal)
-                || candidate.StartsWith("/*", StringComparison.Ordinal)
-                || candidate.StartsWith('*'))
-                continue;
-
-            // Accept either a block body (`{`) on the next non-blank line or a
-            // continuation-style expression body (`=> expr;`). Without the `=>` branch,
-            // multi-line expression-bodied properties (`public int Wrap` + `    => Compute();`)
-            // are silently dropped and `callers` / `impact` fall back to the enclosing class.
-            // 次の空白以外の行が `{` で始まるブロック本体、または継続行の `=> expr;` 形の
-            // 式本体のいずれかを受け入れる。`=>` を許容しないと、`public int Wrap` の次行に
-            // `    => Compute();` が続く multi-line 式本体プロパティが抽出されず、
-            // `callers` / `impact` の帰属が外側クラスに戻ってしまう。
-            return !(candidate.StartsWith('{') || candidate.StartsWith("=>", StringComparison.Ordinal));
+            return trimmed;
         }
 
-        return true;
+        return null;
     }
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
