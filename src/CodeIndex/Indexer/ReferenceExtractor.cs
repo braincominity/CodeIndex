@@ -211,12 +211,15 @@ public static class ReferenceExtractor
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
-        // Ordered innermost-first via ascending body range.
-        // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record。namespace は含めない）。
-        // 内側優先で昇順にソート。
+        // Ordered innermost-first via ascending body range. Java enums can declare constructors and
+        // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
+        // `CSharpCtorChainRegex` will not match inside them, so including `enum` is a no-op there.
+        // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
+        // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
+        // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
         var enclosingTypeCandidates = symbols
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                             (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface"))
+                             (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface" || symbol.Kind == "enum"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
 
@@ -342,7 +345,12 @@ public static class ReferenceExtractor
     {
         foreach (var candidate in candidates)
         {
-            if (candidate.Kind != "class" && candidate.Kind != "struct")
+            // class/struct/enum are all ctor-owner kinds across supported languages. Java enum bodies
+            // can declare constructors and chain via `this(...)`; C# enum cannot declare constructors
+            // at all, so the chain regex will not match inside one even if we pick it up here.
+            // class/struct/enum はいずれもコンストラクタを持ちうる宿主種別。Java enum は `this(...)`
+            // 連鎖を書けるため含める。C# enum はコンストラクタ自体を持てないので副作用は出ない。
+            if (candidate.Kind != "class" && candidate.Kind != "struct" && candidate.Kind != "enum")
                 continue;
             if (candidate.BodyStartLine!.Value <= lineNumber && candidate.BodyEndLine!.Value >= lineNumber)
                 return candidate;
@@ -1016,7 +1024,57 @@ public static class ReferenceExtractor
         }
 
         var segment = signature.Substring(start, i - start).Trim();
+        if (segment.Length == 0)
+            return null;
+
+        // Strip Java type-use annotations (JLS 9.7.4): `@Ann`, `@pkg.Ann`, `@Ann(value=1)` can
+        // appear before the type itself (`extends @Ann Root`) or between nested-type segments
+        // (`Outer<Integer>.@Ann Base`). Without this pass the base resolver returns a phantom
+        // type name like `@Ann Root` that misattributes references / callers / impact.
+        // Java の type-use annotation (JLS 9.7.4) を剥がす。`extends @Ann Root` や
+        // `Outer<Integer>.@Ann Base` のような形で基底型の直前やセグメント間に現れるため、
+        // 先に除去しないと `@Ann Root` のような幽霊シンボルへ参照が張られてしまう。
+        segment = StripJavaTypeAnnotations(segment);
         return segment.Length == 0 ? null : ExtractBareTypeName(segment);
+    }
+
+    private static string StripJavaTypeAnnotations(string text)
+    {
+        if (text.IndexOf('@') < 0)
+            return text;
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        int i = 0;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (c == '@')
+            {
+                // Skip `@` + qualified identifier (`@pkg.Ann`) + optional balanced `(...)`.
+                i++;
+                while (i < text.Length && (IsJavaIdentifierPart(text[i]) || text[i] == '.'))
+                    i++;
+                if (i < text.Length && text[i] == '(')
+                {
+                    int parenDepth = 1;
+                    i++;
+                    while (i < text.Length && parenDepth > 0)
+                    {
+                        if (text[i] == '(') parenDepth++;
+                        else if (text[i] == ')') parenDepth--;
+                        i++;
+                    }
+                }
+                // Drop a single trailing whitespace run so `@Ann Root` collapses to `Root`.
+                while (i < text.Length && char.IsWhiteSpace(text[i]))
+                    i++;
+                continue;
+            }
+            sb.Append(c);
+            i++;
+        }
+
+        return sb.ToString();
     }
 
     private static bool IsJavaIdentifierPart(char c) =>

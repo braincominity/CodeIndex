@@ -1658,4 +1658,123 @@ public class ReferenceExtractorTests
             r.SymbolName == "Parent" && r.ContainerKind == "function" && r.ContainerName == "Child");
         Assert.DoesNotContain(references, r => r.SymbolName == "base");
     }
+
+    [Fact]
+    public void ParseJavaBaseType_TypeUseAnnotation_Stripped()
+    {
+        // Java type-use annotations (JLS 9.7.4) can precede the base type or sit between nested
+        // segments: `extends @Ann Root`, `extends @pkg.Ann(value=1) Root`, `Outer<Integer>.@Ann Base`.
+        // The base-type resolver must strip them or it returns a phantom name like `@Ann Root` that
+        // misattributes `super(...)` edges to a non-existent symbol.
+        // Java の type-use annotation (JLS 9.7.4) は基底型の直前やネスト型の区切り位置に現れる。
+        // 剥がさないと `@Ann Root` のような幽霊シンボルへ `super(...)` が誤配線される。
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @pkg.Ann Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann(value=1) Root {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann @Other Root {"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("class Leaf extends Outer<Integer>.@Ann Base {"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann Outer<Integer>.Base {"));
+        Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType("class Leaf extends @Ann Root implements Foo {"));
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_TypeUseAnnotatedExtends_AttributesToRealBase()
+    {
+        // End-to-end regression for Java type-use annotated `extends`. Before the fix the base
+        // resolver returned `"@Ann Root"` and `super(0)` edges pointed at a phantom symbol.
+        // Java の type-use annotation 付き `extends` の E2E 回帰。修正前は基底型解決が
+        // `"@Ann Root"` となり super(...) が幽霊シンボルに張られていた。
+        const string content = """
+            package demo;
+
+            @interface Ann {}
+
+            class Root {
+                Root(int value) {}
+            }
+
+            class Leaf extends @Ann Root {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName == "@Ann Root");
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("@"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_TypeUseAnnotatedNestedGeneric_AttributesToTerminalSegment()
+    {
+        // Type-use annotation sitting between nested segments (`Outer<Integer>.@Ann Base`). The
+        // resolver must strip the annotation and still return the terminal segment `Base`.
+        // ネスト型の区切り位置 (`Outer<Integer>.@Ann Base`) に type-use annotation が入る形。
+        // annotation を剥がしたうえで末尾セグメント `Base` を返せることを確認する。
+        const string content = """
+            package demo;
+
+            @interface Ann {}
+
+            class Outer<T> {
+                static class Base {
+                    Base(int value) {}
+                }
+            }
+
+            class Leaf extends Outer<Integer>.@Ann Base {
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("@"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaThisCall_EnumConstructorChain_AttributesToEnum()
+    {
+        // Java enums can declare constructors and chain via `this(...)`. Before the fix the
+        // enclosing-type lookup filtered to class/struct/interface, so enum bodies were skipped
+        // and the chain edge was silently dropped (compounded by `this` being in the ignore set).
+        // Java の enum はコンストラクタを宣言でき `this(...)` 連鎖も使える。修正前は外側型の
+        // 走査が class/struct/interface に限定され、enum 本体は無視されて連鎖エッジが
+        // 黙って落ちていた（`this` が ignore set に含まれることも原因として重なっていた）。
+        const string content = """
+            package demo;
+
+            enum Shade {
+                Red,
+                Blue(1);
+
+                Shade() {
+                    this(0);
+                }
+
+                Shade(int code) {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Shade" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Shade" && r.Line == 8);
+        Assert.DoesNotContain(references, r => r.SymbolName == "this");
+    }
 }
