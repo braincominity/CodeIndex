@@ -287,10 +287,10 @@ public static class SymbolExtractor
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Property with get/set/init — visibility optional
             // プロパティ（get/set/init）— visibility 省略可
-            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*\{\s*(?:get|set|init)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate
             // 式本体プロパティ (public int X => ...) — delegate の前に配置
-            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial)\s+)*(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Delegate — visibility optional / デリゲート — visibility 省略可
             new("delegate",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|unsafe)\s+)?delegate\s+(?<returnType>\([^)]+\)|(?:global::)?[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Event — visibility optional / イベント — visibility 省略可

@@ -3159,6 +3159,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPartialProperties()
+    {
+        var content = """
+            namespace Demo;
+
+            public abstract partial class BaseModel
+            {
+                public abstract string Description { get; }
+            }
+
+            public partial class Model : BaseModel
+            {
+                public partial string Name { get; set; }
+                public partial int Count { get; }
+                public string NotPartial { get; set; } = string.Empty;
+            }
+
+            public partial class Model
+            {
+                private string _name = string.Empty;
+
+                public partial string Name { get => _name; set => _name = value; }
+                public partial int Count => 42;
+                public partial override string Description => "demo";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Name") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Count") >= 2);
+        Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Description") >= 2);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NotPartial");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """
