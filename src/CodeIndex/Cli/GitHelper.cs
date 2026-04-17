@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -89,7 +90,7 @@ public static class GitHelper
             throw new InvalidOperationException($"git diff-tree failed for commit {commitId}: {error.Trim()}");
 
         return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => p.Replace('\\', '/'))
+            .Select(FileIndexer.NormalizePathSeparators)
             .ToList();
     }
 
