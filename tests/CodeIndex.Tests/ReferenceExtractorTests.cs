@@ -1348,6 +1348,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpTypeKeyword_CapturesTupleElementsAcrossInnerParens()
+    {
+        // issue #253 review #2: `typeof((Foo, Bar))` / `default((Foo, Bar))` are tuple-typed
+        // arguments where the indexed identifiers only exist inside inner parentheses. The old
+        // lexer treated `(` as "skip balanced body", silently dropping Foo and Bar. The fixed
+        // lexer tracks paren depth instead, so tuple element segments surface normally while
+        // outer `)` still terminates the scan.
+        // issue #253 レビュー #2: `typeof((Foo, Bar))` / `default((Foo, Bar))` のタプル型引数は、
+        // 識別子が内側括弧の中にしか存在しない。旧 lexer は `(` を SkipBalanced で飛ばしていたため
+        // Foo / Bar が silent に落ちていた。括弧深さ追跡に変えたことで tuple 要素も拾えるようになる。
+        const string content = """
+            public class Foo {}
+            public class Bar {}
+            public class Caller
+            {
+                public void Work()
+                {
+                    var t = typeof((Foo, Bar));
+                    var d = default((Foo, Bar));
+                    var n = typeof((Foo, Bar)[]);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpDefaultWithoutParens_IsNotCapturedAsTypeReference()
     {
         // `default;` alone (no parens) is a value expression, not a type reference.

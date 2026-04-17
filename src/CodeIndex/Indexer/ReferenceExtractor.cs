@@ -438,12 +438,13 @@ public static class ReferenceExtractor
     /// <summary>
     /// Walk the argument list of a C# nameof/typeof/sizeof/default starting at
     /// <paramref name="startIndex"/> (the char right after `(`). Emits one `type_reference` row
-    /// per identifier segment while handling generic `&lt;...&gt;`, array `[...]`, and
-    /// `global::` / `Alias::` qualifier skipping so nested paths like `nameof(List&lt;int&gt;.Count)`
-    /// or `nameof(global::System.String)` are indexed correctly.
+    /// per identifier segment while handling generic `&lt;...&gt;`, array `[...]`,
+    /// parenthesized/tuple groups `(...)`, and `global::` / `Alias::` qualifier skipping so nested
+    /// paths like `nameof(List&lt;int&gt;.Count)`, `nameof(global::System.String)`,
+    /// and `typeof((Foo, Bar))` are indexed correctly.
     /// C# の nameof/typeof/sizeof/default の引数を `(` 直後から lexer で走査し、
-    /// generic `&lt;...&gt;`・配列 `[...]`・`global::` / `Alias::` 修飾子を跨ぎながら
-    /// 識別子セグメントごとに type_reference を発行する。
+    /// generic `&lt;...&gt;`・配列 `[...]`・タプル `(...)` 群・`global::` / `Alias::` 修飾子を
+    /// 跨ぎながら識別子セグメントごとに type_reference を発行する。
     /// </summary>
     private static void ExtractCSharpTypeKeywordSegments(
         List<ReferenceRecord> references,
@@ -457,12 +458,31 @@ public static class ReferenceExtractor
         string language)
     {
         int i = startIndex;
+        int parenDepth = 0;
         bool expectSegment = true;
         while (i < line.Length)
         {
             char c = line[i];
-            if (c == ')' || c == ',')
-                return;
+            if (c == ')')
+            {
+                if (parenDepth == 0)
+                    return;
+                parenDepth--;
+                i++;
+                expectSegment = false;
+                continue;
+            }
+
+            if (c == ',')
+            {
+                if (parenDepth == 0)
+                    return;
+                // Tuple element separator inside `typeof((Foo, Bar))` — keep scanning.
+                // `typeof((Foo, Bar))` のタプル要素区切りは続けて走査する。
+                i++;
+                expectSegment = true;
+                continue;
+            }
 
             if (char.IsWhiteSpace(c))
             {
@@ -514,11 +534,13 @@ public static class ReferenceExtractor
 
             if (c == '(')
             {
-                // Parenthesized/tuple-like fragments inside an argument such as
-                // `typeof((int, int))` — skip the paren body and keep scanning.
-                // `typeof((int, int))` のようなタプル形は括弧内をまとめてスキップする。
-                i = SkipBalanced(line, i, '(', ')');
-                expectSegment = false;
+                // Track paren depth instead of skipping the body so tuple/parenthesized
+                // type groups like `typeof((Foo, Bar))` still yield inner segments.
+                // タプル型 `typeof((Foo, Bar))` の中身も拾えるよう、括弧はスキップせず
+                // 深さだけ追跡する。
+                parenDepth++;
+                i++;
+                expectSegment = true;
                 continue;
             }
 
