@@ -110,7 +110,8 @@ public static class SymbolExtractor
         string MatchLine,
         int LastConsumedLineIndex,
         int SignatureLastLineIndex,
-        int? SignatureLastLineExclusiveEndColumn = null);
+        int? SignatureLastLineExclusiveEndColumn = null,
+        int? ExpressionBodyEndLineIndex = null);
 
     private readonly record struct RecordPrimaryComponent(
         string Name,
@@ -786,9 +787,9 @@ public static class SymbolExtractor
                     if (lang == "csharp"
                         && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None
-                        && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                        && csharpPropertyCandidate.ExpressionBodyEndLineIndex.HasValue)
                     {
-                        endLine = Math.Max(endLine, csharpPropertyCandidate.LastConsumedLineIndex + 1);
+                        endLine = Math.Max(endLine, csharpPropertyCandidate.ExpressionBodyEndLineIndex.Value + 1);
                     }
 
                     // Python @property decorator: reclassify the def as property
@@ -849,9 +850,9 @@ public static class SymbolExtractor
 
                     if (lang == "csharp"
                         && pattern.Kind == "property"
-                        && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                        && csharpPropertyCandidate.ExpressionBodyEndLineIndex.HasValue)
                     {
-                        csharpSuppressedContinuationUntil = Math.Max(csharpSuppressedContinuationUntil, csharpPropertyCandidate.LastConsumedLineIndex);
+                        csharpSuppressedContinuationUntil = Math.Max(csharpSuppressedContinuationUntil, csharpPropertyCandidate.ExpressionBodyEndLineIndex.Value);
                     }
 
                     CollectRecordPrimaryComponentSymbols(
@@ -5261,10 +5262,15 @@ public static class SymbolExtractor
     {
         var matchLine = csharpMatchLines[startLineIndex];
         if (string.IsNullOrWhiteSpace(matchLine)
-            || matchLine.Contains("=>", StringComparison.Ordinal)
             || CSharpPropertyAccessorStartRegex.IsMatch(matchLine))
         {
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+        }
+
+        if (TryFindCSharpExpressionArrow(lines, startLineIndex, startLineIndex, out var sameLineArrowLineIndex, out var sameLineArrowColumn))
+        {
+            var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, sameLineArrowLineIndex, sameLineArrowColumn);
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex, null, expressionEndLineIndex);
         }
 
         var builder = new StringBuilder(matchLine.TrimEnd());
@@ -5303,9 +5309,10 @@ public static class SymbolExtractor
                     openBraceLineIndex >= 0 ? openBraceExclusiveEndColumn : null);
             }
 
-            if (normalizedCombined.Contains("=>", StringComparison.Ordinal))
+            if (TryFindCSharpExpressionArrow(lines, startLineIndex, i, out var arrowLineIndex, out var arrowColumn))
             {
-                return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
+                var expressionEndLineIndex = FindCSharpExpressionBodyEndLine(lines, arrowLineIndex, arrowColumn);
+                return new CSharpPropertyMatchCandidate(normalizedCombined, i, i, null, expressionEndLineIndex);
             }
 
             if (nextLine.StartsWith(";", StringComparison.Ordinal)
@@ -5316,6 +5323,75 @@ public static class SymbolExtractor
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+    }
+
+    private static bool TryFindCSharpExpressionArrow(string[] lines, int startLineIndex, int endLineIndex, out int arrowLineIndex, out int arrowColumn)
+    {
+        var lexState = new CSharpLexState();
+        for (int i = startLineIndex; i <= endLineIndex && i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var column = lexedLine.SanitizedLine.IndexOf("=>", StringComparison.Ordinal);
+            if (column >= 0)
+            {
+                arrowLineIndex = i;
+                arrowColumn = column;
+                return true;
+            }
+        }
+
+        arrowLineIndex = -1;
+        arrowColumn = -1;
+        return false;
+    }
+
+    private static int FindCSharpExpressionBodyEndLine(string[] lines, int arrowLineIndex, int arrowColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (int i = arrowLineIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var startColumn = i == arrowLineIndex
+                ? Math.Min(sanitizedLine.Length, arrowColumn + 2)
+                : 0;
+
+            for (int column = startColumn; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}' when braceDepth > 0:
+                        braceDepth--;
+                        break;
+                    case ';' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        return i;
+                }
+            }
+        }
+
+        return arrowLineIndex;
     }
 
     private static string BuildCSharpMultilineSignature(

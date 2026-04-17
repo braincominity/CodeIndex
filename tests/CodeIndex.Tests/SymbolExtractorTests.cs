@@ -3292,6 +3292,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
+    {
+        var content = """
+            namespace Demo;
+
+            public partial class Model
+            {
+                public partial int Count
+                    => DateTime.Now.Day switch
+                    {
+                        > 15 => 2,
+                        _ => 1
+                    };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
+        Assert.Equal(5, count.StartLine);
+        Assert.Equal(10, count.EndLine);
+        Assert.Equal("public partial int Count => DateTime.Now.Day switch", count.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """
