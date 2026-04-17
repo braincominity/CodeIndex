@@ -1537,6 +1537,118 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCollectionExpressionPatternMatch_StaysCall()
+    {
+        // Regression: `[Make()] is int[] xs` is a pattern expression, not an attribute. The
+        // next token after `]` is the contextual keyword `is`, so `Make` must stay `call`.
+        // リグレッション: `[Make()] is int[] xs` はパターン式なので、`]` の次の `is` を属性の続きと誤認せず `Make` は `call`。
+        const string content = """
+            public class C
+            {
+                public bool M()
+                {
+                    return Consume([Make()] is int[] xs && xs.Length > 0);
+                }
+                private static int Make() => 0;
+                private bool Consume(bool b) => b;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var make = Assert.Single(references.Where(r => r.SymbolName == "Make"));
+        Assert.Equal("call", make.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionAsCast_StaysCall()
+    {
+        // Regression: `[Make()] as int[]` is an `as` cast, not an attribute. The classifier
+        // must treat `as` as expression continuation and keep `Make` as `call`.
+        // リグレッション: `[Make()] as int[]` は `as` キャストなので `Make` は `call` のまま。
+        const string content = """
+            public class C
+            {
+                public void M()
+                {
+                    var arr = ([Make()] as int[]);
+                }
+                private static int Make() => 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var make = Assert.Single(references.Where(r => r.SymbolName == "Make"));
+        Assert.Equal("call", make.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionSwitchExpression_StaysCall()
+    {
+        // Regression: `[Make()] switch { ... }` is a switch expression over a collection,
+        // not an attribute. The classifier must treat `switch` as expression continuation.
+        // リグレッション: `[Make()] switch { ... }` は collection に対する switch 式のため `Make` は `call`。
+        const string content = """
+            public class C
+            {
+                public bool M() => Consume([Make()] switch { _ => true });
+                private static int Make() => 0;
+                private bool Consume(bool b) => b;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var make = Assert.Single(references.Where(r => r.SymbolName == "Make"));
+        Assert.Equal("call", make.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTupleTypedParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Regression: `void M([Attr("x")] (int, int) value)` — the token after `]` is `(`
+        // (tuple type syntax), which must still be treated as a declaration start so the
+        // preceding `[...]` is classified as an attribute.
+        // リグレッション: `void M([Attr("x")] (int, int) value)` のように `]` の直後が tuple 型の `(` でも属性扱い。
+        const string content = """
+            public class C
+            {
+                public void M([Attr("x")] (int a, int b) value) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTypeParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Regression: `class C<[Attr("x")] T>` — the `[` is preceded by `<`, which is a valid
+        // attribute position for type parameters. The classifier must accept `<` alongside
+        // `(` and `,` as parameter-list entry points.
+        // リグレッション: `class C<[Attr("x")] T>` のように `<` の直後にある型パラメータ属性も検出できること。
+        const string content = """
+            public class C<[Attr("x")] T>
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
     public void Extract_KotlinQualifiedFieldTargetAnnotation_ClassifiedAsAnnotation()
     {
         // issue #293 follow-up: Kotlin use-site target with a fully-qualified annotation

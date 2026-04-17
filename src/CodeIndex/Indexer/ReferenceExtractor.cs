@@ -566,16 +566,29 @@ public static class ReferenceExtractor
         if (lastMeaningful == ']')
             return lastClosedBracketWasAttribute;
 
-        // Parameter attribute candidates (`(` or `,`): could be `void M([Attr] T x)` or
-        // `Consume([Make()])`. Disambiguate by scanning forward to the matching `]` and
-        // checking the next meaningful character; identifier-like → attribute, otherwise expression.
-        // パラメータ属性候補 (`(` / `,`) は `void M([Attr] T x)` にも `Consume([Make()])` にもなりうる。
-        // 対応する `]` まで進んで直後の文字を確認し、識別子なら属性、それ以外は式として扱う。
-        if (lastMeaningful is '(' or ',')
+        // Parameter / type-parameter attribute candidates (`(`, `,`, `<`): could be
+        // `void M([Attr] T x)`, `class C<[Attr] T>`, or `Consume([Make()])`. Disambiguate by
+        // scanning forward to the matching `]` and checking whether the next meaningful
+        // token begins a declaration (identifier / `@` / `(` for tuple types / `[` chained).
+        // パラメータ / 型パラメータ属性候補 (`(`, `,`, `<`) は `void M([Attr] T x)` にも
+        // `class C<[Attr] T>` にも `Consume([Make()])` にもなりうる。対応する `]` まで進んで
+        // 次トークンが宣言を開始するか（識別子 / `@` / tuple の `(` / chained `[`）で区別する。
+        if (lastMeaningful is '(' or ',' or '<')
             return IsCSharpAttributeFollowedByDeclaration(preparedLines, startLi, startCi);
 
         return false;
     }
+
+    /// <summary>
+    /// Keywords that indicate the preceding `[...]` is an expression (collection / pattern /
+    /// switch target) rather than an attribute section when they appear after `]`.
+    /// `]` の直後に現れると、直前の `[...]` が属性ではなく式（collection / pattern / switch 対象）
+    /// であることを示す C# のキーワード集合。
+    /// </summary>
+    private static readonly HashSet<string> CSharpExpressionContinuationKeywords = new(StringComparer.Ordinal)
+    {
+        "is", "as", "switch", "with", "when",
+    };
 
     /// <summary>
     /// Scan forward from a `[` to its matching `]` (skipping balanced parens) and return true
@@ -626,26 +639,49 @@ public static class ReferenceExtractor
                     if (bracketDepth == 0)
                     {
                         ci++;
-                        while (true)
-                        {
-                            while (ci < line.Length && char.IsWhiteSpace(line[ci]))
-                                ci++;
-                            if (ci < line.Length)
-                            {
-                                var next = line[ci];
-                                return IsIdentifierChar(next) || next == '@';
-                            }
-                            li++;
-                            if (li >= preparedLines.Length)
-                                return false;
-                            line = preparedLines[li];
-                            ci = 0;
-                        }
+                        return NextTokenStartsDeclaration(preparedLines, li, ci);
                     }
                     ci++;
                     continue;
                 }
                 ci++;
+            }
+            li++;
+            ci = 0;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// After the closing `]` of a candidate `[...]`, inspect the next meaningful token to decide
+    /// whether it begins a declaration. Accepts identifiers (except expression-continuation
+    /// keywords like `is` / `as` / `switch` / `with` / `when`), leading `@` (verbatim identifier),
+    /// `(` (tuple-typed parameter), and chained `[` (recurse for `[A][B]`).
+    /// 閉じ `]` の直後のトークンで宣言が始まるかを判定する。識別子（式継続の `is` / `as` /
+    /// `switch` / `with` / `when` は除外）、`@`（verbatim 識別子）、`(`（tuple パラメータ型）、
+    /// `[`（`[A][B]` の連結）を受け入れる。
+    /// </summary>
+    private static bool NextTokenStartsDeclaration(string[] preparedLines, int li, int ci)
+    {
+        while (li < preparedLines.Length)
+        {
+            var line = preparedLines[li];
+            while (ci < line.Length && char.IsWhiteSpace(line[ci]))
+                ci++;
+            if (ci < line.Length)
+            {
+                var first = line[ci];
+                if (first == '@' || first == '(')
+                    return true;
+                if (first == '[')
+                    return IsCSharpAttributeFollowedByDeclaration(preparedLines, li, ci);
+                if (!IsIdentifierChar(first))
+                    return false;
+                var start = ci;
+                while (ci < line.Length && IsIdentifierChar(line[ci]))
+                    ci++;
+                var token = line.Substring(start, ci - start);
+                return !CSharpExpressionContinuationKeywords.Contains(token);
             }
             li++;
             ci = 0;
