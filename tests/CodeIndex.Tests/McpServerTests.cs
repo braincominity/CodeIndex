@@ -620,6 +620,40 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_AnalyzeSymbol_NonExactEnumMemberMarksGraphAsDegraded()
+    {
+        InsertIndexedFile("src/colors.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red,
+                Green
+            }
+
+            public class UsesColor
+            {
+                public Color Shade => Color.Red;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Red","lang":"csharp"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var definition = structured["definitions"]![0]!;
+
+        Assert.Equal("Red", definition["name"]!.GetValue<string>());
+        Assert.Equal("enum", definition["containerKind"]!.GetValue<string>());
+        Assert.Equal("Color", definition["containerName"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_DefaultQueryKeepsSubscribeRowsVisible()
     {
         InsertIndexedFile("src/Publisher.cs", "csharp",

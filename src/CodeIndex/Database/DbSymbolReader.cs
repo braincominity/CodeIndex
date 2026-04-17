@@ -585,7 +585,10 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? file?.Lang;
-        var hasUnsupportedEnumMember = graphSupportDefinitions.Any(IsCSharpEnumMemberDefinition);
+        var hasUnsupportedEnumMember =
+            (primaryDefinition != null && IsCSharpEnumMemberDefinition(primaryDefinition))
+            || definitions.Any(IsCSharpEnumMemberDefinition)
+            || graphSupportDefinitions.Any(IsCSharpEnumMemberDefinition);
         bool? graphSupported = hasUnsupportedEnumMember
             ? false
             : graphLanguage == null

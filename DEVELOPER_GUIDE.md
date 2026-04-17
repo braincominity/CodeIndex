@@ -405,7 +405,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
-For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope resolves to those enum members, `inspect` / exact `references` expose `unsupported_symbol_kind=enum_member`, and `unused` marks the active scope as degraded whenever it excludes C# enum members for that reason.
+For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope resolves to those enum members, `inspect` exposes `unsupported_symbol_kind=enum_member` even on non-exact bundle queries, exact `references` does the same for direct graph queries, and `unused` marks the active scope as degraded whenever it excludes C# enum members for that reason.
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
@@ -1423,7 +1423,7 @@ LIMIT 20;
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
-C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope でその enum member に解決された `inspect` / exact `references` は `unsupported_symbol_kind=enum_member` を返し、`unused` もその理由で C# enum member を除外した active scope を degraded として扱います。
+C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope でその enum member に解決された `inspect` は non-exact の bundle query でも `unsupported_symbol_kind=enum_member` を返し、exact `references` も direct graph query 側で同じ制約を示します。`unused` もその理由で C# enum member を除外した active scope を degraded として扱います。
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 
