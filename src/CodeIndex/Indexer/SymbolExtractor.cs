@@ -106,6 +106,10 @@ public static class SymbolExtractor
         string SanitizedLine,
         CSharpLexState EndState);
 
+    private readonly record struct CSharpPropertyMatchCandidate(
+        string MatchLine,
+        int LastConsumedLineIndex);
+
     private readonly record struct RecordPrimaryComponent(
         string Name,
         string Type,
@@ -699,9 +703,10 @@ public static class SymbolExtractor
             var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
             {
-                var patternMatchLine = lang == "csharp" && pattern.Kind == "property"
+                var csharpPropertyCandidate = lang == "csharp" && pattern.Kind == "property"
                     ? BuildCSharpPropertyMatchLine(csharpMatchLines!, i)
-                    : matchLine;
+                    : new CSharpPropertyMatchCandidate(matchLine, i);
+                var patternMatchLine = csharpPropertyCandidate.MatchLine;
                 var lineOffset = lang is "javascript" or "typescript"
                     ? FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, 0)
                     : 0;
@@ -772,6 +777,13 @@ public static class SymbolExtractor
                         : structuralLines;
                     var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     var startLine = i + 1;
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    {
+                        endLine = Math.Max(endLine, csharpPropertyCandidate.LastConsumedLineIndex + 1);
+                    }
 
                     // Python @property decorator: reclassify the def as property
                     // Python @property デコレータ: def を property に再分類
@@ -5224,14 +5236,14 @@ public static class SymbolExtractor
         return matchLines;
     }
 
-    private static string BuildCSharpPropertyMatchLine(string[] csharpMatchLines, int startLineIndex)
+    private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] csharpMatchLines, int startLineIndex)
     {
         var matchLine = csharpMatchLines[startLineIndex];
         if (string.IsNullOrWhiteSpace(matchLine)
             || matchLine.Contains("=>", StringComparison.Ordinal)
             || CSharpPropertyAccessorStartRegex.IsMatch(matchLine))
         {
-            return matchLine;
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex);
         }
 
         var builder = new StringBuilder(matchLine.TrimEnd());
@@ -5250,7 +5262,7 @@ public static class SymbolExtractor
             if (combined.Contains("=>", StringComparison.Ordinal)
                 || CSharpPropertyAccessorStartRegex.IsMatch(combined))
             {
-                return combined;
+                return new CSharpPropertyMatchCandidate(combined, i);
             }
 
             if (nextLine.StartsWith(";", StringComparison.Ordinal)
@@ -5260,7 +5272,7 @@ public static class SymbolExtractor
             }
         }
 
-        return matchLine;
+        return new CSharpPropertyMatchCandidate(matchLine, startLineIndex);
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)

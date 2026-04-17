@@ -2834,6 +2834,62 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutlineAndDefinition_CSharpMultilineExpressionBodiedPartialProperty_PreservesRangeAndContent()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_partial_property_range");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace Demo;
+
+                public partial class Model
+                {
+                    public partial int Count
+                        => 42;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Count", "--db", dbPath, "--json", "--exact-name", "--body"],
+                _jsonOptions));
+
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var definitionJson = definitionDocument.RootElement;
+            var property = Assert.Single(outlineJson.GetProperty("symbols").EnumerateArray().Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "Count"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(5, property.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, property.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, definitionJson.GetProperty("start_line").GetInt32());
+            Assert.Equal(6, definitionJson.GetProperty("end_line").GetInt32());
+            Assert.Contains("=> 42;", definitionJson.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_JavaScriptStringBraceKeepsFollowingMethodInsideClass()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_js_string_brace");

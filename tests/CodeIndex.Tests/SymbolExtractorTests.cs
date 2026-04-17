@@ -3208,6 +3208,14 @@ public class SymbolExtractorTests
         Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Count") >= 2);
         Assert.True(symbols.Count(s => s.Kind == "property" && s.Name == "Description") >= 2);
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "NotPartial");
+
+        var countImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.Line == 34));
+        Assert.Equal(34, countImplementation.StartLine);
+        Assert.Equal(35, countImplementation.EndLine);
+
+        var descriptionImplementation = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Description" && s.Line == 37));
+        Assert.Equal(37, descriptionImplementation.StartLine);
+        Assert.Equal(38, descriptionImplementation.EndLine);
     }
 
     [Fact]
