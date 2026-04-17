@@ -1000,45 +1000,144 @@ public static class ReferenceExtractor
             return (startLine, int.MaxValue, string.Empty);
 
         // Depth-aware termination so that `{` / `;` inside annotation arg lists (e.g. the `{` in
-        // `@Ann({A.class, B.class})`), parentheses, or angle brackets does not cut the header
-        // off before the real base-list terminator, which would silently drop the base type.
+        // `@Ann({A.class, B.class})`) or attribute-argument brackets does not cut the header off
+        // before the real base-list terminator, which would silently drop the base type.
+        // We intentionally do NOT track `<` / `>` as generic depth here: comparison operators
+        // inside annotation / attribute expressions (e.g. `[Attr(Flag = 1 < 2)]` or
+        // `@Ann(flag = 1 < 2)`) are raised as `<` without a matching `>`, so angle-depth tracking
+        // would leave the counter pinned above zero and silently drop the real top-level `{` / `;`
+        // terminator, letting the synthetic primary-ctor container or the Java base-type parse
+        // swallow everything up to EOF. `{` / `;` cannot legally appear inside a top-level
+        // `<...>` generic arg list in either C# or Java, so paren/bracket masking is sufficient.
         // EndColumn tracks the column index of the top-level terminator on the end line, or
         // int.MaxValue when no terminator was found (end-of-file), so call-site-scoped container
         // overrides can restrict themselves to the header portion of the end line.
-        // アノテーション引数の `{` などを本当のヘッダ終端と誤認しないよう、`()` / `[]` / `<>`
-        // の深さを追いながら最初の top-level `;` / `{` でのみ終了する。
+        // アノテーション引数の `{` などを本当のヘッダ終端と誤認しないよう、`()` / `[]` の深さを追いながら
+        // 最初の top-level `;` / `{` でのみ終了する。`<` / `>` は annotation / attribute 式内の比較演算子で
+        // 非対称に現れうるため generic 深度として扱わない。
         // EndColumn は end line 上の終端 `;` / `{` の位置を返す（終端が無ければ int.MaxValue）。
         var sb = new System.Text.StringBuilder();
         int parenDepth = 0;
         int bracketDepth = 0;
-        int angleDepth = 0;
+        // Comment / string awareness so unbalanced `(` / `[` / `{` / `;` inside a line
+        // comment, block comment, or string literal never advances the depth counters,
+        // fires the terminator, or leaks into the returned header text. For Java `extends`
+        // headers the structuralLines array is an unmasked clone (StructuralLineMasker is a
+        // no-op for Java), so this is what keeps `class Leaf extends Root /* ( stray [ */ {`
+        // from pinning parenDepth / bracketDepth at 1 and skipping the real `{` terminator,
+        // and it also prevents ParseJavaBaseType from seeing the comment body when it parses
+        // the header text downstream.
+        // コメント・文字列内の不均衡な `(` / `[` / `{` / `;` を terminator 判定・連結テキスト双方から除外する。
+        bool inBlockComment = false;
+        bool inString = false;
         for (int i = startIdx; i < structuralLines.Length; i++)
         {
             var line = structuralLines[i];
+            var masked = line.ToCharArray();
             var terminatorIdx = -1;
             for (int j = 0; j < line.Length; j++)
             {
                 var c = line[j];
+
+                if (inBlockComment)
+                {
+                    masked[j] = ' ';
+                    if (c == '*' && j + 1 < line.Length && line[j + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        masked[j + 1] = ' ';
+                        j++;
+                    }
+                    continue;
+                }
+
+                if (inString)
+                {
+                    masked[j] = ' ';
+                    if (c == '\\' && j + 1 < line.Length)
+                    {
+                        masked[j + 1] = ' ';
+                        j++;
+                        continue;
+                    }
+                    if (c == '"')
+                        inString = false;
+                    continue;
+                }
+
+                if (c == '/' && j + 1 < line.Length)
+                {
+                    if (line[j + 1] == '/')
+                    {
+                        for (int k = j; k < line.Length; k++)
+                            masked[k] = ' ';
+                        break;
+                    }
+                    if (line[j + 1] == '*')
+                    {
+                        inBlockComment = true;
+                        masked[j] = ' ';
+                        masked[j + 1] = ' ';
+                        j++;
+                        continue;
+                    }
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    masked[j] = ' ';
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    // Rust / OCaml lifetime annotation vs. char literal: only skip when a
+                    // closing `'` exists within ~12 chars on this line.
+                    // Rust の lifetime と char literal を短距離の閉じ `'` の有無で見分ける。
+                    var closeIdx = -1;
+                    var limit = Math.Min(line.Length, j + 12);
+                    for (int k = j + 1; k < limit; k++)
+                    {
+                        if (line[k] == '\\' && k + 1 < line.Length)
+                        {
+                            k++;
+                            continue;
+                        }
+                        if (line[k] == '\'')
+                        {
+                            closeIdx = k;
+                            break;
+                        }
+                    }
+                    if (closeIdx > 0)
+                    {
+                        for (int k = j; k <= closeIdx; k++)
+                            masked[k] = ' ';
+                        j = closeIdx;
+                    }
+                    continue;
+                }
+
                 if (c == '(') parenDepth++;
                 else if (c == ')') { if (parenDepth > 0) parenDepth--; }
                 else if (c == '[') bracketDepth++;
                 else if (c == ']') { if (bracketDepth > 0) bracketDepth--; }
-                else if (c == '<') angleDepth++;
-                else if (c == '>') { if (angleDepth > 0) angleDepth--; }
-                else if ((c == ';' || c == '{') && parenDepth == 0 && bracketDepth == 0 && angleDepth == 0)
+                else if ((c == ';' || c == '{') && parenDepth == 0 && bracketDepth == 0)
                 {
                     terminatorIdx = j;
                     break;
                 }
             }
 
+            var maskedLine = new string(masked);
             if (terminatorIdx >= 0)
             {
-                sb.Append(line, 0, terminatorIdx);
+                sb.Append(maskedLine, 0, terminatorIdx);
                 return (i + 1, terminatorIdx, sb.ToString());
             }
 
-            sb.Append(line);
+            sb.Append(maskedLine);
             sb.Append('\n');
         }
 

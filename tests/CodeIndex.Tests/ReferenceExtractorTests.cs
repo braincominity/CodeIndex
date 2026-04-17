@@ -2576,4 +2576,129 @@ public class ReferenceExtractorTests
         // annotated segment. This is the downstream path that super(...) attribution uses.
         Assert.Equal("Root", ReferenceExtractor.ParseJavaBaseType(text));
     }
+
+    [Fact]
+    public void CollectCSharpRecordHeader_AttributeArgsWithComparisonOperator_TerminatesAtRealBrace()
+    {
+        // Regression: previously the collector tracked `<` / `>` as generic depth, so a
+        // comparison operator inside an attribute expression (e.g. `[Attr(Flag = 1 < 2)]`)
+        // left angleDepth pinned at 1 with no matching `>`, which silently skipped the real
+        // top-level `{` terminator and let the synthetic primary-ctor container stretch to
+        // EOF. That polluted `callers` / `impact` with phantom record-ctor callers for every
+        // call in the file. Now only `()` / `[]` are tracked for terminator detection.
+        // 属性引数内の比較演算子 `<` で angleDepth が残り、ヘッダ終端の `{` を取り逃す回帰を固定。
+        var structuralLines = new[]
+        {
+            "[Attr(Flag = 1 < 2)]",
+            "public class Child(int x) : Parent(x)",
+            "{",
+            "    public int Doubled => x * 2;",
+            "}",
+        };
+
+        var (endLine, endColumn, text) = ReferenceExtractor.CollectCSharpRecordHeader(structuralLines, startLine: 1);
+
+        Assert.Equal(3, endLine);
+        Assert.Equal(0, endColumn);
+        Assert.Equal('{', structuralLines[2][endColumn]);
+        Assert.Contains("Parent(x)", text);
+        Assert.DoesNotContain("Doubled", text);
+    }
+
+    [Fact]
+    public void Extract_CSharpPrimaryCtor_AttributeArgsWithComparison_DoesNotLeakContainerToFollowingCalls()
+    {
+        // End-to-end regression: with `[Attr(Flag = 1 < 2)]` on a C# 12 class primary
+        // constructor, the synthetic record-ctor container must stop at the real body `{`.
+        // Previously the unbalanced `<` kept the synthetic container active through the rest
+        // of the file, so body-level calls (including calls in later unrelated methods) were
+        // misattributed to the primary-ctor function container.
+        // 属性引数内の比較演算子で合成 primary-ctor コンテナが EOF まで伸び、後続の call を
+        // 誤って primary ctor 経由と見せる回帰を E2E で固定する。
+        const string content = """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            class AttrAttribute : Attribute
+            {
+                public int Flag { get; set; }
+            }
+
+            public class Parent(int v)
+            {
+                public int Value { get; } = v;
+            }
+
+            public class Helper
+            {
+                public static int Compute(int x) => x + 1;
+            }
+
+            [Attr(Flag = 1 < 2)]
+            public class Child(int x) : Parent(x)
+            {
+                public int Doubled() => Helper.Compute(x);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // The `Parent(x)` base call must attribute to the synthetic `Child` ctor container.
+        Assert.Contains(references, r =>
+            r.SymbolName == "Parent" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Child");
+
+        // The `Helper.Compute(x)` body call must NOT leak into the synthetic Child ctor;
+        // it must belong to the `Doubled` function container instead.
+        Assert.Contains(references, r =>
+            r.SymbolName == "Compute" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Doubled");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Compute" && r.ContainerKind == "function" && r.ContainerName == "Child");
+    }
+
+    [Fact]
+    public void Extract_Java_BraceRangeIgnoresCommentsAndStringsInClassHeader()
+    {
+        // Regression: `FindBraceRange` previously counted raw parens/brackets/braces, so a
+        // declaration header with unbalanced punctuation inside a line comment, block comment,
+        // or string literal (for example `class Leaf extends Root /* ( */ { ... }`) left
+        // parenDepth / bracketDepth non-zero and silently collapsed the Leaf body range to a
+        // single line. The super(...) call site then fell outside the class body, so the
+        // constructor-chain edge was dropped.
+        // 宣言ヘッダ付近のコメント・文字列内の不均衡な `(` / `[` で body 範囲が潰れないことを固定。
+        const string content = """
+            package demo;
+
+            class Root {
+                Root(int value) {}
+            }
+
+            // The stray `(` and `[` below live inside comments / strings and must not leak
+            // into the brace-depth counters that FindBraceRange uses.
+            class Leaf extends Root /* ( stray [ */ {
+                // marker "(" and '[' stay in comment/string space
+                String tag = "open ( bracket [";
+                Leaf() {
+                    super(0);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var leaf = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "Leaf");
+        Assert.NotNull(leaf.BodyStartLine);
+        Assert.NotNull(leaf.BodyEndLine);
+        Assert.True(leaf.BodyEndLine!.Value - leaf.BodyStartLine!.Value >= 3,
+            $"Leaf class body must span several lines, got {leaf.BodyStartLine}..{leaf.BodyEndLine}");
+
+        // Super chain must now attribute to Root, proving the brace range extended far enough
+        // to contain the Leaf ctor body through the annotation-/comment-polluted header.
+        Assert.Contains(references, r =>
+            r.SymbolName == "Root" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+    }
 }

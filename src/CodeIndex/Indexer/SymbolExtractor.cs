@@ -4210,9 +4210,17 @@ public static class SymbolExtractor
         // body range that stops before the real class body opens. Subsequent ctor-chain emission
         // then loses the enclosing type, silently dropping `super(...)` edges for annotated Java
         // hierarchies. Same issue applies to Kotlin / Scala default-argument lambdas inside `()`.
-        // アノテーション引数内の `{` / `}` を本物の本体ブレースと誤認しないよう `(` / `[` 深度を追う。
+        // Comments and string/char literals are also skipped so that unbalanced `(` `)` `[` `]`
+        // `{` `}` inside them (e.g. `class Leaf extends Root /* ( */ { ... }`, Kotlin docstrings,
+        // or Rust attribute comment bodies) do not leave depth counters stuck above zero and
+        // silently collapse the body range. This mirrors the C# path which already routes through
+        // LexCSharpLine before counting braces.
+        // アノテーション引数内の `{` / `}` を本物の本体ブレースと誤認しないよう `(` / `[` 深度を追い、
+        // コメント・文字列・文字リテラル内の不均衡な括弧やブレースを無視する。
         int parenDepth = 0;
         int bracketDepth = 0;
+        bool inBlockComment = false;
+        bool inString = false;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -4222,8 +4230,83 @@ public static class SymbolExtractor
                     ? string.Empty
                     : lines[i];
 
-            foreach (var c in scanLine)
+            int sawTerminator = -1;
+            for (int j = 0; j < scanLine.Length; j++)
             {
+                char c = scanLine[j];
+
+                if (inBlockComment)
+                {
+                    if (c == '*' && j + 1 < scanLine.Length && scanLine[j + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        j++;
+                    }
+                    continue;
+                }
+
+                if (inString)
+                {
+                    if (c == '\\' && j + 1 < scanLine.Length)
+                    {
+                        j++;
+                        continue;
+                    }
+                    if (c == '"')
+                        inString = false;
+                    continue;
+                }
+
+                if (c == '/' && j + 1 < scanLine.Length)
+                {
+                    if (scanLine[j + 1] == '/')
+                        break;
+                    if (scanLine[j + 1] == '*')
+                    {
+                        inBlockComment = true;
+                        j++;
+                        continue;
+                    }
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    // Distinguish char literals (`'x'`, `'\n'`, `'\u{1}'`) from Rust / OCaml
+                    // lifetime annotations (`'a`, `'static`, `'_`) and from possessive text
+                    // in comments/strings we already skipped. A char literal has a closing
+                    // `'` within a short distance; a lifetime does not. If we cannot locate
+                    // a matching close within ~12 chars on this line, treat the `'` as a
+                    // regular character so `Holder<'a>` does not swallow the `{` that follows.
+                    // Rust の lifetime (`'a`) と char literal (`'x'`) を区別する。対応する閉じ `'`
+                    // が近傍に無ければ lifetime として `'` を普通の文字扱いで読み飛ばす。
+                    var closeIdx = -1;
+                    var limit = Math.Min(scanLine.Length, j + 12);
+                    for (int k = j + 1; k < limit; k++)
+                    {
+                        if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                        {
+                            k++;
+                            continue;
+                        }
+                        if (scanLine[k] == '\'')
+                        {
+                            closeIdx = k;
+                            break;
+                        }
+                    }
+                    if (closeIdx > 0)
+                    {
+                        j = closeIdx;
+                    }
+                    continue;
+                }
+
                 if (c == '(')
                     parenDepth++;
                 else if (c == ')' && parenDepth > 0)
@@ -4249,12 +4332,19 @@ public static class SymbolExtractor
                         continue;
                     depth--;
                     if (depth == 0)
-                        return (i + 1, bodyStartLine, i + 1);
+                    {
+                        sawTerminator = j;
+                        break;
+                    }
                 }
             }
 
-            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+            if (sawTerminator >= 0)
+                return (i + 1, bodyStartLine, i + 1);
+
+            if (!opened && !inBlockComment && !inString && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
+            // Line comments reset at end of line (handled by the break above).
         }
 
         return opened
