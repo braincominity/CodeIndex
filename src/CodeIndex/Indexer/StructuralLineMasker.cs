@@ -404,6 +404,12 @@ internal static class StructuralLineMasker
         bool isRaw = false;
         bool isFString = false;
         int holeBraceDepth = -1; // -1 when not inside an f-string hole, >=0 otherwise.
+        // Nested triple-quoted string inside an f-string hole. Persists across lines so
+        // multi-line nested triples do not leak `}` into the outer hole's brace depth.
+        // f-string ホール内にネストした三重引用符文字列の状態。行をまたいで保持し、
+        // 複数行にわたるネスト triple 内の `}` が外側のホール brace 数え上げを壊さないようにする。
+        char nestedTripleChar = '\0';
+        bool nestedTripleRaw = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -429,6 +435,50 @@ internal static class StructuralLineMasker
                         // dict/set/ネスト f-string のために brace 深度を追う。
                         // ホール内の文字列リテラルや `#` コメントはスキップし、内部の
                         // `{` / `}` が brace 深度に影響しないようにする。
+                        if (nestedTripleChar != '\0')
+                        {
+                            // Scan contents of a nested triple-quoted string until we hit
+                            // its closing triple. Mask all content to spaces so that
+                            // indentation-sensitive downstream consumers (e.g. Python
+                            // symbol-body extraction) still see a blank line here instead
+                            // of stray `}` / `'''` at column 0.
+                            // ネストした三重引用符文字列の本体を走査し、閉じ三重までの
+                            // 全ての文字を空白に置き換える。インデント依存の後段
+                            // （Python のシンボル本体抽出など）が 0 桁位置の `}` や
+                            // `'''` を見てブロックを早終了しないようにする。
+                            if (!nestedTripleRaw && line[pos] == '\\' && pos + 1 < line.Length)
+                            {
+                                ReplaceWithSpaces(masked, pos, 2);
+                                pos += 2;
+                                continue;
+                            }
+
+                            if (pos + 2 < line.Length
+                                && line[pos] == nestedTripleChar
+                                && line[pos + 1] == nestedTripleChar
+                                && line[pos + 2] == nestedTripleChar)
+                            {
+                                ReplaceWithSpaces(masked, pos, 3);
+                                pos += 3;
+                                nestedTripleChar = '\0';
+                                nestedTripleRaw = false;
+                                continue;
+                            }
+
+                            masked[pos] = ' ';
+                            pos++;
+                            continue;
+                        }
+
+                        if (TryOpenPythonTripleString(line, pos, out var nestedPrefixLen, out var nestedQuote, out var nestedRawFlag, out _))
+                        {
+                            ReplaceWithSpaces(masked, pos, nestedPrefixLen + 3);
+                            pos += nestedPrefixLen + 3;
+                            nestedTripleChar = nestedQuote;
+                            nestedTripleRaw = nestedRawFlag;
+                            continue;
+                        }
+
                         if (line[pos] == '\'' || line[pos] == '"')
                         {
                             pos = SkipPythonSingleLineString(line, pos);
@@ -813,7 +863,7 @@ internal static class StructuralLineMasker
     // flip the following `/` from division to regex literal.
     // 1 行内の JS/TS regex 判定用 state。直前の識別子語も保持し、`return` / `throw` /
     // `typeof` など regex-prefix keyword の後の `/` を division ではなく regex として扱う。
-    private enum JsPrevTokenKind { None, Identifier, Numeric, Literal, CloseParen, CloseBracket, Other }
+    private enum JsPrevTokenKind { None, Identifier, Numeric, Literal, CloseParen, CloseBracket, CloseBrace, Other }
 
     private struct JsLexState
     {
@@ -980,7 +1030,13 @@ internal static class StructuralLineMasker
 
                             holeFrame.NestedBraceDepth--;
                             pos++;
-                            lexState.SetKind(JsPrevTokenKind.Other);
+                            // Treat nested-hole `}` as closing an expression-context brace
+                            // (object literal / function expression / arrow body); the next
+                            // `/` is division, not a regex opener.
+                            // ホール内のネストした `}` は式コンテキストの括弧を閉じたもの
+                            // （object literal / function expression / arrow body）とみなし、
+                            // 次の `/` を regex ではなく division として扱えるようにする。
+                            lexState.SetKind(JsPrevTokenKind.CloseBrace);
                             continue;
                         }
 
@@ -1065,6 +1121,17 @@ internal static class StructuralLineMasker
             case ']':
                 lexState.SetKind(JsPrevTokenKind.CloseBracket);
                 break;
+            case '}':
+                // `}` outside a template hole most often closes an object literal or
+                // function expression body in expression context within this masker's
+                // reach (hole bodies have already been handled separately). Division is
+                // the realistic successor; statement-level `} /regex/` would be invalid
+                // without a statement separator anyway.
+                // テンプレートホール外の `}` は object literal や関数式本体を閉じるケースが
+                // 支配的で、直後の `/` は division とみなすのが安全。statement 後の
+                // `} /regex/` は文区切りなしでは無効なので無視できる。
+                lexState.SetKind(JsPrevTokenKind.CloseBrace);
+                break;
             default:
                 lexState.SetKind(JsPrevTokenKind.Other);
                 break;
@@ -1098,6 +1165,7 @@ internal static class StructuralLineMasker
                 return true;
             case JsPrevTokenKind.CloseParen:
             case JsPrevTokenKind.CloseBracket:
+            case JsPrevTokenKind.CloseBrace:
             case JsPrevTokenKind.Numeric:
             case JsPrevTokenKind.Literal:
                 return false;

@@ -1411,6 +1411,69 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JsTemplateHoleInnerObjectClose_TreatsFollowingSlashAsDivision()
+    {
+        // Regression for issue #291 follow-up: when a template-literal hole contains an
+        // object literal or block close `}` followed by `/`, the masker must classify
+        // the `/` as division (not regex). Otherwise the regex scanner swallows the
+        // hole-closing `}` and backtick, collapsing the caller body and dropping
+        // subsequent real-code references.
+        // issue #291 続編: テンプレート hole 内で object literal / block 閉じの `}` の
+        // 次に来る `/` は division として扱う必要がある。regex 扱いしてしまうと閉じ `}`
+        // と backtick を巻き込み、caller 本体が潰れて実コードの参照が落ちる。
+        const string content = """
+            function caller() {
+                const branch = `${({ value: 1 }
+                    / 2) + runTask()}`;
+                realCall();
+                return branch;
+            }
+
+            function runTask() {}
+            function realCall() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_PythonFStringHole_NestedTripleQuotedStringDoesNotCloseHole()
+    {
+        // Regression for issue #291 follow-up: Python f-string holes can legally contain
+        // triple-quoted string literals that span multiple lines. Any `}` inside that
+        // nested string must not close the outer hole; otherwise the masker masks real
+        // code after the f-string and drops references.
+        // issue #291 続編: Python の f-string hole 内には複数行にわたる三重引用符文字列を
+        // 入れられる。その内部の `}` は外側の hole を閉じてはならない。さもないと
+        // f-string 以降の実コードがマスクされ、参照が落ちる。
+        const string content = "def caller():\n"
+            + "    msg = f\"\"\"\n"
+            + "    {len('''\n"
+            + "}\n"
+            + "''') + real_call()}\n"
+            + "    \"\"\"\n"
+            + "    tail()\n"
+            + "\n"
+            + "def real_call():\n"
+            + "    pass\n"
+            + "\n"
+            + "def tail():\n"
+            + "    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_PythonFStringHole_StringLiteralWithBraceDoesNotCloseHole()
     {
         // Regression for issue #291 follow-up: inside an f-string `{expr}` hole,
