@@ -3219,6 +3219,72 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsReadonlyProperties()
+    {
+        // issue #327: `readonly` is a valid property/accessor modifier on C# 8+ struct
+        // members. All three shapes — expression-bodied (`readonly int A => _v;`),
+        // auto-property (`readonly int B { get; }`), and accessor-body
+        // (`readonly int C { get => _v; }`) — must surface as `property` rows. The regex
+        // modifier slot must consume `readonly` so that a standalone accessor line
+        // (`readonly get => _v;`) inside a block-bodied property does NOT match the
+        // expression-bodied property regex and leak a phantom `property get` / `property set`.
+        // issue #327: C# 8+ 構造体メンバーの `readonly` は property/accessor 修飾子として有効。
+        // 式本体 (`readonly int A => _v;`)、自動プロパティ (`readonly int B { get; }`)、
+        // accessor-body (`readonly int C { get => _v; }`) の三形態はいずれも `property`
+        // として抽出される必要がある。regex の修飾子スロットが `readonly` を消費することで、
+        // ブロック本体プロパティ内の `readonly get => _v;` accessor 行が単独で式本体プロパティ
+        // regex にマッチせず phantom `property get` / `property set` を生まない。
+        var content = """
+            namespace Demo;
+
+            public struct S
+            {
+                private int _v;
+
+                public readonly int A => _v;
+                public readonly int B { get; }
+                public readonly int C { get => _v; }
+
+                public int Mixed
+                {
+                    readonly get => _v;
+                    set => _v = value;
+                }
+
+                public int D { get; set; }
+                public readonly int GetD() => D;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var a = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "A"));
+        Assert.Equal("int", a.ReturnType);
+        Assert.Equal("public", a.Visibility);
+
+        var b = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "B"));
+        Assert.Equal("int", b.ReturnType);
+
+        var c = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "C"));
+        Assert.Equal("int", c.ReturnType);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Mixed");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "D");
+
+        // Baseline: `readonly` methods continue to extract as `function`.
+        // ベースライン: `readonly` メソッドは従来どおり `function` として抽出される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetD");
+
+        // Phantom suppression: neither the accessor line `readonly get => _v;` nor the
+        // accessor line `set => _v = value;` must leak a top-level `property` row named
+        // `get` / `set` / `init`.
+        // phantom 抑止: accessor 行の `readonly get => _v;` や `set => _v = value;` が
+        // top-level の `property get` / `property set` / `property init` を生まないこと。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "get");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "set");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "init");
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
     {
         var content = """
