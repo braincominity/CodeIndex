@@ -5355,6 +5355,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DoesNotExtractMethodCallsAsEnumMembers()
+    {
+        // A class body method call like `\tRED();` must not be misread as an enum member — regression for #292.
+        // クラス本体内のメソッド呼び出し `\tRED();` を enum メンバーとして誤検出しないこと（#292 のリグレッション）。
+        var content = "public class Test {\n\tvoid run() {\n\t\tRED();\n\t\tGREEN();\n\t}\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "RED");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "GREEN");
+    }
+
+    [Fact]
+    public void Extract_Java_StopsEnumMembersAtSemicolon()
+    {
+        // After the first top-level `;` inside the enum body, non-member declarations must not be captured as members.
+        // Enum members have no body range (BodyStartLine == null); the method extractor populates a body range.
+        // enum 本体内の最初の top-level `;` より後の宣言をメンバーとして誤検出しないこと。
+        // メンバーには body range が無い（BodyStartLine == null）点をメソッド抽出と区別する。
+        var content = "public enum Status {\n    ACTIVE,\n    INACTIVE;\n    public void activate() { ACTIVATE_HELPER(); }\n    private static void ACTIVATE_HELPER() {}\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ACTIVE" && s.ContainerName == "Status" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "INACTIVE" && s.ContainerName == "Status" && s.BodyStartLine == null);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "ACTIVATE_HELPER" && s.BodyStartLine == null);
+    }
+
+    [Fact]
     public void Extract_Java_DetectsDefaultAndSynchronizedMethods()
     {
         var content = "public interface Service {\n    default void init() { }\n    static Service create() { return null; }\n}\npublic class Worker {\n    synchronized void process() { }\n}";
