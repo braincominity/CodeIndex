@@ -3804,6 +3804,7 @@ public class SymbolExtractorTests
             public interface IRefBox
             {
                 ref int GetRef();
+                ref readonly int GetRefReadonly();
             }
 
             public class RefBox : IRefBox
@@ -3817,6 +3818,7 @@ public class SymbolExtractorTests
                 public ref readonly int PropRefRo { get => ref _value; }
                 public ref readonly int this[int index] => ref _items[index];
                 ref int IRefBox.GetRef() => ref _value;
+                ref readonly int IRefBox.GetRefReadonly() => ref _value;
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
@@ -3827,6 +3829,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRefRo" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetRef" && s.ContainerName == "RefBox" && s.ReturnType == "ref int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetRefReadonly" && s.ContainerName == "RefBox" && s.ReturnType == "ref readonly int");
     }
 
     [Fact]
