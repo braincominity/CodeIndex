@@ -59,6 +59,87 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """
+            export class Example {
+              foo() {
+                const value = "}";
+                return value;
+              }
+
+              bar() {
+                return 1;
+              }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+
+        Assert.Equal(10, example.EndLine);
+        Assert.Equal(5, foo.EndLine);
+        Assert.Equal("class", bar.ContainerKind);
+        Assert.Equal("Example", bar.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_TemplateLiteralBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """
+            export class Example {
+              foo() {
+                const value = `}`;
+                return value;
+              }
+
+              bar() {
+                return 1;
+              }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+
+        Assert.Equal(10, example.EndLine);
+        Assert.Equal(5, foo.EndLine);
+        Assert.Equal("class", bar.ContainerKind);
+        Assert.Equal("Example", bar.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_TemplateInterpolationBracesStillCountTowardMethodRange()
+    {
+        var content = """
+            export class Example {
+              foo() {
+                const value = `${format({ answer: 42 })}`;
+                return value;
+              }
+
+              bar() {
+                return 1;
+              }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+
+        Assert.Equal(10, example.EndLine);
+        Assert.Equal(5, foo.EndLine);
+        Assert.Equal("class", bar.ContainerKind);
+        Assert.Equal("Example", bar.ContainerName);
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsExportDefaultClassMembers()
     {
         var content = """
@@ -2915,6 +2996,98 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_CharLiteralBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """
+            namespace Demo;
+
+            public class FixtureHost
+            {
+                public bool IsClosingBrace(char c)
+                {
+                    return c is not '}';
+                }
+
+                public void AfterBraceLiteral()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
+        var after = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "AfterBraceLiteral"));
+
+        Assert.Equal(13, host.EndLine);
+        Assert.Equal("class", after.ContainerKind);
+        Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineRawStringBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """"
+            namespace Demo;
+
+            public class FixtureHost
+            {
+                public string UsesRawFixture()
+                {
+                    return """
+                        }
+                        """;
+                }
+
+                public void AfterRawString()
+                {
+                }
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
+        var uses = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "UsesRawFixture"));
+        var after = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "AfterRawString"));
+
+        Assert.Equal(15, host.EndLine);
+        Assert.Equal(10, uses.EndLine);
+        Assert.Equal("class", after.ContainerKind);
+        Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineVerbatimStringBraceDoesNotBreakFollowingRangeDetection()
+    {
+        var content = """
+            namespace Demo;
+
+            public class FixtureHost
+            {
+                public string UsesVerbatimFixture()
+                {
+                    return @"
+            {
+            ";
+                }
+
+                public void AfterVerbatimString()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
+        var uses = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "UsesVerbatimFixture"));
+        var after = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "AfterVerbatimString"));
+
+        Assert.Equal(15, host.EndLine);
+        Assert.Equal(10, uses.EndLine);
+        Assert.Equal("class", after.ContainerKind);
+        Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFileScopedNamespaceAndRecordStruct()
     {
         // C# 10+: file-scoped namespace, global using, record struct
@@ -2938,6 +3111,38 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Button");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Click");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnLog");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSpacedGenericDelegatesAndEvents()
+    {
+        var content = """
+            namespace App;
+            using System;
+
+            public delegate Task<int> GetIdAsync(string user);
+            public delegate Task<Dictionary<string, int>> LoadAsync();
+            public delegate TResult Func<T1, T2, TResult>(T1 a, T2 b);
+
+            public class Pub
+            {
+                public event Action<string, int> NamedEvent;
+                public event Func<string, int, bool> Filter;
+                public event EventHandler<ChangedArgs> Changed;
+                public event Action OnReady;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "GetIdAsync" && s.ReturnType == "Task<int>");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "LoadAsync" && s.ReturnType == "Task<Dictionary<string,int>>");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Func" && s.ReturnType == "TResult");
+
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "NamedEvent" && s.ReturnType == "Action<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Filter" && s.ReturnType == "Func<string,int,bool>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Changed" && s.ReturnType == "EventHandler<ChangedArgs>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnReady" && s.ReturnType == "Action");
+        Assert.DoesNotContain(symbols, s => s.Kind == "event" && s.Name == "int");
     }
 
     [Fact]
@@ -3029,6 +3234,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_TargetedAttributeDeclarations_DoNotBecomePhantomFunctions()
+    {
+        var content = """
+            using System;
+            using System.Runtime.CompilerServices;
+            using System.Runtime.InteropServices;
+
+            [assembly: CLSCompliant(true)]
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            [module: SkipLocalsInit]
+
+            public class Fixture
+            {
+                [return: MarshalAs(UnmanagedType.Bool)]
+                public bool Method([param: MarshalAs(UnmanagedType.Bool)] bool value) => value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Fixture");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Method");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "CLSCompliant");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "AssemblyVersion");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "SkipLocalsInit");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "MarshalAs");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
@@ -3041,6 +3274,279 @@ public class SymbolExtractorTests
         // Signature should contain parameters / シグネチャにパラメータが含まれるべき
         var userDto = symbols.First(s => s.Name == "UserDto");
         Assert.Contains("string Name", userDto.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsAsProperties()
+    {
+        var content = """
+            namespace App;
+
+            public record Point(int X, int Y);
+            public readonly record struct Vec3(double X, double Y, double Z);
+            public record Animal(string Name);
+            public record Dog(string Name, string Breed) : Animal(Name);
+            public record Options(
+                string Host,
+                int Port) { public bool UseTls { get; init; } = true; }
+            public record Container<T>(T Value, int Count) where T : class;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var pointX = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point"));
+        Assert.Equal("int", pointX.ReturnType);
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("App.Point", pointX.ContainerQualifiedName);
+        Assert.Equal("public", pointX.Visibility);
+
+        var vec3Z = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Z" && s.ContainerName == "Vec3"));
+        Assert.Equal("double", vec3Z.ReturnType);
+        Assert.Equal("struct", vec3Z.ContainerKind);
+
+        var dogBreed = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Breed" && s.ContainerName == "Dog"));
+        Assert.Equal("string", dogBreed.ReturnType);
+
+        var optionsHost = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Host" && s.ContainerName == "Options"));
+        Assert.Equal("string", optionsHost.ReturnType);
+        Assert.Contains("string Host", optionsHost.Signature);
+        Assert.Equal(8, optionsHost.Line);
+        var optionsRecord = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Options"));
+        Assert.Equal(9, optionsRecord.EndLine);
+
+        var containerValue = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Value" && s.ContainerName == "Container"));
+        Assert.Equal("T", containerValue.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsLongAndCommentedRecordPrimaryComponentsAsProperties()
+    {
+        var componentLines = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"    int P{i},"));
+        var content = $$"""
+            namespace App;
+
+            public record Big(
+            {{componentLines}}
+                int Tail);
+
+            public record Point(
+                int X /* separator, comment */,
+                // the next component must still parse
+                int Y);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P30" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Tail" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
+
+        var tail = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Tail" && s.ContainerName == "Big"));
+        Assert.Equal(34, tail.Line);
+        var bigRecord = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Big"));
+        Assert.Equal(34, bigRecord.EndLine);
+
+        var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point"));
+        Assert.Equal(39, pointY.Line);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsWithComparisonDefaults()
+    {
+        var content = """
+            public record Threshold(bool Enabled = 1 < 2, int Count = 0);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var enabled = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Enabled" && s.ContainerName == "Threshold"));
+        Assert.Equal("bool", enabled.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.ContainerName == "Threshold"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRecordPrimaryComponentsWithTightComparisonDefaults()
+    {
+        var content = """
+            public record Threshold(bool Enabled = left<right, int Count = 0);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var enabled = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Enabled" && s.ContainerName == "Threshold"));
+        Assert.Equal("bool", enabled.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count" && s.ContainerName == "Threshold"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotInjectRecordPrimaryComponentsIntoEarlierSameNamedClass()
+    {
+        var content = """
+            namespace A
+            {
+                public class Point {}
+            }
+
+            namespace B
+            {
+                public record Point(int X);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "A.Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.ContainerQualifiedName == "B.Point");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordStructDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public readonly record struct Bodyless(
+                int X,
+                int Y);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var bodyless = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Bodyless"));
+        Assert.Equal(5, bodyless.EndLine);
+
+        var y = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Bodyless"));
+        Assert.Equal(5, y.Line);
+        Assert.Equal("App.Bodyless", y.ContainerQualifiedName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordBaseAndWhereDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Animal(string Name);
+
+            public record Dog(
+                string Name)
+                : Animal(Name);
+
+            public record Box<T>(
+                T Value)
+                where T : class;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var dog = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Dog"));
+        Assert.Equal(7, dog.EndLine);
+
+        var box = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Box"));
+        Assert.Equal(11, box.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordBaseComparisonDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Child(int X)
+                : Base(1 < 2);
+
+            public record Base(bool Flag);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal(4, child.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsBodylessRecordTightBaseComparisonDeclarationRange()
+    {
+        var content = """
+            namespace App;
+
+            public record Child(int X)
+                : Base(left<right);
+
+            public record Base(bool Flag);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal(4, child.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsEmptyBodylessRecordDeclarationRange()
+    {
+        var content = """
+            namespace Repro;
+
+            public record Empty(
+            )
+                : Base();
+
+            public record Base();
+
+            public record struct EmptyStruct(
+            );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var empty = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Empty"));
+        Assert.Equal(5, empty.EndLine);
+
+        var emptyStruct = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "EmptyStruct"));
+        Assert.Equal(10, emptyStruct.EndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_TracksRecordPrimaryComponentLineAfterAttributes()
+    {
+        var content = """
+            public record Person(
+                [property: Obsolete]
+                string Name,
+                [property: Obsolete]
+                int Age);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name" && s.ContainerName == "Person"));
+        Assert.Equal(3, name.Line);
+
+        var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Age" && s.ContainerName == "Person"));
+        Assert.Equal(5, age.Line);
+    }
+
+    [Fact]
+    public void Extract_CSharp_RecordComponents_DoNotDisruptBodyMembersOrDuplicateExplicitProperties()
+    {
+        var content = """
+            namespace App;
+
+            public record Person(string Name)
+            {
+                public string Name { get; init; } = Name;
+
+                public string Upper() => Name.ToUpperInvariant();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var nameProperties = symbols.Where(s => s.Kind == "property" && s.Name == "Name" && s.ContainerName == "Person").ToList();
+        var nameProperty = Assert.Single(nameProperties);
+        Assert.Equal(5, nameProperty.Line);
+        Assert.Equal("App.Person", nameProperty.ContainerQualifiedName);
+
+        var upper = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Upper"));
+        Assert.Equal("class", upper.ContainerKind);
+        Assert.Equal("Person", upper.ContainerName);
+        Assert.Equal("App.Person", upper.ContainerQualifiedName);
     }
 
     [Fact]
@@ -3201,6 +3707,82 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TryRaise" && s.Line == 4);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetItems");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Process");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSpacedAndNestedGenericReturnTypeMethods()
+    {
+        var content = """
+            public class App
+            {
+                public Task<Result<string, Error>> WithSpace() => null!;
+                public Task<Result<string,Error>> NoSpace() => null!;
+                public Dictionary<string, List<int>> Map() => new();
+                public Tuple<int, int, int, int> Quad() => new(1, 2, 3, 4);
+                public Func<int, int, int> Make() => null!;
+                public Task<List<Tuple<int, int, int>>> Deep() => null!;
+                public (int Left, string Right) Pair() => default;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var withSpace = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "WithSpace"));
+        Assert.Equal("Task<Result<string,Error>>", withSpace.ReturnType);
+
+        var noSpace = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "NoSpace"));
+        Assert.Equal("Task<Result<string,Error>>", noSpace.ReturnType);
+
+        var map = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Map"));
+        Assert.Equal("Dictionary<string,List<int>>", map.ReturnType);
+
+        var quad = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Quad"));
+        Assert.Equal("Tuple<int,int,int,int>", quad.ReturnType);
+
+        var make = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Make"));
+        Assert.Equal("Func<int,int,int>", make.ReturnType);
+
+        var deep = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Deep"));
+        Assert.Equal("Task<List<Tuple<int,int,int>>>", deep.ReturnType);
+
+        var pair = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Pair"));
+        Assert.Equal("(int Left, string Right)", pair.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSpacedGenericTypeMembersBeyondMethods()
+    {
+        var content = """
+            public delegate Dictionary<string, int> Factory();
+
+            public interface IFoo
+            {
+                Dictionary<string, int> Get();
+            }
+
+            public class Holder : IFoo
+            {
+                public Dictionary<string, int> Lookup { get; set; } = new();
+                public event Action<string, int> OnLog;
+
+                Dictionary<string, int> IFoo.Get() => Lookup;
+                public Dictionary<string, int> this[int index] => Lookup;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Factory");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnLog" && s.ContainerName == "Holder");
+
+        var lookup = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Lookup"));
+        Assert.Equal("Dictionary<string,int>", lookup.ReturnType);
+        Assert.Equal("Holder", lookup.ContainerName);
+
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item"));
+        Assert.Equal("Dictionary<string,int>", indexer.ReturnType);
+        Assert.Equal("Holder", indexer.ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.Line == 5 && s.ReturnType == "Dictionary<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get" && s.ContainerName == "Holder" && s.ReturnType == "Dictionary<string,int>");
     }
 
     [Fact]
@@ -3528,6 +4110,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_LifetimeAnnotationsDoNotBreakBraceRanges()
+    {
+        var content = """
+            pub struct Holder<'a> {
+                value: &'a str,
+            }
+
+            impl<'a> Holder<'a> {
+                pub fn get(&self) -> &'a str {
+                    self.value
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        var holder = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Holder"));
+        var get = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "get"));
+
+        Assert.Equal(3, holder.EndLine);
+        Assert.Equal(8, get.EndLine);
+        Assert.Equal("class", get.ContainerKind);
+        Assert.Equal("Holder", get.ContainerName);
+    }
+
+    [Fact]
     public void Extract_UnknownLang_ReturnsEmpty()
     {
         // Unsupported languages return no symbols
@@ -3575,6 +4182,131 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Point");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Shape");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsRecordPrimaryComponentsAsProperties()
+    {
+        var content = """
+            package com.example;
+
+            public record Point(int x, int y) {}
+            public record Range(
+                int low,
+                int high
+            ) {
+                public int span() { return high - low; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var pointX = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point"));
+        Assert.Equal("int", pointX.ReturnType);
+        Assert.Equal("class", pointX.ContainerKind);
+        Assert.Equal("Point", pointX.ContainerQualifiedName);
+        Assert.Equal("public", pointX.Visibility);
+
+        var rangeLow = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "low" && s.ContainerName == "Range"));
+        Assert.Equal("int", rangeLow.ReturnType);
+        Assert.Equal(5, rangeLow.Line);
+
+        var rangeHigh = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "high" && s.ContainerName == "Range"));
+        Assert.Equal("int", rangeHigh.ReturnType);
+        Assert.Equal(6, rangeHigh.Line);
+
+        var span = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "span"));
+        Assert.Equal("class", span.ContainerKind);
+        Assert.Equal("Range", span.ContainerName);
+        Assert.Equal("Range", span.ContainerQualifiedName);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsLongAndCommentedRecordPrimaryComponentsAsProperties()
+    {
+        var componentLines = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"    int p{i},"));
+        var content = $$"""
+            package com.example;
+
+            public record Big(
+            {{componentLines}}
+                int tail
+            ) {}
+
+            public record Point(
+                int x /* separator, comment */,
+                // the next component must still parse
+                int y
+            ) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p1" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p30" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Point");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "separator" && s.ContainerName == "Point");
+
+        var tail = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Big"));
+        Assert.Equal(34, tail.Line);
+
+        var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point"));
+        Assert.Equal(40, pointY.Line);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsRecordPrimaryComponentsWithSpacedGenericTypes()
+    {
+        var content = """
+            import java.util.Map;
+
+            public record Sample(Map <String, Integer> values, int count) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var values = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "values" && s.ContainerName == "Sample"));
+        Assert.Equal("Map <String, Integer>", values.ReturnType);
+
+        var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "count" && s.ContainerName == "Sample"));
+        Assert.Equal("int", count.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_Java_TracksRecordPrimaryComponentLineAfterAnnotations()
+    {
+        var content = """
+            public record Person(
+                @Deprecated
+                String name,
+                @Deprecated
+                int age
+            ) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "Person"));
+        Assert.Equal(3, name.Line);
+
+        var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "age" && s.ContainerName == "Person"));
+        Assert.Equal(5, age.Line);
+    }
+
+    [Fact]
+    public void Extract_Java_RecordComponents_DoNotDisruptBodyMembers()
+    {
+        var content = """
+            package repro;
+
+            public record Point(int x) {
+                public int doubled() { return x * 2; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var doubled = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "doubled"));
+        Assert.Equal("class", doubled.ContainerKind);
+        Assert.Equal("Point", doubled.ContainerName);
+        Assert.Equal("Point", doubled.ContainerQualifiedName);
     }
 
     [Fact]
@@ -4260,8 +4992,162 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "primary-color");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "flex-center");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fade-in");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "container");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "header");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#header");
+    }
+
+    [Fact]
+    public void Extract_CSS_DetectsCustomPropertiesFontFacesAndSelectorVariants()
+    {
+        var content = """
+            :root {
+              --accent-color: #09f;
+            }
+
+            @font-face {
+              font-family: "Block Font";
+              src: url("block.woff2");
+            }
+
+            @FONT-FACE {
+              font-family:
+                "Split Font";
+              src: url("split.woff2");
+            }
+
+            a:hover {
+              color: red;
+            }
+
+            input[type="text"] {
+              color: blue;
+            }
+
+            [hidden] {
+              display: none;
+            }
+
+            .btn::before {
+              content: "";
+            }
+
+            %button-base {
+              padding: 4px;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent-color");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Block Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "a:hover");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "input[type=\"text\"]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[hidden]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".btn::before");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "%button-base");
+    }
+
+    [Fact]
+    public void Extract_CSS_DetectsInlineFontFaceFamilyNames()
+    {
+        var content = """
+            @font-face { font-family: "Inline Font"; src: url("inline.woff2"); }
+            @font-face { src: url("same-line.woff2"); font-family: "Trailing Font"; unicode-range: U+0-5FF; }
+            @font-face { src: url("valid-last.woff2"); font-family: "Last No Semicolon" }
+            @font-face { font-family: /* keep */ "Comment Gap"; src: url("comment-gap.woff2"); }
+            @font-face {
+              src: url("commented.woff2");
+              /* font-family: bogus; */
+              font-family: "Commented Font";
+            }
+            @font-face {
+              src: url("data:application/font-woff2;charset=utf-8;base64,font-family:bogus");
+              font-family: "Real Font";
+            }
+            @font-face { src: url("no-family.woff2"); }
+            @font-face {
+              font-family:
+                "Split Font";
+              src: url("split.woff2");
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Inline Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Trailing Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Last No Semicolon");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Comment Gap");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Commented Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real Font");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Split Font");
+        Assert.DoesNotContain(symbols, s => s.Name == "@font-face");
+    }
+
+    [Fact]
+    public void Extract_CSS_CapturesSelectorsInsideGroupingAtRulesButNotTrueNesting()
+    {
+        var content = """
+            @media screen {
+              .media-class {
+                color: red;
+              }
+            }
+
+            .parent {
+              .nested-child {
+                color: blue;
+              }
+            }
+
+            @media screen { .inline-media { color: red; } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".media-class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".inline-media");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".nested-child");
+    }
+
+    [Fact]
+    public void Extract_CSS_TopLevelDetection_IgnoresScssLineCommentsAndEscapedQuotes()
+    {
+        var content = """
+            // {
+            .top-level { color: red; }
+
+            .foo::before { content: "\""; }
+            .bar { color: blue; }
+
+            .parent { background-image: url(http://example.com/a.png); }
+            .top-level:hover { color: green; }
+
+            .parent2 { background-image: url(//cdn.example.com/app.css); }
+            [data-theme="dark"] { color: white; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".top-level");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".foo::before");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".bar");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".top-level:hover");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[data-theme=\"dark\"]");
+    }
+
+    [Fact]
+    public void Extract_CSS_PreservesLiteralSelectorNames()
+    {
+        var content = """
+            :root { --accent: #09f; }
+            .root { color: red; }
+            #root { color: blue; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ":root");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--accent");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".root");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "#root");
     }
 
     [Fact]

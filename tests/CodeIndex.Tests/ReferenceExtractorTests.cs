@@ -416,6 +416,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpReturnTargetAttribute_CallIsNotDropped()
+    {
+        const string content = """
+            using System.Runtime.InteropServices;
+
+            public class Foo
+            {
+                [MarshalAs(UnmanagedType.Bool)]
+                public bool Field1;
+
+                [return: MarshalAs(UnmanagedType.Bool)]
+                public bool Method1() => true;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var marshalAsCalls = references
+            .Where(reference => reference.SymbolName == "MarshalAs" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Equal(2, marshalAsCalls.Count);
+        Assert.Equal([5, 8], marshalAsCalls.Select(reference => reference.Line).ToArray());
+        Assert.All(marshalAsCalls, reference => Assert.Equal("Foo", reference.ContainerName));
+    }
+
+    [Fact]
     public void Extract_ConstructorCalls_AreInstantiateOnly()
     {
         const string content = """

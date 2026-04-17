@@ -375,10 +375,10 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, arrow, methods (including same-line keyword/modifier-named methods, default arguments, computed names, `#private`, generator, `async *`) | class, export default class, same-line sibling/statement-prefixed public classes, class expressions, multiline/parenthesized/CommonJS class exports | -- | -- | -- | -- | -- | import...from | yes |
 | TypeScript | function, arrow, methods (including generic and same-line object/conditional/function-return methods, default arguments, computed names, `#private`, generator, `async *`) | class, export default class, anonymous default `abstract class`, `export = class`, same-line sibling/statement-prefixed public classes, class expressions, multiline/parenthesized class expressions, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
-| C# | methods, ctors, explicit-interface impls (guards named-argument labels only before qualified call expressions; allows `global::` / alias-qualified return types), operators stored as `operator +` / `operator checked +`, conversion operators stored as `implicit operator decimal` / `explicit operator Money` (including `unsafe` / `extern` forms and function-pointer target types), indexers normalized to `Item`, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied | event, delegate | using, using alias | yes |
+| C# | methods, ctors, explicit-interface impls (guards named-argument labels only before qualified call expressions; allows `global::` / alias-qualified return types and spaced generic type tokens), operators stored as `operator +` / `operator checked +`, conversion operators stored as `implicit operator decimal` / `explicit operator Money` (including `unsafe` / `extern` forms and function-pointer target types), indexers normalized to `Item`, const, static readonly, enum members, #region, finalizers | class, record | struct, record struct, ref struct | interface | enum | property, expression-bodied, record primary components | event, delegate (including spaced generic type tokens) | using, using alias | yes |
 | Go | func, methods | type alias | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
-| Java | methods, static final, enum members | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
+| Java | methods, static final, enum members | class, record, sealed, @interface | -- | interface | enum | record primary components | -- | import | yes |
 | Kotlin | fun, extension fun | class, object, companion, data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
 | C | functions | -- | struct | -- | enum | -- | -- | #include | yes |
@@ -403,7 +403,7 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
-| CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
+| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
@@ -1391,10 +1391,10 @@ LIMIT 20;
 | Python | def, async def | class | -- | -- | -- | @property | -- | from/import | yes |
 | JavaScript | function, アロー, メソッド（同一行の keyword / modifier 名、default 引数、computed、`#private`、generator、`async *` を含む） | class, export default class, 同一行 sibling / statement-prefixed public class, クラス式, 複数行 / parenthesized / CommonJS クラス export | -- | -- | -- | -- | -- | import...from | yes |
 | TypeScript | function, アロー, メソッド（generic / 同一行 object-return / conditional / function-return、default 引数、computed、`#private`、generator、`async *` を含む） | class, export default class, 匿名 default `abstract class`, `export = class`, 同一行 sibling / statement-prefixed public class, 複数行 / parenthesized クラス式, type | -- | interface | enum, const enum | -- | -- | import...from | yes |
-| C# | メソッド, コンストラクタ, explicit-interface 実装（qualified call expression の直前にある named-argument label だけを除外し、`global::` / alias-qualified な戻り値型は許可）, `operator +` / `operator checked +` 形式で保持する演算子, `implicit operator decimal` / `explicit operator Money` 形式で保持する変換演算子（`unsafe` / `extern` 付きと function-pointer target type を含む）, `Item` に正規化するインデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体 | event, delegate | using, using alias | yes |
+| C# | メソッド, コンストラクタ, explicit-interface 実装（qualified call expression の直前にある named-argument label だけを除外し、`global::` / alias-qualified な戻り値型と、スペースを含む generic 型トークンを許可）, `operator +` / `operator checked +` 形式で保持する演算子, `implicit operator decimal` / `explicit operator Money` 形式で保持する変換演算子（`unsafe` / `extern` 付きと function-pointer target type を含む）, `Item` に正規化するインデクサ, const, static readonly, enum メンバー, #region, ファイナライザ | class, record | struct, record struct, ref struct | interface | enum | property, 式本体, record primary component | event, delegate（generic 型引数内スペースを含む形も対応） | using, using alias | yes |
 | Go | func, メソッド | 型エイリアス | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
-| Java | メソッド, static final, enum メンバー | class, record, sealed, @interface | -- | interface | enum | -- | -- | import | yes |
+| Java | メソッド, static final, enum メンバー | class, record, sealed, @interface | -- | interface | enum | record primary component | -- | import | yes |
 | Kotlin | fun, 拡張関数 | class, object, companion, data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
 | C | 関数 | -- | struct | -- | enum | -- | -- | #include | yes |
@@ -1419,7 +1419,7 @@ LIMIT 20;
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
-| CSS/SCSS | @mixin, @keyframes, #id | .class | -- | -- | -- | $variable | -- | @import, @use | -- |
+| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 
