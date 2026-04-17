@@ -3114,6 +3114,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsSpacedGenericDelegatesAndEvents()
+    {
+        var content = """
+            namespace App;
+            using System;
+
+            public delegate Task<int> GetIdAsync(string user);
+            public delegate Task<Dictionary<string, int>> LoadAsync();
+            public delegate TResult Func<T1, T2, TResult>(T1 a, T2 b);
+
+            public class Pub
+            {
+                public event Action<string, int> NamedEvent;
+                public event Func<string, int, bool> Filter;
+                public event EventHandler<ChangedArgs> Changed;
+                public event Action OnReady;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "GetIdAsync" && s.ReturnType == "Task<int>");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "LoadAsync" && s.ReturnType == "Task<Dictionary<string,int>>");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Func" && s.ReturnType == "TResult");
+
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "NamedEvent" && s.ReturnType == "Action<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Filter" && s.ReturnType == "Func<string,int,bool>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Changed" && s.ReturnType == "EventHandler<ChangedArgs>");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnReady" && s.ReturnType == "Action");
+        Assert.DoesNotContain(symbols, s => s.Kind == "event" && s.Name == "int");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsProperties()
     {
         // C# property with get/set / C# プロパティ（get/set付き）
