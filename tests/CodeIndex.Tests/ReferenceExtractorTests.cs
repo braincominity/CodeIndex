@@ -1415,4 +1415,148 @@ public class ReferenceExtractorTests
         Assert.Equal(2, rootRefs.Count);
         Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
     }
+
+    [Fact]
+    public void ParseJavaBaseType_SealedWithPermits_StopsAtPermits()
+    {
+        // Java 17+ sealed types can add `permits A, B` after the base-list. The base-type scanner
+        // must stop at the `permits` word-boundary just like `implements`, otherwise the returned
+        // base type greedily absorbs `permits` and the super(...) edge misattributes.
+        // Java 17+ sealed 型は base-list の後ろに `permits A, B` を付けられる。`implements` と同様
+        // に `permits` の単語境界で停止しないと、基底型が `Base permits A` のように伸びてしまう。
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("sealed class Leaf extends Base permits A, B {"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("sealed class Leaf extends Base permits A"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("non-sealed class Leaf extends Base permits A {"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("sealed class Leaf extends Base implements Foo permits A {"));
+        Assert.Equal("Base", ReferenceExtractor.ParseJavaBaseType("sealed class Leaf extends Outer<Integer>.Base permits A {"));
+    }
+
+    [Fact]
+    public void Extract_JavaSuperCall_SealedWithPermits_AttributesToRealBase()
+    {
+        // End-to-end regression for Java 17+ sealed class with `permits`. Before the fix the base
+        // resolver returned `"Base permits A"` and the super(...) edge was dropped.
+        // Java 17+ sealed class with `permits` の E2E 回帰。修正前は基底型解決が
+        // `"Base permits A"` となり super(...) エッジが落ちていた。
+        const string content = """
+            package demo;
+
+            public sealed class Base permits Leaf, Other {
+                public Base(int x) {}
+            }
+
+            final class Leaf extends Base {
+                Leaf(){super(0);}
+            }
+
+            final class Other extends Base {
+                Other(){super(1);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Other");
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_CsharpBaseCall_MultiLineBaseList_AttributesToParent()
+    {
+        // C# multi-line base-list (e.g. `class Child\n    : Parent`) must still resolve the
+        // `: base(...)` target. SymbolRecord.Signature only stores the first declaration line, so
+        // the header must be reconstructed from structural lines to find `: Parent`.
+        // C# の複数行 base-list (`class Child\n    : Parent` の形) でも `: base(...)` の
+        // 解決先を見失わないこと。SymbolRecord.Signature は 1 行目しか持たないため、ヘッダを
+        // structural lines から再構築する必要がある。
+        const string content = """
+            namespace Demo;
+
+            public class Parent
+            {
+                public Parent(int x) {}
+            }
+
+            public class Child
+                : Parent
+            {
+                public Child() : base(0) {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Parent" && r.ContainerKind == "function" && r.ContainerName == "Child");
+        Assert.DoesNotContain(references, r => r.SymbolName == "base");
+    }
+
+    [Fact]
+    public void Extract_CsharpBaseCall_MultiLineBaseList_NestedGenericOuter_AttributesToTerminalSegment()
+    {
+        // Multi-line base-list combined with the `Outer<T>.Base` nested-generic form. Reconstructed
+        // header feeds both multi-line handling and the depth-aware terminal-segment extractor.
+        // 複数行 base-list と `Outer<T>.Base` ネスト generic 形の複合ケース。再構築したヘッダが
+        // 両方の分岐（multi-line 連結と depth-aware な末尾セグメント抽出）を通る。
+        const string content = """
+            namespace Demo;
+
+            public class Outer<T>
+            {
+                public class Base
+                {
+                    public Base(int x) {}
+                }
+            }
+
+            public class Child<T>
+                : Outer<T>.Base
+            {
+                public Child() : base(0) {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Child");
+        Assert.DoesNotContain(references, r => r.SymbolName == "base");
+    }
+
+    [Fact]
+    public void Extract_CsharpBaseCall_MultiLineBaseList_WithWhereClause_AttributesToParent()
+    {
+        // Multi-line base-list continuation followed by a `where` constraint must still resolve
+        // the base type correctly. The `where` clause regex is trimmed before extracting the
+        // first base entry, and the multi-line header path must not regress that behavior.
+        // 複数行 base-list の継続行の末尾に `where` 制約が続く形でも基底型が正しく解決されること。
+        const string content = """
+            namespace Demo;
+
+            public class Parent<U>
+            {
+                public Parent(U x) {}
+            }
+
+            public class Child<T>
+                : Parent<T>
+                where T : class, new()
+            {
+                public Child() : base(null!) {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Parent" && r.ContainerKind == "function" && r.ContainerName == "Child");
+        Assert.DoesNotContain(references, r => r.SymbolName == "base");
+    }
 }

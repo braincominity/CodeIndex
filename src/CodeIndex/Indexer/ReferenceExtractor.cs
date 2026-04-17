@@ -269,7 +269,7 @@ public static class ReferenceExtractor
             {
                 EmitCSharpCtorChainReferences(
                     preparedLine, enclosingTypeCandidates, containerCandidates,
-                    references, seen, fileId, context, lineNumber, container);
+                    structuralLines, references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "java")
             {
@@ -354,6 +354,7 @@ public static class ReferenceExtractor
         string preparedLine,
         IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
         IReadOnlyList<SymbolRecord> containerCandidates,
+        string[] structuralLines,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -395,8 +396,16 @@ public static class ReferenceExtractor
             else
             {
                 // `base(...)` needs the base type from the enclosing class's signature.
+                // SymbolRecord.Signature only captures the first declaration line, so multi-line
+                // base-lists (e.g. `class Child\n    : Parent`) lose the `: Parent` continuation.
+                // Reconstruct the joined header up to the first `;` or `{` from structuralLines.
                 // `base(...)` は外側クラスのシグネチャから基底型を解析する必要がある。
-                target = ParseCSharpBaseType(enclosingType.Signature);
+                // SymbolRecord.Signature は宣言 1 行目しか持たないので複数行 base-list が欠落する。
+                // structuralLines から最初の `;` / `{` までを連結し直して渡す。
+                var (_, headerText) = CollectCSharpRecordHeader(structuralLines, enclosingType.StartLine);
+                target = ParseCSharpBaseType(headerText);
+                if (string.IsNullOrWhiteSpace(target))
+                    target = ParseCSharpBaseType(enclosingType.Signature);
                 if (string.IsNullOrWhiteSpace(target))
                     continue;
             }
@@ -859,7 +868,9 @@ public static class ReferenceExtractor
     /// the declaration header up to (but not including) the first `;` or `{` that sits outside a
     /// string or comment. Returns the 1-based line number where the terminator was found (or the
     /// final line index when none was found) and the joined header text for further parsing.
-    /// structuralLines を使って、record 宣言ヘッダーを最初の `;` / `{` まで連結する。
+    /// Reused for record primary-ctor container synthesis and multi-line `: base(...)` resolution.
+    /// structuralLines を使って、class / struct / record 宣言ヘッダーを最初の `;` / `{` まで連結する。
+    /// record primary-ctor のコンテナ合成と、複数行 `: base(...)` 解決の両方で使う。
     /// </summary>
     private static (int EndLine, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
     {
@@ -966,7 +977,6 @@ public static class ReferenceExtractor
         int start = match.Index + match.Length;
         int i = start;
         int angleDepth = 0;
-        const string implementsKeyword = "implements";
         while (i < signature.Length)
         {
             char c = signature[i];
@@ -982,13 +992,10 @@ public static class ReferenceExtractor
             {
                 if (c == '{' || c == ',' || c == ';')
                     break;
-                // Stop at a word-boundary `implements`.
-                if ((c == 'i') &&
-                    (i == start || !IsJavaIdentifierPart(signature[i - 1])) &&
-                    i + implementsKeyword.Length <= signature.Length &&
-                    string.CompareOrdinal(signature, i, implementsKeyword, 0, implementsKeyword.Length) == 0 &&
-                    (i + implementsKeyword.Length == signature.Length ||
-                     !IsJavaIdentifierPart(signature[i + implementsKeyword.Length])))
+                // Stop at a word-boundary `implements` or `permits` (Java 17+ sealed types).
+                // 単語境界の `implements` / `permits` (Java 17+ sealed 型) で停止する。
+                if (IsJavaBaseListTerminatorKeyword(signature, i, start, "implements") ||
+                    IsJavaBaseListTerminatorKeyword(signature, i, start, "permits"))
                 {
                     break;
                 }
@@ -1002,6 +1009,19 @@ public static class ReferenceExtractor
 
     private static bool IsJavaIdentifierPart(char c) =>
         char.IsLetterOrDigit(c) || c == '_' || c == '$';
+
+    private static bool IsJavaBaseListTerminatorKeyword(string signature, int i, int start, string keyword)
+    {
+        if (i + keyword.Length > signature.Length)
+            return false;
+        if (i != start && IsJavaIdentifierPart(signature[i - 1]))
+            return false;
+        if (string.CompareOrdinal(signature, i, keyword, 0, keyword.Length) != 0)
+            return false;
+        if (i + keyword.Length < signature.Length && IsJavaIdentifierPart(signature[i + keyword.Length]))
+            return false;
+        return true;
+    }
 
     private static int FindSignatureColonIndex(string text)
     {
