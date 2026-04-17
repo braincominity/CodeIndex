@@ -311,7 +311,7 @@ public static class SymbolExtractor
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpExplicitInterfaceReturnTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Indexer (this[...]) / インデクサ (this[...])
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Static constructor / 静的コンストラクタ
@@ -644,13 +644,11 @@ public static class SymbolExtractor
     private static readonly Regex RubyBlockTokenRegex = new(@"\b(?:class|module|def|if|unless|case|begin|do|while|until|for|end)\b", RegexOptions.Compiled);
     private static readonly Regex VisualBasicContainerStartRegex = new(@$"^(?:Namespace\b|(?:(?:{VbTypeModifierPattern})\s+)*(?:(?:{VbVisibilityPattern})\s+)?(?:(?:{VbTypeModifierPattern})\s+)*(?:Class|Module|Structure|Interface)\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex VisualBasicContainerEndRegex = new(@"^End\s+(?:Namespace|Class|Module|Structure|Interface)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    // Explicit-interface return type: primitives, user-defined types, tuples, plus pointer
-    // suffix (`int*`, `void**`, `Foo*[]`) and the full `delegate*<...>` / `delegate* unmanaged[Cdecl]<...>`
-    // function-pointer form so `int* IFoo.Get()` and `delegate*<int, int> IFoo.Transform()` are indexed.
-    // explicit-interface 戻り値型: プリミティブ・ユーザー定義型・タプルに加え、ポインタ suffix
-    // (`int*` / `void**` / `Foo*[]`) と `delegate*<...>` / `delegate* unmanaged[Cdecl]<...>` を許容する。
-    private const string CSharpExplicitInterfaceReturnTypePattern =
-        @"(?:\([^)]+\)|delegate\*(?:\s+(?:managed|unmanaged(?:\s*\[[^\]]+\])?))?\s*<[^>]+>|(?:global::)?(?:void|bool|byte|sbyte|short|ushort|int|uint|long|ulong|nint|nuint|float|double|decimal|char|string|object|dynamic|[A-Z_][\w?.<>\[\],:\s]*)(?:\s*\*+(?:\s*\[[\s,]*\])*)?)";
+    // Explicit-interface implementations reuse CSharpTypePattern for the return type so nested
+    // generics and function pointers (`delegate*<List<int>, int>`, `delegate*<delegate*<int, void>, int>`)
+    // are handled uniformly with the regular method / property / indexer / delegate paths.
+    // 明示的インターフェース実装の戻り値型は CSharpTypePattern を共有するため、入れ子の generic や
+    // `delegate*<...>` / `delegate* unmanaged[Cdecl]<...>` も通常メソッドと同じ経路で扱える。
     private const string CSharpExplicitInterfaceQualifierPattern =
         @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)(?:[\w.<>:]*)";
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

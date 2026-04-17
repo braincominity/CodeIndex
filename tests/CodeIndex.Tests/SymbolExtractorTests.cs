@@ -3708,8 +3708,10 @@ public class SymbolExtractorTests
     public void Extract_CSharp_DetectsExplicitInterfacePointerReturnTypes()
     {
         // Issue #234: explicit-interface implementations with pointer / function-pointer
-        // return types must still be indexed (e.g. `int* IFoo.Get()`, `delegate*<int, int> IFoo.Transform()`).
-        // Issue #234: explicit-interface 実装のポインタ / 関数ポインタ戻り値型も取りこぼさずに抽出する。
+        // return types must still be indexed, including nested generics inside the
+        // function-pointer payload and `delegate* unmanaged[Cdecl]<...>` calling conventions.
+        // Issue #234: explicit-interface 実装のポインタ / 関数ポインタ戻り値型も取りこぼさず、
+        // function-pointer 内部に入れ子の generic がある場合や `delegate* unmanaged[Cdecl]<...>` でも動くこと。
         var content = """
             namespace Demo;
 
@@ -3717,6 +3719,9 @@ public class SymbolExtractorTests
             {
                 int* Get();
                 delegate*<int, int> Transform();
+                delegate*<System.Collections.Generic.List<int>, int> TransformNested();
+                delegate*<delegate*<int, void>, int> TransformFp();
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> TransformUnmanaged();
                 byte** Double();
                 int*[] Arr();
             }
@@ -3725,6 +3730,9 @@ public class SymbolExtractorTests
             {
                 int* IFoo.Get() => null;
                 delegate*<int, int> IFoo.Transform() => null;
+                delegate*<System.Collections.Generic.List<int>, int> IFoo.TransformNested() => null;
+                delegate*<delegate*<int, void>, int> IFoo.TransformFp() => null;
+                delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>, int> IFoo.TransformUnmanaged() => null;
                 byte** IFoo.Double() => null;
                 int*[] IFoo.Arr() => null!;
             }
@@ -3733,8 +3741,26 @@ public class SymbolExtractorTests
 
         Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Get"));
         Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Transform"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformNested"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformFp"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "TransformUnmanaged"));
         Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Double"));
         Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Arr"));
+
+        var impls = symbols.Where(s => s.Kind == "function" && s.ContainerName == "Foo").ToList();
+        Assert.Equal("int*", impls.Single(s => s.Name == "Get").ReturnType);
+        Assert.Equal("delegate*<int, int>", impls.Single(s => s.Name == "Transform").ReturnType);
+        Assert.Equal("delegate*<System.Collections.Generic.List<int>, int>", impls.Single(s => s.Name == "TransformNested").ReturnType);
+        Assert.Equal("delegate*<delegate*<int, void>, int>", impls.Single(s => s.Name == "TransformFp").ReturnType);
+        // Spaces inside `unmanaged[...]<...>` payload are collapsed by CollapseCSharpGenericTypeWhitespace
+        // because the outer `<` has `]` as predecessor (a recognized generic-angle start); non-unmanaged
+        // `delegate*<...>` keeps payload spaces because the outer `<` has `*` as predecessor.
+        // `unmanaged[...]<...>` の payload 内のスペースは CollapseCSharpGenericTypeWhitespace で除去される
+        // （outer `<` の直前が `]` で generic angle start と認識されるため）。通常の `delegate*<...>` は
+        // outer `<` の直前が `*` で認識されないため payload 内スペースは保持される。
+        Assert.Equal("delegate* unmanaged[Cdecl]<System.Collections.Generic.List<int>,int>", impls.Single(s => s.Name == "TransformUnmanaged").ReturnType);
+        Assert.Equal("byte**", impls.Single(s => s.Name == "Double").ReturnType);
+        Assert.Equal("int*[]", impls.Single(s => s.Name == "Arr").ReturnType);
     }
 
     [Fact]
