@@ -122,6 +122,7 @@ public static class SymbolExtractor
 
     private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
     [
@@ -968,54 +969,175 @@ public static class SymbolExtractor
         (int LineIndex, int Column)? currentStart = null;
         var parenDepth = 0;
         var bracketDepth = 0;
+        var lineIndex = bodyStartLineIndex;
+        var column = bodyStartColumn;
 
-        for (int lineIndex = bodyStartLineIndex; lineIndex <= bodyEndLineIndex; lineIndex++)
+        while (lineIndex <= bodyEndLineIndex)
         {
             var maskedLine = csharpMatchLines[lineIndex];
-            var scanStartColumn = lineIndex == bodyStartLineIndex
-                ? Math.Min(bodyStartColumn, maskedLine.Length)
-                : 0;
             var scanEndColumnExclusive = lineIndex == bodyEndLineIndex
                 ? Math.Min(bodyEndColumnExclusive, maskedLine.Length)
                 : maskedLine.Length;
 
-            for (int column = scanStartColumn; column < scanEndColumnExclusive; column++)
+            if (column >= scanEndColumnExclusive)
             {
-                var ch = maskedLine[column];
-                if (currentStart == null)
-                {
-                    if (char.IsWhiteSpace(ch) || ch == ',')
-                        continue;
-
-                    currentStart = (lineIndex, column);
-                }
-
-                if (ch == '(')
-                {
-                    parenDepth++;
-                }
-                else if (ch == ')' && parenDepth > 0)
-                {
-                    parenDepth--;
-                }
-                else if (ch == '[')
-                {
-                    bracketDepth++;
-                }
-                else if (ch == ']' && bracketDepth > 0)
-                {
-                    bracketDepth--;
-                }
-                else if (ch == ',' && parenDepth == 0 && bracketDepth == 0 && currentStart != null)
-                {
-                    TryAddCSharpEnumMemberFromSpan(fileId, rawLines, csharpMatchLines, currentStart.Value, (lineIndex, column + 1), symbols);
-                    currentStart = null;
-                }
+                lineIndex++;
+                column = 0;
+                continue;
             }
+
+            var ch = maskedLine[column];
+            if (currentStart == null)
+            {
+                if (char.IsWhiteSpace(ch) || ch == ',')
+                {
+                    column++;
+                    continue;
+                }
+
+                if (ch == '['
+                    && TrySkipLeadingCSharpAttributeListsInEnumBody(
+                        csharpMatchLines,
+                        lineIndex,
+                        column,
+                        bodyEndLineIndex,
+                        bodyEndColumnExclusive,
+                        out var nextPosition))
+                {
+                    lineIndex = nextPosition.LineIndex;
+                    column = nextPosition.Column;
+                    continue;
+                }
+
+                currentStart = (lineIndex, column);
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+            }
+            else if (ch == ',' && parenDepth == 0 && bracketDepth == 0 && currentStart != null)
+            {
+                TryAddCSharpEnumMemberFromSpan(fileId, rawLines, csharpMatchLines, currentStart.Value, (lineIndex, column + 1), symbols);
+                currentStart = null;
+            }
+
+            column++;
         }
 
         if (currentStart != null)
             TryAddCSharpEnumMemberFromSpan(fileId, rawLines, csharpMatchLines, currentStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
+    }
+
+    private static bool TrySkipLeadingCSharpAttributeListsInEnumBody(
+        string[] csharpMatchLines,
+        int startLineIndex,
+        int startColumn,
+        int bodyEndLineIndex,
+        int bodyEndColumnExclusive,
+        out (int LineIndex, int Column) nextPosition)
+    {
+        nextPosition = (startLineIndex, startColumn);
+        var lineIndex = startLineIndex;
+        var column = startColumn;
+
+        while (lineIndex <= bodyEndLineIndex)
+        {
+            var line = csharpMatchLines[lineIndex];
+            var lineEndExclusive = lineIndex == bodyEndLineIndex
+                ? Math.Min(bodyEndColumnExclusive, line.Length)
+                : line.Length;
+            var probe = column;
+
+            while (probe < lineEndExclusive && char.IsWhiteSpace(line[probe]))
+                probe++;
+
+            if (probe >= lineEndExclusive)
+            {
+                lineIndex++;
+                column = 0;
+                continue;
+            }
+
+            if (line[probe] != '[')
+            {
+                if (probe == startColumn && lineIndex == startLineIndex)
+                    return false;
+
+                nextPosition = (lineIndex, probe);
+                return true;
+            }
+
+            var bracketDepth = 0;
+            var parenDepth = 0;
+            var currentLineIndex = lineIndex;
+            var currentColumn = probe;
+            var matchedAttribute = false;
+
+            while (currentLineIndex <= bodyEndLineIndex)
+            {
+                var currentLine = csharpMatchLines[currentLineIndex];
+                var currentLineEndExclusive = currentLineIndex == bodyEndLineIndex
+                    ? Math.Min(bodyEndColumnExclusive, currentLine.Length)
+                    : currentLine.Length;
+
+                while (currentColumn < currentLineEndExclusive)
+                {
+                    var ch = currentLine[currentColumn++];
+                    if (ch == '[')
+                    {
+                        bracketDepth++;
+                    }
+                    else if (ch == '(')
+                    {
+                        parenDepth++;
+                    }
+                    else if (ch == ')' && parenDepth > 0)
+                    {
+                        parenDepth--;
+                    }
+                    else if (ch == ']')
+                    {
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+
+                        if (bracketDepth == 0)
+                        {
+                            matchedAttribute = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (matchedAttribute)
+                {
+                    lineIndex = currentLineIndex;
+                    column = currentColumn;
+                    break;
+                }
+
+                currentLineIndex++;
+                currentColumn = 0;
+            }
+
+            if (!matchedAttribute)
+                return false;
+        }
+
+        nextPosition = (bodyEndLineIndex, bodyEndColumnExclusive);
+        return true;
     }
 
     private static void TryAddCSharpEnumMemberFromSpan(
@@ -1030,7 +1152,7 @@ public static class SymbolExtractor
         if (string.IsNullOrWhiteSpace(maskedSnippet))
             return;
 
-        var match = CSharpEnumMemberRegex.Match(maskedSnippet);
+        var match = CSharpEnumMemberNameRegex.Match(maskedSnippet);
         if (!match.Success)
             return;
 
@@ -5473,7 +5595,7 @@ public static class SymbolExtractor
 
         return insideEnumBody
             && attributeParenDepth == 0
-            && CSharpEnumMemberRegex.IsMatch(line);
+            && CSharpEnumMemberNameRegex.IsMatch(line);
     }
 
     private static bool ShouldSkipCSharpSwitchExpressionPropertyCandidate(

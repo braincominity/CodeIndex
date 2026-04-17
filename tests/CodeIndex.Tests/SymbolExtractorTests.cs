@@ -3420,6 +3420,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsCompactEnumMembersWithAttributesAndCastValues()
+    {
+        var content = "public enum Mode { [Obsolete] A = (int)B, [EnumMember(Value = \"b\")] B = (MyFlags)(A | C), C = 1 }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "A");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "B");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "C");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsLowercaseAndUnicodeEnumMembers()
     {
         var content = "public enum Status\n{\n    active,\n    inactive,\n    Δelta = active,\n}";
