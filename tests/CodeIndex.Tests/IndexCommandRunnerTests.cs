@@ -2064,6 +2064,76 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesUnchangedCSharpFilesWhenCanonicalNameContractChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "money.cs"),
+                """
+                public struct Money
+                {
+                    public static explicit operator Money(decimal d) => new();
+                }
+
+                public class Bag
+                {
+                    public string this[int index] => "";
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols SET name = 'explicit' WHERE name = 'explicit operator Money';
+                    UPDATE symbols SET name = 'this' WHERE name = 'Item';
+                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.True(json.GetProperty("csharp_symbol_name_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var exactNameCmd = verify.CreateCommand();
+            exactNameCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'explicit operator Money'";
+            Assert.Equal(1L, (long)exactNameCmd.ExecuteScalar()!);
+
+            using var itemCmd = verify.CreateCommand();
+            itemCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'Item'";
+            Assert.Equal(1L, (long)itemCmd.ExecuteScalar()!);
+
+            using var legacyNameCmd = verify.CreateCommand();
+            legacyNameCmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE name IN ('explicit', 'this')";
+            Assert.Equal(0L, (long)legacyNameCmd.ExecuteScalar()!);
+
+            using var contractCmd = verify.CreateCommand();
+            contractCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version'";
+            Assert.Equal(
+                DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                contractCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {
         var projectRoot = CreateTempProject();

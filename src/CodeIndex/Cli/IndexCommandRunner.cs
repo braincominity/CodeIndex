@@ -188,6 +188,7 @@ public static class IndexCommandRunner
         // partial update で FoldReady を restamp しない。
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
@@ -215,8 +216,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath);
 
         return isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorCSharpSymbolNameContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot);
     }
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -459,6 +460,7 @@ public static class IndexCommandRunner
         int priorReadiness,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        string? priorCSharpSymbolNameContractVersion,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
@@ -521,6 +523,8 @@ public static class IndexCommandRunner
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
+        var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
 
         void DemoteReadinessOnce()
         {
@@ -646,7 +650,11 @@ public static class IndexCommandRunner
                 if (warning != null && !options.Json)
                     ConsoleUi.PrintWarning(warning);
 
-                var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
+                var existingId = writer.GetUnchangedFileId(
+                    record.Path,
+                    record.Modified,
+                    record.Checksum,
+                    allowReuse: record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent);
                 if (existingId != null)
                 {
                     skipped++;
@@ -708,6 +716,8 @@ public static class IndexCommandRunner
         var issuesTableAvailableAfter = !readinessDemoted
             ? (priorReadiness & DbContext.IssuesReadyFlag) != 0
             : false;
+        var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp")
+            || (!readinessDemoted && csharpSymbolNameContractMatchesCurrent);
         var foldReadyAfter = !readinessDemoted
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
             && priorFoldVersion == currentFoldVersion
@@ -736,6 +746,11 @@ public static class IndexCommandRunner
             {
                 writer.MarkIssuesReady();
                 issuesTableAvailableAfter = true;
+            }
+            if (csharpSymbolNameContractMatchesCurrent || !writer.HasAnyFilesWithLanguage("csharp"))
+            {
+                writer.MarkCSharpSymbolNameContractReady();
+                csharpSymbolNameReadyAfter = true;
             }
             RestampHotspotFamilyTrustForUpdate(
                 writer,
@@ -778,6 +793,7 @@ public static class IndexCommandRunner
                 },
                 graph_table_available = graphTableAvailableAfter,
                 issues_table_available = issuesTableAvailableAfter,
+                csharp_symbol_name_ready = csharpSymbolNameReadyAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
@@ -802,13 +818,14 @@ public static class IndexCommandRunner
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  C# names: {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter, resolvedDbPath));
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -954,6 +971,7 @@ public static class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
+        string? priorCSharpSymbolNameContractVersion,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
         IReadOnlyDictionary<string, string?> currentHotspotFamilyMarkerFingerprints,
@@ -964,6 +982,8 @@ public static class IndexCommandRunner
             ? null
             : Path.GetFullPath(priorIndexedProjectRoot);
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
+        var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
 
         void WriteProjectRootOnce()
         {
@@ -1070,7 +1090,11 @@ public static class IndexCommandRunner
                 if (warning != null && !options.Json)
                     ConsoleUi.PrintWarning(warning);
 
-                var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
+                var existingId = writer.GetUnchangedFileId(
+                    record.Path,
+                    record.Modified,
+                    record.Checksum,
+                    allowReuse: record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent);
                 if (existingId != null)
                 {
                     skipped++;
@@ -1137,6 +1161,7 @@ public static class IndexCommandRunner
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
         var graphTableAvailableAfter = false;
         var issuesTableAvailableAfter = false;
+        var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
         var foldReadyAfter = false;
         if (errors == 0)
         {
@@ -1147,8 +1172,10 @@ public static class IndexCommandRunner
             // full-scan は全repo をカバーするため、Graph / Issues は常に stamp。Fold のみ条件付き。
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            writer.MarkCSharpSymbolNameContractReady();
             graphTableAvailableAfter = true;
             issuesTableAvailableAfter = true;
+            csharpSymbolNameReadyAfter = true;
             RestampHotspotFamilyTrustForFullScan(
                 writer,
                 skipped == 0,
@@ -1219,6 +1246,7 @@ public static class IndexCommandRunner
                 },
                 graph_table_available = graphTableAvailableAfter,
                 issues_table_available = issuesTableAvailableAfter,
+                csharp_symbol_name_ready = csharpSymbolNameReadyAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
@@ -1241,13 +1269,14 @@ public static class IndexCommandRunner
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  C# names: {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, foldReadyAfter, resolvedDbPath));
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -1284,13 +1313,15 @@ public static class IndexCommandRunner
         return "--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` to rewrite folded keys in place, or use `cdidx index . --rebuild` to regenerate the whole DB.";
     }
 
-    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool foldReady, string resolvedDbPath)
+    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool csharpSymbolNameReady, bool foldReady, string resolvedDbPath)
     {
         var degradedParts = new List<string>();
         if (!graphTableAvailable)
             degradedParts.Add("graph_table_available=false");
         if (!issuesTableAvailable)
             degradedParts.Add("issues_table_available=false");
+        if (!csharpSymbolNameReady)
+            degradedParts.Add("csharp_symbol_name_ready=false");
         if (!foldReady)
             degradedParts.Add("fold_ready=false");
 

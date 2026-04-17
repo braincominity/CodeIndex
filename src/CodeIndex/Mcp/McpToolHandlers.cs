@@ -1348,6 +1348,7 @@ public partial class McpServer
         using var db = new DbContext(_dbPath);
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+        var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
@@ -1370,6 +1371,8 @@ public partial class McpServer
         var writer = new DbWriter(db.Connection);
         var indexer = new FileIndexer(projectPath);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
+        var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var normalizedProjectPath = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -1418,7 +1421,11 @@ public partial class McpServer
             try
             {
                 var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
-                var existingId = writer.GetUnchangedFileId(record.Path, record.Modified, record.Checksum);
+                var existingId = writer.GetUnchangedFileId(
+                    record.Path,
+                    record.Modified,
+                    record.Checksum,
+                    allowReuse: record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent);
                 if (existingId != null)
                 {
                     skipped++;
@@ -1455,12 +1462,15 @@ public partial class McpServer
         // path is no longer accurate. Bits are only stamped when every file committed without
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
+        var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
         var foldReadyAfter = false;
         string? foldReadyReason = null;
         if (errors == 0)
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            writer.MarkCSharpSymbolNameContractReady();
+            csharpSymbolNameReadyAfter = true;
             RestampHotspotFamilyTrust(
                 writer,
                 skipped == 0,
@@ -1518,6 +1528,7 @@ public partial class McpServer
                 ["purged"] = purged,
                 ["errors"] = errors
             },
+            ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
             ["fold_ready"] = foldReadyAfter,
