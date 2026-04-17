@@ -579,6 +579,7 @@ public static class IndexCommandRunner
                 jsonOptions,
                 priorFoldVersion,
                 priorFoldFingerprint,
+                priorCSharpSymbolNameContractVersion,
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints,
