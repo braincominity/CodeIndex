@@ -3835,6 +3835,167 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_InlineAttributeWithBracketInString_DoesNotLeakToAdjacentProperty()
+    {
+        // Regression for #375 — `[` or `]` inside an attribute string argument must not
+        // confuse the bracket-depth scanner. Without the fix, the adjacent plain property
+        // below inherited the reflection attribute and flipped into the wrong bucket.
+        // #375 回帰: 属性文字列引数内の `[` / `]` が bracket-depth スキャナを乱すと、
+        // 直下の属性なしプロパティが誤って reflection 属性を継承して分類が狂う。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_string_bracket_fixture.cs",
+            Lang = "csharp",
+            Size = 320,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [JsonPropertyName("a[")] public string BuggyName { get; set; } = "";
+
+                    public string PlainName { get; set; } = "";
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "BuggyName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "[JsonPropertyName(\"a[\")] public string BuggyName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "PlainName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string PlainName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_string_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var buggy = Assert.Single(unused, symbol => symbol.Name == "BuggyName");
+        Assert.Equal("reflection_or_config_suspect", buggy.UnusedBucket);
+
+        var plain = Assert.Single(unused, symbol => symbol.Name == "PlainName");
+        Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
+    }
+
+    [Theory]
+    [InlineData("[JsonPropertyName(\"a[\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"a]b\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"]\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(@\"a[\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    public void GetUnusedSymbols_InlineReflectionAttributeWithBracketInString_IsStillSuspect(string anchor)
+    {
+        // The inline-declaration line itself must still be recognized as having
+        // both an attribute and a declaration, regardless of `[` / `]` in string args.
+        // 属性文字列中の `[` / `]` によらず、インライン宣言行自身は
+        // 「属性 + 宣言が同じ行にある」と認識されねばならない。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/reflection_string_bracket_inline_{anchor.GetHashCode():x8}.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 7,
+                Content = $$"""
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    {{anchor}}
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Name",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = anchor,
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: [$"reflection_string_bracket_inline_{anchor.GetHashCode():x8}.cs"],
+            excludePathPatterns: null, excludeTests: false);
+
+        var property = Assert.Single(unused, symbol => symbol.Name == "Name");
+        Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_CommentBetweenAttributeAndProperty_IsClassifiedAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
