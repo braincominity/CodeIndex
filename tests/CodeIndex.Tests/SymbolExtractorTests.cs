@@ -4758,6 +4758,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSS_DoesNotLeakNestedSelectorsAfterSameLineGroupingAndQualifiedRule()
+    {
+        var content = """
+            @media screen { .outer {
+              .inner { color: red; }
+            } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".inner");
+    }
+
+    [Fact]
     public void Extract_CSS_TopLevelDetection_IgnoresScssLineCommentsAndEscapedQuotes()
     {
         var content = """

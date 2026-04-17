@@ -306,7 +306,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
-            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, exact);
+            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
@@ -3117,12 +3117,15 @@ public static class QueryCommandRunner
         DbReader reader,
         string query,
         string? lang,
+        IReadOnlyList<string> pathPatterns,
+        IReadOnlyList<string> excludePaths,
+        bool excludeTests,
         bool exact)
     {
         if (!exact)
             return null;
 
-        var unsupportedKinds = reader.GetUnsupportedExactGraphSymbolKinds(query, lang);
+        var unsupportedKinds = reader.GetUnsupportedExactGraphSymbolKinds(query, lang, pathPatterns, excludePaths, excludeTests);
         if (!unsupportedKinds.Contains("enum_member"))
             return null;
 
@@ -3143,7 +3146,7 @@ public static class QueryCommandRunner
         IReadOnlyList<string> excludePaths,
         bool excludeTests)
     {
-        if (!string.Equals(lang, "csharp", StringComparison.Ordinal))
+        if (lang != null && !string.Equals(lang, "csharp", StringComparison.Ordinal))
             return null;
         if (kind != null && !string.Equals(kind, "enum", StringComparison.Ordinal))
             return null;

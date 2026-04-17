@@ -454,7 +454,16 @@ public partial class McpServer
                 () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
-            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            var unsupportedKinds = exact
+                ? reader.GetUnsupportedExactGraphSymbolKinds(query, lang, pathPatterns, excludePaths, excludeTests)
+                : [];
+            var hasEnumMemberGap = unsupportedKinds.Contains("enum_member");
+            bool? graphSupported = hasEnumMemberGap
+                ? false
+                : lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            var graphSupportReason = hasEnumMemberGap
+                ? ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
+                : ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -463,12 +472,17 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = lang,
+                ["graphLanguage"] = hasEnumMemberGap ? "csharp" : lang,
                 ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
+                ["graphSupportReason"] = graphSupportReason,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (hasEnumMemberGap)
+            {
+                payload["graphDegraded"] = true;
+                payload["unsupportedSymbolKind"] = "enum_member";
+            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -1237,12 +1251,13 @@ public partial class McpServer
 
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
-        bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
-        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
+            bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+            var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
 
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var hasEnumMemberGap = reader.HasFilteredCSharpEnumMembers(kind, lang, pathPatterns, excludePaths, excludeTests);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
@@ -1250,11 +1265,19 @@ public partial class McpServer
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
-                ["graph_supported"] = graphSupported,
-                ["graph_support_reason"] = graphSupportReason,
+                ["graph_supported"] = hasEnumMemberGap ? true : graphSupported,
+                ["graph_support_reason"] = hasEnumMemberGap
+                    ? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused until those edges exist."
+                    : graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (hasEnumMemberGap)
+            {
+                payload["graph_language"] = "csharp";
+                payload["graph_degraded"] = true;
+                payload["unsupported_symbol_kind"] = "enum_member";
+            }
             var summary = results.Count > 0
                 ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";

@@ -568,14 +568,24 @@ public partial class DbReader
             definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
         }
         primaryDefinition ??= definitions.FirstOrDefault();
-        var unsupportedExactGraphKinds = exact
-            ? GetUnsupportedExactGraphSymbolKinds(query, lang)
+        var graphSupportDefinitions = exact
+            ? GetDefinitions(
+                query,
+                Math.Max(limit, 32),
+                kind: null,
+                lang: lang,
+                includeBody: false,
+                pathPatterns: pathPatterns,
+                excludePathPatterns: excludePathPatterns,
+                excludeTests: excludeTests,
+                since: null,
+                exact: true)
             : [];
         var file = primaryDefinition != null ? GetFileByPath(primaryDefinition.Path) : null;
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? file?.Lang;
-        var hasUnsupportedEnumMember = unsupportedExactGraphKinds.Contains("enum_member");
+        var hasUnsupportedEnumMember = graphSupportDefinitions.Any(IsCSharpEnumMemberDefinition);
         bool? graphSupported = hasUnsupportedEnumMember
             ? false
             : graphLanguage == null
@@ -612,7 +622,7 @@ public partial class DbReader
             GraphLanguage = graphLanguage,
             GraphSupported = graphSupported,
             GraphSupportReason = graphSupportReason,
-            GraphDegraded = unsupportedSymbolKind != null,
+            GraphDegraded = unsupportedSymbolKind != null ? true : null,
             UnsupportedSymbolKind = unsupportedSymbolKind,
             Definitions = definitions,
             NearbySymbols = nearbySymbols,
@@ -628,7 +638,12 @@ public partial class DbReader
         };
     }
 
-    public HashSet<string> GetUnsupportedExactGraphSymbolKinds(string query, string? lang)
+    public HashSet<string> GetUnsupportedExactGraphSymbolKinds(
+        string query,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
     {
         var definitions = GetDefinitions(
             query,
@@ -636,9 +651,9 @@ public partial class DbReader
             kind: null,
             lang: lang,
             includeBody: false,
-            pathPatterns: null,
-            excludePathPatterns: null,
-            excludeTests: false,
+            pathPatterns: pathPatterns,
+            excludePathPatterns: excludePathPatterns,
+            excludeTests: excludeTests,
             since: null,
             exact: true);
 
@@ -671,6 +686,13 @@ public partial class DbReader
 
         var value = cmd.ExecuteScalar();
         return value != null && value != DBNull.Value;
+    }
+
+    private static bool IsCSharpEnumMemberDefinition(DefinitionResult definition)
+    {
+        return string.Equals(definition.Lang, "csharp", StringComparison.Ordinal)
+            && string.Equals(definition.Kind, "enum", StringComparison.Ordinal)
+            && string.Equals(definition.ContainerKind, "enum", StringComparison.Ordinal);
     }
 
     private static List<DefinitionResult> BuildAnalysisDefinitions(DefinitionResult? primaryDefinition, List<DefinitionResult> definitions, int limit)

@@ -6054,20 +6054,27 @@ public static class SymbolExtractor
         {
             ancestors[lineIndex] = contexts.Contains(CssContextKind.QualifiedRule);
             var line = lines[lineIndex];
+            var segmentStart = 0;
             for (int cursor = 0; cursor < line.Length; cursor++)
             {
                 var ch = line[cursor];
                 if (ch == '{')
                 {
-                    var segment = line[..cursor].Trim();
+                    var segment = line[segmentStart..cursor].Trim();
                     var contextKind = segment.StartsWith("@", StringComparison.Ordinal)
                         ? CssContextKind.GroupingAtRule
                         : CssContextKind.QualifiedRule;
                     contexts.Push(contextKind);
+                    segmentStart = cursor + 1;
                 }
                 else if (ch == '}' && contexts.Count > 0)
                 {
                     contexts.Pop();
+                    segmentStart = cursor + 1;
+                }
+                else if (ch == ';')
+                {
+                    segmentStart = cursor + 1;
                 }
             }
         }
