@@ -4809,7 +4809,7 @@ public static class SymbolExtractor
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
             BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
             BodyStyle.Brace when lang == "java" => FindJavaBraceRange(lines, startIndex, startColumn),
-            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
+            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn, lang),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
@@ -5045,11 +5045,38 @@ public static class SymbolExtractor
             : (startIndex + 1, null, null);
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0, string? lang = null)
     {
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
+        // In languages where `'...'` is a regular string literal (PHP) rather than a char
+        // literal (Java/Kotlin/Scala/Swift/Go/C/C++/Dart) or a lifetime annotation (Rust / OCaml),
+        // we must scan to the next unescaped `'` regardless of length so that unbalanced `(`,
+        // `[`, `{`, `}` tokens inside long single-quoted strings do not leak into brace-depth
+        // counters and collapse the enclosing body range.
+        // PHP のように `'...'` が通常の文字列リテラルである言語では、閉じ `'` まで距離を制限せず
+        // スキップしないと、文字列内の `(` / `[` / `{` / `}` で body 範囲が壊れる。
+        bool singleQuoteIsString = lang == "php";
+        // Track () and [] depth so `{` / `}` inside annotation arguments, function-default lambdas,
+        // and similar paren/bracket-delimited contexts do not advance the body brace counter.
+        // Without this, Java headers like `class Leaf extends @Ann({A.class, B.class}) Root {`
+        // count the annotation-arg `{A.class, B.class}` as the body open/close pair, flip
+        // `opened=true` on the inner `{`, close depth to 0 on the inner `}`, and return a 1-line
+        // body range that stops before the real class body opens. Subsequent ctor-chain emission
+        // then loses the enclosing type, silently dropping `super(...)` edges for annotated Java
+        // hierarchies. Same issue applies to Kotlin / Scala default-argument lambdas inside `()`.
+        // Comments and string/char literals are also skipped so that unbalanced `(` `)` `[` `]`
+        // `{` `}` inside them (e.g. `class Leaf extends Root /* ( */ { ... }`, Kotlin docstrings,
+        // or Rust attribute comment bodies) do not leave depth counters stuck above zero and
+        // silently collapse the body range. This mirrors the C# path which already routes through
+        // LexCSharpLine before counting braces.
+        // アノテーション引数内の `{` / `}` を本物の本体ブレースと誤認しないよう `(` / `[` 深度を追い、
+        // コメント・文字列・文字リテラル内の不均衡な括弧やブレースを無視する。
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        bool inBlockComment = false;
+        bool inString = false;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -5059,10 +5086,124 @@ public static class SymbolExtractor
                     ? string.Empty
                     : lines[i];
 
-            foreach (var c in scanLine)
+            int sawTerminator = -1;
+            for (int j = 0; j < scanLine.Length; j++)
             {
-                if (c == '{')
+                char c = scanLine[j];
+
+                if (inBlockComment)
                 {
+                    if (c == '*' && j + 1 < scanLine.Length && scanLine[j + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        j++;
+                    }
+                    continue;
+                }
+
+                if (inString)
+                {
+                    if (c == '\\' && j + 1 < scanLine.Length)
+                    {
+                        j++;
+                        continue;
+                    }
+                    if (c == '"')
+                        inString = false;
+                    continue;
+                }
+
+                if (c == '/' && j + 1 < scanLine.Length)
+                {
+                    if (scanLine[j + 1] == '/')
+                        break;
+                    if (scanLine[j + 1] == '*')
+                    {
+                        inBlockComment = true;
+                        j++;
+                        continue;
+                    }
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    if (singleQuoteIsString)
+                    {
+                        // PHP-style: `'...'` is a full string literal. Scan to the next
+                        // unescaped `'` on this line regardless of length so long strings
+                        // with `[` / `{` / `(` inside cannot leak into brace-depth counters.
+                        // PHP の `'...'` はフルの文字列リテラル。閉じ `'` まで距離制限なく走査する。
+                        var closeIdx = -1;
+                        for (int k = j + 1; k < scanLine.Length; k++)
+                        {
+                            if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                            {
+                                k++;
+                                continue;
+                            }
+                            if (scanLine[k] == '\'')
+                            {
+                                closeIdx = k;
+                                break;
+                            }
+                        }
+                        // If no close on this line, swallow the rest of the line so multi-line
+                        // PHP single-quoted strings do not corrupt brace depth mid-scan.
+                        // その行に閉じが無ければ行末までスキップする（PHP の複数行 '...' 文字列対応）。
+                        j = closeIdx > 0 ? closeIdx : scanLine.Length;
+                        continue;
+                    }
+
+                    // Distinguish char literals (`'x'`, `'\n'`, `'\u{1}'`) from Rust / OCaml
+                    // lifetime annotations (`'a`, `'static`, `'_`) and from possessive text
+                    // in comments/strings we already skipped. A char literal has a closing
+                    // `'` within a short distance; a lifetime does not. If we cannot locate
+                    // a matching close within ~12 chars on this line, treat the `'` as a
+                    // regular character so `Holder<'a>` does not swallow the `{` that follows.
+                    // Rust の lifetime (`'a`) と char literal (`'x'`) を区別する。対応する閉じ `'`
+                    // が近傍に無ければ lifetime として `'` を普通の文字扱いで読み飛ばす。
+                    {
+                        var closeIdx = -1;
+                        var limit = Math.Min(scanLine.Length, j + 12);
+                        for (int k = j + 1; k < limit; k++)
+                        {
+                            if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                            {
+                                k++;
+                                continue;
+                            }
+                            if (scanLine[k] == '\'')
+                            {
+                                closeIdx = k;
+                                break;
+                            }
+                        }
+                        if (closeIdx > 0)
+                        {
+                            j = closeIdx;
+                        }
+                    }
+                    continue;
+                }
+
+                if (c == '(')
+                    parenDepth++;
+                else if (c == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (c == '[')
+                    bracketDepth++;
+                else if (c == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (c == '{')
+                {
+                    if (parenDepth > 0 || bracketDepth > 0)
+                        continue;
                     depth++;
                     if (!opened)
                     {
@@ -5072,14 +5213,23 @@ public static class SymbolExtractor
                 }
                 else if (c == '}' && opened)
                 {
+                    if (parenDepth > 0 || bracketDepth > 0)
+                        continue;
                     depth--;
                     if (depth == 0)
-                        return (i + 1, bodyStartLine, i + 1);
+                    {
+                        sawTerminator = j;
+                        break;
+                    }
                 }
             }
 
-            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+            if (sawTerminator >= 0)
+                return (i + 1, bodyStartLine, i + 1);
+
+            if (!opened && !inBlockComment && !inString && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
+            // Line comments reset at end of line (handled by the break above).
         }
 
         return opened
@@ -5092,12 +5242,24 @@ public static class SymbolExtractor
     // block or quoted string does not prematurely close the containing brace range.
     // Java 用の FindBraceRange。文字列 / char / コメント / text block を enum member 抽出と同じ
     // lexer で追跡し、text block や文字列内の `}` で本体範囲が早期終了しないようにする。
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    internal static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaBraceRange(string[] lines, int startIndex, int startColumn = 0)
     {
         var depth = 0;
         var opened = false;
         int? bodyStartLine = null;
         var mode = JavaScanMode.Normal;
+        // Track paren/bracket/angle nesting before the body opens so that `{` / `}` appearing
+        // inside `@Ann({A.class, B.class})` type-use annotations or bounded generic arguments
+        // don't open/close the outer class body prematurely. Once the body is opened, only
+        // string/char/comment tracking matters for the depth counter, so the header-level
+        // counters are frozen.
+        // body `{` が開く前に `@Ann({...})` や `List<Map<String,Integer>>` のような annotation
+        // 引数・入れ子 generic 内の `{` / `}` で誤って開閉しないよう、header 段階の `()` / `[]`
+        // / `<>` 深さを追跡する。body が開いた後は深さ計測は不要（lexer の文字列・コメント
+        // 追跡で十分）。
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -5113,6 +5275,21 @@ public static class SymbolExtractor
                     continue;
 
                 var ch = line[column];
+                if (!opened)
+                {
+                    if (ch == '(') { parenDepth++; column++; continue; }
+                    if (ch == ')' && parenDepth > 0) { parenDepth--; column++; continue; }
+                    if (ch == '[') { bracketDepth++; column++; continue; }
+                    if (ch == ']' && bracketDepth > 0) { bracketDepth--; column++; continue; }
+                    if (ch == '<') { angleDepth++; column++; continue; }
+                    if (ch == '>' && angleDepth > 0) { angleDepth--; column++; continue; }
+                    if ((parenDepth > 0 || bracketDepth > 0 || angleDepth > 0))
+                    {
+                        column++;
+                        continue;
+                    }
+                }
+
                 if (ch == '{')
                 {
                     depth++;
@@ -5131,7 +5308,9 @@ public static class SymbolExtractor
                 column++;
             }
 
-            if (!opened && mode == JavaScanMode.Normal && line.TrimEnd().EndsWith(';'))
+            if (!opened && mode == JavaScanMode.Normal
+                && parenDepth == 0 && bracketDepth == 0 && angleDepth == 0
+                && line.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
 
