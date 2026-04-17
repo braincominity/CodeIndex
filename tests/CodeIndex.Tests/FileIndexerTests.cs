@@ -64,9 +64,59 @@ public class FileIndexerTests
     [InlineData("Justfile", "justfile")]
     [InlineData("CMakeLists.txt", "cmake")]
     [InlineData("Vagrantfile", "ruby")]
+    // Issue #189: additional filename maps / 追加ファイル名マッピング
+    [InlineData("Gemfile", "ruby")]
+    [InlineData("Rakefile", "ruby")]
+    [InlineData("Podfile", "ruby")]
+    [InlineData("Guardfile", "ruby")]
+    [InlineData("Capfile", "ruby")]
+    [InlineData("GNUmakefile", "makefile")]
+    [InlineData("Containerfile", "dockerfile")]
+    [InlineData("BUILD", "python")]
+    [InlineData("BUILD.bazel", "python")]
+    [InlineData("WORKSPACE", "python")]
+    [InlineData("WORKSPACE.bazel", "python")]
+    // Issue #189: additional extensions / 追加拡張子
+    [InlineData("types.pyi", "python")]
+    [InlineData("windowed.pyw", "python")]
+    [InlineData("module.pyx", "python")]
+    [InlineData("module.pxd", "python")]
+    [InlineData("tasks.rake", "ruby")]
+    [InlineData("mygem.gemspec", "ruby")]
+    [InlineData("MyPod.podspec", "ruby")]
+    [InlineData("common.mk", "makefile")]
+    [InlineData("page.htm", "html")]
+    [InlineData("style.less", "css")]
+    [InlineData("style.sass", "css")]
+    [InlineData("style.styl", "css")]
+    [InlineData("style.pcss", "css")]
+    [InlineData("schema.pgsql", "sql")]
+    [InlineData("proc.tsql", "sql")]
+    [InlineData("pkg.plsql", "sql")]
+    [InlineData("migrate.psql", "sql")]
+    // Issue #189: filename prefix matching for Dockerfile.* / Makefile.* / GNUmakefile.*
+    [InlineData("Dockerfile.dev", "dockerfile")]
+    [InlineData("Dockerfile.prod", "dockerfile")]
+    [InlineData("Dockerfile.test", "dockerfile")]
+    [InlineData("Containerfile.dev", "dockerfile")]
+    [InlineData("Makefile.am", "makefile")]
+    [InlineData("Makefile.in", "makefile")]
+    [InlineData("Makefile.common", "makefile")]
+    [InlineData("GNUmakefile.am", "makefile")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
+    }
+
+    [Theory]
+    // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
+    // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。
+    [InlineData("Dockerfile.")]
+    [InlineData("Makefile.")]
+    [InlineData("GNUmakefile.")]
+    public void DetectLanguage_BareTrailingDot_DoesNotMatchPrefix(string filename)
+    {
+        Assert.Null(FileIndexer.DetectLanguage(filename));
     }
 
     [Theory]
@@ -149,6 +199,47 @@ public class FileIndexerTests
             File.WriteAllText(path, "  #!/usr/bin/env bash\necho hi\n");
 
             Assert.Null(FileIndexer.DetectLanguage(path));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_IndexesIssue189FilenameAndExtensionCoverage()
+    {
+        // Locks in the full Issue #189 repro: Ruby / Docker / Makefile / .pyi / .less / .mk /
+        // .htm and Dockerfile.* / Makefile.* prefix variants are all indexed (not silently dropped).
+        // Issue #189 のリプロを網羅。Ruby / Docker / Makefile / .pyi / .less / .mk / .htm と
+        // Dockerfile.* / Makefile.* のプレフィックス変種が黙って落ちないことをロックする。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var files = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Gemfile"]         = "source 'https://rubygems.org'\ngem 'rails', '~> 7.0'\n",
+                ["Rakefile"]        = "task :default => [:test]\n",
+                ["Containerfile"]   = "FROM alpine\nRUN echo hi\n",
+                ["Dockerfile.dev"]  = "FROM alpine AS builder\nRUN echo dev\n",
+                ["GNUmakefile"]     = "all:\n\techo hi\n",
+                ["common.mk"]       = "OBJ = foo.o bar.o\n",
+                ["stub.pyi"]        = "def foo() -> int: ...\n",
+                ["style.less"]      = ".foo { color: red; }\n",
+                ["page.htm"]        = "<html><body>old-school</body></html>\n",
+                ["Makefile.am"]     = "SUBDIRS = lib\n",
+            };
+            foreach (var (name, content) in files)
+                File.WriteAllText(Path.Combine(tempDir, name), content);
+
+            var scanned = new FileIndexer(tempDir).ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            var expected = files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
+            Assert.Equal(expected, scanned);
         }
         finally
         {

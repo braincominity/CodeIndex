@@ -501,7 +501,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
-| Python | `.py` | yes |
+| Python | `.py`, `.pyi`, `.pyw`, `.pyx`, `.pxd`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel` (Bazel Starlark) | yes |
 | JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
 | TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |
@@ -509,7 +509,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt` | yes |
-| Ruby | `.rb` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -526,8 +526,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
-| Makefile | `Makefile` | yes |
-| Dockerfile | `Dockerfile` | yes |
+| Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
@@ -535,13 +535,13 @@ The database reflects the working tree at the time of the last index. After swit
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql` | yes |
+| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html` | -- |
-| CSS | `.css`, `.scss` | yes |
+| HTML | `.html`, `.htm` | -- |
+| CSS | `.css`, `.scss`, `.less`, `.sass`, `.styl`, `.pcss` | yes |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
@@ -1373,7 +1373,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
-| Python | `.py` | yes |
+| Python | `.py`, `.pyi`, `.pyw`, `.pyx`, `.pxd`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel`（Bazel Starlark） | yes |
 | JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
 | TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |
@@ -1381,7 +1381,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt` | yes |
-| Ruby | `.rb` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -1398,8 +1398,8 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
-| Makefile | `Makefile` | yes |
-| Dockerfile | `Dockerfile` | yes |
+| Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
@@ -1407,13 +1407,13 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql` | yes |
+| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html` | -- |
-| CSS | `.css`, `.scss` | yes |
+| HTML | `.html`, `.htm` | -- |
+| CSS | `.css`, `.scss`, `.less`, `.sass`, `.styl`, `.pcss` | yes |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
