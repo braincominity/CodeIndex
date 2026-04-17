@@ -301,11 +301,28 @@ public static class SymbolExtractor
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex($@"^\s*(?<visibility>{CSharpVisibilityPattern})\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Property with get/set/init — visibility optional
+            // Reject statement keywords (return/throw/switch/...) as the return type so that
+            // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
+            // `return o switch` combined with an opening `{` on the next line — are not
+            // misclassified as a property. Closes #233.
             // プロパティ（get/set/init）— visibility 省略可
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Expression-bodied property (public int X => ...) — must come before delegate
-            // 式本体プロパティ (public int X => ...) — delegate の前に配置
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // `return o switch` のような複数行にまたがる文断片が `BuildCSharpPropertyMatchLine`
+            // で結合された結果、property として誤判定されるのを防ぐため、戻り値型として
+            // ステートメントキーワードを拒否する。Closes #233.
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Expression-bodied property (public int X => ...) — must come before delegate.
+            // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns a body
+            // range covering the declaration line through the terminating ';', which
+            // ReferenceExtractor.FindInnermostContainer needs to attribute accessor-internal
+            // calls to the property rather than the enclosing class.
+            // Closes #233.
+            // 式本体プロパティ (public int X => ...) — delegate の前に配置。
+            // `BodyStyle.Brace` にして `FindCSharpBraceRange` の '=>' 検出で宣言行から
+            // 終端 ';' までを本体範囲として扱えるようにする。
+            // ReferenceExtractor.FindInnermostContainer が accessor 内呼び出しを外側
+            // クラスではなく property に帰属させるために必要。
+            // Closes #233.
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Delegate — visibility optional / デリゲート — visibility 省略可
             new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|unsafe)\s+)?delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Event — visibility optional / イベント — visibility 省略可
@@ -660,7 +677,18 @@ public static class SymbolExtractor
         @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)(?:[\w.<>:]*)";
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
-    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*$", RegexOptions.Compiled);
+    // Accepts `Type Name`, `Type`, and `Type Name {` (bare brace at end of declaration
+    // line) so BuildCSharpPropertyMatchLine also merges the Microsoft-style
+    // `public int Wrap {` + next-line `get { ... }` form with its accessor. Without the
+    // optional trailing `{`, that shape would early-return unmerged and get rejected by
+    // ShouldSkipCSharpBracePropertyCandidate.
+    // Closes #233.
+    // `Type Name`、`Type`、および宣言行末の bare `{` を含む `Type Name {` を受け付ける。
+    // これにより BuildCSharpPropertyMatchLine が `public int Wrap {` の次行 `get { ... }`
+    // も accessor と結合できる。末尾 `{` を許さないと、この形が未結合のまま
+    // ShouldSkipCSharpBracePropertyCandidate で弾かれてしまう。
+    // Closes #233.
+    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -3736,6 +3764,14 @@ public static class SymbolExtractor
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
+        // Expression-bodied member (`=> expr;`) detection. Tracks paren/bracket depth only
+        // until '=>' is observed at top level, so default-value lambdas in params
+        // (e.g. `Action a = () => ...`) don't trigger expression-body mode.
+        // 式本体メンバー (`=> expr;`) の検出。param のデフォルト値に出てくるラムダ
+        // (`Action a = () => ...` 等) を誤検出しないよう、paren/bracket の深さを追う。
+        bool expressionBody = false;
+        int parenDepth = 0;
+        int bracketDepth = 0;
         var lexState = new CSharpLexState();
 
         for (int i = startIndex; i < lines.Length; i++)
@@ -3749,9 +3785,31 @@ public static class SymbolExtractor
                     ? string.Empty
                     : sanitizedLine;
 
-            foreach (var c in scanLine)
+            for (int j = 0; j < scanLine.Length; j++)
             {
-                if (c == '{')
+                var c = scanLine[j];
+
+                if (expressionBody)
+                {
+                    // In expression-body mode: track nested (), [], {} and stop at ';' at top level.
+                    // 式本体モード: ()/[]/{} の深さを追い、トップレベルの ';' で終端する。
+                    if (c == '(') parenDepth++;
+                    else if (c == ')' && parenDepth > 0) parenDepth--;
+                    else if (c == '[') bracketDepth++;
+                    else if (c == ']' && bracketDepth > 0) bracketDepth--;
+                    else if (c == '{') depth++;
+                    else if (c == '}' && depth > 0) depth--;
+                    else if (c == ';' && parenDepth == 0 && bracketDepth == 0 && depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                    continue;
+                }
+
+                if (c == '(') { parenDepth++; continue; }
+                if (c == ')' && parenDepth > 0) { parenDepth--; continue; }
+                if (c == '[') { bracketDepth++; continue; }
+                if (c == ']' && bracketDepth > 0) { bracketDepth--; continue; }
+
+                if (c == '{' && parenDepth == 0 && bracketDepth == 0)
                 {
                     depth++;
                     if (!opened)
@@ -3759,18 +3817,38 @@ public static class SymbolExtractor
                         opened = true;
                         bodyStartLine = i + 1;
                     }
+                    continue;
                 }
-                else if (c == '}' && opened)
+
+                if (c == '}' && opened && parenDepth == 0 && bracketDepth == 0)
                 {
                     depth--;
                     if (depth == 0)
                         return (i + 1, bodyStartLine, i + 1);
+                    continue;
+                }
+
+                // Detect '=>' at top level (outside any (), [], {}) before any block body opened.
+                // This marks an expression-bodied member; body spans the declaration line
+                // through the line holding the terminating ';'.
+                // () / [] / {} の外側で、かつブロック本体がまだ開いていない状態で '=>' を検出すると
+                // 式本体メンバー開始。本体は宣言行から終端 ';' の行までとする。
+                if (c == '=' && j + 1 < scanLine.Length && scanLine[j + 1] == '>'
+                    && !opened && parenDepth == 0 && bracketDepth == 0)
+                {
+                    expressionBody = true;
+                    bodyStartLine = startIndex + 1;
+                    j++; // consume '>' / '>' を消費
+                    continue;
                 }
             }
 
-            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+            if (!opened && !expressionBody && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
+
+        if (expressionBody)
+            return (lines.Length, bodyStartLine, lines.Length);
 
         return opened
             ? (lines.Length, bodyStartLine, lines.Length)
@@ -5572,6 +5650,15 @@ public static class SymbolExtractor
         && csharpSwitchExpressionLines[lineIndex]
         && matchLine.Contains("=>", StringComparison.Ordinal);
 
+    // Gate only the block-bodied property pattern (requires `{ get|set|init ... }`).
+    // Expression-bodied properties (`Name => expr;`) now also use BodyStyle.Brace so
+    // FindCSharpBraceRange can detect `=>` and compute a body range, but they never
+    // carry `{ get|set|init` on the match line — skipping them here would throw away
+    // every expression-bodied property. Closes #233.
+    // block-bodied プロパティパターン（`{ get|set|init ... }` を要求）のみガードする。
+    // 式本体プロパティ（`Name => expr;`）も FindCSharpBraceRange で '=>' 本体範囲を
+    // 取るため BodyStyle.Brace を使うが、match 行に `{ get|set|init` は来ないので
+    // ここで弾くと式本体プロパティが全滅してしまう。Closes #233.
     private static bool ShouldSkipCSharpBracePropertyCandidate(
         string? lang,
         SymbolPattern pattern,
@@ -5579,6 +5666,7 @@ public static class SymbolExtractor
         lang == "csharp"
         && pattern.Kind == "property"
         && pattern.BodyStyle == BodyStyle.Brace
+        && !matchLine.Contains("=>", StringComparison.Ordinal)
         && !HasCSharpPropertyAccessorStart(matchLine);
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)

@@ -3807,6 +3807,200 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ExpressionBodiedMembers_HaveBodyRanges()
+    {
+        // issue #233: expression-bodied members must report a body range covering the
+        // declaration line through the terminating ';' so reference attribution can find
+        // them as the innermost enclosing container.
+        // issue #233: 式本体メンバーは、宣言行から終端 ';' までを本体範囲として報告する必要がある。
+        // そうすることで参照属性解決が内側コンテナとして認識できる。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap1() => Compute();\n    public int Wrap3 => Compute();\n    public int MultiLine()\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var compute = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Compute"));
+        Assert.Equal(3, compute.BodyStartLine);
+        Assert.Equal(3, compute.BodyEndLine);
+
+        var wrap1 = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Wrap1"));
+        Assert.Equal(4, wrap1.BodyStartLine);
+        Assert.Equal(4, wrap1.BodyEndLine);
+
+        var wrap3 = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap3"));
+        Assert.Equal(5, wrap3.BodyStartLine);
+        Assert.Equal(5, wrap3.BodyEndLine);
+
+        var multi = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MultiLine"));
+        Assert.Equal(6, multi.BodyStartLine);
+        Assert.Equal(7, multi.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BlockBodiedProperty_AllmanStyle_IsExtracted()
+    {
+        // issue #233 review follow-up: Allman-style block-bodied properties (with `{` on
+        // the next line) were not matched by the property regex, so `callers` would
+        // attribute accessor-internal references to the enclosing class. The widened
+        // regex plus `ShouldSkipCSharpHeaderOnlyPropertyCandidate` verification must
+        // still recognize them as properties with proper body ranges.
+        // issue #233 のレビュー指摘: Allman スタイル（次行に `{`）の block-bodied property が
+        // property regex でマッチしておらず、accessor 内の参照がクラスに帰属していた。
+        // widened regex と `ShouldSkipCSharpHeaderOnlyPropertyCandidate` の組み合わせで
+        // 正しく property として認識され、本体範囲も持つ必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    {\n        get { return Compute(); }\n    }\n    public string Name\n    {\n        get;\n        set;\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(5, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+
+        var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name"));
+        Assert.Equal(8, name.StartLine);
+        Assert.Equal(12, name.EndLine);
+        Assert.Equal(9, name.BodyStartLine);
+        Assert.Equal(12, name.BodyEndLine);
+        Assert.Equal("string", name.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_IsExtracted()
+    {
+        // issue #233 second review follow-up: multi-line expression-bodied properties,
+        // where the declaration is on one line and `=> expr;` on the continuation line,
+        // must still be extracted as properties with a body range spanning the two lines.
+        // Without this, accessor-internal calls fall through to the enclosing class.
+        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が来る multi-line 式本体
+        // プロパティも property として抽出され、本体範囲が宣言行から `;` 行までを覆う必要がある。
+        // これができないと accessor 内呼び出しが外側クラスに誤帰属する。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(5, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(5, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+        Assert.Equal("public", wrap.Visibility);
+    }
+
+    [Fact]
+    public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: when an Allman-style block-bodied property
+        // has a multi-line `/* ... */` block comment between the header line and the `{`
+        // line, the skip guard must traverse the comment via `LexCSharpLine` and still
+        // recognize the continuation `{`. A naive prefix-based comment skip only
+        // handled `*` / `//` / `/*` line starts and dropped the property entirely.
+        // issue #233 第4次レビュー指摘: Allman スタイルの block-bodied property で
+        // header 行と `{` の間に multi-line `/* ... */` のブロックコメントがあっても、
+        // `LexCSharpLine` でコメントを通り抜けて次の `{` を認識する必要がある。
+        // 行頭 prefix だけの素朴なスキップでは `*` / `//` / `/*` の開始行しか飛ばせず、
+        // この形の property は落ちていた。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap\n    /* some multi-line\n       block comment */\n    {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(9, wrap.EndLine);
+        Assert.Equal(7, wrap.BodyStartLine);
+        Assert.Equal(9, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedProperty_WithIntermediateBlockComment_IsExtracted()
+    {
+        // issue #233 fourth review follow-up: same scenario for multi-line expression
+        // bodies — `public int Wrap` followed by `/* ... */` and then `=> Compute();`
+        // must still be extracted with the property spanning declaration through `;`.
+        // issue #233 第4次レビュー指摘: multi-line 式本体プロパティでも同じく、
+        // `public int Wrap` の後に `/* ... */`、さらに `=> Compute();` が続く形で
+        // 宣言行から `;` 行までを本体範囲とする property が抽出されること。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int WrapExpr\n    /* multi-line\n       comment */\n        => Compute();\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrapExpr"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(7, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(7, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLineProperty_IsExtracted()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property — `{` on the same line as the declaration and the accessor on the
+        // following line — must be recognized as a property with a body range spanning
+        // declaration through closing `}`.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property が property として抽出され、宣言行から `}` 行
+        // までを本体範囲として持つこと。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(6, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(6, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLine_AcceptsAttributeAndVisibility()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must also
+        // accept next lines that begin with accessor attributes (`[JsonIgnore]`) or a
+        // visibility modifier (`private set`) before the `get` / `set` / `init` token.
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、accessor attribute
+        // (`[JsonIgnore]`) や visibility 修飾子 (`private set`) で始まる行も受け入れる必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n"
+            + "    public int WithAttr {\n        [System.Obsolete] get => Compute();\n    }\n"
+            + "    public int WithVis {\n        private set { }\n        get { }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithAttr");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithVis");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineWithoutAccessor_IsNotMisclassifiedAsProperty()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must reject
+        // non-property shapes that happen to be `Type Name {` followed by a body that
+        // does not start an accessor (for example a stray method-like block).
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、`Type Name {` に
+        // 続く行が accessor 宣言でない場合（例: accessor でない任意のブロック）を
+        // property として採用してはならない。
+        var content = "public class Calc\n{\n    public int Stray {\n        Console.WriteLine(1);\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Stray");
+    }
+
+    [Fact]
+    public void Extract_CSharp_HeaderOnlyNonProperty_IsNotMisclassified()
+    {
+        // issue #233 review follow-up: the header-only property alternation must not
+        // swallow keyword lines such as `public class X` or `return Foo` even if they
+        // happen to look like `Type Name` before a newline.
+        // issue #233 のレビュー指摘: header-only の alternation が `public class X` や
+        // `return Foo` のようなキーワード行を property と誤分類しないことを担保する。
+        var content = "public class Thing\n{\n    public int Method()\n    {\n        return Thing;\n    }\n}\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Thing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Method");
+    }
+
+    [Fact]
     public void Extract_CSharp_SwitchExpressionArms_DoNotProducePhantomProperties()
     {
         var content = """
@@ -3841,6 +4035,41 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "d");
         Assert.DoesNotContain(symbols, s => s.Name == "list");
         Assert.DoesNotContain(symbols, s => s.Name == "0");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineSwitchExpressionArms_DoNotProducePhantomProperties()
+    {
+        // issue #233 third review follow-up: switch-expression arms whose `=>` is placed
+        // on a continuation line must not be misclassified as multi-line expression-bodied
+        // properties. Without switch-expression guard coverage on the continuation `=>`,
+        // each pattern variable (e.g. `text`, `neg`) would be emitted as a phantom property
+        // and `callers` / `impact` would misattribute calls inside the arm to it.
+        // issue #233 第3次レビュー指摘: switch expression arm の `=>` が継続行にある
+        // multi-line 形を、multi-line 式本体プロパティと誤認しないこと。continuation `=>`
+        // まで switch-expression ガードが及ばないと、`text` や `neg` のようなパターン変数が
+        // phantom property として抽出され、arm 内の呼び出しが phantom に誤帰属する。
+        var content = """
+            public class Matcher
+            {
+                public string Describe(object x) => x switch
+                {
+                    string text
+                        => text.Trim(),
+                    int neg
+                        => "non-pos",
+                    _
+                        => "other",
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Matcher");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Describe");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property");
+        Assert.DoesNotContain(symbols, s => s.Name == "text");
+        Assert.DoesNotContain(symbols, s => s.Name == "neg");
     }
 
     [Fact]
