@@ -340,8 +340,9 @@ public static class SymbolExtractor
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
             // LINQ query-expression keywords (from/where/select/orderby/group/join/let/into/on/equals/ascending/descending/by)
             // are also excluded so continuation lines like `select Mapper.Convert(x)` or `where Validator.Check(x)` do not
-            // fire returnType+qualifier+name phantoms. These are C# contextual keywords, so the tradeoff drops rare
-            // user-defined methods named after LINQ keywords (e.g. `void where()`). Closes #377.
+            // fire returnType+qualifier+name phantoms. The lookahead is anchored to the line-leading token, so it only
+            // blocks continuation forms; ordinary method declarations whose NAME happens to be a LINQ keyword still match
+            // via their return type (e.g. `public void where() { }`). Closes #377.
             // The `(?!(?:base|this)\b)` guard on the name capture belt-and-suspenders against constructor-chain
             // initializers (`: base(...)` / `: this(...)`) leaking phantom `function base` / `function this`
             // symbols if any upstream guard becomes permissive. Closes #331.
@@ -350,8 +351,8 @@ public static class SymbolExtractor
             // negative lookahead で呼び出し行（await/return/throw/yield/var/typeof 等）と ternary continuation を除外する。
             // LINQ 式キーワード (from/where/select/orderby/group/join/let/into/on/equals/ascending/descending/by) も除外し、
             // `select Mapper.Convert(x)` や `where Validator.Check(x)` のような continuation 行が returnType+qualifier+name
-            // phantom を生まないようにする。C# contextual keyword のため、LINQ キーワードと同名のメソッド
-            // （例: `void where()`）は取りこぼすトレードオフを受け入れる。Closes #377.
+            // phantom を生まないようにする。lookahead は行頭トークンに固定しているため、continuation 形のみを弾き、
+            // LINQ キーワードと同名のメソッド（例: `public void where() { }`）は戻り値型を介して通常どおり一致する。Closes #377.
             // `(?!(?:base|this)\b)` を name キャプチャに付け、上流ガードが緩んだ場合でも
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.

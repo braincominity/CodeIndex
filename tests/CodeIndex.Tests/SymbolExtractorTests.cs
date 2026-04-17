@@ -3704,17 +3704,40 @@ public class SymbolExtractorTests
                              orderby Math.Abs(x)
                              select x;
 
+                    // Exercise line-leading `group`, `by`, and `into` so the guard
+                    // covers each keyword individually instead of only the q4 opener.
+                    // 行頭 `group` / `by` / `into` を個別に踏ませ、q4 先頭だけで抜けないようにする。
                     var q4 = from x in list
-                             group x by x % 2 into g
+                             group x
+                             by Helper.Key(x)
+                             into g
                              select g;
 
+                    // Exercise line-leading `join`, `on`, and `equals` so the guard
+                    // covers each keyword individually instead of only the q5 opener.
+                    // 行頭 `join` / `on` / `equals` を個別に踏ませ、q5 先頭だけで抜けないようにする。
                     var q5 = from x in list
-                             join y in list on Helper.Key(x) equals Helper.Key(y)
+                             join y in list
+                             on Helper.Key(x)
+                             equals Helper.Key(y)
                              select x;
 
                     var q6 = from x in list
                              let doubled = Helper.Double(x)
                              select doubled;
+
+                    // Exercise line-leading `ascending` and `descending` so the guard
+                    // covers them even when an `orderby` clause wraps onto its own line.
+                    // 行頭 `ascending` / `descending` を個別に踏ませ、`orderby` が折り返したときも抜けないようにする。
+                    var q7 = from x in list
+                             orderby Helper.Key(x)
+                             ascending
+                             select x;
+
+                    var q8 = from x in list
+                             orderby Helper.Key(x)
+                             descending
+                             select x;
                 }
             }
             """;
