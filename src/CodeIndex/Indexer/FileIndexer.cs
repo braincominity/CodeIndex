@@ -772,6 +772,37 @@ public class FileIndexer
     internal static bool CanIndexFile(string filePath)
         => GetFileIndexability(filePath) == FileProbeStatus.Supported;
 
+    // Detect symbolic links / reparse points so the scanner can skip them.
+    // Treats probe failures (e.g. dangling symlinks whose target is gone) as reparse points
+    // so the scanner skips them instead of trying to read the missing target.
+    // symlink / reparse point を検出し、スキャナでスキップできるようにする。
+    // プロバ失敗（例: target が消えた dangling symlink）は missing target を読もうとせずスキップするため、
+    // reparse point 扱いにする。
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            return (attributes & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
         if (OperatingSystem.IsWindows())
@@ -1075,6 +1106,14 @@ public class FileIndexer
                 if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
                     continue;
 
+                // Skip file symlinks/reparse points to avoid double-indexing the same content under a second path.
+                // ファイル symlink / reparse point は二重 index を防ぐためスキップする。
+                if (IsReparsePoint(file))
+                {
+                    nonIndexablePaths.Add(ToRelativePath(file));
+                    continue;
+                }
+
                 // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
                 // Unix では通常ファイルのみをインデックス対象にする。FIFO/socket/device でのブロックを避ける。
                 var indexability = GetFileIndexability(file);
@@ -1117,6 +1156,18 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
+                // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
+                // and duplicate indexing when a symlink points inside the same tree.
+                // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
+                // ツリー内を指す symlink での二重 index を防ぐためスキップする。
+                if (IsReparsePoint(subDir))
+                {
+                    var subRelative = ToRelativePath(subDir);
+                    listedDirectories.Add(subRelative);
+                    fullyScannedDirectories.Add(subRelative);
+                    continue;
+                }
+
                 fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
             }
         }
