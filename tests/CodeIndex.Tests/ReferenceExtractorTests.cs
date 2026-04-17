@@ -940,6 +940,60 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpRecordChain_MultilineBaseCall_RewritesToBaseType()
+    {
+        // Record declaration wraps the base primary-ctor call onto a continuation line.
+        // The synthetic function container must span the whole header range so the Parent
+        // reference is attributed to the record rather than landing without a container.
+        // record 宣言の base primary-ctor 呼び出しが改行で別行に来るケース。
+        // 合成 function コンテナは宣言ヘッダー全体を覆い、`Parent(...)` が record に紐付くこと。
+        const string content = """
+            namespace Demo;
+
+            public record Parent(int Value);
+
+            public record Child(int Value, int Extra)
+                : Parent(Value);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
+        Assert.Equal("call", parentRef.ReferenceKind);
+        Assert.Equal("function", parentRef.ContainerKind);
+        Assert.Equal("Child", parentRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpRecordChain_BracedBodyAfterBaseCall_AttributesBaseCallOnly()
+    {
+        // Base primary-ctor call sits at the end of the record header on its own line,
+        // followed by a braced body. The synthetic container must cover the base-call line
+        // but not leak into body method lines (those keep their real innermost containers).
+        // base 呼び出し後に `{}` 本体が続くケース。合成コンテナはヘッダーのみを覆い、
+        // body 内のメソッド行は通常の container を維持すること。
+        const string content = """
+            namespace Demo;
+
+            public record Parent(int Value);
+
+            public record Child(int Value, int Extra)
+                : Parent(Value)
+            {
+                public int DoubleValue() => Value * 2;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var parentRef = Assert.Single(references, r => r.SymbolName == "Parent");
+        Assert.Equal("function", parentRef.ContainerKind);
+        Assert.Equal("Child", parentRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpGenericBase_StripsGenericArgs()
     {
         const string content = """
@@ -1063,6 +1117,57 @@ public class ReferenceExtractorTests
         Assert.Equal("call", superRef.ReferenceKind);
         Assert.Equal("Leaf", superRef.ContainerName);
         Assert.DoesNotContain(references, r => r.SymbolName == "super");
+    }
+
+    [Fact]
+    public void Extract_JavaCtorChain_SameLineBody_RewritesToBaseClass()
+    {
+        // Same-line ctor bodies like `Leaf(int x){super(x);}` do not match
+        // SymbolExtractor's enum-member regex (line ends with `}`, not `{`/`,`/`;`),
+        // so no function symbol is emitted. The chain rewrite must synthesize a
+        // ctor container from the line text and attribute super(x)/this(0) correctly.
+        // 同一行に本体を書くコンストラクタは SymbolExtractor で関数シンボルが作られないため、
+        // chain 書き換えは行テキストから ctor コンテナを合成して super/this を拾う必要がある。
+        const string content = """
+            package demo;
+
+            public class Root {
+                public Root(int x) {}
+                Root() {}
+            }
+
+            class PublicLeaf extends Root {
+                public PublicLeaf(int x){super(x);}
+                public PublicLeaf(){this(0);}
+            }
+
+            class PackageLeaf extends Root {
+                PackageLeaf(int x){super(x);}
+                PackageLeaf(){this(0);}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var publicSuper = Assert.Single(references, r =>
+            r.SymbolName == "Root" && r.ContainerName == "PublicLeaf" && r.ContainerKind == "function");
+        Assert.Equal("call", publicSuper.ReferenceKind);
+
+        var publicThis = Assert.Single(references, r =>
+            r.SymbolName == "PublicLeaf" && r.ContainerName == "PublicLeaf" && r.ContainerKind == "function");
+        Assert.Equal("call", publicThis.ReferenceKind);
+
+        var packageSuper = Assert.Single(references, r =>
+            r.SymbolName == "Root" && r.ContainerName == "PackageLeaf" && r.ContainerKind == "function");
+        Assert.Equal("call", packageSuper.ReferenceKind);
+
+        var packageThis = Assert.Single(references, r =>
+            r.SymbolName == "PackageLeaf" && r.ContainerName == "PackageLeaf" && r.ContainerKind == "function");
+        Assert.Equal("call", packageThis.ReferenceKind);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+        Assert.DoesNotContain(references, r => r.SymbolName == "this");
     }
 
     [Fact]

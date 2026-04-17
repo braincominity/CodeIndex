@@ -137,12 +137,22 @@ public static class ReferenceExtractor
     // C# constructor chain initializer: `public A() : this(0)` / `public B() : base(42)`
     // C# コンストラクタ連鎖イニシャライザ
     private static readonly Regex CSharpCtorChainRegex = new(@":\s*(?<kind>this|base)\s*\(", RegexOptions.Compiled);
-    // Java constructor chain statement (first statement of a constructor body): `this(0);` / `super(42);`
-    // Java コンストラクタ連鎖文（本体先頭に現れる this(...) / super(...)）
-    private static readonly Regex JavaCtorChainRegex = new(@"^\s*(?<kind>this|super)\s*\(", RegexOptions.Compiled);
+    // Java constructor chain statement (first statement of a constructor body): `this(0);` / `super(42);`.
+    // Also matches single-line ctor bodies like `Leaf(int x){super(x);}` where `{` precedes the chain call.
+    // Java コンストラクタ連鎖文。`Leaf(int x){super(x);}` のように `{` 直後に連鎖文が続く
+    // single-line body 形式にも対応する。
+    private static readonly Regex JavaCtorChainRegex = new(@"(?:^\s*|\{\s*)(?<kind>this|super)\s*\(", RegexOptions.Compiled);
     // Java `extends` clause used to resolve `super(...)` chain targets
     // Java の extends 節を解析して super(...) の呼び先を決定するために使用
     private static readonly Regex JavaExtendsRegex = new(@"\bextends\s+(?<base>[\w.$]+)", RegexOptions.Compiled);
+    // Same-line Java constructor declaration used to synthesize a container for chain rewrites
+    // when SymbolExtractor does not emit a function symbol (the enum-member regex requires the
+    // line to end with `,`, `{`, or `;`, so `Leaf(int x){super(x);}` is skipped).
+    // SymbolExtractor が function 化しない same-line ctor body を、chain 書き換えの container
+    // として合成するための正規表現。
+    private static readonly Regex JavaSameLineCtorRegex = new(
+        @"^\s*(?:(?:public|private|protected|static|final|synchronized|strictfp|abstract|native|default)\s+)*(?<name>\w+)\s*\([^)]*\)(?:\s*throws\s+[\w.,\s]+?)?\s*\{",
+        RegexOptions.Compiled);
     // Inline `where` constraint in a C# type header; used to trim base-list parsing
     // C# 型ヘッダーの where 制約句。base-list 解析の終端として使用
     private static readonly Regex CSharpWhereClauseRegex = new(@"\s+where\s+[\w?.]+\s*:", RegexOptions.Compiled);
@@ -208,11 +218,13 @@ public static class ReferenceExtractor
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
 
-        // Synthetic function-kind container per-line for C# record primary-ctor declarations
-        // that include a base primary-ctor call such as `record Child(int x) : Parent(x)`.
-        // Keyed by the record class symbol's StartLine so only the declaration line is overridden.
-        // C# record のプライマリーコンストラクタ宣言行に限って、合成 function コンテナを用意する。
-        var recordPrimaryCtorContainers = BuildCSharpRecordPrimaryCtorContainers(language, symbols);
+        // Synthetic function-kind container for C# record primary-ctor declarations with a base
+        // primary-ctor call such as `record Child(int x) : Parent(x)`. The range spans the entire
+        // declaration header so multi-line forms where `: Parent(x)` sits on a later line are
+        // covered. Later lines inside the record body keep their real innermost containers.
+        // C# record のプライマリコンストラクタ宣言で base primary-ctor を呼んでいる場合、
+        // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
+        var recordPrimaryCtorRanges = BuildCSharpRecordPrimaryCtorContainers(language, symbols, structuralLines);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -233,8 +245,14 @@ public static class ReferenceExtractor
                 ? namesOnLine
                 : null;
             var container = FindInnermostContainer(containerCandidates, lineNumber);
-            if (recordPrimaryCtorContainers.TryGetValue(lineNumber, out var syntheticRecordCtor))
-                container = syntheticRecordCtor;
+            foreach (var (rangeStart, rangeEnd, syntheticRecordCtor) in recordPrimaryCtorRanges)
+            {
+                if (lineNumber >= rangeStart && lineNumber <= rangeEnd)
+                {
+                    container = syntheticRecordCtor;
+                    break;
+                }
+            }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
             if (language is "csharp")
@@ -424,10 +442,13 @@ public static class ReferenceExtractor
         // Otherwise, fall back to scanning all function-kind symbols by name match against the enclosing
         // class. Package-private ctors like `Leaf(int x){super(x);}` can appear without body ranges in
         // SymbolExtractor, so they are excluded from containerCandidates and the innermost container
-        // becomes the class itself. The fallback still finds them by declaration StartLine.
+        // becomes the class itself. Same-line ctor bodies are not emitted as function symbols at all
+        // (the enum-member regex requires the line to end with `,`/`{`/`;`), so the final fallback
+        // synthesizes a container from the current line when it matches a ctor declaration shape.
         // 外側クラスのコンストラクタが innermost container として既に見つかっていれば使う。
         // そうでなければ、関数シンボル全体を走査して外側クラスと同名のコンストラクタを
-        // declaration StartLine ベースで引き直す。body 範囲を持たない package-private ctor でも拾える。
+        // declaration StartLine ベースで引き直す。same-line body ctor は関数シンボル自体が
+        // 存在しないので、行の shape から合成 container を作る。
         SymbolRecord? ctorContainer = null;
         if (container != null && container.Kind == "function"
             && string.Equals(container.Name, enclosingType.Name, StringComparison.Ordinal))
@@ -436,7 +457,8 @@ public static class ReferenceExtractor
         }
         else
         {
-            ctorContainer = FindEnclosingJavaConstructor(symbols, enclosingType, lineNumber);
+            ctorContainer = FindEnclosingJavaConstructor(symbols, enclosingType, lineNumber)
+                ?? TrySynthesizeSameLineJavaCtor(preparedLine, enclosingType, lineNumber);
         }
 
         if (ctorContainer == null)
@@ -533,6 +555,42 @@ public static class ReferenceExtractor
         return best;
     }
 
+    /// <summary>
+    /// When the current line itself carries a same-line Java constructor body (for example
+    /// `Leaf(int x) { super(x); }`), synthesize a function-kind container so the chain rewrite
+    /// still attaches the edge to the owning constructor. SymbolExtractor does not emit a
+    /// function symbol for this shape because the enum-member regex requires the line to end
+    /// with `,`, `{`, or `;`.
+    /// same-line body の Java コンストラクタ（`Leaf(int x){super(x);}` など）では SymbolExtractor
+    /// が function 化しないため、行自体を直接スキャンして合成 container を作る。
+    /// </summary>
+    private static SymbolRecord? TrySynthesizeSameLineJavaCtor(
+        string preparedLine,
+        SymbolRecord enclosingType,
+        int lineNumber)
+    {
+        var match = JavaSameLineCtorRegex.Match(preparedLine);
+        if (!match.Success)
+            return null;
+        if (!string.Equals(match.Groups["name"].Value, enclosingType.Name, StringComparison.Ordinal))
+            return null;
+
+        return new SymbolRecord
+        {
+            Kind = "function",
+            Name = enclosingType.Name,
+            Line = lineNumber,
+            StartLine = lineNumber,
+            EndLine = lineNumber,
+            BodyStartLine = lineNumber,
+            BodyEndLine = lineNumber,
+            ContainerKind = enclosingType.Kind,
+            ContainerName = enclosingType.Name,
+            ContainerQualifiedName = enclosingType.ContainerQualifiedName,
+            Visibility = enclosingType.Visibility,
+        };
+    }
+
     private static void AddChainReference(
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -562,23 +620,27 @@ public static class ReferenceExtractor
     }
 
     /// <summary>
-    /// Build a per-line map of synthetic function-kind containers for C# record declarations
-    /// that carry a base primary-constructor call (e.g. `record Child(int x) : Parent(x)`).
-    /// SymbolExtractor does not synthesize a separate ctor symbol for the implicit primary
-    /// constructor, so the `Parent(x)` reference would otherwise be attributed to the class
-    /// itself (or to no container at all) and `callers` / `callees` / `impact` would miss the
-    /// edge. We override the container on the record's declaration line so the chain edge is
-    /// attributed to a synthetic function named after the record.
-    /// C# record のプライマリーコンストラクタ宣言（`record Child(int x) : Parent(x)` など）に対して、
-    /// 宣言行だけ合成 function コンテナへ差し替えるための辞書を作る。
+    /// Build a list of line ranges paired with synthetic function-kind containers for C# record
+    /// declarations that carry a base primary-constructor call (e.g. `record Child(int x) : Parent(x)`
+    /// or the multi-line form where `: Parent(x)` sits on a continuation line). SymbolExtractor does
+    /// not synthesize a separate ctor symbol for the implicit primary constructor, so the `Parent(x)`
+    /// reference would otherwise land on `container = null` (when the declaration line has no body
+    /// range) or on the record class itself. Overriding the container over the whole header range
+    /// keeps the chain edge attached to a synthetic function named after the record. Body lines past
+    /// `;` / `{` are not included, so methods inside a braced record still resolve to their real
+    /// containers via FindInnermostContainer.
+    /// C# record のプライマリコンストラクタ宣言に対して、宣言ヘッダー全体を合成 function コンテナで
+    /// 上書きするための (start, end, container) リストを作る。multi-line 宣言でも `Parent(...)` が
+    /// header 末尾にあれば拾える。
     /// </summary>
-    private static Dictionary<int, SymbolRecord> BuildCSharpRecordPrimaryCtorContainers(
+    private static List<(int StartLine, int EndLine, SymbolRecord Container)> BuildCSharpRecordPrimaryCtorContainers(
         string language,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        string[] structuralLines)
     {
-        var map = new Dictionary<int, SymbolRecord>();
+        var ranges = new List<(int, int, SymbolRecord)>();
         if (language != "csharp")
-            return map;
+            return ranges;
 
         foreach (var symbol in symbols)
         {
@@ -587,9 +649,18 @@ public static class ReferenceExtractor
             var signature = symbol.Signature;
             if (string.IsNullOrWhiteSpace(signature))
                 continue;
+            // Quick filter: only bother for declarations that look like a record primary-ctor opener.
+            // 前段フィルタ: record のプライマリコンストラクタ宣言に見える場合だけ続行する。
             if (!CSharpRecordPrimaryCtorSignatureRegex.IsMatch(signature))
                 continue;
-            if (!HasCSharpRecordBasePrimaryCtorCall(signature))
+
+            // Signature stored on the SymbolRecord is only the first declaration line, so for
+            // multi-line forms it may not contain `: Parent(...)`. Walk the structural-masked lines
+            // from StartLine until we hit `;` or `{` and examine the joined header text.
+            // 宣言の signature は 1 行目だけなので、複数行宣言では `: Parent(...)` が含まれていない
+            // ことがある。structuralLines を使って `;` / `{` までヘッダーを連結してから判定する。
+            var (headerEndLine, headerText) = CollectCSharpRecordHeader(structuralLines, symbol.StartLine);
+            if (!HasCSharpRecordBasePrimaryCtorCall(headerText))
                 continue;
 
             var synthetic = new SymbolRecord
@@ -599,9 +670,9 @@ public static class ReferenceExtractor
                 Name = symbol.Name,
                 Line = symbol.Line,
                 StartLine = symbol.StartLine,
-                EndLine = symbol.StartLine,
+                EndLine = headerEndLine,
                 BodyStartLine = symbol.StartLine,
-                BodyEndLine = symbol.StartLine,
+                BodyEndLine = headerEndLine,
                 Signature = signature,
                 ContainerKind = symbol.ContainerKind,
                 ContainerName = symbol.ContainerName,
@@ -610,24 +681,61 @@ public static class ReferenceExtractor
                 Visibility = symbol.Visibility,
             };
 
-            // Record declaration StartLine is the line the base primary-ctor call sits on.
-            // Only that exact line is overridden so method bodies inside `{...}` keep their
-            // real containers via FindInnermostContainer.
-            // 宣言行のみを上書きし、`{...}` 本体内のメソッドは本来のコンテナを保つ。
-            map[symbol.StartLine] = synthetic;
+            ranges.Add((symbol.StartLine, headerEndLine, synthetic));
         }
 
-        return map;
+        return ranges;
     }
 
     /// <summary>
-    /// Returns true when the C# type signature carries a base-list entry that looks like a
-    /// primary-constructor call (contains `(`).
-    /// C# 型シグネチャの base-list 先頭エントリが primary-ctor 呼び出し（`(` を含む）かを判定する。
+    /// Walk structural-masked lines starting at the 1-based <paramref name="startLine"/> and collect
+    /// the declaration header up to (but not including) the first `;` or `{` that sits outside a
+    /// string or comment. Returns the 1-based line number where the terminator was found (or the
+    /// final line index when none was found) and the joined header text for further parsing.
+    /// structuralLines を使って、record 宣言ヘッダーを最初の `;` / `{` まで連結する。
     /// </summary>
-    private static bool HasCSharpRecordBasePrimaryCtorCall(string signature)
+    private static (int EndLine, string Text) CollectCSharpRecordHeader(string[] structuralLines, int startLine)
     {
-        var text = signature.TrimEnd();
+        var startIdx = Math.Max(0, startLine - 1);
+        if (structuralLines.Length == 0)
+            return (startLine, string.Empty);
+
+        var sb = new System.Text.StringBuilder();
+        for (int i = startIdx; i < structuralLines.Length; i++)
+        {
+            var line = structuralLines[i];
+            var terminatorIdx = -1;
+            for (int j = 0; j < line.Length; j++)
+            {
+                if (line[j] == ';' || line[j] == '{')
+                {
+                    terminatorIdx = j;
+                    break;
+                }
+            }
+
+            if (terminatorIdx >= 0)
+            {
+                sb.Append(line, 0, terminatorIdx);
+                return (i + 1, sb.ToString());
+            }
+
+            sb.Append(line);
+            sb.Append('\n');
+        }
+
+        return (structuralLines.Length, sb.ToString());
+    }
+
+    /// <summary>
+    /// Returns true when the C# type header text carries a base-list entry that looks like a
+    /// primary-constructor call (contains `(`). Accepts multi-line header text already joined by
+    /// <see cref="CollectCSharpRecordHeader"/>.
+    /// C# 型ヘッダー（複数行連結後でも可）の base-list 先頭エントリが `(` を含むかを判定する。
+    /// </summary>
+    private static bool HasCSharpRecordBasePrimaryCtorCall(string headerText)
+    {
+        var text = headerText.TrimEnd();
         if (text.EndsWith(";", StringComparison.Ordinal))
             text = text.Substring(0, text.Length - 1).TrimEnd();
         if (text.EndsWith("{", StringComparison.Ordinal))
