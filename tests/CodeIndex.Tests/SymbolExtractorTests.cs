@@ -3983,6 +3983,102 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_LinqQueryExpressionContinuations_DoNotLeakPhantoms()
+    {
+        // LINQ query-expression continuation lines with qualified method calls
+        // (e.g. `where Validator.Check(x)`, `select Mapper.Convert(x)`, `orderby Math.Abs(x)`)
+        // must not fire the explicit-interface-implementation regex as
+        // `returnType=<linq-keyword>` + `interface=<qualifier>` + `name=<member>`.
+        // Closes #377.
+        // LINQ 式の continuation 行（`where Validator.Check(x)` など）が、明示的インターフェース実装
+        // regex の returnType+qualifier+name 形として一致し phantom function を生まないこと。Closes #377.
+        var content = """
+            using System.Linq;
+            using System.Collections.Generic;
+
+            namespace LinqPhantom;
+
+            public static class Validator { public static bool Check(int x) => x > 0; }
+            public static class Mapper { public static string Convert(int x) => x.ToString(); }
+
+            public class Svc
+            {
+                public void Query()
+                {
+                    var list = new List<int> { 1, 2, 3 };
+
+                    var q1 = from x in list
+                             where Validator.Check(x)
+                             select x;
+
+                    var q2 = from x in list
+                             select Mapper.Convert(x);
+
+                    var q3 = from x in list
+                             orderby Math.Abs(x)
+                             select x;
+
+                    // Exercise line-leading `group`, `by`, and `into` so the guard
+                    // covers each keyword individually instead of only the q4 opener.
+                    // 行頭 `group` / `by` / `into` を個別に踏ませ、q4 先頭だけで抜けないようにする。
+                    var q4 = from x in list
+                             group x
+                             by Helper.Key(x)
+                             into g
+                             select g;
+
+                    // Exercise line-leading `join`, `on`, and `equals` so the guard
+                    // covers each keyword individually instead of only the q5 opener.
+                    // 行頭 `join` / `on` / `equals` を個別に踏ませ、q5 先頭だけで抜けないようにする。
+                    var q5 = from x in list
+                             join y in list
+                             on Helper.Key(x)
+                             equals Helper.Key(y)
+                             select x;
+
+                    var q6 = from x in list
+                             let doubled = Helper.Double(x)
+                             select doubled;
+
+                    // Exercise line-leading `ascending` and `descending` so the guard
+                    // covers them even when an `orderby` clause wraps onto its own line.
+                    // 行頭 `ascending` / `descending` を個別に踏ませ、`orderby` が折り返したときも抜けないようにする。
+                    var q7 = from x in list
+                             orderby Helper.Key(x)
+                             ascending
+                             select x;
+
+                    var q8 = from x in list
+                             orderby Helper.Key(x)
+                             descending
+                             select x;
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Real symbols should survive / 実体のシンボルは残る
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Validator");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Mapper");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Query");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Check" && s.ContainerName == "Validator");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Convert" && s.ContainerName == "Mapper");
+
+        // No phantom `function` symbols should appear inside the Query body / Query 本体から phantom が出ないこと
+        var phantomNames = new[] { "Abs", "Key", "Double" };
+        foreach (var name in phantomNames)
+        {
+            Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == name);
+        }
+
+        // Check and Convert must only be declared once each (on their real definition lines), not duplicated from LINQ continuations.
+        // Check と Convert は定義行の1個ずつだけで、LINQ continuation からの重複が出ないこと。
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "Check"));
+        Assert.Equal(1, symbols.Count(s => s.Kind == "function" && s.Name == "Convert"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
@@ -5879,6 +5975,198 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RED");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GREEN");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BLUE");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsTabIndentedEnumMembers()
+    {
+        // Single-tab indent enum (EditorConfig indent_style=tab) — regression for #364 Java side.
+        // タブ1文字でインデントされた enum（#364 の Java 側クロス言語修正のリグレッション）。
+        var content = "public enum Color {\n\tRED,\n\tGREEN,\n\tBLUE;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RED");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GREEN");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BLUE");
+    }
+
+    [Fact]
+    public void Extract_Java_DoesNotExtractMethodCallsAsEnumMembers()
+    {
+        // A class body method call like `\tRED();` must not be misread as an enum member — regression for #292.
+        // クラス本体内のメソッド呼び出し `\tRED();` を enum メンバーとして誤検出しないこと（#292 のリグレッション）。
+        var content = "public class Test {\n\tvoid run() {\n\t\tRED();\n\t\tGREEN();\n\t}\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "RED");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "GREEN");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesAnnotationWithQuotedParen()
+    {
+        // `@Label(")")` must not fool the paren-balance counter — the `)` is inside a string literal.
+        // `@Label(")")` の `)` は文字列内なので括弧バランスで閉じてはいけない。
+        var content = "public enum E {\n    @Label(\")\") A,\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesBlockCommentBetweenAnnotationAndMember()
+    {
+        // Block comments between `@Annotation` and the member name must be skipped.
+        // アノテーションとメンバー名の間の block comment を読み飛ばすこと。
+        var content = "public enum E {\n    @A /*note*/ B,\n    C;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.ContainerName == "E");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesEmptyEnumBody()
+    {
+        // `enum X {}` has no members; the enum itself should still be extracted.
+        // 空本体の enum でも enum 自身は抽出されること。
+        var content = "public enum Empty {}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Empty");
+        Assert.DoesNotContain(symbols, s => s.ContainerKind == "enum" && s.ContainerName == "Empty");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesEnumWithOnlySemicolon()
+    {
+        // `enum X { ; }` declares no members but may still hold methods/fields.
+        // 本体が `;` のみの enum はメンバーを持たない。
+        var content = "public enum NoMembers {\n    ;\n    private int count;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "NoMembers");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.ContainerKind == "enum" && s.ContainerName == "NoMembers" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesTextBlockContainingBrace()
+    {
+        // A `}` inside a Java text block (""") must not close the enum body prematurely, which
+        // would otherwise drop every member after the text block. Regression for FindJavaBraceRange.
+        // Java text block 内の `}` で enum 本体範囲を誤って閉じず、後続メンバーが落ちないこと。
+        var content = "public enum TxtBlock {\n  FIRST(\"\"\"\n    end }\n    more ;\n    \"\"\"),\n  SECOND;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FIRST" && s.ContainerName == "TxtBlock");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "SECOND" && s.ContainerName == "TxtBlock");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesStringContainingBrace()
+    {
+        // A `}` inside a regular string literal must not close the enum body prematurely either.
+        // 文字列リテラル内の `}` でも enum 本体範囲を閉じないこと。
+        var content = "public enum QuotedBrace {\n    A(\"text with } inside\"),\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "QuotedBrace");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "QuotedBrace");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsUnicodeEnumMembers()
+    {
+        var content = "public enum Localized {\n    RÉSUMÉ,\n    NAÏVE;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RÉSUMÉ" && s.ContainerName == "Localized");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NAÏVE" && s.ContainerName == "Localized");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "R" && s.ContainerName == "Localized");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "NA" && s.ContainerName == "Localized");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesTrailingComma()
+    {
+        // `enum X { A, B, }` — trailing comma before closing brace must not emit an empty member.
+        // `,` の直後が body end でも空メンバーを出さないこと。
+        var content = "public enum Trailing {\n    A,\n    B,\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "Trailing");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "Trailing");
+        Assert.Equal(2, symbols.Count(s => s.ContainerKind == "enum" && s.ContainerName == "Trailing" && s.BodyStartLine == null));
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesAnonymousMemberBody()
+    {
+        // Anonymous member bodies (`A { void f() {} }`) must not suppress the following member.
+        // 匿名メンバー本体があっても直後のメンバーが消えないこと。
+        var content = "public enum WithBody {\n    A {\n        void f() {}\n    },\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_RecoversMembersWhenAnnotationIsMalformed()
+    {
+        // An unclosed `@Ann(` would otherwise make the primary scanner swallow subsequent member lines.
+        // The per-line fallback rescues obvious uppercase-identifier members.
+        // 未閉鎖の `@Ann(` で primary scanner が後続行を飲み込んでしまう状況を、line fallback で救済する。
+        var content = "public enum E {\n    @Ann(\n    A,\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "E");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E");
+    }
+
+    [Fact]
+    public void Extract_Java_RecoveryIgnoresLinesInsideAnonymousMemberBody()
+    {
+        // Malformed input forces the recovery pass; recovery must track brace depth so uppercase
+        // call statements inside an anonymous member body (e.g. `ACTIVATE_HELPER();`) are not
+        // emitted as phantom enum members, and the subsequent real member is still captured.
+        // 不整形入力で recovery が走るとき、匿名メンバー本体内の大文字呼び出しを誤って member にせず、
+        // その後の実メンバーを救済できること。
+        var content = "public enum E {\n    @Bad(\n    RED {\n        void f() { ACTIVATE_HELPER(); }\n    },\n    GREEN;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GREEN" && s.ContainerName == "E" && s.BodyStartLine == null);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "ACTIVATE_HELPER" && s.ContainerName == "E" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_RecoveryDedupsByNameAcrossAnnotationStartLines()
+    {
+        // Primary scanner stamps StartLine at the annotation line; recovery stamps the member-name
+        // line. StartLine-based dedup would double-emit. Name-based dedup must suppress duplicates.
+        // primary scanner と recovery で StartLine 基準が異なるため、名前基準で重複排除されること。
+        var content = "public enum E {\n    @Marker\n    A,\n    @Bad(\n    B;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var aMembers = symbols.Where(s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "E" && s.BodyStartLine == null).ToList();
+        Assert.Single(aMembers);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_StopsEnumMembersAtSemicolon()
+    {
+        // After the first top-level `;` inside the enum body, non-member declarations must not be captured as members.
+        // Enum members have no body range (BodyStartLine == null); the method extractor populates a body range.
+        // enum 本体内の最初の top-level `;` より後の宣言をメンバーとして誤検出しないこと。
+        // メンバーには body range が無い（BodyStartLine == null）点をメソッド抽出と区別する。
+        var content = "public enum Status {\n    ACTIVE,\n    INACTIVE;\n    public void activate() { ACTIVATE_HELPER(); }\n    private static void ACTIVATE_HELPER() {}\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ACTIVE" && s.ContainerName == "Status" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "INACTIVE" && s.ContainerName == "Status" && s.BodyStartLine == null);
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "ACTIVATE_HELPER" && s.BodyStartLine == null);
     }
 
     [Fact]

@@ -338,17 +338,26 @@ public static class SymbolExtractor
             // Method with return type — visibility optional for explicit interface impl and nested members.
             // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
+            // LINQ query-expression keywords (from/where/select/orderby/group/join/let/into/on/equals/ascending/descending/by)
+            // are also excluded so continuation lines like `select Mapper.Convert(x)` or `where Validator.Check(x)` do not
+            // fire returnType+qualifier+name phantoms. The lookahead is anchored to the line-leading token, so it only
+            // blocks continuation forms; ordinary method declarations whose NAME happens to be a LINQ keyword still match
+            // via their return type (e.g. `public void where() { }`). Closes #377.
             // The `(?!(?:base|this)\b)` guard on the name capture belt-and-suspenders against constructor-chain
             // initializers (`: base(...)` / `: this(...)`) leaking phantom `function base` / `function this`
             // symbols if any upstream guard becomes permissive. Closes #331.
             // Note: `new` is NOT excluded because `new void Hidden()` is a valid C# member-hiding declaration.
             // 戻り値型付きメソッド — 明示的インターフェース実装やネストメンバー向けに visibility 省略可。
             // negative lookahead で呼び出し行（await/return/throw/yield/var/typeof 等）と ternary continuation を除外する。
+            // LINQ 式キーワード (from/where/select/orderby/group/join/let/into/on/equals/ascending/descending/by) も除外し、
+            // `select Mapper.Convert(x)` や `where Validator.Check(x)` のような continuation 行が returnType+qualifier+name
+            // phantom を生まないようにする。lookahead は行頭トークンに固定しているため、continuation 形のみを弾き、
+            // LINQ キーワードと同名のメソッド（例: `public void where() { }`）は戻り値型を介して通常どおり一致する。Closes #377.
             // `(?!(?:base|this)\b)` を name キャプチャに付け、上流ガードが緩んだ場合でも
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?!\s*(?:(?:{CSharpVisibilityPattern})\s+)?delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern})\s+)?delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex($@"^\s*(?<visibility>{CSharpVisibilityPattern})\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -383,11 +392,14 @@ public static class SymbolExtractor
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
             // so alias-qualified types like `global::System.String` and `Alias::Type` still match.
+            // LINQ query-expression keywords are also excluded from the negative lookahead so that
+            // continuation lines like `where Validator.Check(x)` / `select Mapper.Convert(x)` /
+            // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. Closes #377.
             // 明示的インターフェース実装 (例: void IDisposable.Dispose())
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
             // short property name (Value) is recorded as name, consistent with how the method row
@@ -464,9 +476,12 @@ public static class SymbolExtractor
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Enum member (uppercase constant) — 2+ whitespace for any indent style (2-space, 4-space, tab)
-            // enum メンバー（大文字定数）— 任意のインデントスタイル対応（2スペース、4スペース、タブ）
-            new("function", new Regex(@"^\s{2,}(?<name>[A-Z]\w*)\s*(?:\([^)]*\))?\s*(?:,|\{|;)\s*$", RegexOptions.Compiled), BodyStyle.None),
+            // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
+            // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
+            // outside the enum body (e.g. `\tRED();` method calls inside a class body).
+            // enum メンバーは ExtractJavaEnumMembers の body-scoped scanner で抽出する。
+            // 任意のインデントスタイル（タブ、2スペース、4スペース）に対応しつつ、enum 本体外の
+            // メンバー風の行（例: クラス本体内の `\tRED();` メソッド呼び出し）を誤検出しない。
             new("import",   new Regex(@"^\s*import\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["kotlin"] =
@@ -1139,6 +1154,8 @@ public static class SymbolExtractor
             ExtractJavaScriptTypeScriptBareMethods(fileId, lang, lines, symbols, privateScopeColumns!);
         else if (lang == "csharp")
             ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
+        else if (lang == "java")
+            ExtractJavaEnumMembers(fileId, lines, symbols);
 
         AssignContainers(symbols);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
@@ -1355,6 +1372,675 @@ public static class SymbolExtractor
 
         if (currentStart != null)
             TryAddCSharpEnumMemberFromSpan(fileId, enumSymbol, rawLines, enumScannerLines, currentStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
+    }
+
+    // Java identifier start: Unicode letter / letter-number / underscore / dollar. Continue chars also
+    // allow digits, connector punctuation, and combining marks so enum members like `RÉSUMÉ` survive intact.
+    // Java 識別子の先頭: Unicode の letter / letter-number / underscore / dollar。
+    // 継続文字は数字・connector punctuation・結合文字も許可し、`RÉSUMÉ` のような enum member を切らない。
+    private static readonly Regex JavaEnumMemberNameRegex = new(
+        @"(?<name>[\p{L}\p{Nl}_$][\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}_$]*)",
+        RegexOptions.Compiled);
+
+    // Line-based fallback used only when the primary body scanner exits with unbalanced delimiters,
+    // which signals malformed input. Mirrors the pre-body-scope regex so mid-edit states still emit
+    // obvious uppercase-identifier members.
+    // malformed 入力を primary scanner が検知した場合に限って使う line-based fallback。以前の行単位正規表現と同等。
+    private static readonly Regex JavaEnumMemberLineFallbackRegex = new(
+        @"^\s+(?<name>[A-Z]\w*)\s*(?:\([^)]*\))?\s*(?:,|\{|;)\s*$",
+        RegexOptions.Compiled);
+
+    private static void ExtractJavaEnumMembers(long fileId, string[] rawLines, List<SymbolRecord> symbols)
+    {
+        // Snapshot enum declarations first — we mutate the list during iteration.
+        // 反復中に list を書き換えるため、先に enum 宣言を snapshot しておく。
+        var enumDeclarations = symbols
+            .Where(s => s.Kind == "enum" && s.BodyStartLine != null && s.BodyEndLine != null)
+            .OrderBy(s => s.StartLine)
+            .ThenByDescending(s => s.EndLine)
+            .ToList();
+
+        foreach (var enumSymbol in enumDeclarations)
+        {
+            if (!TryFindJavaEnumBodyBounds(rawLines, enumSymbol, out var bodyStartLineIndex, out var bodyStartColumn, out var bodyEndLineIndex, out var bodyEndColumnExclusive))
+                continue;
+
+            ExtractJavaEnumMembersFromBody(
+                fileId,
+                enumSymbol,
+                rawLines,
+                bodyStartLineIndex,
+                bodyStartColumn,
+                bodyEndLineIndex,
+                bodyEndColumnExclusive,
+                symbols);
+        }
+    }
+
+    // Track Java source-code scanner state (strings, char literals, comments, text blocks).
+    // Java ソース scanner の state（文字列・char literal・コメント・text block）を表す。
+    private enum JavaScanMode
+    {
+        Normal,
+        LineComment,
+        BlockComment,
+        String,
+        TextBlock,
+        Char,
+    }
+
+    private static bool TryFindJavaEnumBodyBounds(
+        string[] rawLines,
+        SymbolRecord enumSymbol,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
+        out int bodyEndLineIndex,
+        out int bodyEndColumnExclusive)
+    {
+        bodyStartLineIndex = 0;
+        bodyStartColumn = 0;
+        bodyEndLineIndex = 0;
+        bodyEndColumnExclusive = 0;
+
+        var declarationLineIndex = enumSymbol.StartLine - 1;
+        if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
+            return false;
+
+        var scanEndLineIndex = Math.Min(enumSymbol.EndLine, rawLines.Length) - 1;
+        if (scanEndLineIndex < declarationLineIndex)
+            return false;
+
+        var mode = JavaScanMode.Normal;
+        var depth = 0;
+        var opened = false;
+
+        var lineIndex = declarationLineIndex;
+        var column = 0;
+        while (lineIndex <= scanEndLineIndex)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = rawLines[lineIndex];
+            while (column < line.Length)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '{')
+                {
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLineIndex = lineIndex;
+                        bodyStartColumn = column + 1;
+                    }
+                }
+                else if (ch == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        bodyEndLineIndex = lineIndex;
+                        bodyEndColumnExclusive = column;
+                        return true;
+                    }
+                }
+                column++;
+            }
+
+            lineIndex++;
+            column = 0;
+        }
+
+        if (!opened)
+            return false;
+
+        bodyEndLineIndex = scanEndLineIndex;
+        bodyEndColumnExclusive = rawLines[scanEndLineIndex].Length;
+        return true;
+    }
+
+    // Consume strings / chars / comments / text blocks, updating mode and advancing column.
+    // Returns true if one or more characters were consumed; caller must NOT increment column again.
+    // Returns false if the current character is structural code and caller should handle it.
+    // 文字列・char・コメント・text block を読み飛ばして column を進める。
+    // 消費したら true を返し、呼び出し元は column を再度進めないこと。
+    // 構造的コードなら false を返して呼び出し元に処理を委ねる。
+    private static bool TryConsumeJavaNonCode(string line, ref int column, ref JavaScanMode mode)
+    {
+        if (column >= line.Length)
+            return false;
+
+        var ch = line[column];
+        switch (mode)
+        {
+            case JavaScanMode.LineComment:
+                column = line.Length;
+                return true;
+            case JavaScanMode.BlockComment:
+                if (ch == '*' && column + 1 < line.Length && line[column + 1] == '/')
+                {
+                    mode = JavaScanMode.Normal;
+                    column += 2;
+                    return true;
+                }
+                column++;
+                return true;
+            case JavaScanMode.String:
+                if (ch == '\\' && column + 1 < line.Length)
+                {
+                    column += 2;
+                    return true;
+                }
+                if (ch == '"')
+                {
+                    mode = JavaScanMode.Normal;
+                    column++;
+                    return true;
+                }
+                column++;
+                return true;
+            case JavaScanMode.TextBlock:
+                if (ch == '"' && column + 2 < line.Length && line[column + 1] == '"' && line[column + 2] == '"')
+                {
+                    mode = JavaScanMode.Normal;
+                    column += 3;
+                    return true;
+                }
+                if (ch == '\\' && column + 1 < line.Length)
+                {
+                    column += 2;
+                    return true;
+                }
+                column++;
+                return true;
+            case JavaScanMode.Char:
+                if (ch == '\\' && column + 1 < line.Length)
+                {
+                    column += 2;
+                    return true;
+                }
+                if (ch == '\'')
+                {
+                    mode = JavaScanMode.Normal;
+                    column++;
+                    return true;
+                }
+                column++;
+                return true;
+            default:
+                if (ch == '/' && column + 1 < line.Length && line[column + 1] == '/')
+                {
+                    mode = JavaScanMode.LineComment;
+                    column = line.Length;
+                    return true;
+                }
+                if (ch == '/' && column + 1 < line.Length && line[column + 1] == '*')
+                {
+                    mode = JavaScanMode.BlockComment;
+                    column += 2;
+                    return true;
+                }
+                if (ch == '"' && column + 2 < line.Length && line[column + 1] == '"' && line[column + 2] == '"')
+                {
+                    mode = JavaScanMode.TextBlock;
+                    column += 3;
+                    return true;
+                }
+                if (ch == '"')
+                {
+                    mode = JavaScanMode.String;
+                    column++;
+                    return true;
+                }
+                if (ch == '\'')
+                {
+                    mode = JavaScanMode.Char;
+                    column++;
+                    return true;
+                }
+                return false;
+        }
+    }
+
+    private static void ExtractJavaEnumMembersFromBody(
+        long fileId,
+        SymbolRecord enumSymbol,
+        string[] rawLines,
+        int bodyStartLineIndex,
+        int bodyStartColumn,
+        int bodyEndLineIndex,
+        int bodyEndColumnExclusive,
+        List<SymbolRecord> symbols)
+    {
+        var mode = JavaScanMode.Normal;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0; // depth inside the enum body (member anonymous bodies push this).
+        (int LineIndex, int Column)? memberStart = null;
+        var lineIndex = bodyStartLineIndex;
+        var column = bodyStartColumn;
+
+        while (lineIndex <= bodyEndLineIndex)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = rawLines[lineIndex];
+            var scanEndColumnExclusive = lineIndex == bodyEndLineIndex
+                ? Math.Min(bodyEndColumnExclusive, line.Length)
+                : line.Length;
+
+            while (column < scanEndColumnExclusive)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+
+                if (ch == '(')
+                {
+                    if (memberStart == null)
+                        memberStart = (lineIndex, column);
+                    parenDepth++;
+                    column++;
+                    continue;
+                }
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    column++;
+                    continue;
+                }
+                if (ch == '[')
+                {
+                    if (memberStart == null)
+                        memberStart = (lineIndex, column);
+                    bracketDepth++;
+                    column++;
+                    continue;
+                }
+                if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    column++;
+                    continue;
+                }
+                if (ch == '{')
+                {
+                    if (memberStart == null)
+                        memberStart = (lineIndex, column);
+                    braceDepth++;
+                    column++;
+                    continue;
+                }
+                if (ch == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                {
+                    if (ch == ',')
+                    {
+                        if (memberStart != null)
+                        {
+                            TryAddJavaEnumMemberFromSpan(fileId, enumSymbol, rawLines, memberStart.Value, (lineIndex, column), symbols);
+                            memberStart = null;
+                        }
+                        column++;
+                        continue;
+                    }
+                    if (ch == ';')
+                    {
+                        if (memberStart != null)
+                        {
+                            TryAddJavaEnumMemberFromSpan(fileId, enumSymbol, rawLines, memberStart.Value, (lineIndex, column), symbols);
+                            memberStart = null;
+                        }
+                        return;
+                    }
+                }
+
+                if (!char.IsWhiteSpace(ch) && memberStart == null)
+                    memberStart = (lineIndex, column);
+
+                column++;
+            }
+
+            lineIndex++;
+            column = 0;
+        }
+
+        if (memberStart != null)
+            TryAddJavaEnumMemberFromSpan(fileId, enumSymbol, rawLines, memberStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
+
+        // Malformed-input recovery: if the scanner exited with unbalanced paren/bracket depths, the
+        // body almost certainly contains an unterminated annotation. Fall back to the pre-body-scope
+        // line regex so obvious enum members aren't suppressed wholesale by a single syntax error.
+        // Depths > 0 mean the primary scan could not find clean boundaries — well-formed code always
+        // closes back to 0 at the body end.
+        // 入力不整形に対する recovery: primary scan が paren/bracket 深さを 0 に戻せずに終わった場合、未閉鎖の
+        // annotation である可能性が高い。line regex を使って明白な enum member を救済する。
+        if (parenDepth > 0 || bracketDepth > 0)
+        {
+            RecoverJavaEnumMembersByLine(
+                fileId,
+                enumSymbol,
+                rawLines,
+                bodyStartLineIndex,
+                bodyStartColumn,
+                bodyEndLineIndex,
+                bodyEndColumnExclusive,
+                symbols);
+        }
+    }
+
+    private static void RecoverJavaEnumMembersByLine(
+        long fileId,
+        SymbolRecord enumSymbol,
+        string[] rawLines,
+        int bodyStartLineIndex,
+        int bodyStartColumn,
+        int bodyEndLineIndex,
+        int bodyEndColumnExclusive,
+        List<SymbolRecord> symbols)
+    {
+        // Dedup by member name. The primary scanner stamps StartLine at the first non-whitespace
+        // (often the annotation line), while this fallback stamps the member-name line, so
+        // StartLine-based dedup would miss matches. Java enum member names are unique.
+        // メンバー名で重複排除する。primary scanner と recovery で StartLine 基準が揃わないため。
+        var alreadyEmittedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var existing in symbols)
+        {
+            if (existing.FileId == enumSymbol.FileId
+                && existing.ContainerKind == "enum"
+                && existing.ContainerName == enumSymbol.Name)
+            {
+                alreadyEmittedNames.Add(existing.Name);
+            }
+        }
+
+        // Track brace depth across the body so lines inside anonymous member bodies or methods
+        // don't spuriously match the line regex. Depth 0 means "top of the enum body member list."
+        // 匿名メンバー本体やメソッド本体内の行を誤って member として拾わないよう brace 深さを追う。
+        var mode = JavaScanMode.Normal;
+        var braceDepth = 0;
+
+        for (int i = bodyStartLineIndex; i <= bodyEndLineIndex && i < rawLines.Length; i++)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = rawLines[i];
+            var lineStartBraceDepth = braceDepth;
+            var lineStartMode = mode;
+
+            // Only try the fallback regex when this line starts at the enum body's top level and
+            // not inside a string / comment / text block carried over from the previous line.
+            // 行頭が enum 本体の top-level で、かつ非コード状態でもないときだけ fallback regex を試す。
+            if (lineStartBraceDepth == 0 && lineStartMode == JavaScanMode.Normal)
+            {
+                var match = JavaEnumMemberLineFallbackRegex.Match(line);
+                if (match.Success)
+                {
+                    var name = match.Groups["name"].Value;
+                    if (!alreadyEmittedNames.Contains(name))
+                    {
+                        symbols.Add(new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "function",
+                            Name = name,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            EndLine = i + 1,
+                            Signature = line.Trim(),
+                            ContainerKind = "enum",
+                            ContainerName = enumSymbol.Name,
+                        });
+                        alreadyEmittedNames.Add(name);
+                    }
+                }
+            }
+
+            // Advance mode / brace depth across this line so subsequent lines see correct state.
+            // A top-level `;` (braceDepth == 0) terminates the member list — stop recovery.
+            // 次行の状態を正しく保つため行内の mode / brace 深さを更新する。top-level の `;` は終端。
+            var startColumn = (i == bodyStartLineIndex) ? bodyStartColumn : 0;
+            var endColumnExclusive = (i == bodyEndLineIndex)
+                ? Math.Min(bodyEndColumnExclusive, line.Length)
+                : line.Length;
+            var column = startColumn;
+            while (column < endColumnExclusive)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '{')
+                    braceDepth++;
+                else if (ch == '}' && braceDepth > 0)
+                    braceDepth--;
+                else if (ch == ';' && braceDepth == 0)
+                    return;
+
+                column++;
+            }
+        }
+    }
+
+    private static void TryAddJavaEnumMemberFromSpan(
+        long fileId,
+        SymbolRecord enumSymbol,
+        string[] rawLines,
+        (int LineIndex, int Column) start,
+        (int LineIndex, int Column) endExclusive,
+        List<SymbolRecord> symbols)
+    {
+        var rawSignature = GetSourceSpanText(rawLines, start, endExclusive).Trim();
+        if (rawSignature.Length == 0)
+            return;
+
+        // Skip leading `@Annotation(...)` annotations before the member name.
+        // メンバー名の前にある `@Annotation(...)` を読み飛ばす。
+        var nameSearchStart = SkipLeadingJavaAnnotations(rawSignature);
+        if (nameSearchStart >= rawSignature.Length)
+            return;
+
+        var match = JavaEnumMemberNameRegex.Match(rawSignature, nameSearchStart);
+        if (!match.Success || match.Index != nameSearchStart)
+            return;
+
+        var name = match.Groups["name"].Value;
+        if (string.IsNullOrEmpty(name))
+            return;
+
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = name,
+            Line = start.LineIndex + 1,
+            StartLine = start.LineIndex + 1,
+            EndLine = endExclusive.LineIndex + 1,
+            Signature = rawSignature,
+            ContainerKind = "enum",
+            ContainerName = enumSymbol.Name,
+        });
+    }
+
+    private static int SkipLeadingJavaAnnotations(string span)
+    {
+        var mode = JavaScanMode.Normal;
+        var index = SkipJavaWhitespaceAndComments(span, 0, ref mode);
+
+        while (index < span.Length && mode == JavaScanMode.Normal && span[index] == '@')
+        {
+            index++; // consume '@'
+            index = SkipJavaWhitespaceAndComments(span, index, ref mode);
+            if (mode != JavaScanMode.Normal)
+                return index;
+
+            while (index < span.Length && (char.IsLetterOrDigit(span[index]) || span[index] == '_' || span[index] == '.' || span[index] == '$'))
+                index++;
+
+            index = SkipJavaWhitespaceAndComments(span, index, ref mode);
+            if (mode != JavaScanMode.Normal)
+                return index;
+
+            if (index < span.Length && span[index] == '(')
+            {
+                var depth = 1;
+                index++;
+                while (index < span.Length && depth > 0)
+                {
+                    if (TryConsumeJavaNonCodeAcrossLines(span, ref index, ref mode))
+                        continue;
+
+                    var ch = span[index];
+                    if (ch == '(') depth++;
+                    else if (ch == ')') depth--;
+                    index++;
+                }
+            }
+
+            index = SkipJavaWhitespaceAndComments(span, index, ref mode);
+        }
+
+        return index;
+    }
+
+    // Walk whitespace, comments, and newlines in a multi-line span until the next non-whitespace code position.
+    // 複数行 span 内の空白・コメント・改行をまとめて読み飛ばす。
+    private static int SkipJavaWhitespaceAndComments(string span, int index, ref JavaScanMode mode)
+    {
+        while (index < span.Length)
+        {
+            if (mode == JavaScanMode.Normal && char.IsWhiteSpace(span[index]))
+            {
+                index++;
+                continue;
+            }
+
+            if (TryConsumeJavaNonCodeAcrossLines(span, ref index, ref mode))
+                continue;
+
+            if (mode == JavaScanMode.Normal)
+                return index;
+
+            index++;
+        }
+        return index;
+    }
+
+    // Multi-line-aware variant of TryConsumeJavaNonCode. Handles `\n` explicitly so it can run on
+    // a single span string that contains newlines (the line-based caller uses the per-line variant).
+    // 複数行 span 対応版。`\n` を明示的に処理し、改行跨ぎの line-comment / 文字列終端も扱う。
+    private static bool TryConsumeJavaNonCodeAcrossLines(string span, ref int index, ref JavaScanMode mode)
+    {
+        if (index >= span.Length)
+            return false;
+
+        var ch = span[index];
+        switch (mode)
+        {
+            case JavaScanMode.LineComment:
+                if (ch == '\n')
+                    mode = JavaScanMode.Normal;
+                index++;
+                return true;
+            case JavaScanMode.String:
+            case JavaScanMode.Char:
+                // Non-text-block Java string / char literals cannot cross raw newlines.
+                // Treat a newline as an implicit terminator so the annotation skip stays sane.
+                // Java の非 text-block 文字列 / char は生の改行を跨げないため、改行で暗黙終端する。
+                if (ch == '\n')
+                {
+                    mode = JavaScanMode.Normal;
+                    index++;
+                    return true;
+                }
+                if (ch == '\\' && index + 1 < span.Length)
+                {
+                    index += 2;
+                    return true;
+                }
+                if (mode == JavaScanMode.String && ch == '"')
+                {
+                    mode = JavaScanMode.Normal;
+                    index++;
+                    return true;
+                }
+                if (mode == JavaScanMode.Char && ch == '\'')
+                {
+                    mode = JavaScanMode.Normal;
+                    index++;
+                    return true;
+                }
+                index++;
+                return true;
+            case JavaScanMode.BlockComment:
+                if (ch == '*' && index + 1 < span.Length && span[index + 1] == '/')
+                {
+                    mode = JavaScanMode.Normal;
+                    index += 2;
+                    return true;
+                }
+                index++;
+                return true;
+            case JavaScanMode.TextBlock:
+                if (ch == '"' && index + 2 < span.Length && span[index + 1] == '"' && span[index + 2] == '"')
+                {
+                    mode = JavaScanMode.Normal;
+                    index += 3;
+                    return true;
+                }
+                if (ch == '\\' && index + 1 < span.Length)
+                {
+                    index += 2;
+                    return true;
+                }
+                index++;
+                return true;
+            default:
+                if (ch == '/' && index + 1 < span.Length && span[index + 1] == '/')
+                {
+                    mode = JavaScanMode.LineComment;
+                    index += 2;
+                    return true;
+                }
+                if (ch == '/' && index + 1 < span.Length && span[index + 1] == '*')
+                {
+                    mode = JavaScanMode.BlockComment;
+                    index += 2;
+                    return true;
+                }
+                if (ch == '"' && index + 2 < span.Length && span[index + 1] == '"' && span[index + 2] == '"')
+                {
+                    mode = JavaScanMode.TextBlock;
+                    index += 3;
+                    return true;
+                }
+                if (ch == '"')
+                {
+                    mode = JavaScanMode.String;
+                    index++;
+                    return true;
+                }
+                if (ch == '\'')
+                {
+                    mode = JavaScanMode.Char;
+                    index++;
+                    return true;
+                }
+                return false;
+        }
     }
 
     private static bool TryGetFirstNonWhitespaceColumn(string line, int startColumn, int endColumnExclusive, out int column)
@@ -4122,6 +4808,7 @@ public static class SymbolExtractor
         {
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
             BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
+            BodyStyle.Brace when lang == "java" => FindJavaBraceRange(lines, startIndex, startColumn),
             BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
@@ -4392,6 +5079,59 @@ public static class SymbolExtractor
             }
 
             if (!opened && scanLine.TrimEnd().EndsWith(';'))
+                return (startIndex + 1, null, null);
+        }
+
+        return opened
+            ? (lines.Length, bodyStartLine, lines.Length)
+            : (startIndex + 1, null, null);
+    }
+
+    // Java-aware variant of FindBraceRange. Tracks strings, char literals, comments, and text blocks
+    // via the same lexer state machine used by the enum member extractor, so a `}` inside a text
+    // block or quoted string does not prematurely close the containing brace range.
+    // Java 用の FindBraceRange。文字列 / char / コメント / text block を enum member 抽出と同じ
+    // lexer で追跡し、text block や文字列内の `}` で本体範囲が早期終了しないようにする。
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    {
+        var depth = 0;
+        var opened = false;
+        int? bodyStartLine = null;
+        var mode = JavaScanMode.Normal;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = lines[i];
+            var column = i == startIndex ? Math.Min(startColumn, line.Length) : 0;
+
+            while (column < line.Length)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '{')
+                {
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLine = i + 1;
+                    }
+                }
+                else if (ch == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                        return (i + 1, bodyStartLine, i + 1);
+                }
+                column++;
+            }
+
+            if (!opened && mode == JavaScanMode.Normal && line.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
 

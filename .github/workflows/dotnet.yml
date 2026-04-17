@@ -30,6 +30,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Windows Defender real-time scanning of every temp file created by the
+      # test suite (temp projects, SQLite DBs, .cdidx directories, synthetic
+      # source files) dominates the Windows lane of this matrix; see issue #394.
+      # Excluding the workspace and every candidate temp root before build/test
+      # brings the Windows runtime back in line with macOS/Ubuntu.
+      # We rely on -ExclusionPath only: -ExclusionProcess expects full image
+      # paths, so bare filenames like 'dotnet.exe' would silently fail to take
+      # effect. We include $env:TMP and the live [IO.Path]::GetTempPath() value
+      # in addition to $env:TEMP / RUNNER_TEMP because .NET's Path.GetTempPath()
+      # consults TMP before TEMP and may resolve to a path that differs from
+      # $env:TEMP in pwsh. Paths are trimmed of trailing separators so the
+      # Get-MpPreference -notcontains check matches the stored form exactly.
+      # Every Add-MpPreference call uses -ErrorAction Stop, and a final
+      # Get-MpPreference verification throws if any exclusion did not register
+      # so the step fails loudly instead of degrading silently. The list of
+      # effective exclusions is also echoed to the log so future investigations
+      # of Windows lane variance can see exactly which paths were covered.
+      # テストスイートが大量に作る一時ファイル（temp project / SQLite DB /
+      # .cdidx / 合成ソース）を Windows Defender が都度スキャンする影響で
+      # Windows lane だけ極端に遅くなる（issue #394）。build/test 前に
+      # workspace と全候補 temp root を除外して macOS/Ubuntu と同等に戻す。
+      # -ExclusionProcess はフルパスを要求する仕様のため、bare filename では
+      # 黙って no-op になる。ここでは -ExclusionPath だけに寄せる。.NET の
+      # Path.GetTempPath() は TMP → TEMP → USERPROFILE の順で参照し、pwsh の
+      # $env:TEMP と異なるパスへ解決されうるため、$env:TMP と実行時の
+      # [IO.Path]::GetTempPath() も追加でカバーする。末尾区切り文字を揃え、
+      # Get-MpPreference -notcontains の照合を保存形式と完全一致させる。
+      # 各呼び出しを -ErrorAction Stop で明示失敗させ、最後に Get-MpPreference
+      # で登録を検証し、silent degradation を起こさないようにする。最終的に
+      # 適用された除外パス一覧はログにも出力し、今後 Windows lane のばらつき
+      # を調査するときにどのパスが対象になったかを追えるようにする。
+      - name: Exclude workspace and temp paths from Windows Defender (Windows only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${{ github.workspace }}",
+            $env:RUNNER_TEMP,
+            $env:TEMP,
+            $env:TMP,
+            [System.IO.Path]::GetTempPath()
+          )
+
+          $paths = $candidates |
+            Where-Object { $_ } |
+            ForEach-Object { $_.TrimEnd('\','/') } |
+            Where-Object { $_ } |
+            Select-Object -Unique
+
+          Write-Host "Windows Defender exclusion candidates:"
+          foreach ($path in $paths) {
+            Write-Host "  $path"
+          }
+
+          foreach ($path in $paths) {
+            Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+          }
+
+          $prefs = Get-MpPreference
+          foreach ($path in $paths) {
+            if ($prefs.ExclusionPath -notcontains $path) {
+              throw "Windows Defender exclusion was not applied: $path"
+            }
+          }
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
