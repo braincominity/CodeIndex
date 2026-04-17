@@ -1335,13 +1335,17 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "[a.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore:1", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.Contains("Invalid ignore rule skipped", json.GetProperty("errors")[0].GetProperty("message").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore:1", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.Contains("Invalid ignore rule skipped", json.GetProperty("warnings")[0].GetProperty("message").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("[a.py", indexedPaths);
@@ -1514,7 +1518,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_WithMalformedIgnoreRule_ReturnsPartialInsteadOfCrashing()
+    public void Run_FullScan_WithMalformedIgnoreRule_ReturnsSuccessWithWarningInsteadOfCrashing()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1526,10 +1530,14 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore:1", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.Contains("Invalid ignore rule skipped", json.GetProperty("errors")[0].GetProperty("message").GetString());
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore:1", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.Contains("Invalid ignore rule skipped", json.GetProperty("warnings")[0].GetProperty("message").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.DoesNotContain("ignored.py", indexedPaths);

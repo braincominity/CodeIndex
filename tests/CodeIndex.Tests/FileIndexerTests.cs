@@ -572,6 +572,38 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_RespectsGitIgnoreCaseSettingForAsciiOnly()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            RunGit(tempDir, "init");
+            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+            RunGit(tempDir, "config", "user.email", "tests@example.com");
+            RunGit(tempDir, "config", "core.ignorecase", "true");
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "Å.py\n[[:upper:]].rb\n[A-Z].cs\n");
+            File.WriteAllText(Path.Combine(tempDir, "å.py"), "print('kept non-ascii fold')");
+            File.WriteAllText(Path.Combine(tempDir, "a.rb"), "puts 'ignored lower via ignorecase'");
+            File.WriteAllText(Path.Combine(tempDir, "å.rb"), "puts 'kept non-ascii lower'");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class IgnoredLower { }");
+            File.WriteAllText(Path.Combine(tempDir, "å.cs"), "class KeptLower { }");
+
+            var indexer = new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir));
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "å.cs", "å.py", "å.rb"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignore()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -889,6 +921,7 @@ public class FileIndexerTests
             Assert.Equal(7, scanResult.Errors.Count);
             Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
+            Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
         }
         finally
         {

@@ -585,8 +585,9 @@ public static class IndexCommandRunner
 
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
-        int updated = 0, removed = 0, skipped = 0, errors = 0;
+        int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<object>();
+        var warningList = new List<object>();
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var readinessDemoted = false;
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
@@ -630,13 +631,22 @@ public static class IndexCommandRunner
         {
             foreach (var scanError in scanErrors)
             {
-                var key = $"{scanError.Path}\n{scanError.Message}";
+                var key = $"{scanError.Severity}\n{scanError.Path}\n{scanError.Message}";
                 if (!scanErrorKeys.Add(key))
                     continue;
 
-                DemoteReadinessOnce();
-                errors++;
-                errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                if (scanError.IsFatal)
+                {
+                    DemoteReadinessOnce();
+                    errors++;
+                    errorList.Add(new { file = scanError.Path, message = scanError.Message });
+                }
+                else
+                {
+                    warnings++;
+                    warningList.Add(new { file = scanError.Path, message = scanError.Message });
+                }
+
                 if (!options.Json)
                     ConsoleUi.PrintWarning($"{scanError.Path}: {scanError.Message}");
             }
@@ -908,6 +918,7 @@ public static class IndexCommandRunner
                     updated,
                     removed,
                     skipped,
+                    warnings,
                     errors,
                 },
                 graph_table_available = graphTableAvailableAfter,
@@ -917,6 +928,7 @@ public static class IndexCommandRunner
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
+                warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));
         }
@@ -933,6 +945,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Updated : {updated:N0}");
             if (removed > 0) Console.WriteLine($"  Removed : {removed:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0}");
+            if (warnings > 0) Console.WriteLine($"  Warnings: {warnings:N0}");
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
@@ -1194,7 +1207,16 @@ public static class IndexCommandRunner
         var scanResult = indexer.ScanFilesDetailed();
         var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
-        var errorList = scanResult.Errors
+        var fatalScanErrors = scanResult.Errors
+            .Where(error => error.IsFatal)
+            .ToList();
+        var warningScanErrors = scanResult.Errors
+            .Where(error => !error.IsFatal)
+            .ToList();
+        var errorList = fatalScanErrors
+            .Select(error => (object)new { file = error.Path, message = error.Message })
+            .ToList();
+        var warningList = warningScanErrors
             .Select(error => (object)new { file = error.Path, message = error.Message })
             .ToList();
         if (!options.Json)
@@ -1266,7 +1288,7 @@ public static class IndexCommandRunner
         CancellationTokenSource? indexCts = null;
         if (!options.Json)
             indexCts = ConsoleUi.StartSpinner("Indexing...", spinnerFrames);
-        int processed = 0, skipped = 0, errors = errorList.Count;
+        int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
         bool indexSpinnerStopped = false;
 
         foreach (var filePath in files)
@@ -1429,6 +1451,7 @@ public static class IndexCommandRunner
                     files_scanned = files.Count,
                     files_skipped = skipped,
                     files_purged = purged,
+                    warnings,
                     errors,
                 },
                 graph_table_available = graphTableAvailableAfter,
@@ -1438,6 +1461,7 @@ public static class IndexCommandRunner
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
                 errors = errorList.Count > 0 ? errorList : null,
+                warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
             }, jsonOptions));
         }
@@ -1452,6 +1476,7 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Symbols : {totalSymbols:N0}");
             Console.WriteLine($"  Refs    : {totalReferences:N0}");
             if (skipped > 0) Console.WriteLine($"  Skipped : {skipped:N0} (unchanged)");
+            if (warnings > 0) Console.WriteLine($"  Warnings: {warnings:N0}");
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");

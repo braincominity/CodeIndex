@@ -20,7 +20,16 @@ public class FileIndexer
 
     internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
 
-    public readonly record struct ScanError(string Path, string Message);
+    public enum ScanIssueSeverity
+    {
+        Warning,
+        Error,
+    }
+
+    public readonly record struct ScanError(string Path, string Message, ScanIssueSeverity Severity = ScanIssueSeverity.Error)
+    {
+        public bool IsFatal => Severity == ScanIssueSeverity.Error;
+    }
 
     public readonly record struct ScanFilesResult(
         IReadOnlyList<string> Files,
@@ -30,7 +39,7 @@ public class FileIndexer
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> FullyScannedDirectories)
     {
-        public bool HadErrors => Errors.Count > 0;
+        public bool HadErrors => Errors.Any(error => error.IsFatal);
     }
 
     internal enum PathFilterKind
@@ -223,18 +232,21 @@ public class FileIndexer
 
         private readonly string _sourceDirectory;
         private readonly Regex _matcher;
+        private readonly bool _asciiIgnoreCase;
         private readonly bool _directoryOnly;
         private readonly bool _matchBasenameOnly;
 
         private IgnoreRule(
             string sourceDirectory,
             Regex matcher,
+            bool asciiIgnoreCase,
             bool negated,
             bool directoryOnly,
             bool matchBasenameOnly)
         {
             _sourceDirectory = sourceDirectory;
             _matcher = matcher;
+            _asciiIgnoreCase = asciiIgnoreCase;
             Negated = negated;
             _directoryOnly = directoryOnly;
             _matchBasenameOnly = matchBasenameOnly;
@@ -279,8 +291,11 @@ public class FileIndexer
             var matchBasenameOnly = !anchoredToSourceDirectory && !tokens.Any(token => token is { Value: '/', Escaped: false });
             try
             {
+                if (ignoreCase)
+                    tokens = FoldAsciiTokens(tokens);
+
                 var matcher = BuildMatcher(tokens, ignoreCase);
-                rule = new IgnoreRule(sourceDirectory, matcher, negated, directoryOnly, matchBasenameOnly);
+                rule = new IgnoreRule(sourceDirectory, matcher, ignoreCase, negated, directoryOnly, matchBasenameOnly);
                 return true;
             }
             catch (ArgumentException ex)
@@ -309,6 +324,9 @@ public class FileIndexer
 
             if (string.IsNullOrEmpty(candidate))
                 return false;
+
+            if (_asciiIgnoreCase)
+                candidate = FoldAscii(candidate);
 
             return _matcher.IsMatch(candidate);
         }
@@ -403,20 +421,17 @@ public class FileIndexer
                     continue;
                 }
 
-                if (ch == '[' && TryBuildCharacterClass(pattern, ref i, builder))
+                if (ch == '[' && TryBuildCharacterClass(pattern, ref i, builder, ignoreCase))
                     continue;
 
                 builder.Append(Regex.Escape(ch.ToString()));
             }
 
             builder.Append('$');
-            var options = RegexOptions.CultureInvariant | RegexOptions.Compiled;
-            if (ignoreCase)
-                options |= RegexOptions.IgnoreCase;
-            return new Regex(builder.ToString(), options);
+            return new Regex(builder.ToString(), RegexOptions.CultureInvariant | RegexOptions.Compiled);
         }
 
-        private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder)
+        private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder, bool ignoreCase)
         {
             var contentStart = index + 1;
             if (contentStart >= pattern.Count)
@@ -466,12 +481,24 @@ public class FileIndexer
                 var ch = token.Value;
                 if (token.Escaped)
                 {
-                    builder.Append(EscapeCharacterClassLiteral(ch));
+                    AppendCharacterClassLiteral(builder, ch, ignoreCase);
                     continue;
                 }
 
-                if (ch == '[' && TryAppendPosixCharacterClass(pattern, closingIndex, ref i, builder))
+                if (ch == '[' && TryAppendPosixCharacterClass(pattern, closingIndex, ref i, builder, ignoreCase))
                     continue;
+
+                if (i + 2 < closingIndex &&
+                    pattern[i + 1] is { Value: '-', Escaped: false })
+                {
+                    var endToken = pattern[i + 2];
+                    if (!endToken.Escaped &&
+                        TryAppendCharacterClassRange(builder, ch, endToken.Value, ignoreCase))
+                    {
+                        i += 2;
+                        continue;
+                    }
+                }
 
                 if (ch is '\\' or '[' or ']')
                 {
@@ -480,7 +507,7 @@ public class FileIndexer
                     continue;
                 }
 
-                builder.Append(ch);
+                AppendCharacterClassLiteral(builder, ch, ignoreCase);
             }
 
             builder.Append(']');
@@ -508,7 +535,7 @@ public class FileIndexer
             return -1;
         }
 
-        private static bool TryAppendPosixCharacterClass(IReadOnlyList<PatternToken> pattern, int closingIndex, ref int index, StringBuilder builder)
+        private static bool TryAppendPosixCharacterClass(IReadOnlyList<PatternToken> pattern, int closingIndex, ref int index, StringBuilder builder, bool ignoreCase)
         {
             if (!TryFindPosixCharacterClassEnd(pattern, index, out var posixEnd) || posixEnd >= closingIndex)
                 return false;
@@ -517,7 +544,7 @@ public class FileIndexer
             for (var i = index + 2; i < posixEnd - 1; i++)
                 nameChars.Append(pattern[i].Value);
 
-            builder.Append(GetPosixCharacterClassPattern(nameChars.ToString()));
+            builder.Append(GetPosixCharacterClassPattern(nameChars.ToString(), ignoreCase));
             index = posixEnd;
             return true;
         }
@@ -545,7 +572,7 @@ public class FileIndexer
             return false;
         }
 
-        private static string GetPosixCharacterClassPattern(string className)
+        private static string GetPosixCharacterClassPattern(string className, bool ignoreCase)
             => className switch
             {
                 "alnum" => "A-Za-z0-9",
@@ -554,11 +581,11 @@ public class FileIndexer
                 "cntrl" => @"\x00-\x1F\x7F",
                 "digit" => "0-9",
                 "graph" => "!-~",
-                "lower" => "a-z",
+                "lower" => ignoreCase ? "A-Za-z" : "a-z",
                 "print" => " -~",
                 "punct" => @"!-/:-@\[-`\{-~",
                 "space" => " \t\r\n\v\f",
-                "upper" => "A-Z",
+                "upper" => ignoreCase ? "A-Za-z" : "A-Z",
                 "xdigit" => "0-9A-Fa-f",
                 _ => throw new ArgumentException($"unsupported POSIX character class '{className}'"),
             };
@@ -569,6 +596,76 @@ public class FileIndexer
                 '\\' or '[' or ']' or '^' or '-' => $@"\{ch}",
                 _ => ch.ToString(),
             };
+
+        private static void AppendCharacterClassLiteral(StringBuilder builder, char ch, bool ignoreCase)
+        {
+            if (ignoreCase && IsAsciiLetter(ch))
+            {
+                builder.Append(char.ToLowerInvariant(ch));
+                builder.Append(char.ToUpperInvariant(ch));
+                return;
+            }
+
+            builder.Append(EscapeCharacterClassLiteral(ch));
+        }
+
+        private static bool TryAppendCharacterClassRange(StringBuilder builder, char start, char end, bool ignoreCase)
+        {
+            builder.Append(EscapeCharacterClassLiteral(start));
+            builder.Append('-');
+            builder.Append(EscapeCharacterClassLiteral(end));
+
+            if (!ignoreCase ||
+                !IsAsciiLetter(start) ||
+                !IsAsciiLetter(end))
+            {
+                return true;
+            }
+
+            var lowerStart = char.ToLowerInvariant(start);
+            var lowerEnd = char.ToLowerInvariant(end);
+            var upperStart = char.ToUpperInvariant(start);
+            var upperEnd = char.ToUpperInvariant(end);
+
+            if (lowerStart == start && lowerEnd == end)
+            {
+                builder.Append(char.ToUpperInvariant(start));
+                builder.Append('-');
+                builder.Append(char.ToUpperInvariant(end));
+                return true;
+            }
+
+            if (upperStart == start && upperEnd == end)
+            {
+                builder.Append(char.ToLowerInvariant(start));
+                builder.Append('-');
+                builder.Append(char.ToLowerInvariant(end));
+                return true;
+            }
+
+            return true;
+        }
+
+        private static List<PatternToken> FoldAsciiTokens(IReadOnlyList<PatternToken> tokens)
+            => tokens
+                .Select(token => new PatternToken(FoldAsciiChar(token.Value), token.Escaped))
+                .ToList();
+
+        private static string FoldAscii(string value)
+        {
+            var chars = value.ToCharArray();
+            for (var i = 0; i < chars.Length; i++)
+                chars[i] = FoldAsciiChar(chars[i]);
+            return new string(chars);
+        }
+
+        private static char FoldAsciiChar(char ch)
+            => ch is >= 'A' and <= 'Z'
+                ? char.ToLowerInvariant(ch)
+                : ch;
+
+        private static bool IsAsciiLetter(char ch)
+            => ch is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z');
     }
 
     public FileIndexer(string projectRoot)
@@ -1077,7 +1174,7 @@ public class FileIndexer
                     if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
                         rules.Add(rule);
                     else if (errorMessage != null)
-                        errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage));
+                        errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
                 }
             }
             catch (UnauthorizedAccessException)
