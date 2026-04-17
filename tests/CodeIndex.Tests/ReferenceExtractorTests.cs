@@ -1915,6 +1915,58 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultiLineNoArgAttribute_NonLeadingOpenBracket_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): multi-line `[...]` sections that open with `[`
+        // appearing AFTER other text on the opening line (e.g. `void M([`, `class C<[`,
+        // `delegate void D([`) must also blank out the interior in SymbolExtractor. Otherwise
+        // the bare identifier on the interior line is extracted as a phantom `function`
+        // declaration, and the downstream `definitionNames` guard suppresses the real
+        // `attribute` reference, silently dropping it from `references --kind attribute`.
+        // リグレッション (issue #293 補足): 開口行の途中で `[` が開く複数行属性
+        // (`void M([`, `class C<[`, `delegate void D([` 等) も SymbolExtractor 側で
+        // 内部を空白化しなければならない。そうしないと、内部行の裸識別子が phantom な
+        // `function` 宣言として抽出され、下流の `definitionNames` ガードに食われて
+        // 本来の `attribute` 参照が `references --kind attribute` から消える。
+        const string content = """
+            public class Foo
+            {
+                public void M([
+                    FromServices
+                ] IService s) { }
+            }
+
+            public class Bar<[
+                TypeParamAttr
+            ] T>
+            {
+            }
+
+            public delegate void D([
+                DelegateParamAttr
+            ] int x);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // None of the attribute names should be misclassified as phantom function symbols.
+        // 属性名が phantom な function シンボルとして抽出されていないこと。
+        Assert.DoesNotContain(symbols, s => s.Name == "FromServices" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "TypeParamAttr" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "DelegateParamAttr" && s.Kind == "function");
+
+        var fromServices = Assert.Single(references.Where(r => r.SymbolName == "FromServices"));
+        Assert.Equal("attribute", fromServices.ReferenceKind);
+
+        var typeParamAttr = Assert.Single(references.Where(r => r.SymbolName == "TypeParamAttr"));
+        Assert.Equal("attribute", typeParamAttr.ReferenceKind);
+
+        var delegateParamAttr = Assert.Single(references.Where(r => r.SymbolName == "DelegateParamAttr"));
+        Assert.Equal("attribute", delegateParamAttr.ReferenceKind);
+    }
+
+    [Fact]
     public void Extract_CsharpMultiLineAttributeArgumentEnum_NotClassifiedAsAttribute()
     {
         // Regression (issue #293 follow-up): identifiers appearing inside the argument list of

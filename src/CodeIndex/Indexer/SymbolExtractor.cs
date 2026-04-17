@@ -5365,45 +5365,59 @@ public static class SymbolExtractor
     }
 
     /// <summary>
-    /// Track multi-line C# `[...]` attribute sections across lines and blank out any text that
+    /// Track multi-line C# `[...]` bracket sections across lines and blank out any text that
     /// sits inside those sections, so downstream symbol regexes do not treat interior identifiers
-    /// as declarations. Only activates when a leading `[` (optionally after whitespace) opens the
-    /// section without a matching `]` on the same line — single-line attribute lists continue to
-    /// be handled by `StripLeadingCSharpAttributeLists`.
-    /// 複数行にまたがる C# `[...]` 属性セクションを跨行で追跡し、内部の文字列を空白化することで
-    /// 下流のシンボル regex が内部の識別子を宣言として誤解釈しないようにする。行頭（空白の後）の
-    /// `[` が同一行内で閉じないときだけ起動し、同一行で完結する属性リストは
+    /// as declarations. Activates whenever a `[` opens without a matching `]` on the same line,
+    /// regardless of whether the `[` sits at the start of the line (leading attribute) or deeper
+    /// inside the line (parameter attribute like `void M([\n Attr\n] T x)`, type-parameter
+    /// attribute like `class C<[\n Attr\n] T>`, delegate/lambda parameter attributes, etc.).
+    /// Single-line attribute lists continue to be handled by `StripLeadingCSharpAttributeLists`.
+    /// 複数行にまたがる C# `[...]` セクションを跨行で追跡し、内部の文字列を空白化することで
+    /// 下流のシンボル regex が内部の識別子を宣言として誤解釈しないようにする。`[` が行頭
+    /// （空白の後）にある場合だけでなく、`void M([\n Attr\n] T x)` のようなパラメータ属性、
+    /// `class C<[\n Attr\n] T>` のような型パラメータ属性、delegate / lambda のパラメータ属性など、
+    /// 行の途中で開いて同一行で閉じない `[` でも作動する。同一行で完結する属性リストは
     /// `StripLeadingCSharpAttributeLists` が引き続き担当する。
     /// </summary>
     private static string StripMultiLineCSharpAttributeInterior(string line, ref int depth)
     {
         if (depth == 0)
         {
-            // Detect the opening of a multi-line attribute section: line starts with `[`, and the
-            // `[` is not closed on the same line (single-line cases are handled downstream).
-            var cursor = 0;
-            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
-                cursor++;
-            if (cursor >= line.Length || line[cursor] != '[')
-                return line;
-
-            // Count `[` / `]` on this line to decide whether we span into following lines.
+            // Scan the line for a `[` that is NOT closed on the same line. Everything before
+            // that `[` is real code (method header text like `void M(`, generic opener like
+            // `class C<`, etc.) and must be preserved so downstream declaration regexes can
+            // still recognize the surrounding construct. Everything from the unclosed `[`
+            // onward is blanked, and subsequent lines are blanked until the matching `]`.
+            // 行内を走査し、同一行で閉じない `[` を探す。その `[` より前は通常のコード
+            // （`void M(` のようなメソッドヘッダ、`class C<` のようなジェネリック開口など）
+            // であり、下流の宣言 regex が外側の構文を認識できるように残す必要がある。
+            // 閉じない `[` 以降は空白化し、対応する `]` が現れるまで後続行も空白化する。
+            int openIndex = -1;
             int localDepth = 0;
-            for (int i = cursor; i < line.Length; i++)
+            for (int i = 0; i < line.Length; i++)
             {
-                if (line[i] == '[') localDepth++;
+                if (line[i] == '[')
+                {
+                    if (localDepth == 0)
+                        openIndex = i;
+                    localDepth++;
+                }
                 else if (line[i] == ']')
                 {
-                    localDepth--;
-                    if (localDepth == 0)
-                        return line; // single-line section — leave to StripLeadingCSharpAttributeLists
+                    if (localDepth > 0)
+                    {
+                        localDepth--;
+                        if (localDepth == 0)
+                            openIndex = -1;
+                    }
                 }
             }
-            if (localDepth <= 0)
+
+            if (openIndex < 0 || localDepth <= 0)
                 return line;
 
             depth = localDepth;
-            return string.Empty;
+            return line.Substring(0, openIndex);
         }
 
         // We are inside a multi-line attribute section. Walk the line, closing brackets when we
