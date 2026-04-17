@@ -586,7 +586,6 @@ public static class IndexCommandRunner
         if (!options.Json)
             Console.WriteLine($"Updating {targetPaths.Count} file(s)...");
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
-        int preservableIgnoreRulesUnavailableSkips = 0;
         var errorList = new List<object>();
         var warningList = new List<object>();
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -628,7 +627,20 @@ public static class IndexCommandRunner
             projectRootWritten = true;
         }
 
-        void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors)
+        bool CanPreserveReadinessForIgnoreRulesUnavailable(string relPath, string absPath)
+        {
+            try
+            {
+                var (record, _, _, _) = indexer.BuildRecordWithRawBytes(absPath);
+                return writer.HasFileAtPathWithChecksum(relPath, record.Checksum);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        void RecordScanErrors(IEnumerable<FileIndexer.ScanError> scanErrors, bool demoteFatalErrors = true)
         {
             foreach (var scanError in scanErrors)
             {
@@ -638,7 +650,8 @@ public static class IndexCommandRunner
 
                 if (scanError.IsFatal)
                 {
-                    DemoteReadinessOnce();
+                    if (demoteFatalErrors)
+                        DemoteReadinessOnce();
                     errors++;
                     errorList.Add(new { file = scanError.Path, message = scanError.Message });
                 }
@@ -699,23 +712,16 @@ public static class IndexCommandRunner
                 }
 
                 var pathFilter = indexer.EvaluatePathFilter(absPath);
-                RecordScanErrors(pathFilter.Errors);
+                var preserveReadinessForIgnoreRulesUnavailable =
+                    pathFilter.FilterKind == FileIndexer.PathFilterKind.IgnoreRulesUnavailable
+                    && pathFilter.ShouldSkip
+                    && !pathFilter.ShouldDeleteExisting
+                    && CanPreserveReadinessForIgnoreRulesUnavailable(relPath, absPath);
+                RecordScanErrors(pathFilter.Errors, demoteFatalErrors: !preserveReadinessForIgnoreRulesUnavailable);
                 if (pathFilter.ShouldSkip)
                 {
                     if (!pathFilter.ShouldDeleteExisting)
                     {
-                        if (pathFilter.FilterKind == FileIndexer.PathFilterKind.IgnoreRulesUnavailable)
-                        {
-                            if (writer.HasFileAtPath(relPath))
-                            {
-                                preservableIgnoreRulesUnavailableSkips++;
-                            }
-                            else
-                            {
-                                DemoteReadinessOnce();
-                            }
-                        }
-
                         skipped++;
                         if (options.Verbose && !options.Json)
                             Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
@@ -869,13 +875,7 @@ public static class IndexCommandRunner
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
             && priorFoldVersion == currentFoldVersion
             && priorFoldFingerprint == currentFoldFingerprint;
-        var canRestorePriorReadiness =
-            errors == 0 ||
-            (updated == 0 &&
-             removed == 0 &&
-             errors > 0 &&
-             errors == preservableIgnoreRulesUnavailableSkips);
-        if (readinessDemoted && canRestorePriorReadiness)
+        if (readinessDemoted && errors == 0)
         {
             // Restore each readiness bit independently based on what the DB carried BEFORE
             // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
@@ -890,8 +890,8 @@ public static class IndexCommandRunner
             // name_folded populated, so no extra scan is needed here.
             // update mode は事前 bit を個別に復元。Graph/Issues は prior bit があれば復元、
             // Fold も prior bit があれば invariant を信じて restamp（codex 2nd review 対応）。
-            // さらに、unreadable ignore file による no-op skip だけで DB 内容が未変更なら、
-            // ready bit をそのまま維持して healthy index を不要に degraded へ落とさない。
+            // unreadable ignore file の true no-op skip は ClearReadyFlags 自体を避けるので、
+            // ここでは通常どおり errors==0 の成功 run だけを復元対象にする。
             if ((priorReadiness & DbContext.GraphReadyFlag) != 0)
             {
                 writer.MarkGraphReady();
