@@ -1752,6 +1752,19 @@ public partial class DbReader
         if (attributeBottom < 0 || !LooksLikeAttributeBoundaryLine(lines[attributeBottom]))
             return [];
 
+        // If the previous non-trivia line already has its own inline `[attr] decl`,
+        // its attribute belongs to that line's declaration, not to the anchor below.
+        // Without this guard, a line like `[JsonPropertyName("a[")] public string X { ... }`
+        // would leak its reflection attribute onto the next plain property and flip
+        // that unrelated symbol into the reflection_or_config_suspect bucket. Closes #375.
+        // 直前の非 trivia 行がすでに `[attr] decl` のインライン宣言を持つ場合、
+        // その属性はその行の宣言に属し、下の anchor 行には及ばない。
+        // このガードが無いと `[JsonPropertyName("a[")] public string X { ... }` の属性が
+        // 下の属性なしプロパティに漏れ、無関係なシンボルが reflection_or_config_suspect に
+        // 誤分類される。#375 を修正。
+        if (attributeBottom != anchorIndex && LineContainsInlineAttributeAndDeclaration(lines[attributeBottom]))
+            return [];
+
         var block = new List<string>();
         var bracketDepth = 0;
         var sawBracket = false;
@@ -1779,13 +1792,40 @@ public partial class DbReader
             }
 
             block.Add(trimmed);
-            bracketDepth += CountChar(trimmed, ']') - CountChar(trimmed, '[');
+            bracketDepth += CountBracketDeltaOutsideStrings(trimmed);
             if (bracketDepth < 0)
                 bracketDepth = 0;
         }
 
         block.Reverse();
         return block;
+    }
+
+    // Count `] - [` on a C# line while skipping characters that appear inside
+    // string or char literals, so standalone attribute rows like `[Obsolete("]")]`
+    // do not leave one bracket of residual depth and swallow an unrelated
+    // attribute block above them.
+    // C# の 1 行について、文字列 / 文字リテラル内の文字を除外した上で `] - [` を数える。
+    // `[Obsolete("]")]` のような standalone 属性行が 1 つ分の bracket depth を残して
+    // 上の無関係な属性ブロックまで吸い込むのを防ぐ。
+    private static int CountBracketDeltaOutsideStrings(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+            return 0;
+
+        var delta = 0;
+        var cursor = 0;
+        while (cursor < line.Length)
+        {
+            if (TrySkipCSharpStringOrCharLiteral(line, ref cursor))
+                continue;
+            var ch = line[cursor++];
+            if (ch == '[')
+                delta--;
+            else if (ch == ']')
+                delta++;
+        }
+        return delta;
     }
 
     private static bool LineContainsInlineAttributeAndDeclaration(string line)
@@ -1914,8 +1954,22 @@ public partial class DbReader
         {
             var depth = 0;
             var sawBracket = false;
+            var breakOnDepthZero = false;
             while (cursor < line.Length)
             {
+                // Skip over string and char literals so `[` or `]` inside them do
+                // not affect the bracket-depth counter. Without this, a line like
+                // `[Foo("[")] public string X { get; set; }` runs to end of line
+                // with depth > 0 and the scan returns `string.Empty`, which makes
+                // `LineContainsInlineAttributeAndDeclaration` falsely report that
+                // the line has no trailing declaration. Closes #375.
+                // 文字列・文字リテラル中の `[` `]` が depth 計算を乱さないようスキップする。
+                // これを怠ると `[Foo("[")] public string X { get; set; }` のような行で
+                // depth が戻らず空文字が返り、`LineContainsInlineAttributeAndDeclaration`
+                // が「宣言なし」と誤判定して隣接する別シンボルへ属性が誤帰属する。#375 を修正。
+                if (TrySkipCSharpStringOrCharLiteral(line, ref cursor))
+                    continue;
+
                 var ch = line[cursor++];
                 if (ch == '[')
                 {
@@ -1926,11 +1980,14 @@ public partial class DbReader
                 {
                     depth--;
                     if (depth == 0 && sawBracket)
+                    {
+                        breakOnDepthZero = true;
                         break;
+                    }
                 }
             }
 
-            if (depth != 0)
+            if (!breakOnDepthZero)
                 return string.Empty;
 
             while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
@@ -1938,6 +1995,296 @@ public partial class DbReader
         }
 
         return cursor < line.Length ? line[cursor..] : string.Empty;
+    }
+
+    /// <summary>
+    /// If <paramref name="cursor"/> is at the start of a C# string or char literal
+    /// (regular, verbatim, raw, or char), advance <paramref name="cursor"/> past the
+    /// closing delimiter and return true. Multi-line strings are clamped to end-of-line
+    /// since this helper operates on a single line. Returns false if not at a literal.
+    /// C# の文字列・文字リテラル（通常・verbatim・raw・char）先頭にあれば、終端直後まで
+    /// <paramref name="cursor"/> を進めて true を返す。単一行前提のため、未終端リテラルは
+    /// 行末で打ち切る。リテラル先頭でなければ false を返す。
+    /// </summary>
+    private static bool TrySkipCSharpStringOrCharLiteral(string line, ref int cursor)
+    {
+        var start = cursor;
+        if (start >= line.Length)
+            return false;
+
+        var ch = line[start];
+
+        // Verbatim string: @"..." with "" as escape
+        // verbatim 文字列: @"..." で "" が escape
+        if (ch == '@' && start + 1 < line.Length && line[start + 1] == '"')
+        {
+            var i = start + 2;
+            while (i < line.Length)
+            {
+                if (line[i] == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            cursor = i;
+            return true;
+        }
+
+        // Interpolated verbatim string: $@"..." or @$"..."
+        // 補間 verbatim 文字列: $@"..." または @$"..."
+        if ((ch == '$' && start + 2 < line.Length && line[start + 1] == '@' && line[start + 2] == '"')
+            || (ch == '@' && start + 2 < line.Length && line[start + 1] == '$' && line[start + 2] == '"'))
+        {
+            var i = start + 3;
+            var braceDepth = 0;
+            while (i < line.Length)
+            {
+                if (braceDepth == 0 && line[i] == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    i++;
+                    break;
+                }
+                if (line[i] == '{')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '{')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    braceDepth++;
+                }
+                else if (line[i] == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+                i++;
+            }
+            cursor = i;
+            return true;
+        }
+
+        if (ch == '"')
+        {
+            // Raw string: """..."""  (C# 11) — match the opening run length
+            // raw 文字列: """..."""（C# 11）— 開始クォート数に合わせて終端を探す
+            var runLength = 0;
+            while (start + runLength < line.Length && line[start + runLength] == '"')
+                runLength++;
+
+            if (runLength >= 3)
+            {
+                var i = start + runLength;
+                while (i < line.Length)
+                {
+                    if (line[i] == '"')
+                    {
+                        var closeRun = 0;
+                        while (i + closeRun < line.Length && line[i + closeRun] == '"')
+                            closeRun++;
+                        if (closeRun >= runLength)
+                        {
+                            i += closeRun;
+                            break;
+                        }
+                        i += closeRun;
+                        continue;
+                    }
+                    i++;
+                }
+                cursor = i;
+                return true;
+            }
+
+            // Regular string: "..." with \ as escape
+            // 通常文字列: "..." で \ が escape
+            var k = start + 1;
+            while (k < line.Length)
+            {
+                if (line[k] == '\\' && k + 1 < line.Length)
+                {
+                    k += 2;
+                    continue;
+                }
+                if (line[k] == '"')
+                {
+                    k++;
+                    break;
+                }
+                k++;
+            }
+            cursor = k;
+            return true;
+        }
+
+        // Interpolated raw string: $"""..."""  and multi-$ form $$"""..."""  (C# 11)
+        // — N consecutive `$` means N consecutive `{`/`}` are required to open/close
+        // interpolation; fewer are treated as literal.
+        // 補間 raw 文字列: $"""..."""、および multi-$ 形式 $$"""..."""（C# 11）—
+        // `$` の連続数 N に対し、補間を開閉するには `{` / `}` も N 個連続している必要がある。
+        if (ch == '$')
+        {
+            var dollarCount = 0;
+            while (start + dollarCount < line.Length && line[start + dollarCount] == '$')
+                dollarCount++;
+
+            var quoteStart = start + dollarCount;
+            var rawRunLength = 0;
+            while (quoteStart + rawRunLength < line.Length && line[quoteStart + rawRunLength] == '"')
+                rawRunLength++;
+
+            if (dollarCount >= 1 && rawRunLength >= 3)
+            {
+                var i = quoteStart + rawRunLength;
+                var braceDepth = 0;
+                while (i < line.Length)
+                {
+                    if (braceDepth == 0 && line[i] == '"')
+                    {
+                        var closeRun = 0;
+                        while (i + closeRun < line.Length && line[i + closeRun] == '"')
+                            closeRun++;
+                        if (closeRun >= rawRunLength)
+                        {
+                            i += closeRun;
+                            break;
+                        }
+                        i += closeRun;
+                        continue;
+                    }
+                    if (line[i] == '{')
+                    {
+                        if (braceDepth == 0)
+                        {
+                            var openRun = 0;
+                            while (i + openRun < line.Length && line[i + openRun] == '{')
+                                openRun++;
+                            if (openRun >= dollarCount)
+                            {
+                                braceDepth = 1;
+                                i += dollarCount;
+                                continue;
+                            }
+                            // Fewer than $ count — literal in raw interpolated.
+                            // $ の連続数より少ない `{` は raw 補間では literal 扱い。
+                            i += openRun;
+                            continue;
+                        }
+                        braceDepth++;
+                        i++;
+                        continue;
+                    }
+                    if (line[i] == '}')
+                    {
+                        if (braceDepth == 0)
+                        {
+                            i++;
+                            continue;
+                        }
+                        if (braceDepth > 1)
+                        {
+                            braceDepth--;
+                            i++;
+                            continue;
+                        }
+                        var closeRun = 0;
+                        while (i + closeRun < line.Length && line[i + closeRun] == '}')
+                            closeRun++;
+                        if (closeRun >= dollarCount)
+                        {
+                            braceDepth = 0;
+                            i += dollarCount;
+                            continue;
+                        }
+                        i += closeRun;
+                        continue;
+                    }
+                    i++;
+                }
+                cursor = i;
+                return true;
+            }
+        }
+
+        // Interpolated string: $"..." — treat braces as skipped so quotes inside
+        // `{...}` expressions don't prematurely terminate the string.
+        // 補間文字列: $"..." — `{...}` 中のクォートで早期終端しないよう波括弧を追跡する。
+        if (ch == '$' && start + 1 < line.Length && line[start + 1] == '"')
+        {
+            var i = start + 2;
+            var braceDepth = 0;
+            while (i < line.Length)
+            {
+                if (braceDepth == 0)
+                {
+                    if (line[i] == '\\' && i + 1 < line.Length)
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    if (line[i] == '"')
+                    {
+                        i++;
+                        break;
+                    }
+                }
+                if (line[i] == '{')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '{')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    braceDepth++;
+                }
+                else if (line[i] == '}' && braceDepth > 0)
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '}')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    braceDepth--;
+                }
+                i++;
+            }
+            cursor = i;
+            return true;
+        }
+
+        if (ch == '\'')
+        {
+            var k = start + 1;
+            while (k < line.Length)
+            {
+                if (line[k] == '\\' && k + 1 < line.Length)
+                {
+                    k += 2;
+                    continue;
+                }
+                if (line[k] == '\'')
+                {
+                    k++;
+                    break;
+                }
+                k++;
+            }
+            cursor = k;
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryReadAttributeIdentifier(string content, ref int index, out string? identifier)
