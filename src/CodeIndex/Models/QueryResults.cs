@@ -333,6 +333,10 @@ public class SymbolAnalysisResult
     public string? GraphLanguage { get; set; }
     public bool? GraphSupported { get; set; }
     public string? GraphSupportReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? GraphDegraded { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnsupportedSymbolKind { get; set; }
     public List<DefinitionResult> Definitions { get; set; } = [];
     public List<SymbolResult> NearbySymbols { get; set; } = [];
     public List<ReferenceResult> References { get; set; } = [];

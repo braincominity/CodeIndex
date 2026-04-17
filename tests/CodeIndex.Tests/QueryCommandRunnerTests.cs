@@ -1845,11 +1845,16 @@ public class QueryCommandRunnerTests
                 ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
                 _jsonOptions));
 
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
         }
         finally
         {
@@ -3088,6 +3093,897 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.NotFound, fontFaceExitCode);
             Assert.Equal(string.Empty, fontFaceStderr);
             Assert.Equal(string.Empty, fontFaceStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CssFamilyLessFontFaceSameLineStillFindsFollowingRule()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_css_familyless_fontface_inline");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "styles.css"),
+                """
+                @font-face { src: url("no-family.woff2"); } .after { color: red; }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/styles.css", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(outlineStdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Contains(".after", names);
+            Assert.DoesNotContain("@font-face", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsLowercaseEnumMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_exact_name");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "status.cs"),
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    active,
+                    inactive,
+                    pending
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["active", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("active", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsCompactAndZeroIndentEnumMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_compact_and_flat");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                namespace Demo;
+
+                public enum Compact { A, B = A }
+                public enum Flat
+                {
+                C,
+                D = C
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (flatExitCode, flatStdout, flatStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["C", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var compactRows = ParseJsonLines(compactStdout);
+            var flatRows = ParseJsonLines(flatStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.Single(compactRows);
+            Assert.Equal("A", compactRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", compactRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("enum", compactRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Compact", compactRows[0].RootElement.GetProperty("container_name").GetString());
+            Assert.Equal(CommandExitCodes.Success, flatExitCode);
+            Assert.Equal(string.Empty, flatStderr);
+            Assert.Single(flatRows);
+            Assert.Equal("C", flatRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", flatRows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsSameLineSiblingEnums()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_same_line_siblings");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                namespace Demo;
+
+                public enum InlineA { A1 } public enum InlineB { B1 }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (enumExitCode, enumStdout, enumStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["InlineB", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (memberExitCode, memberStdout, memberStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["B1", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var enumRows = ParseJsonLines(enumStdout);
+            var memberRows = ParseJsonLines(memberStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, enumExitCode);
+            Assert.Equal(string.Empty, enumStderr);
+            Assert.Single(enumRows);
+            Assert.Equal("InlineB", enumRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal(CommandExitCodes.Success, memberExitCode);
+            Assert.Equal(string.Empty, memberStderr);
+            Assert.Single(memberRows);
+            Assert.Equal("B1", memberRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", memberRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("InlineB", memberRows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpSameLineSiblingEnumsIncludesBothEnumsAndMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_enum_same_line_siblings");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mode.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public enum InlineA { A1 } public enum InlineB { B1 }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/mode.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("InlineA", names);
+            Assert.Contains("InlineB", names);
+            Assert.Contains("A1", names);
+            Assert.Contains("B1", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_CSharpSameLineNamespaceBodyIncludesNestedEnumAndMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_enum_same_line_namespace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mode.cs",
+                "csharp",
+                """
+                namespace Demo { public enum E { A } }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/mode.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Demo", names);
+            Assert.Contains("E", names);
+            Assert.Contains("A", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsEnumInsideSameLineClassBody()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_same_line_class");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/mode.cs",
+                "csharp",
+                """
+                public class Holder { public enum E { A } }
+                """);
+
+            var (enumExitCode, enumStdout, enumStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["E", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (memberExitCode, memberStdout, memberStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var enumRows = ParseJsonLines(enumStdout);
+            var memberRows = ParseJsonLines(memberStdout);
+
+            Assert.Equal(CommandExitCodes.Success, enumExitCode);
+            Assert.Equal(string.Empty, enumStderr);
+            Assert.Single(enumRows);
+            Assert.Equal("E", enumRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", enumRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Holder", enumRows[0].RootElement.GetProperty("container_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, memberExitCode);
+            Assert.Equal(string.Empty, memberStderr);
+            Assert.Single(memberRows);
+            Assert.Equal("A", memberRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", memberRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("E", memberRows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsCompactEnumMembersWithAttributesAndCastValues()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_compact_attr_cast");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                using System.Runtime.Serialization;
+
+                public enum Mode { [Obsolete] A = (int)B, [EnumMember(Value = "b")] B = (MyFlags)(A | C), C = 1 }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (aExitCode, aStdout, aStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (bExitCode, bStdout, bStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["B", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var aRows = ParseJsonLines(aStdout);
+            var bRows = ParseJsonLines(bStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, aExitCode);
+            Assert.Equal(string.Empty, aStderr);
+            Assert.Single(aRows);
+            Assert.Equal("A", aRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", aRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("enum", aRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Mode", aRows[0].RootElement.GetProperty("container_name").GetString());
+            Assert.Equal(CommandExitCodes.Success, bExitCode);
+            Assert.Equal(string.Empty, bStderr);
+            Assert.Single(bRows);
+            Assert.Equal("B", bRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", bRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("enum", bRows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Mode", bRows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsEnumMembersAcrossDirectiveLines()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_directives");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                public enum Mode
+                {
+                #if DEBUG
+                    A,
+                #endif
+                #region values
+                    B,
+                #endregion
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (aExitCode, aStdout, aStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (bExitCode, bStdout, bStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["B", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var aRows = ParseJsonLines(aStdout);
+            var bRows = ParseJsonLines(bStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, aExitCode);
+            Assert.Equal(string.Empty, aStderr);
+            Assert.Single(aRows);
+            Assert.Equal("A", aRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", aRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal(CommandExitCodes.Success, bExitCode);
+            Assert.Equal(string.Empty, bStderr);
+            Assert.Single(bRows);
+            Assert.Equal("B", bRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", bRows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsEnumMembersWhenAttributeSharesDeclarationLine()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_attr_same_line");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                namespace Demo;
+
+                [Flags] public enum Mode
+                {
+                    A,
+                    B = A
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("A", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsEnumMembersWhenMemberAttributesShareLine()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_attr_same_line");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                using System.Runtime.Serialization;
+
+                namespace Demo;
+
+                public enum Mode
+                {
+                    [Obsolete] A,
+                    [EnumMember(Value = "a")] B = A
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("A", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameIgnoresMultilineEnumMemberAttributeArguments()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_multiline_attr");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                """
+                using System.Runtime.Serialization;
+
+                public enum Mode
+                {
+                    [EnumMember(
+                        Value = Alias,
+                        Other = 1)]
+                    A,
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (valueExitCode, valueStdout, valueStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Value", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (otherExitCode, otherStdout, otherStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Other", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.NotFound, valueExitCode);
+            Assert.Equal(string.Empty, valueStdout);
+            Assert.Equal(string.Empty, valueStderr);
+            Assert.Equal(CommandExitCodes.NotFound, otherExitCode);
+            Assert.Equal(string.Empty, otherStdout);
+            Assert.Equal(string.Empty, otherStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsTabIndentedEnumMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_tab_indent");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "mode.cs"),
+                "public enum Mode\n{\n\tA,\n\tB = A,\n}\n");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["A", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("A", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameRecoversAfterIncompleteEnumDeclarationAttribute()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_broken_decl_attr");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "broken.cs"),
+                """
+                [Attr(
+                public enum Mode
+                {
+                    A,
+                }
+
+                public class After
+                {
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["After", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("After", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameRecoversAfterIncompleteEnumMemberAttribute()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_broken_member_attr");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "broken.cs"),
+                """
+                public enum Mode
+                {
+                    [Attr()
+                    A,
+                    B
+                }
+
+                public class After
+                {
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (memberExitCode, memberStdout, memberStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["B", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["After", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var memberRows = ParseJsonLines(memberStdout);
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, memberExitCode);
+            Assert.Equal(string.Empty, memberStderr);
+            Assert.Single(memberRows);
+            Assert.Equal("B", memberRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("enum", memberRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal("After", rows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("class", rows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameRecoversAfterIncompleteEnumMemberAttributeMissingParen()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_broken_member_attr_missing_paren");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "broken.cs"),
+                """
+                public enum BrokenAttr
+                {
+                    [Attr(
+                    X,
+                    Y
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (xExitCode, xStdout, xStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["X", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (yExitCode, yStdout, yStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Y", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var xRows = ParseJsonLines(xStdout);
+            var yRows = ParseJsonLines(yStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, xExitCode);
+            Assert.Equal(string.Empty, xStderr);
+            Assert.Single(xRows);
+            Assert.Equal("X", xRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal(CommandExitCodes.Success, yExitCode);
+            Assert.Equal(string.Empty, yStderr);
+            Assert.Single(yRows);
+            Assert.Equal("Y", yRows[0].RootElement.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameRecoversModifierlessMembersAfterIncompleteAttribute()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_broken_member_attr_modifierless");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "broken.cs"),
+                """
+                public class C
+                {
+                    [Attr(
+                    void M() {}
+                    string Name { get; }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (methodExitCode, methodStdout, methodStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["M", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (propertyExitCode, propertyStdout, propertyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Name", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var methodRows = ParseJsonLines(methodStdout);
+            var propertyRows = ParseJsonLines(propertyStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, methodExitCode);
+            Assert.Equal(string.Empty, methodStderr);
+            Assert.Single(methodRows);
+            Assert.Equal("M", methodRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("function", methodRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal(CommandExitCodes.Success, propertyExitCode);
+            Assert.Equal(string.Empty, propertyStderr);
+            Assert.Single(propertyRows);
+            Assert.Equal("Name", propertyRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("property", propertyRows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameRecoversBracketTypedMembersAfterIncompleteAttribute()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_broken_member_attr_brackets");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "broken.cs"),
+                """
+                public class C
+                {
+                    [Attr(
+                    int[] Values { get; }
+                    int[] Build() => [];
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (propertyExitCode, propertyStdout, propertyStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Values", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (methodExitCode, methodStdout, methodStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Build", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var propertyRows = ParseJsonLines(propertyStdout);
+            var methodRows = ParseJsonLines(methodStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, propertyExitCode);
+            Assert.Equal(string.Empty, propertyStderr);
+            Assert.Single(propertyRows);
+            Assert.Equal("Values", propertyRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("property", propertyRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal(CommandExitCodes.Success, methodExitCode);
+            Assert.Equal(string.Empty, methodStderr);
+            Assert.Single(methodRows);
+            Assert.Equal("Build", methodRows[0].RootElement.GetProperty("name").GetString());
+            Assert.Equal("function", methodRows[0].RootElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameReportsOwningEnumForDuplicateMemberNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_member_container");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "enums.cs"),
+                """
+                namespace Demo;
+
+                public enum First
+                {
+                    None,
+                }
+
+                public enum Second
+                {
+                    None,
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["None", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal("enum", rows[0].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("First", rows[0].RootElement.GetProperty("container_name").GetString());
+            Assert.Equal("enum", rows[1].RootElement.GetProperty("container_kind").GetString());
+            Assert.Equal("Second", rows[1].RootElement.GetProperty("container_name").GetString());
         }
         finally
         {
@@ -4901,6 +5797,1353 @@ public class QueryCommandRunnerTests
             Assert.Equal("Hook", caller.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", caller.GetProperty("callee_name").GetString());
             Assert.Empty(json.GetProperty("callees").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpEnumMembersReturnUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_references");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Outer
+                {
+                    public enum First { None }
+                }
+
+                public enum Nested
+                {
+                    A = 1,
+                    B = A
+                }
+
+                public class UsesEnum
+                {
+                    public void Use()
+                    {
+                        _ = Nested.A;
+                        _ = Outer.First.None;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_JsonLeavesEnumMemberReferencesEmptyWithoutResolvedEdges()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_enum_member_bundle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Nested
+                {
+                    A = 1,
+                    B = A
+                }
+
+                public class UsesEnum
+                {
+                    public void Use()
+                    {
+                        _ = Nested.A;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("A", definition.GetProperty("name").GetString());
+            Assert.Equal("enum", definition.GetProperty("container_kind").GetString());
+            Assert.Equal("Nested", definition.GetProperty("container_name").GetString());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_NonExactJson_MarksEnumMemberGraphLimitWhenDefinitionsResolveToEnumMember()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_enum_member_bundle_non_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red,
+                    Green
+                }
+
+                public class UsesColor
+                {
+                    public Color Shade => Color.Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Red", definition.GetProperty("name").GetString());
+            Assert.Equal("enum", definition.GetProperty("container_kind").GetString());
+            Assert.Equal("Color", definition.GetProperty("container_name").GetString());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_NonExactJson_MixedCallableAndEnumMemberKeepsGraphSupportedButMarksGap()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_mixed_callable_enum");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Worker
+                {
+                    public void A() { }
+
+                    public void Use()
+                    {
+                        A();
+                    }
+                }
+
+                public enum Status
+                {
+                    A
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.NotEmpty(json.GetProperty("references").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_LargeMixedCandidateSetStillMarksEnumMemberGap()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_large_mixed_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 40; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/Worker{i}.cs", "csharp",
+                    $$"""
+                    namespace Demo;
+
+                    public class Worker{{i}}
+                    {
+                        public void Ready() { }
+                    }
+                    """);
+            }
+
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactCountJson_LargeMixedCandidateSetStillMarksEnumMemberGap()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_large_mixed_exact_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 70; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/Worker{i}.cs", "csharp",
+                    $$"""
+                    namespace Demo;
+
+                    public class Worker{{i}}
+                    {
+                        public void Ready() { }
+                    }
+                    """);
+            }
+
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_CSharpEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_enum_member_gap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Nested
+                {
+                    A = 1,
+                    B = A
+                }
+
+                public class UsesEnum
+                {
+                    public Nested Value => Nested.A;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_ZeroResultsWithoutOverride_UsesZeroSchema()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_exact_zero_schema");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Worker
+                {
+                    public void Ready() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_WithResults_StillIncludesUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_enum_member_success_metadata");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Worker
+                {
+                    public void A() { }
+
+                    public void Use()
+                    {
+                        A();
+                    }
+                }
+
+                public enum Status
+                {
+                    A
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_WithoutLang_MixedCallableAndEnumMember_UsesSupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_exact_mixed_without_lang");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                function Ready() {}
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'javascript'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_WithResults_StillIncludesUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_enum_member_success_metadata");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Worker
+                {
+                    public void A() { }
+
+                    public void Use()
+                    {
+                        A();
+                    }
+                }
+
+                public enum Status
+                {
+                    A
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_ExactJson_ZeroResultsWithoutOverride_UsesZeroSchema()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_exact_zero_schema");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Worker
+                {
+                    public void Ready() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_ExactJson_CSharpEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_enum_member_gap");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Nested
+                {
+                    A = 1,
+                    B = A
+                }
+
+                public class UsesEnum
+                {
+                    public Nested Value => Nested.A;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_ExactJson_ZeroResultsWithoutOverride_UsesZeroSchema()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_exact_zero_schema");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Worker
+                {
+                    public void Ready() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_ExactJson_WithResults_StillIncludesUnsupportedGraphMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_enum_member_success_metadata");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Worker
+                {
+                    public void A()
+                    {
+                        B();
+                    }
+
+                    public void B() { }
+                }
+
+                public enum Status
+                {
+                    A
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CrossLanguageMixedHitDoesNotForceCSharpGraphLanguage()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_cross_language_mixed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                export function Ready() {}
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'javascript'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_MixedCSharpEnumMemberHitsKeepGraphSupportedWhileMarkingGap()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_mixed_enum_member_bundle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum E
+                {
+                    A
+                }
+
+                public class Holder
+                {
+                    public int A { get; }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_CrossLanguageMixedHitCombinesPrimaryGraphAndEnumGapReason()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_cross_language_mixed_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                export function Ready() {}
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("Call-graph extraction is indexed for 'javascript'.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_CrossLanguageMixedHitPrefersGraphCapablePrimaryDefinition()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_cross_language_primary_alignment");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                function Ready() {}
+
+                function Helper() {}
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var nearbyPaths = json.GetProperty("nearby_symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("path").GetString())
+                .Where(path => path != null)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var references = json.GetProperty("references").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Equal("web/app.js", json.GetProperty("file").GetProperty("path").GetString());
+            Assert.Contains("web/app.js", nearbyPaths);
+            Assert.DoesNotContain("src/status.cs", nearbyPaths);
+            Assert.Contains(json.GetProperty("nearby_symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() == "Helper");
+            Assert.NotEmpty(references);
+            Assert.All(references, reference =>
+                Assert.Equal("javascript", reference.GetProperty("lang").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonSkipsCSharpEnumMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_enum_members");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Nested
+                {
+                    A = 1,
+                    B = A
+                }
+
+                public class UsesEnum
+                {
+                    public Nested Value => Nested.A;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("excluded from unused", document.RootElement.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("A", names);
+            Assert.DoesNotContain("B", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonKeepsCSharpEnumDeclarationsWhileSkippingEnumMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_enum_declarations");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+
+                public enum TrulyUnused
+                {
+                    Green
+                }
+
+                public class UsesColor
+                {
+                    public Color Shade => Color.Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum members are excluded from unused", document.RootElement.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("Color", names);
+            Assert.Contains("TrulyUnused", names);
+            Assert.DoesNotContain("Red", names);
+            Assert.DoesNotContain("Blue", names);
+            Assert.DoesNotContain("Green", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithKindEnum_KeepsUnusedEnumDeclarationsVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_kind_enum_declarations");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+
+                public enum TrulyUnused
+                {
+                    Green
+                }
+
+                public class UsesColor
+                {
+                    public Color Shade => Color.Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "enum"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .Where(name => name != null)
+                .Cast<string>()
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Color", names);
+            Assert.Contains("TrulyUnused", names);
+            Assert.DoesNotContain("Red", names);
+            Assert.DoesNotContain("Blue", names);
+            Assert.DoesNotContain("Green", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonOnCSharpProjectWithoutEnumMembersDoesNotMarkGraphDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_without_enum_members");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public class Holder
+                {
+                    public int Value { get; }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_JsonWithoutLangMarksCSharpEnumMemberGapWhenScopeContainsEnumMembers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_without_lang_enum_members");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("excluded from unused", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpNonEnumQualifiedMemberAccessDoesNotLeakAsEnumMemberReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_false_positive");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum EnumHolder
+                {
+                    A = 1
+                }
+
+                public static class Values
+                {
+                    public static int A = 1;
+                }
+
+                public class UsesValues
+                {
+                    public int Read()
+                    {
+                        return Values.A;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.False(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactCountJson_PathScopeDoesNotInheritOutOfScopeEnumMemberMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_references_scoped_js");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                function Ready() {
+                }
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "cs/status.cs", "csharp",
+                """
+                public enum Status { Ready }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "javascript", "--exact-name", "--path", "web/","--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_Json_CrossLanguageMixedHitPrefersGraphCapablePrimaryDefinition()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_cross_language_primary_alignment_non_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                function Ready() {}
+
+                function Helper() {}
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/status.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var nearbyPaths = json.GetProperty("nearby_symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("path").GetString())
+                .Where(path => path != null)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var references = json.GetProperty("references").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
+            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.Equal("web/app.js", json.GetProperty("file").GetProperty("path").GetString());
+            Assert.Contains("web/app.js", nearbyPaths);
+            Assert.DoesNotContain("src/status.cs", nearbyPaths);
+            Assert.Contains(json.GetProperty("nearby_symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() == "Helper");
+            Assert.NotEmpty(references);
+            Assert.All(references, reference =>
+                Assert.Equal("javascript", reference.GetProperty("lang").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_PathScopeDoesNotInheritOutOfScopeEnumMemberMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_scoped_js");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "web/app.js", "javascript",
+                """
+                function Ready() {
+                }
+
+                Ready();
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "cs/status.cs", "csharp",
+                """
+                public enum Status { Ready }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--exact-name", "--path", "web/"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("javascript", json.GetProperty("file").GetProperty("lang").GetString());
+            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7752,11 +9995,16 @@ public class QueryCommandRunnerTests
                 ["Execute", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
                 _jsonOptions));
 
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
         }
         finally
         {
@@ -9437,6 +11685,7 @@ public class QueryCommandRunnerTests
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkFoldReady();
+        writer.MarkCSharpSymbolNameContractReady();
     }
 
     private static (string ProjectRoot, string DbPath) CreateCountOnlyTotalFixtureDb()

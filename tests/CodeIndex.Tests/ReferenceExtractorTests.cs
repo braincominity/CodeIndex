@@ -698,6 +698,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_DoesNotCreateBareEnumMemberReferencesYet()
+    {
+        const string content = """
+            namespace Demo;
+
+            public class Outer
+            {
+                public enum First { None }
+            }
+
+            public enum Nested { A = 1, B = A }
+
+            public class UsesEnum
+            {
+                public void Use()
+                {
+                    _ = Nested.A;
+                    _ = Outer.First.None;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "None");
+    }
+
+    [Fact]
     public void Extract_CsharpReturnTargetAttribute_CallIsNotDropped()
     {
         const string content = """
@@ -724,6 +754,37 @@ public class ReferenceExtractorTests
         Assert.Equal(2, marshalAsCalls.Count);
         Assert.Equal([5, 8], marshalAsCalls.Select(reference => reference.Line).ToArray());
         Assert.All(marshalAsCalls, reference => Assert.Equal("Foo", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpNonEnumQualifiedMemberAccess_DoesNotBecomeEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum EnumHolder
+            {
+                A = 1
+            }
+
+            public static class Values
+            {
+                public static int A = 1;
+            }
+
+            public class UsesValues
+            {
+                public int Read()
+                {
+                    return Values.A;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
     }
 
     [Fact]
