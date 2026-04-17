@@ -5342,6 +5342,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsTabIndentedEnumMembers()
+    {
+        // Single-tab indent enum (EditorConfig indent_style=tab) — regression for #364 Java side.
+        // タブ1文字でインデントされた enum（#364 の Java 側クロス言語修正のリグレッション）。
+        var content = "public enum Color {\n\tRED,\n\tGREEN,\n\tBLUE;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RED");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GREEN");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BLUE");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsDefaultAndSynchronizedMethods()
     {
         var content = "public interface Service {\n    default void init() { }\n    static Service create() { return null; }\n}\npublic class Worker {\n    synchronized void process() { }\n}";
