@@ -4901,6 +4901,7 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
             Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -4953,6 +4954,7 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
             Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
             Assert.Empty(json.GetProperty("references").EnumerateArray());
         }
         finally
@@ -5003,6 +5005,7 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
             Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
         }
         finally
         {

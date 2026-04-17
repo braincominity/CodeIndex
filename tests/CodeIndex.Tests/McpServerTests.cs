@@ -651,6 +651,7 @@ public class McpServerTests : IDisposable
         Assert.True(structured["graphDegraded"]!.GetValue<bool>());
         Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -804,6 +805,7 @@ public class McpServerTests : IDisposable
         Assert.True(structured["graphDegraded"]!.GetValue<bool>());
         Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -184,7 +184,10 @@ public static class ReferenceExtractor
 
         var enumGapReason = hasSupportedGraphDefinition
             ? "Exact results also include C# enum members whose access edges are not indexed yet."
-            : BuildGraphSupportReason("csharp", false, "enum", "enum");
+            : BuildGraphSupportReason("csharp", true, "enum", "enum");
+
+        if (!hasSupportedGraphDefinition)
+            return enumGapReason;
 
         if (string.IsNullOrWhiteSpace(baseReason))
             return enumGapReason;
