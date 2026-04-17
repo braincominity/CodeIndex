@@ -3171,8 +3171,17 @@ public class SymbolExtractorTests
 
             public partial class Model : BaseModel
             {
-                public partial string Name { get; set; }
-                public partial int Count { get; }
+                public partial string Name
+                {
+                    get;
+                    set;
+                }
+
+                public partial int Count
+                {
+                    get;
+                }
+
                 public string NotPartial { get; set; } = string.Empty;
             }
 
@@ -3180,9 +3189,17 @@ public class SymbolExtractorTests
             {
                 private string _name = string.Empty;
 
-                public partial string Name { get => _name; set => _name = value; }
-                public partial int Count => 42;
-                public partial override string Description => "demo";
+                public partial string Name
+                {
+                    get => _name;
+                    set => _name = value;
+                }
+
+                public partial int Count
+                    => 42;
+
+                public partial override string Description
+                    => "demo";
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
